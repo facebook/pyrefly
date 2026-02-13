@@ -5,17 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
+use std::io::Write;
 
 use clap::Parser;
-use dupe::Dupe;
-use lsp_server::Connection;
-use lsp_server::ProtocolError;
 use lsp_types::InitializeParams;
+use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::lsp::IndexingMode;
 use crate::commands::util::CommandExitStatus;
 use crate::lsp::non_wasm::queue::LspQueue;
+use crate::lsp::non_wasm::server::Connection;
+use crate::lsp::non_wasm::server::initialize_finish;
+use crate::lsp::non_wasm::server::initialize_start;
 use crate::tsp::server::tsp_capabilities;
 use crate::tsp::server::tsp_loop;
 
@@ -32,62 +33,63 @@ pub struct TspArgs {
     pub(crate) workspace_indexing_limit: usize,
 }
 
-pub fn run_tsp(connection: Arc<Connection>, args: TspArgs) -> anyhow::Result<()> {
-    let initialization_params = match initialize_tsp_connection(&connection, &args) {
-        Ok(it) => it,
-        Err(e) => {
-            return Err(e.into());
-        }
-    };
+pub fn run_tsp(
+    connection: Connection,
+    args: TspArgs,
+    telemetry: &impl Telemetry,
+) -> anyhow::Result<()> {
+    if let Some(initialize_params) = initialize_tsp_connection(&connection, args.indexing_mode)? {
+        // Create an LSP server instance for the TSP server to use.
+        let lsp_queue = LspQueue::new();
+        let surface = telemetry.surface();
+        let lsp_server = crate::lsp::non_wasm::server::Server::new(
+            connection,
+            lsp_queue,
+            initialize_params.clone(),
+            args.indexing_mode,
+            args.workspace_indexing_limit,
+            false,
+            surface,
+            None, // No path remapping for TSP
+        );
 
-    // Create an LSP server instance for the TSP server to use.
-    let lsp_queue = LspQueue::new();
-    let lsp_server = Box::new(crate::lsp::non_wasm::server::Server::new(
-        connection.dupe(),
-        lsp_queue.dupe(),
-        initialization_params.clone(),
-        args.indexing_mode,
-        args.workspace_indexing_limit,
-    ));
-
-    // Reuse the existing lsp_loop but with TSP initialization
-    tsp_loop(lsp_server, connection, initialization_params, lsp_queue)?;
+        // Reuse the existing lsp_loop but with TSP initialization
+        tsp_loop(lsp_server, initialize_params, telemetry)?;
+    }
     Ok(())
 }
 
 fn initialize_tsp_connection(
     connection: &Connection,
-    args: &TspArgs,
-) -> Result<InitializeParams, ProtocolError> {
-    let (request_id, initialization_params) = connection.initialize_start()?;
-    let initialization_params: InitializeParams =
-        serde_json::from_value(initialization_params).unwrap();
-
-    // Use TSP-specific capabilities (same as LSP but without serverInfo)
-    let server_capabilities =
-        serde_json::to_value(tsp_capabilities(args.indexing_mode, &initialization_params)).unwrap();
-    let initialize_data = serde_json::json!({
-        "capabilities": server_capabilities,
-        // Note: TSP doesn't include serverInfo, unlike LSP
-    });
-
-    connection.initialize_finish(request_id, initialize_data)?;
-    Ok(initialization_params)
+    indexing_mode: IndexingMode,
+) -> anyhow::Result<Option<InitializeParams>> {
+    let Some((id, initialize_params)) = initialize_start(connection)? else {
+        return Ok(None);
+    };
+    let capabilities = tsp_capabilities(indexing_mode, &initialize_params);
+    // Note: TSP doesn't include serverInfo, unlike LSP
+    if !initialize_finish(connection, id, capabilities, None)? {
+        return Ok(None);
+    }
+    Ok(Some(initialize_params))
 }
 
 impl TspArgs {
-    pub fn run(self) -> anyhow::Result<CommandExitStatus> {
-        // Note that  we must have our logging only write out to stderr.
+    pub fn run(self, telemetry: &impl Telemetry) -> anyhow::Result<CommandExitStatus> {
+        // Note that we must have our logging only write out to stderr.
         eprintln!("starting TSP server");
 
         // Create the transport. Includes the stdio (stdin and stdout) versions but this could
         // also be implemented to use sockets or HTTP.
         let (connection, io_threads) = Connection::stdio();
 
-        run_tsp(Arc::new(connection), self)?;
+        run_tsp(connection, self, telemetry)?;
         io_threads.join()?;
         // We have shut down gracefully.
-        eprintln!("shutting down TSP server");
+        // Use writeln! instead of eprintln! to avoid panicking if stderr is closed.
+        // This can happen, for example, when stderr is connected to an LSP client which
+        // closes the connection before Pyrefly language server exits.
+        let _ = writeln!(std::io::stderr(), "shutting down TSP server");
         Ok(CommandExitStatus::Success)
     }
 }

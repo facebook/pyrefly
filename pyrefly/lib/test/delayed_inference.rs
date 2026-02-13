@@ -22,10 +22,10 @@ def g(a: list[str], b: list[int]) -> None:
 testcase!(
     test_first_use_reads_name_twice_narrowing,
     r#"
-from typing import reveal_type
+from typing import assert_type
 def test(x: list[int]) -> tuple[list[int], int]:
     y = x
-    return (y, 0 if 0 in reveal_type(y) else 1)  # E: revealed type: list[int]
+    return (y, 0 if 0 in assert_type(y, list[int]) else 1)
 "#,
 );
 
@@ -329,5 +329,57 @@ from chained_first_use_with_inconsistent_pins import z
 assert_type(z, None)
 from chained_first_use_with_inconsistent_pins import x
 assert_type(x, list[Any])
+"#,
+);
+
+// Tests for partial type inference in loops.
+// These tests verify that first-use detection works correctly through phi nodes
+// when BoundName bindings are deferred until after AST traversal.
+
+testcase!(
+    test_partial_type_first_use_in_for_loop,
+    r#"
+from typing import assert_type
+x = []
+for i in range(5):
+    x.append(i)
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    test_partial_type_first_use_in_while_loop,
+    r#"
+from typing import assert_type
+x = []
+i = 0
+while i < 5:
+    x.append(i)
+    i += 1
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    test_partial_type_first_use_in_nested_loops,
+    r#"
+from typing import assert_type
+x = []
+for i in range(5):
+    for j in range(3):
+        x.append(i + j)
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    test_partial_type_secondary_read_in_loop,
+    r#"
+from typing import assert_type
+x = []
+for i in range(5):
+    x.append(i)
+    y = len(x)  # secondary read of x, doesn't reassign
+assert_type(x, list[int])
 "#,
 );

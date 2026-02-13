@@ -14,6 +14,7 @@ use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_types::class::Class;
+use pyrefly_types::class::ClassType;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::name::Name;
@@ -23,6 +24,7 @@ use serde::ser::SerializeStruct;
 use starlark_map::Hashed;
 
 use crate::alt::class::class_field::ClassField;
+use crate::alt::class::class_field::WithDefiningClass;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassField;
@@ -177,7 +179,11 @@ impl PysaClassFieldDeclaration {
             ClassFieldDefinition::AssignedInBody { .. } => {
                 Some(PysaClassFieldDeclaration::AssignedInBody)
             }
-            ClassFieldDefinition::DefinedWithoutAssign { .. } => {
+            ClassFieldDefinition::NestedClass { .. }
+            | ClassFieldDefinition::DefinedWithoutAssign { .. } => {
+                // TODO: we handled NestedClass this way for backward
+                // compatibility after a Pyrefly refactor. Should it be modeled
+                // differently?
                 Some(PysaClassFieldDeclaration::DefinedWithoutAssign)
             }
             ClassFieldDefinition::DefinedInMethod { .. } => {
@@ -230,7 +236,7 @@ pub fn get_all_classes(context: &ModuleContext) -> impl Iterator<Item = Class> {
         .map(|idx| context.answers.get_idx(idx).unwrap().0.dupe().unwrap())
 }
 
-pub fn get_class_field(
+pub fn get_class_field_from_current_class_only(
     class: &Class,
     field_name: &Name,
     context: &ModuleContext,
@@ -241,6 +247,20 @@ pub fn get_class_field(
             solver.get_field_from_current_class_only(class, field_name)
         })
         .unwrap()
+}
+
+pub fn get_super_class_member(
+    class: &Class,
+    field_name: &Name,
+    start_lookup_cls: Option<&ClassType>,
+    context: &ModuleContext,
+) -> Option<WithDefiningClass<Arc<ClassField>>> {
+    context
+        .transaction
+        .ad_hoc_solve(&context.handle, |solver| {
+            solver.get_super_class_member(class, start_lookup_cls, field_name)
+        })
+        .flatten()
 }
 
 pub fn get_context_from_class<'a>(
@@ -282,7 +302,8 @@ pub fn get_class_fields<'a>(
     context: &'a ModuleContext<'a>,
 ) -> impl Iterator<Item = (Cow<'a, Name>, Arc<ClassField>)> {
     let regular_fields = class.fields().filter_map(|name| {
-        get_class_field(class, name, context).map(|field| (Cow::Borrowed(name), field))
+        get_class_field_from_current_class_only(class, name, context)
+            .map(|field| (Cow::Borrowed(name), field))
     });
 
     let synthesized_fields_idx = context
@@ -366,9 +387,7 @@ pub fn export_class_fields(
                     PysaClassField {
                         type_: PysaType::from_type(&field.ty(), context),
                         explicit_annotation,
-                        location: Some(PysaLocation::new(
-                            context.module_info.display_range(*range),
-                        )),
+                        location: Some(PysaLocation::from_text_range(*range, &context.module_info)),
                         declaration_kind: PysaClassFieldDeclaration::from(definition),
                     },
                 )),
@@ -433,7 +452,6 @@ pub fn export_all_classes(
             .0
             .dupe()
             .unwrap();
-        let display_range = context.module_info.display_range(class.qname().range());
         let class_index = class.index();
         let parent = get_scope_parent(&context.ast, &context.module_info, class.qname().range());
         let metadata = context
@@ -483,7 +501,10 @@ pub fn export_all_classes(
 
         assert!(
             class_definitions
-                .insert(PysaLocation::new(display_range), class_definition)
+                .insert(
+                    PysaLocation::from_text_range(class.qname().range(), &context.module_info),
+                    class_definition
+                )
                 .is_none(),
             "Found class definitions with the same location"
         );

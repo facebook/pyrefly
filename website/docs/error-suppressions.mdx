@@ -3,6 +3,14 @@ title: Pyrefly Error Suppressions
 
 description: Learn how to suppress type check errors in Pyrefly with code comments and baseline files.
 ---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 import CodeSnippet from '@site/src/sandbox/CodeSnippet'
 
 ## Error Suppression Comments
@@ -60,11 +68,13 @@ def bar() -> int:
   />
 </pre>
 
-Pyrefly can automatically suppress all type errors in your project if you run:
+Pyrefly can automatically suppress all type errors in your project by running:
 
 ```
-pyrefly check --suppress-errors
+pyrefly suppress
 ```
+
+This is equivalent to `pyrefly check --suppress-errors`.
 
 ## Baseline Files (Experimental)
 
@@ -78,14 +88,31 @@ To generate (or re-generate) the baseline file:
 pyrefly check --baseline="<path to baseline file>" --update-baseline
 ```
 
-To check your project using a baseline file and report only newly-introduced errors:
+To check your project using a baseline file and report only newly-introduced errors, you can either use the CLI flag:
 
 ```
 pyrefly check --baseline="<path to baseline file>"
 ```
 
+Or specify the baseline in your configuration file (`pyrefly.toml` or `pyproject.toml`):
+
+```toml
+# pyrefly.toml
+baseline = "baseline.json"
+```
+
+```toml
+# pyproject.toml
+[tool.pyrefly]
+baseline = "baseline.json"
+```
+
+When the baseline is specified in the configuration file, you don't need to pass the `--baseline` flag on every invocation. The CLI flag takes precedence if both are specified.
+
+Note that `baseline` is a **project-level setting** and cannot be overridden in [`sub-config`](./configuration.mdx#sub-configs) sections. If you need different baseline files for different parts of your codebase, consider using separate Pyrefly configuration files.
+
 Errors are matched with the baseline by looking at file, error code, and column number.
-Right now, errors suppressed by the baseline file are still shown in the IDE and the baseline file can only be passed as a command line argument, but both are expected to change in the future.
+Note that errors suppressed by the baseline file are still shown in the IDE.
 This feature is experimental, so please submit any feedback or requests you have on our Github repo.
 
 ## Upgrading Pyrefly (And other changes that introduce new type errors)
@@ -94,7 +121,7 @@ Upgrading the version of Pyrefly you're using, or a third party library you depe
 
 ```
 # step 1
-pyrefly check --suppress-errors
+pyrefly suppress
 ```
 
 ```
@@ -104,8 +131,12 @@ pyrefly check --suppress-errors
 
 ```
 # step 3
-pyrefly check --remove-unused-ignores
+pyrefly suppress --remove-unused
 ```
 Repeat the steps above until you get a clean formatting run and a clean type check.
 
 This will add ` # pyrefly: ignore` comments to your code that will enable you to silence errors, and come back and fix them at a later date. This can make the process of upgrading a large codebase much more manageable.
+
+:::note
+`pyrefly suppress` is equivalent to `pyrefly check --suppress-errors`, and `pyrefly suppress --remove-unused` is equivalent to `pyrefly check --remove-unused-ignores`.
+:::

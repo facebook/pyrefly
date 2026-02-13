@@ -13,6 +13,8 @@ use std::mem;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -26,7 +28,9 @@ use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_build::source_db::Target;
 use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::PYTHON_EXTENSIONS;
+use pyrefly_python::ignore::Tool;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
@@ -37,16 +41,23 @@ use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Glob;
 use pyrefly_util::globs::Globs;
+use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::telemetry::SubTaskTelemetry;
+use pyrefly_util::telemetry::TelemetryEventKind;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
+use tracing::error;
 
 use crate::base::ConfigBase;
+use crate::base::RecursionLimitConfig;
 use crate::base::UntypedDefBehavior;
 use crate::environment::environment::PythonEnvironment;
 use crate::environment::interpreters::Interpreters;
@@ -55,6 +66,10 @@ use crate::error::ErrorDisplayConfig;
 use crate::finder::ConfigError;
 use crate::module_wildcard::Match;
 use crate::pyproject::PyProject;
+
+pub static GENERATED_FILE_CONFIG_OVERRIDE: LazyLock<
+    RwLock<SmallMap<InternedPath, ArcId<ConfigFile>>>,
+> = LazyLock::new(|| RwLock::new(SmallMap::new()));
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
 pub struct SubConfig {
@@ -451,6 +466,11 @@ pub struct ConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typeshed_path: Option<PathBuf>,
 
+    /// Path to baseline file for comparing type errors.
+    /// Errors matching the baseline are suppressed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<PathBuf>,
+
     /// Pyrefly's configurations around interpreter querying/finding.
     #[serde(flatten)]
     pub interpreters: Interpreters,
@@ -494,18 +514,7 @@ pub struct ConfigFile {
     /// for a path and doing module finding.
     #[serde(skip, default)]
     #[derivative(PartialEq = "ignore")]
-    pub source_db: Option<Arc<Box<dyn SourceDatabase>>>,
-
-    /// Skips the check to ensure any `-stubs` `site_package_path` entries have an
-    /// installed non-stubs package.
-    #[serde(
-                     default = "ConfigFile::default_true",
-                     skip_serializing_if = "crate::util::skip_default_true",
-                     // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
-                     // alias while we migrate existing fields from snake case to kebab case.
-                     alias = "ignore_missing_source",
-                 )]
-    pub ignore_missing_source: bool,
+    pub source_db: Option<ArcId<Box<dyn SourceDatabase>>>,
 
     /// Should we let Pyrefly try to index the project's files? Disabling this
     /// may speed up LSP operations on large projects.
@@ -538,8 +547,8 @@ impl Default for ConfigFile {
             build_system: Default::default(),
             source_db: Default::default(),
             use_ignore_files: true,
-            ignore_missing_source: true,
             typeshed_path: None,
+            baseline: None,
             skip_lsp_config_indexing: false,
         }
     }
@@ -801,19 +810,33 @@ impl ConfigFile {
                  self.root.infer_with_first_use.unwrap())
     }
 
-    pub fn permissive_ignores(&self, path: &Path) -> bool {
-        self.get_from_sub_configs(|x| x.permissive_ignores, path)
+    pub fn tensor_shapes(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_tensor_shapes, path)
             .unwrap_or_else(||
-                // we can use unwrap here, because the value in the root config must
-                // be set in `ConfigFile::configure()`.
-                self.root.permissive_ignores.unwrap())
+                 // we can use unwrap here, because the value in the root config must
+                 // be set in `ConfigFile::configure()`.
+                 self.root.tensor_shapes.unwrap())
     }
+
+    pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
+        self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path)
+            .unwrap_or_else(||
+                 // we can use unwrap here, because the value in the root config must
+                 // be set in `ConfigFile::configure()`.
+                 self.root.enabled_ignores.as_ref().unwrap())
+    }
+
+    /// Get the recursion limit configuration.
+    /// Returns None if not set (disabled).
+    pub fn recursion_limit_config(&self) -> Option<RecursionLimitConfig> {
+        ConfigBase::get_recursion_limit_config(&self.root)
+    }
+
     pub fn get_error_config(&self, path: &Path) -> ErrorConfig<'_> {
         ErrorConfig::new(
             self.errors(path),
             self.ignore_errors_in_generated_code(path),
-            self.permissive_ignores(path),
-            self.ignore_missing_source,
+            self.enabled_ignores(path).clone(),
         )
     }
 
@@ -834,27 +857,36 @@ impl ConfigFile {
     }
 
     pub fn handle_from_module_path(&self, module_path: ModulePath) -> Handle {
-        self.handle_from_module_path_with_fallback(module_path, std::iter::empty())
+        self.handle_from_module_path_with_fallback(module_path, &FallbackSearchPath::Empty)
     }
 
-    pub fn handle_from_module_path_with_fallback<'a>(
-        &'a self,
+    pub fn handle_from_module_path_with_fallback(
+        &self,
         module_path: ModulePath,
-        fallback_search_paths: impl Iterator<Item = &'a PathBuf>,
+        fallback_search_path: &FallbackSearchPath,
     ) -> Handle {
         match &self
             .source_db
             .as_ref()
-            .and_then(|db| db.handle_from_module_path(module_path.dupe()))
+            .and_then(|db| db.handle_from_module_path(&module_path))
         {
             Some(handle) => handle.dupe(),
             None => {
-                let name = ModuleName::from_path(
-                    module_path.as_path(),
-                    self.search_path().chain(fallback_search_paths),
-                )
-                .unwrap_or_else(ModuleName::unknown);
-                Handle::new(name, module_path, self.get_sys_info())
+                let module_kind = if fallback_search_path.is_empty() {
+                    let name = ModuleName::from_path(module_path.as_path(), self.search_path())
+                        .unwrap_or_else(ModuleName::unknown);
+                    ModuleNameWithKind::guaranteed(name)
+                } else {
+                    let fallback_paths =
+                        fallback_search_path.for_directory(Some(module_path.as_path()));
+                    ModuleName::from_path_with_fallback(
+                        module_path.as_path(),
+                        self.search_path(),
+                        fallback_paths.iter(),
+                    )
+                    .unwrap_or(ModuleNameWithKind::guaranteed(ModuleName::unknown()))
+                };
+                Handle::from_with_module_name_kind(module_kind, module_path, self.get_sys_info())
             }
         }
     }
@@ -862,33 +894,125 @@ impl ConfigFile {
     /// Get glob patterns that should be watched by a file watcher.
     /// We return a tuple of root (non-pattern part of the path) and a pattern.
     /// If pattern is None, then the root should contain the whole path to watch.
-    pub fn get_paths_to_watch(&self) -> Vec<WatchPattern<'_>> {
-        let mut result = Vec::new();
-        if let Some(source_db) = &self.source_db {
-            result.extend(source_db.get_paths_to_watch())
+    pub fn get_paths_to_watch(configs: &SmallSet<ArcId<ConfigFile>>) -> SmallSet<WatchPattern> {
+        let mut result = SmallSet::new();
+        let mut source_dbs = SmallSet::new();
+        for config in configs {
+            if let Some(source_db) = &config.source_db {
+                source_dbs.insert(source_db);
+            }
+            if let Some(config_root) = config.source.root() {
+                let config_root = InternedPath::from_path(config_root);
+                ConfigFile::CONFIG_FILE_NAMES.iter().for_each(|config| {
+                    result.insert(WatchPattern::root(config_root, format!("**/{config}")));
+                });
+            }
+            config
+                .search_path()
+                .chain(config.site_package_path())
+                .cartesian_product(PYTHON_EXTENSIONS.iter().chain(COMPILED_FILE_SUFFIXES))
+                .for_each(|(s, suffix)| {
+                    result.insert(WatchPattern::root(
+                        InternedPath::from_path(s),
+                        format!("**/*.{suffix}"),
+                    ));
+                });
         }
-        let config_root = self.source.root();
-        if let Some(config_root) = config_root {
-            Self::CONFIG_FILE_NAMES.iter().for_each(|config| {
-                result.push(WatchPattern::root(config_root, format!("**/{config}")));
-            });
+
+        for source_db in source_dbs {
+            result.extend(source_db.get_paths_to_watch());
         }
-        self.search_path()
-            .chain(self.site_package_path())
-            .cartesian_product(PYTHON_EXTENSIONS.iter().chain(COMPILED_FILE_SUFFIXES))
-            .for_each(|(s, suffix)| {
-                result.push(WatchPattern::root(s, format!("**/*.{suffix}")));
-            });
         result
     }
 
-    pub fn requery_source_db(&self, files: &SmallSet<ModulePath>) -> anyhow::Result<bool> {
-        let Some(source_db) = &self.source_db else {
-            return Ok(false);
-        };
+    /// Requery the source database, if one is available, for any changes that may
+    /// occur with the current open set of files.
+    ///
+    /// When `force` is true, ignore any heuristics that would exit early if the open
+    /// set of files has not changed. Should be used when a build system file
+    /// or configuration file might have changed, or if we suspect the build system
+    /// may produce changes in generated files.
+    pub fn query_source_db(
+        configs_to_files: &SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>>,
+        force: bool,
+        telemetry: Option<SubTaskTelemetry>,
+    ) -> (
+        SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>>,
+        TelemetrySourceDbRebuildStats,
+    ) {
+        let mut stats: TelemetrySourceDbRebuildStats = Default::default();
+        stats.common.forced = force;
+        let mut reloaded_source_dbs = SmallSet::new();
+        let mut sourcedb_configs: SmallMap<_, Vec<_>> = SmallMap::new();
+        for (config, files) in configs_to_files {
+            let Some(source_db) = &config.source_db else {
+                continue;
+            };
+            sourcedb_configs
+                .entry(source_db)
+                .or_default()
+                .push((config, files));
+            // Files can be uniquely tied to a config, so we will be counting each file at most
+            // once here.
+            stats.common.files += files.len();
+        }
 
-        let files = files.iter().map(|p| p.module_path_buf()).collect();
-        source_db.requery_source_db(files)
+        stats.count = sourcedb_configs.len();
+        fn log_telemetry(
+            telemetry: &Option<SubTaskTelemetry>,
+            start: Instant,
+            instance_stats: TelemetrySourceDbRebuildInstanceStats,
+            error: Option<&anyhow::Error>,
+        ) {
+            let Some(telemetry) = telemetry else {
+                return;
+            };
+
+            let mut event_telemetry =
+                telemetry.new_task(TelemetryEventKind::SourceDbRebuildInstance, start);
+            event_telemetry.set_sourcedb_rebuild_instance_stats(instance_stats);
+            telemetry.finish_task(event_telemetry, error);
+        }
+        for (source_db, configs_and_files) in sourcedb_configs {
+            let start = Instant::now();
+            let all_files = configs_and_files
+                .iter()
+                .flat_map(|x| x.1.iter())
+                .map(|p| p.module_path_buf())
+                .collect::<SmallSet<_>>();
+            let (sourcedb_rebuild, instance_stats) = source_db.query_source_db(all_files, force);
+            let changed = match sourcedb_rebuild {
+                Err(error) => {
+                    log_telemetry(&telemetry, start, instance_stats, Some(&error));
+                    error!("Error reloading source database for config: {error:?}");
+                    stats.had_error = true;
+                    continue;
+                }
+                Ok(r) => r,
+            };
+            let generated_files = source_db.get_generated_files();
+            if !generated_files.is_empty() {
+                let mut write = GENERATED_FILE_CONFIG_OVERRIDE.write();
+                // we don't need any specific config here, any config for this sourcedb will work
+                let first_config = configs_and_files.first().unwrap().0;
+                for file in generated_files {
+                    write.insert(file, first_config.dupe());
+                }
+            }
+            if changed {
+                stats.common.changed = true;
+                debug!(
+                    "Performed grouped source db query for configs at {:?}",
+                    configs_and_files
+                        .iter()
+                        .filter_map(|x| x.0.source.root())
+                        .collect::<Vec<_>>(),
+                );
+                reloaded_source_dbs.insert(source_db.dupe());
+            }
+            log_telemetry(&telemetry, start, instance_stats, None);
+        }
+        (reloaded_source_dbs, stats)
     }
 
     /// Configures values that must be updated *after* overwriting with CLI flag values,
@@ -953,24 +1077,89 @@ impl ConfigFile {
             self.root.infer_with_first_use = Some(true);
         }
 
-        if self.root.permissive_ignores.is_none() {
-            self.root.permissive_ignores = Some(false);
+        if self.root.tensor_shapes.is_none() {
+            self.root.tensor_shapes = Some(false);
         }
 
-        if let Some(build_system) = &self.build_system {
-            match &self.source {
+        let tools_from_permissive_ignores = match self.root.permissive_ignores {
+            Some(true) => Some(Tool::all()),
+            Some(false) => Some(Tool::default_enabled()),
+            None => None,
+        };
+
+        let enabled_ignores = match (
+            tools_from_permissive_ignores,
+            self.root.enabled_ignores.clone(),
+        ) {
+            (None, None) => Tool::default_enabled(),
+            (None, Some(tools)) | (Some(tools), None) => tools,
+            (Some(_), Some(tools)) => {
+                configure_errors.push(anyhow!("Cannot use both `permissive-ignores` and `enabled-ignores`: `permissive-ignores` will be ignored."));
+                tools
+            }
+        };
+        self.root.enabled_ignores = Some(enabled_ignores);
+
+        let mut configure_source_db = |build_system: &mut BuildSystem| {
+            let root = match &self.source {
                 ConfigSource::File(path) => {
                     let mut root = path.to_path_buf();
                     root.pop();
-                    self.source_db = Some(Arc::new(build_system.get_source_db(root.to_path_buf())));
+                    root
+                }
+                _ => {
+                    return Some(anyhow::anyhow!(
+                        "Invalid config state: `build-system` is set on project without config."
+                    ));
+                }
+            };
+
+            match build_system.get_source_db(root.to_path_buf())? {
+                Ok(source_db) => {
+                    self.source_db = Some(source_db);
                     self.fallback_search_path = FallbackSearchPath::DirectoryRelative(
                         DirectoryRelativeFallbackSearchPathCache::new(Some(root)),
                     );
+                    None
                 }
-                _ => configure_errors.push(anyhow::anyhow!(
-                    "Invalid config state: `build-system` is set on project without config."
-                )),
+                Err(error) => Some(error),
             }
+        };
+
+        // TODO(connernilsen): remove once PyTorch performs an upgrade
+        #[allow(unexpected_cfgs)]
+        if cfg!(fbcode_build) {
+            let root = match &self.source {
+                ConfigSource::File(path) => {
+                    let mut root = path.to_path_buf();
+                    root.pop();
+                    Some(root)
+                }
+                _ => None,
+            };
+            if let Some(root) = root
+                && root.ends_with("fbsource/fbcode/caffe2")
+            {
+                self.build_system = Some(BuildSystem::new(
+                    Some(".pyrelsp".to_owned()),
+                    Some(vec![
+                        "--oncall=pyre".to_owned(),
+                        "--client-metadata=id=pyrefly".to_owned(),
+                    ]),
+                    true,
+                    vec![
+                        "../python/typeshed_experimental".into(),
+                        "../python/typeshed_internal".into(),
+                        "../python/pyre_temporary_stubs".into(),
+                    ],
+                ));
+            }
+        }
+
+        if let Some(build_system) = &mut self.build_system
+            && let Some(error) = configure_source_db(build_system)
+        {
+            configure_errors.push(error)
         }
 
         fn validate<'a>(
@@ -1019,6 +1208,12 @@ impl ConfigFile {
             });
         if let Some(import_root) = &self.import_root {
             self.import_root = Some(import_root.absolutize_from(config_root));
+        }
+        if let Some(typeshed_path) = &self.typeshed_path {
+            self.typeshed_path = Some(typeshed_path.absolutize_from(config_root));
+        }
+        if let Some(baseline) = &self.baseline {
+            self.baseline = Some(baseline.absolutize_from(config_root));
         }
         self.python_environment
             .site_package_path
@@ -1259,10 +1454,14 @@ mod tests {
                     disable_type_errors_in_ide: None,
                     ignore_errors_in_generated_code: Some(true),
                     infer_with_first_use: None,
+                    tensor_shapes: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
                     ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                     permissive_ignores: None,
+                    enabled_ignores: None,
+                    recursion_depth_limit: None,
+                    recursion_overflow_handler: None,
                 },
                 source_db: Default::default(),
                 sub_configs: vec![SubConfig {
@@ -1276,14 +1475,18 @@ mod tests {
                         disable_type_errors_in_ide: None,
                         ignore_errors_in_generated_code: Some(false),
                         infer_with_first_use: Some(false),
+                        tensor_shapes: None,
                         replace_imports_with_any: Some(Vec::new()),
                         ignore_missing_imports: Some(Vec::new()),
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
                         permissive_ignores: None,
+                        enabled_ignores: None,
+                        recursion_depth_limit: None,
+                        recursion_overflow_handler: None,
                     }
                 }],
-                ignore_missing_source: true,
                 typeshed_path: None,
+                baseline: None,
                 skip_lsp_config_indexing: false,
             }
         );
@@ -1302,7 +1505,6 @@ mod tests {
              python-interpreter-path = "venv/my/python"
              replace_imports_with_any = ["fibonacci"]
              ignore_errors_in_generated_code = true
-             ignore_missing_source = true
 
              [errors]
              assert-type = "error"
@@ -1482,6 +1684,7 @@ mod tests {
         fn with_sep(s: &str) -> String {
             s.replace("/", path::MAIN_SEPARATOR_STR)
         }
+        let typeshed = "path/to/typeshed";
         let mut python_environment = PythonEnvironment {
             site_package_path: Some(vec![PathBuf::from("venv/lib/python1.2.3/site-packages")]),
             ..PythonEnvironment::default()
@@ -1515,8 +1718,8 @@ mod tests {
                 matches: Glob::new("sub/project/**".to_owned()).unwrap(),
                 settings: Default::default(),
             }],
-            ignore_missing_source: false,
-            typeshed_path: None,
+            typeshed_path: Some(PathBuf::from(typeshed)),
+            baseline: Some(PathBuf::from("baseline.json")),
             skip_lsp_config_indexing: false,
         };
 
@@ -1535,6 +1738,7 @@ mod tests {
                 .into_owned(),
         ];
         let search_path = vec![test_path.parent().unwrap().parent().unwrap().to_path_buf()];
+        let expected_typeshed = test_path.join(typeshed);
         python_environment.site_package_path =
             Some(vec![test_path.join("venv/lib/python1.2.3/site-packages")]);
 
@@ -1573,8 +1777,8 @@ mod tests {
                 matches: sub_config_matches,
                 settings: Default::default(),
             }],
-            ignore_missing_source: false,
-            typeshed_path: None,
+            typeshed_path: Some(expected_typeshed),
+            baseline: Some(test_path.join("baseline.json")),
             skip_lsp_config_indexing: false,
         };
         assert_eq!(config, expected_config);
@@ -1600,6 +1804,15 @@ mod tests {
                  "#;
         let err = ConfigFile::parse_config(config_str).unwrap_err();
         assert!(err.to_string().contains("missing field `matches`"));
+    }
+
+    #[test]
+    fn test_baseline_config_parsing() {
+        let config_str = r#"
+baseline = "baseline.json"
+"#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        assert_eq!(config.baseline, Some(PathBuf::from("baseline.json")));
     }
 
     #[test]
@@ -1649,8 +1862,12 @@ mod tests {
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),
+                enabled_ignores: None,
+                recursion_depth_limit: None,
+                recursion_overflow_handler: None,
             },
             sub_configs: vec![
                 SubConfig {
@@ -1955,8 +2172,12 @@ mod tests {
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),
+                enabled_ignores: None,
+                recursion_depth_limit: None,
+                recursion_overflow_handler: None,
             },
             sub_configs: vec![],
             ..Default::default()
@@ -1986,8 +2207,12 @@ mod tests {
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),
+                enabled_ignores: None,
+                recursion_depth_limit: None,
+                recursion_overflow_handler: None,
             },
             sub_configs: vec![],
             ..Default::default()

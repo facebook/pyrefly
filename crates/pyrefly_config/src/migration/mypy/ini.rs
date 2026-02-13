@@ -6,13 +6,10 @@
  */
 
 use std::path::Path;
-use std::path::PathBuf;
 
 use anyhow::Context as _;
 use configparser::ini::Ini;
 use configparser::ini::IniDefault;
-use pyrefly_python::sys_info::PythonVersion;
-use serde::Deserialize;
 
 use crate::config::ConfigFile;
 use crate::migration::config_option_migrater::ConfigOptionMigrater;
@@ -25,69 +22,47 @@ use crate::migration::python_version::PythonVersionConfig;
 use crate::migration::search_path::SearchPath;
 use crate::migration::sub_configs::SubConfigs;
 use crate::migration::untyped_def_behavior::UntypedDefBehaviorConfig;
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct MypyConfig {
-    files: Option<Vec<String>>,
-    packages: Option<Vec<String>>,
-    modules: Option<Vec<String>>,
-    #[allow(dead_code)]
-    #[serde(rename = "exclude")]
-    exclude_regex: Option<String>,
-    #[serde(rename = "mypy_path")]
-    search_path: Option<Vec<PathBuf>>,
-    #[serde(rename = "platform")]
-    python_platform: Option<String>,
-    python_version: Option<PythonVersion>,
-    #[serde(rename = "python_executable")]
-    python_interpreter: Option<PathBuf>,
-    disable_error_code: Option<Vec<String>>,
-    enable_error_code: Option<Vec<String>>,
-    check_untyped_defs: Option<bool>,
-}
 
-impl MypyConfig {
-    pub fn parse_mypy_config(ini_path: &Path) -> anyhow::Result<ConfigFile> {
-        let mut default = IniDefault::default();
-        // Need to set this to properly parse things like the PyTorch mypy.ini file,
-        // Which has a multiline `files` comment that gets parsed incorrectly without this.
-        default.multiline = true;
-        let mut config = Ini::new_from_defaults(default);
-        config
-            .load(ini_path)
-            .map_err(|e| anyhow::anyhow!(e))
-            .with_context(|| {
-                format!("While trying to read mypy config at {}", ini_path.display())
-            })?;
+pub fn parse_mypy_config(ini_path: &Path) -> anyhow::Result<ConfigFile> {
+    let mut default = IniDefault::default();
+    // Need to set this to properly parse things like the PyTorch mypy.ini file,
+    // Which has a multiline `files` comment that gets parsed incorrectly without this.
+    default.multiline = true;
+    let mut config = Ini::new_from_defaults(default);
+    config
+        .load(ini_path)
+        .map_err(|e| anyhow::anyhow!(e))
+        .with_context(|| format!("While trying to read mypy config at {}", ini_path.display()))?;
 
-        let mut cfg = ConfigFile::default();
+    let mut cfg = ConfigFile::default();
 
-        let config_options: Vec<Box<dyn ConfigOptionMigrater>> = vec![
-            Box::new(ProjectIncludes),
-            Box::new(ProjectExcludes),
-            Box::new(PythonInterpreter),
-            Box::new(PythonVersionConfig),
-            Box::new(IgnoreMissingImports),
-            Box::new(SearchPath),
-            Box::new(ErrorCodes),
-            Box::new(SubConfigs),
-            Box::new(UntypedDefBehaviorConfig),
-        ];
+    let config_options: Vec<Box<dyn ConfigOptionMigrater>> = vec![
+        Box::new(ProjectIncludes),
+        Box::new(ProjectExcludes),
+        Box::new(PythonInterpreter),
+        Box::new(PythonVersionConfig),
+        Box::new(IgnoreMissingImports),
+        Box::new(SearchPath),
+        Box::new(ErrorCodes),
+        Box::new(SubConfigs),
+        Box::new(UntypedDefBehaviorConfig),
+    ];
 
-        // Iterate through all config options and apply them to the config
-        for option in config_options {
-            // Ignore errors for now, we can use this in the future if we want to print out error messages or use for logging purpose
-            let _ = option.migrate_from_mypy(&config, &mut cfg);
-        }
-
-        // All configuration options are now processed by the individual config option migraters
-
-        Ok(cfg)
+    // Iterate through all config options and apply them to the config
+    for option in config_options {
+        // Ignore errors for now, we can use this in the future if we want to print out error messages or use for logging purpose
+        let _ = option.migrate_from_mypy(&config, &mut cfg);
     }
+
+    // All configuration options are now processed by the individual config option migraters
+
+    Ok(cfg)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use pyrefly_util::fs_anyhow;
     use pyrefly_util::globs::Globs;
 
@@ -124,7 +99,7 @@ ignore_missing_imports = True
  "#;
         fs_anyhow::write(&input_path, mypy)?;
 
-        let cfg = MypyConfig::parse_mypy_config(&input_path)?;
+        let cfg = parse_mypy_config(&input_path)?;
         let project_includes = Globs::new(vec![
             "src".to_owned(),
             "other_src".to_owned(),
@@ -164,7 +139,7 @@ unknown_option = True
 "#;
         fs_anyhow::write(&input_path, mypy)?;
 
-        let cfg = MypyConfig::parse_mypy_config(&input_path)?;
+        let cfg = parse_mypy_config(&input_path)?;
         let default = ConfigFile::default();
         assert_eq!(cfg.project_includes, default.project_includes);
         assert_eq!(cfg.project_excludes, default.project_excludes);

@@ -205,7 +205,7 @@ class B(Generic[*Ts, *Ts]):  # E: Duplicated type parameter declaration
 class C(Generic[P, P]):  # E: Duplicated type parameter declaration
     pass
 
-class D(Protocol[T, T]):  # E: Duplicated type parameter declaration
+class D(Protocol[T, T]):  # E: Duplicated type parameter declaration  # E: Type variable `T` in class `D` is declared as invariant, but could be covariant based on its usage
     pass
 class E(Protocol[*Ts, *Ts]):  # E: Duplicated type parameter declaration
     pass
@@ -738,7 +738,7 @@ assert_type(f(0), int)
 // information that travels through a legacy tparam builder.
 //
 // It is necessary because Pyrefly sees the `bool` in a type annotation and has
-// to account for the possiblity that `bool` (which is an import from builtins)
+// to account for the possibility that `bool` (which is an import from builtins)
 // might actually be a legacy type variable.
 //
 // We have to make sure that the way we do this doesn't break special export
@@ -789,7 +789,7 @@ class A:
 
 testcase!(
     bug = "We currently create separate narrows for modules that may contain legacy type variables, we need to merge them",
-    test_mutliple_possible_legacy_tparams,
+    test_multiple_possible_legacy_tparams,
     TestEnv::one(
         "foo",
         "from typing import TypeVar\nT = TypeVar('T')\nclass C: pass"

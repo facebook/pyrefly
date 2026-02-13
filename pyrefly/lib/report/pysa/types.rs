@@ -12,25 +12,52 @@ use dupe::Dupe;
 use pyrefly_types::class::Class;
 #[cfg(test)]
 use pyrefly_types::class::ClassType;
+use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::quantified::Quantified;
+use pyrefly_types::type_alias::TypeAliasData;
+use pyrefly_types::type_var::Restriction;
+use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::Type;
+use pyrefly_types::types::Union;
 use serde::Serialize;
 
 use crate::report::pysa::ModuleContext;
 use crate::report::pysa::class::ClassRef;
 use crate::types::display::TypeDisplayContext;
 
+/// Modifier that was stripped from a type to extract the underlying class.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[allow(dead_code)]
+pub enum TypeModifier {
+    Optional,               // Optional[T]
+    Coroutine,              // Coroutine[<...>]
+    Awaitable,              // Awaitable[T]
+    TypeVariableBound,      // TypeVar(.., bound=T)
+    TypeVariableConstraint, // TypeVar("T", ..., ...)
+    Type,                   // type[T]
+}
+
+/// A class reference along with the modifiers that were stripped to extract it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ClassWithModifiers {
+    pub class: ClassRef,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub modifiers: Vec<TypeModifier>,
+}
+
+impl ClassWithModifiers {
+    pub fn new(class: ClassRef) -> ClassWithModifiers {
+        ClassWithModifiers {
+            class,
+            modifiers: Vec::new(),
+        }
+    }
+}
+
 // List of class names that a type refers to, after stripping Optional and Awaitable.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ClassNamesFromType {
-    class_names: Vec<ClassRef>,
-    #[serde(skip_serializing_if = "<&bool>::not")]
-    stripped_coroutine: bool,
-    #[serde(skip_serializing_if = "<&bool>::not")]
-    stripped_optional: bool,
-    #[serde(skip_serializing_if = "<&bool>::not")]
-    stripped_readonly: bool,
-    #[serde(skip_serializing_if = "<&bool>::not")]
-    unbound_type_variable: bool,
+    classes: Vec<ClassWithModifiers>,
     // Is there an element (after stripping) that isn't a class name?
     #[serde(skip_serializing_if = "<&bool>::not")]
     is_exhaustive: bool,
@@ -53,11 +80,10 @@ pub struct PysaType {
 impl ClassNamesFromType {
     pub fn from_class(class: &Class, context: &ModuleContext) -> ClassNamesFromType {
         ClassNamesFromType {
-            class_names: vec![ClassRef::from_class(class, context.module_ids)],
-            stripped_coroutine: false,
-            stripped_optional: false,
-            stripped_readonly: false,
-            unbound_type_variable: false,
+            classes: vec![ClassWithModifiers::new(ClassRef::from_class(
+                class,
+                context.module_ids,
+            ))],
             is_exhaustive: true,
         }
     }
@@ -65,67 +91,75 @@ impl ClassNamesFromType {
     #[cfg(test)]
     pub fn from_classes(class_names: Vec<ClassRef>, is_exhaustive: bool) -> ClassNamesFromType {
         ClassNamesFromType {
-            class_names,
-            stripped_coroutine: false,
-            stripped_optional: false,
-            stripped_readonly: false,
-            unbound_type_variable: false,
+            classes: class_names
+                .into_iter()
+                .map(ClassWithModifiers::new)
+                .collect(),
             is_exhaustive,
         }
     }
 
     pub fn not_a_class() -> ClassNamesFromType {
         ClassNamesFromType {
-            class_names: vec![],
-            stripped_coroutine: false,
-            stripped_optional: false,
-            stripped_readonly: false,
-            unbound_type_variable: false,
+            classes: vec![],
             is_exhaustive: false,
         }
     }
 
     fn skip_serializing(&self) -> bool {
-        self.class_names.is_empty()
+        self.classes.is_empty()
     }
 
-    pub fn with_strip_optional(mut self, stripped_optional: bool) -> ClassNamesFromType {
-        self.stripped_optional = stripped_optional;
-        self
+    pub fn prepend_optional(self) -> ClassNamesFromType {
+        self.prepend_modifier(TypeModifier::Optional)
     }
 
-    pub fn with_strip_coroutine(mut self, stripped_coroutine: bool) -> ClassNamesFromType {
-        self.stripped_coroutine = stripped_coroutine;
+    pub fn prepend_awaitable(self) -> ClassNamesFromType {
+        self.prepend_modifier(TypeModifier::Awaitable)
+    }
+
+    pub fn prepend_coroutine(self) -> ClassNamesFromType {
+        self.prepend_modifier(TypeModifier::Coroutine)
+    }
+
+    pub fn prepend_typevar_bound(self) -> ClassNamesFromType {
+        self.prepend_modifier(TypeModifier::TypeVariableBound)
+    }
+
+    pub fn prepend_typevar_constraint(self) -> ClassNamesFromType {
+        self.prepend_modifier(TypeModifier::TypeVariableConstraint)
+    }
+
+    pub fn prepend_modifier(mut self, modifier: TypeModifier) -> ClassNamesFromType {
+        for class in &mut self.classes {
+            class.modifiers.insert(0, modifier);
+        }
         self
     }
 
     fn join_with(mut self, other: ClassNamesFromType) -> ClassNamesFromType {
-        self.class_names.extend(other.class_names);
-        self.stripped_coroutine |= other.stripped_coroutine;
-        self.stripped_optional |= other.stripped_optional;
-        self.stripped_readonly |= other.stripped_readonly;
-        self.unbound_type_variable |= other.unbound_type_variable;
+        self.classes.extend(other.classes);
         self.is_exhaustive &= other.is_exhaustive;
         self
     }
 
     fn sort_and_dedup(mut self) -> ClassNamesFromType {
-        self.class_names.sort();
-        self.class_names.dedup();
+        self.classes.sort();
+        self.classes.dedup();
         self
     }
 }
 
-fn string_for_type(type_: &Type) -> String {
+pub fn string_for_type(type_: &Type) -> String {
     let mut ctx = TypeDisplayContext::new(&[type_]);
     ctx.always_display_module_name_except_builtins();
     ctx.display(type_).to_string()
 }
 
-fn strip_self_type(mut ty: Type) -> Type {
+fn strip_self_type(heap: &TypeHeap, mut ty: Type) -> Type {
     ty.transform_mut(&mut |t| {
         if let Type::SelfType(cls) = t {
-            *t = Type::ClassType(cls.clone());
+            *t = heap.mk_class_type(cls.clone());
         }
     });
     ty
@@ -133,12 +167,12 @@ fn strip_self_type(mut ty: Type) -> Type {
 
 fn strip_optional(type_: &Type) -> Option<&Type> {
     match type_ {
-        Type::Union(elements) if elements.len() == 2 && elements[0] == Type::None => {
-            Some(&elements[1])
-        }
-        Type::Union(elements) if elements.len() == 2 && elements[1] == Type::None => {
-            Some(&elements[0])
-        }
+        Type::Union(box Union {
+            members: elements, ..
+        }) if elements.len() == 2 && elements[0].is_none() => Some(&elements[1]),
+        Type::Union(box Union {
+            members: elements, ..
+        }) if elements.len() == 2 && elements[1].is_none() => Some(&elements[0]),
         _ => None,
     }
 }
@@ -167,6 +201,26 @@ fn strip_coroutine<'a>(type_: &'a Type, context: &ModuleContext) -> Option<&'a T
     }
 }
 
+enum TypeVariableRestriction {
+    Bound(Type),
+    Constraints(Vec<Type>),
+}
+
+fn strip_typevar(type_: &Type) -> Option<TypeVariableRestriction> {
+    match type_ {
+        Type::Quantified(quantified) if Quantified::is_type_var(quantified) => {
+            match &quantified.restriction {
+                Restriction::Bound(type_) => Some(TypeVariableRestriction::Bound(type_.clone())),
+                Restriction::Constraints(constraints) => {
+                    Some(TypeVariableRestriction::Constraints(constraints.clone()))
+                }
+                Restriction::Unrestricted => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 pub fn has_superclass(class: &Class, want: &Class, context: &ModuleContext) -> bool {
     context
         .transaction
@@ -186,44 +240,85 @@ fn is_scalar_type(get: &Type, want: &Class, context: &ModuleContext) -> bool {
     if let Some(inner) = strip_coroutine(get, context) {
         return is_scalar_type(inner, want, context);
     }
+    if let Some(type_variable_restriction) = strip_typevar(get) {
+        return match type_variable_restriction {
+            TypeVariableRestriction::Bound(inner) => is_scalar_type(&inner, want, context),
+            TypeVariableRestriction::Constraints(inners) => inners
+                .iter()
+                .any(|inner| is_scalar_type(inner, want, context)),
+        };
+    }
     match get {
         Type::ClassType(class_type) => has_superclass(class_type.class_object(), want, context),
-        Type::TypeAlias(alias) => is_scalar_type(&alias.as_type(), want, context),
+        Type::TypeAlias(box TypeAliasData::Value(alias)) => {
+            is_scalar_type(&alias.as_type(), want, context)
+        }
         _ => false,
     }
 }
 
 fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromType {
     if let Some(inner) = strip_optional(type_) {
-        return get_classes_of_type(inner, context).with_strip_optional(true);
+        return get_classes_of_type(inner, context).prepend_optional();
     }
     if let Some(inner) = strip_awaitable(type_, context) {
-        return get_classes_of_type(inner, context).with_strip_coroutine(true);
+        return get_classes_of_type(inner, context).prepend_awaitable();
     }
     if let Some(inner) = strip_coroutine(type_, context) {
-        return get_classes_of_type(inner, context).with_strip_coroutine(true);
+        return get_classes_of_type(inner, context).prepend_coroutine();
+    }
+    if let Some(type_variable_restriction) = strip_typevar(type_) {
+        return match type_variable_restriction {
+            TypeVariableRestriction::Bound(inner) => {
+                get_classes_of_type(&inner, context).prepend_typevar_bound()
+            }
+            TypeVariableRestriction::Constraints(inners) => inners
+                .iter()
+                .map(|inner| get_classes_of_type(inner, context).prepend_typevar_constraint())
+                .reduce(|acc, next| acc.join_with(next))
+                .unwrap()
+                .sort_and_dedup(),
+        };
     }
     // No need to strip ReadOnly[], it is already stripped by pyrefly.
     match type_ {
         Type::ClassType(class_type) => {
             ClassNamesFromType::from_class(class_type.class_object(), context)
         }
+        Type::ClassDef(class) => {
+            ClassNamesFromType::from_class(class, context).prepend_modifier(TypeModifier::Type)
+        }
+        Type::Type(box Type::ClassType(class_type)) => {
+            ClassNamesFromType::from_class(class_type.class_object(), context)
+                .prepend_modifier(TypeModifier::Type)
+        }
         Type::Tuple(_) => ClassNamesFromType::from_class(context.stdlib.tuple_object(), context),
-        Type::Union(elements) if !elements.is_empty() => elements
+        Type::TypedDict(TypedDict::TypedDict(inner)) => {
+            ClassNamesFromType::from_class(inner.class_object(), context)
+        }
+        Type::TypedDict(TypedDict::Anonymous(_)) => {
+            ClassNamesFromType::from_class(context.stdlib.dict_object(), context)
+        }
+        Type::Union(box Union {
+            members: elements, ..
+        }) if !elements.is_empty() => elements
             .iter()
             .map(|inner| get_classes_of_type(inner, context))
             .reduce(|acc, next| acc.join_with(next))
             .unwrap()
             .sort_and_dedup(),
-        Type::TypeAlias(alias) => get_classes_of_type(&alias.as_type(), context),
+        Type::TypeAlias(box TypeAliasData::Value(alias)) => {
+            get_classes_of_type(&alias.as_type(), context)
+        }
         _ => ClassNamesFromType::not_a_class(),
     }
 }
 
-fn preprocess_type(type_: &Type, context: &ModuleContext) -> Type {
+/// Apply normalization to a type before exporting it to Pysa.
+pub fn preprocess_type(type_: &Type, context: &ModuleContext) -> Type {
     // Promote `Literal[..]` into `str` or `int`.
-    let type_ = type_.clone().promote_literals(&context.stdlib);
-    strip_self_type(type_)
+    let type_ = type_.clone().promote_implicit_literals(&context.stdlib);
+    strip_self_type(context.answers.heap(), type_)
 }
 
 impl PysaType {
@@ -345,12 +440,9 @@ impl ScalarTypeProperties {
         }
     }
 
-    pub fn join(mut self, other: ScalarTypeProperties) -> Self {
-        self.is_bool &= other.is_bool;
-        self.is_int &= other.is_int;
-        self.is_float &= other.is_float;
-        self.is_enum &= other.is_enum;
-        self
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn is_none(&self) -> bool {
+        *self == Self::none()
     }
 
     #[cfg(test)]
@@ -363,11 +455,22 @@ impl ScalarTypeProperties {
         }
     }
 
+    #[cfg(test)]
     pub fn bool() -> ScalarTypeProperties {
         ScalarTypeProperties {
             is_bool: true,
             is_int: true,
             is_float: false,
+            is_enum: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn float() -> ScalarTypeProperties {
+        ScalarTypeProperties {
+            is_bool: false,
+            is_int: false,
+            is_float: true,
             is_enum: false,
         }
     }
@@ -379,11 +482,29 @@ pub fn is_callable_like(ty: &Type) -> bool {
         Type::Callable(_) => true,
         Type::BoundMethod(_) => true,
         Type::Overload(_) => true,
-        Type::Union(unions) => {
-            unions.iter().any(is_callable_like)
-                && unions
+        Type::Union(box Union {
+            members: elements, ..
+        }) => {
+            elements.iter().any(is_callable_like)
+                && elements
                     .iter()
                     .all(|ty| ty.is_none() || ty.is_any() || is_callable_like(ty))
+        }
+        _ => false,
+    }
+}
+
+pub fn is_bound_method_like(ty: &Type) -> bool {
+    match ty {
+        Type::BoundMethod(_) => true,
+        Type::Overload(_) => true,
+        Type::Union(box Union {
+            members: elements, ..
+        }) => {
+            elements.iter().any(is_bound_method_like)
+                && elements
+                    .iter()
+                    .all(|ty| ty.is_none() || ty.is_any() || is_bound_method_like(ty))
         }
         _ => false,
     }

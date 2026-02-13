@@ -1,0 +1,6 @@
+from numpy.typing import NDArray
+
+from .rag import RAG
+
+def DW_matrices(graph: RAG): ...
+def ncut_cost(cut: NDArray, D, W) -> float: ...

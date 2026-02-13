@@ -66,6 +66,23 @@
                 "command": "pyrefly.unfoldAllDocstrings"
             }
         ],
+        "semanticTokenScopes": [
+            {
+                "language": "python",
+                "scopes": {
+                    "variable.readonly": [
+                        "variable.other.constant.python"
+                    ]
+                }
+            }
+        ],
+        "configurationDefaults": {
+            "editor.semanticTokenColorCustomizations": {
+                "rules": {
+                    "variable.readonly:python": "#4EC9B0"
+                }
+            }
+        },
         "configuration": {
             "properties": {
                 "pyrefly.lspPath": {
@@ -90,12 +107,13 @@
                 },
                 "python.pyrefly.displayTypeErrors": {
                     "type": "string",
-                    "description": "If 'default', Pyrefly will only provide type check squiggles in the IDE if your file is covered by a Pyrefly configuration. If 'force-off', Pyrefly will never provide type check squiggles in the IDE. If 'force-on', Pyrefly will always provide type check squiggles in the IDE.",
+                    "description": "If 'default', Pyrefly will only provide type check squiggles in the IDE if your file is covered by a Pyrefly configuration. If 'force-off', Pyrefly will never provide type check squiggles in the IDE. If 'force-on', Pyrefly will always provide type check squiggles in the IDE. If 'error-missing-imports', Pyrefly will only show errors for missing imports and missing sources (missing-import, missing-source, and missing-source-for-stubs).",
                     "default": "default",
                     "enum": [
                         "default",
                         "force-on",
-                        "force-off"
+                        "force-off",
+                        "error-missing-imports"
                     ]
                 },
                 "pyrefly.trace.server": {
@@ -175,8 +193,40 @@
                         "implementation": {
                             "type": "boolean",
                             "default": false
+                        },
+                        "callHierarchy": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Disable call hierarchy feature (Show Incoming/Outgoing Calls)"
                         }
                     }
+                },
+                "python.analysis.showHoverGoToLinks": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Controls whether hover tooltips include 'Go to definition' and 'Go to type definition' navigation links.",
+                    "scope": "resource"
+                },
+                "python.analysis.completeFunctionParens": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Automatically insert parentheses when completing a function or method.",
+                    "scope": "resource"
+                },
+                "python.pyrefly.syncNotebooks": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "If true, Pyrefly will sync notebook documents with the language server. Set to false to disable notebook support."
+                },
+                "python.pyrefly.streamDiagnostics": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes. This is a global setting that applies to all workspaces."
+                },
+                "pyrefly.commentFoldingRanges": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Controls whether comment section folding ranges are included in the editor. When true, comments following the pattern '# Section Name ----' (with 4+ trailing dashes) create collapsible regions, similar to R's code section convention."
                 }
             }
         }

@@ -11,7 +11,8 @@ use std::collections::HashSet;
 use pyrefly_build::handle::Handle;
 use pyrefly_types::class::Class;
 use pyrefly_util::thread_pool::ThreadPool;
-use rayon::prelude::*;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
 use ruff_python_ast::name::Name;
 
 use crate::report::pysa::class::ClassRef;

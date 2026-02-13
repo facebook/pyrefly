@@ -10,7 +10,9 @@ use std::fmt::Display;
 
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Arguments;
+use ruff_python_ast::Decorator;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprYield;
@@ -40,6 +42,12 @@ impl DisplayWith<Module> for Expr {
         } else {
             write!(f, "{}", m.code_at(self.range()))
         }
+    }
+}
+
+impl DisplayWith<Module> for AnyNodeRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &Module) -> fmt::Result {
+        write!(f, "{}", m.code_at(self.range()))
     }
 }
 
@@ -74,6 +82,12 @@ impl DisplayWith<Module> for StmtAugAssign {
 }
 
 impl DisplayWith<Module> for Stmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &Module) -> fmt::Result {
+        write!(f, "{}", m.code_at(self.range()))
+    }
+}
+
+impl DisplayWith<Module> for Decorator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, m: &Module) -> fmt::Result {
         write!(f, "{}", m.code_at(self.range()))
     }

@@ -15,6 +15,7 @@ use library::util::CommonGlobalArgs;
 use pyrefly::library::library::library::library;
 use pyrefly_util::args::get_args_expanded;
 use pyrefly_util::panic::exit_on_panic;
+use pyrefly_util::telemetry::NoTelemetry;
 
 // fbcode likes to set its own allocator in fbcode.default_allocator
 // So when we set our own allocator, buck build buck2 or buck2 build buck2 often breaks.
@@ -47,11 +48,22 @@ struct Args {
 async fn run() -> anyhow::Result<ExitCode> {
     let args = Args::parse_from(get_args_expanded(args_os())?);
     args.common.init(false);
-    Ok(args.command.run(crate_version!()).await?.to_exit_code())
+    Ok(args
+        .command
+        .run(crate_version!(), &NoTelemetry)
+        .await?
+        .to_exit_code())
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    // Enable stack overflow backtraces for debugging.
+    // This is unsafe and only intended for debug builds.
+    #[cfg(not(windows))]
+    #[cfg(feature = "debug-stack-overflow")]
+    unsafe {
+        backtrace_on_stack_overflow::enable();
+    }
     exit_on_panic();
     let res = run().await;
     match res {

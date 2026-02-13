@@ -6,6 +6,7 @@
  */
 
 use std::backtrace::Backtrace;
+use std::io::Write;
 use std::panic::PanicHookInfo;
 use std::sync::Once;
 use std::sync::atomic::AtomicBool;
@@ -37,7 +38,12 @@ pub fn print_panic(info: &PanicHookInfo<'_>) {
             Backtrace::force_capture()
         );
 
-        let out = |x: &str| anstream::eprintln!("{} {x}", Paint::magenta("PANIC"));
+        // Use writeln! instead of eprintln! to avoid panicking if stderr is closed.
+        // This can happen, for example, when stderr is connected to an LSP client which
+        // closes the connection before Pyrefly language server exits.
+        let out = |x: &str| {
+            let _ = writeln!(anstream::stderr(), "{} {x}", Paint::magenta("PANIC"));
+        };
 
         out("Sorry, Pyrefly crashed, this is always a bug in Pyrefly itself.");
         if cfg!(fbcode_build) {

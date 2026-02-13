@@ -190,6 +190,95 @@ c = Concrete()
 "#,
 );
 
+testcase!(
+    test_call_abstract_classmethod_errors,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> "Base": ...
+
+Base.build()  # E: Cannot call abstract method `Base.build`
+
+cls: type[Base] = Base
+cls.build()  # OK
+"#,
+);
+
+testcase!(
+    bug = "We should error on abstract static method calls when the class name is directly referenced",
+    test_call_abstract_staticmethod_errors,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @staticmethod
+    @abstractmethod
+    def helper() -> None: ...
+
+Base.helper()  # This should error
+
+cls: type[Base] = Base
+cls.helper()  # This should not error
+"#,
+);
+
+testcase!(
+    test_call_abstract_method_on_final_class_errors,
+    r#"
+from abc import ABC, abstractmethod
+from typing import final, Protocol
+
+@final
+class FinalBase(ABC):  # E: Final class `FinalBase` cannot have unimplemented abstract members: `build`
+    @classmethod
+    @abstractmethod
+    def build(cls) -> int: ...
+
+@final
+class FinalProtocol(Protocol):
+    @classmethod
+    def build(cls) -> int: ...
+
+class NotFinalBase(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> int: ...
+
+def err(cls: type[FinalBase]):
+    cls.build()  # E: Cannot call abstract method `FinalBase.build`
+
+def ok(cls: type[NotFinalBase]):
+    cls.build()  # OK
+
+def ok(cls: type[FinalProtocol]):
+    cls.build()  # OK
+"#,
+);
+
+testcase!(
+    bug = "We should error on method calls from the class, when the class name is directly referenced",
+    test_call_base_method_directly_errors,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self) -> None: ...
+
+class Concrete(Base):
+    def foo(self) -> None:
+        print("ok")
+
+Base.foo(Concrete())  # This should error
+
+cls: type[Base] = Base
+cls.foo(Concrete())  # This should not error
+"#,
+);
+
 fn env_super_protocol() -> TestEnv {
     let mut env = TestEnv::one_with_path(
         "foo",
@@ -327,4 +416,76 @@ class D(C):  # E: Class `D` has unimplemented abstract members: `bar`
     async def foo(self) -> AsyncIterator[int]:
         yield 1
     "#,
+);
+
+testcase!(
+    test_uninit_classvar_abc,
+    r#"
+# To align with mypy and pyright, we do not consider uninitialized class vars on abstract classes to be abstract
+from abc import ABC
+from typing import ClassVar, final
+@final
+class A(ABC):
+    x: ClassVar[int]
+a = A()
+"#,
+);
+
+testcase!(
+    test_abstract_method_abc,
+    r#"
+from abc import ABC
+
+class A(ABC):
+    def foo(self):
+        raise NotImplementedError()
+
+class B(A):
+    def foo(self):
+        x = 1
+        print(x)
+"#,
+);
+
+testcase!(
+    test_abstract_method_abc_transitive,
+    r#"
+from abc import ABC
+
+class A(ABC):
+    def foo(self):
+        raise NotImplementedError()
+
+class B(A):
+    def bar(self):
+        raise NotImplementedError()
+
+class C(B):
+    def foo(self):
+        pass
+    def bar(self):
+        pass
+"#,
+);
+
+testcase!(
+    test_abstract_method_simple_assignment,
+    r#"
+from abc import ABC, abstractmethod
+
+def concrete_impl(self: "Base") -> int:
+    return 42
+
+class Base(ABC):
+    @abstractmethod
+    def method(self) -> int:
+        pass
+
+class Child(Base):
+    # This assignment should implement the abstract method
+    method = concrete_impl
+
+# This should work - abstract method is implemented via assignment
+x = Child()
+"#,
 );

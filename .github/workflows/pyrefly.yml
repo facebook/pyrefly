@@ -21,7 +21,7 @@ jobs:
           - os: windows-latest
             github_env: $env:GITHUB_ENV
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: set windows cargo home
       # we need to set CARGO_HOME to a high-up directory on Windows machines, since some dependencies cloned
       # by Cargo have long paths and will cause builds/tests to fail
@@ -37,7 +37,7 @@ jobs:
         prefix-key: pyrefly
     - uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: nightly-2025-08-01
+        toolchain: nightly-2025-12-05
         components: clippy, rustfmt
     - run: cargo fmt -- --check
     - run: cargo clippy --release
@@ -50,5 +50,6 @@ jobs:
         JQ: jq
         TEST_PY: ${{ github.workspace }}/test.py
         PYREFLY_PY: ${{ github.workspace }}/pyrefly/python
-      run: scrut test test
+        TENSOR_TEST_ROOT: ${{ github.workspace }}/test/tensor_shapes
+      run: env -u GITHUB_ACTIONS scrut test test
       if: ${{ matrix.os != 'windows-latest' }}

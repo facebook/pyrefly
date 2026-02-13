@@ -10,6 +10,8 @@ use std::sync::Arc;
 use dupe::Clone_;
 use dupe::Copy_;
 use dupe::Dupe_;
+use pyrefly_types::type_alias::TypeAlias;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::BoundMethod;
 use ruff_python_ast::name::Name;
@@ -131,8 +133,8 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.typed_dict_kw_param_info(typed_dict)
     }
 
-    pub fn typed_dict_extra_items(self, cls: &Class) -> ExtraItems {
-        self.0.typed_dict_extra_items(cls)
+    pub fn typed_dict_extra_items(self, typed_dict: &TypedDict) -> ExtraItems {
+        self.0.typed_dict_extra_items(typed_dict)
     }
 
     pub fn get_typed_dict_value_type(self, typed_dict: &TypedDict) -> Type {
@@ -167,5 +169,13 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> Option<Type> {
         self.0.bind_boundmethod(m, is_subset)
+    }
+
+    pub fn get_type_alias(self, ta: &TypeAliasData) -> Arc<TypeAlias> {
+        self.0.get_type_alias(ta)
+    }
+
+    pub fn untype_alias(self, ta: &TypeAliasData) -> Type {
+        self.0.untype_alias(ta)
     }
 }

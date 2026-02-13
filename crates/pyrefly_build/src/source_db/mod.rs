@@ -13,9 +13,10 @@ use std::path::PathBuf;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::RwLock;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -38,7 +39,7 @@ pub(crate) mod query_source_db;
 // with the same data (especially when deserialied) point to the same value.
 static TARGET_INTERNER: Interner<String> = Interner::new();
 
-#[derive(Debug, Clone, Dupe, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Dupe, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Target(Intern<String>);
 impl Serialize for Target {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -53,9 +54,15 @@ impl<'de> Deserialize<'de> for Target {
     }
 }
 
+impl fmt::Debug for Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <Self as fmt::Display>::fmt(self, f)
+    }
+}
+
 impl fmt::Display for Target {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", &**self.0)
     }
 }
 
@@ -69,6 +76,9 @@ impl Target {
     }
 }
 
+/// A `ModulePath` is optimised so that equal paths compare equal with `Arc::ptr_eq`,
+/// that only works if we reuse the `ModulePath` and don't create new ones each time.
+/// Use this cache to ensure we are reusing them.
 #[derive(Debug)]
 pub struct ModulePathCache(RwLock<SmallMap<PathBuf, ModulePath>>);
 
@@ -101,23 +111,32 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// Find the given module in the sourcedb, given the module it's originating from.
     fn lookup(
         &self,
-        module: &ModuleName,
+        module: ModuleName,
         origin: Option<&Path>,
         style_filter: Option<ModuleStyle>,
     ) -> Option<ModulePath>;
     /// Get the handle for the given module path, including its Python platform and version
     /// settings.
-    fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle>;
-    /// Requeries this sourcedb if the set of files provided differs from the files
-    /// previously queried for. This is a blocking operation.
+    fn handle_from_module_path(&self, module_path: &ModulePath) -> Option<Handle>;
+    /// Queries this sourcedb for the provided set of open files. Will short-circuit querying
+    /// if there are no changes from the set of files previously queried for, unless `force`
+    /// is provided, which will unconditionally requery the source DB.
+    ///
+    /// This is a blocking operation.
     /// Returns `Err` if the shellout to the build system failed
     /// The resulting bool represents whether find caches
     /// related to this sourcedb should be invalidated.
-    fn requery_source_db(&self, files: SmallSet<ModulePathBuf>) -> anyhow::Result<bool>;
+    fn query_source_db(
+        &self,
+        files: SmallSet<InternedPath>,
+        force: bool,
+    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats);
     /// The source database-related configuration files a watcher should wait for
     /// changes on. Changes to one of these returned watchfiles should force
     /// a sourcedb rebuild.
-    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern<'_>>;
+    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern>;
     /// Get the target for the given [`ModulePath`], if one exists.
     fn get_target(&self, origin: Option<&Path>) -> Option<Target>;
+    /// Get any generated files for which we might have to override the config finder.
+    fn get_generated_files(&self) -> SmallSet<InternedPath>;
 }

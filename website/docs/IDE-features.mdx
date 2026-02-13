@@ -4,6 +4,13 @@ title: IDE Supported Features
 description: Supported features for Pyrefly's IDE extension
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # IDE Supported Features
 
 Pyrefly’s language server powers a complete editing experience while **fully disabling Pylance**, ensuring no interference between checkers.
@@ -14,7 +21,7 @@ Pyrefly’s language server powers a complete editing experience while **fully d
 
 ### [Go to definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_definition)
 
-Jump to where a symbol is declared with a click or <kbd>F12</kbd>.
+Jump to where a symbol was originally defined with a click or <kbd>F12</kbd>. If there is both a `.pyi` and `.py` file, we will jump to the `.py`.
 <video
   src="/videos/go-to-definition.mp4"
   width="720"
@@ -27,9 +34,9 @@ Jump to where a symbol is declared with a click or <kbd>F12</kbd>.
 
 ---
 
-<!-- ### [Go to type definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
+### [Go to type definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
 
-Navigate to the underlying type of any expression.
+Navigate to the underlying type of any expression. If the expression is a type, we will navigate to the `.pyi` file if both a `.py` and `.pyi` exist.
 <video
   src="/videos/go-to-type-definition.mp4"
   width="720"
@@ -41,7 +48,49 @@ Navigate to the underlying type of any expression.
 />
 
 ---
--->
+
+### [Go to declaration](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_declaration)
+
+Navigate to where the type was defined, but stop at imports.
+<video
+  src="/videos/go-to-declaration.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Go to implementation](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_implementation)
+
+On a method, navigate to all reimplementations.
+<video
+  src="/videos/go-to-implementation.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+
+### [Move/rename file](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_didRename)
+
+When moving or renaming a file, Pyrefly will do it's best to rename all references to it.
+<video
+  src="/videos/move-file.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
 
 ### [Find references](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_references)
 
@@ -212,8 +261,20 @@ We reuse Pyright's `python.analysis.inlayHints.<>` settings for backwards compat
 You can turn inlay hints on or off using the [VSCode Setting](https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints) `editor.inlayHints.enabled`.
 
 
+Inlay hints can be double clicked to insert them as an annotation.
 <video
-  src="/videos/inlay-hints.mp4"
+  src="/videos/double-click-inlay-hint.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+Go-to-definition can be used on a type in an inlay hint to jump its definition. This works even if the type isn't explicitly imported by the current file.
+<video
+  src="/videos/cmd-click-inlay-hint.mp4"
   width="720"
   muted
   loop
@@ -232,6 +293,157 @@ In Jupyter Lab, once you install the [jupyterlab-lsp](https://jupyterlab-lsp.rea
 
 Notebook support is experimental. Please report any bugs on our Github.
 
+---
+### [Call Hierarchy](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_prepareCallHierarchy)
+
+See all incoming functions calls to a particular function, as well as all outgoing function calls from a function. Call Hierarchy provides a full picture of
+how a particular function is used within a call stack.
+
+<video
+  src="/videos/call-hierarchy.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### [Type Hierarchy](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_prepareTypeHierarchy)
+
+See all subclasses and superclasses of a selected class.
+
+<video
+  src="/videos/type-hierarchy.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Pull Member Up and Push Member Down
+
+Pull a method from a subclass to a superclass, or push a method from a superclass to a subclass.
+
+Pull Member Up
+<video
+  src="/videos/pull-up-refactor.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+Push Member Down
+<video
+  src="/videos/push-down-refactor.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Convert to Package and Convert to Module
+
+Convert to Package takes .py file and moves it to a package directory with all logic moved into an __init__.py file.
+
+<video
+  src="/videos/convert-to-package.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+Convert to Module takes an existing package with all logic defined in its __init__.py and creates a named .py file from it.
+
+<video
+  src="/videos/convert-to-module.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Move function to top level
+
+Takes a function nested within another function or statement and moves it to the top level of the module.
+
+<video
+  src="/videos/top-level-refactor.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Introduce Parameter
+
+Adds a new parameter to a function definition and update all call sites to pass the new parameter.
+
+<video
+  src="/videos/refactor-introduce-parameter.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Inline Variable
+
+Removes redundant variables by replacing them with their value.
+
+<video
+  src="/videos/refactor-inline-variable.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Extract to Field
+
+Declare a new field on a class with the value of the selected expression.
+
+<video
+  src="/videos/refactor-extract-to-field.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Extract to Variable
+
+Declare a new variable with the value of the selected expression.
+
+<video
+  src="/videos/refactor-extract-to-variable.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
 ---
 
 ## Planned features

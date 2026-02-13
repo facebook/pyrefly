@@ -11,6 +11,7 @@ use clap::Parser;
 use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::finder::ConfigFinder;
+use pyrefly_types::types::Union;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
@@ -24,12 +25,13 @@ use crate::commands::files::FilesArgs;
 use crate::commands::files::get_project_config_for_current_dir;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::ErrorKind;
+use crate::lsp::wasm::inlay_hints::ParameterAnnotation;
 use crate::state::ide::insert_import_edit_with_forced_import_format;
 use crate::state::lsp::AnnotationKind;
-use crate::state::lsp::ParameterAnnotation;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::types::class::Class;
+use crate::types::heap::TypeHeap;
 use crate::types::simplify::unions_with_literals;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
@@ -141,11 +143,12 @@ fn format_hints(
     inlay_hints: Vec<(ruff_text_size::TextSize, Type, AnnotationKind)>,
     stdlib: &Stdlib,
     enum_members: &dyn Fn(&Class) -> Option<usize>,
+    heap: &TypeHeap,
 ) -> Vec<(ruff_text_size::TextSize, String)> {
     let mut qualified_hints = Vec::new();
     for (position, hint, kind) in inlay_hints {
         let is_container = is_container(&hint);
-        let formatted_hint = hint_to_string(hint, stdlib, enum_members);
+        let formatted_hint = hint_to_string(hint, stdlib, enum_members, heap);
         // TODO: Put these behind a flag
         if formatted_hint.contains("Any") {
             continue;
@@ -193,11 +196,14 @@ fn hint_to_string(
     hint: Type,
     stdlib: &Stdlib,
     enum_members: &dyn Fn(&Class) -> Option<usize>,
+    heap: &TypeHeap,
 ) -> String {
-    let hint = hint.promote_literals(stdlib);
+    let hint = hint.promote_implicit_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
     let hint = match hint {
-        Type::Union(types) => unions_with_literals(types, stdlib, enum_members),
+        Type::Union(box Union { members: types, .. }) => {
+            unions_with_literals(types, stdlib, enum_members, heap)
+        }
         _ => hint,
     };
     hint.to_string()
@@ -251,18 +257,24 @@ impl InferArgs {
                 .collect();
             if let Some(inferred_types) = inferred_types {
                 parameter_types.extend(inferred_types);
-                let formatted = format_hints(parameter_types, &stdlib, &|cls| {
-                    transaction
-                        .ad_hoc_solve(&handle, |solver| {
-                            let meta = solver.get_metadata_for_class(cls);
-                            if meta.is_enum() {
-                                Some(solver.get_enum_members(cls).len())
-                            } else {
-                                None
-                            }
-                        })
-                        .flatten()
-                });
+                let heap = TypeHeap::new();
+                let formatted = format_hints(
+                    parameter_types,
+                    &stdlib,
+                    &|cls| {
+                        transaction
+                            .ad_hoc_solve(&handle, |solver| {
+                                let meta = solver.get_metadata_for_class(cls);
+                                if meta.is_enum() {
+                                    Some(solver.get_enum_members(cls).len())
+                                } else {
+                                    None
+                                }
+                            })
+                            .flatten()
+                    },
+                    &heap,
+                );
                 let sorted = sort_inlay_hints(formatted);
                 let file_path = handle.path().as_path();
                 Self::add_annotations_to_file(file_path, sorted)?;
@@ -282,7 +294,9 @@ impl InferArgs {
                             let module_info = error.module();
                             let module_path = module_info.path().clone();
                             let config = state.config_finder().python_file(
-                                pyrefly_python::module_name::ModuleName::unknown(),
+                                pyrefly_python::module_name::ModuleNameWithKind::guaranteed(
+                                    pyrefly_python::module_name::ModuleName::unknown(),
+                                ),
                                 &module_path,
                             );
                             let handle = config.handle_from_module_path(module_path);
@@ -292,7 +306,7 @@ impl InferArgs {
                                 let imports: Vec<(TextSize, String, String)> = transaction
                                     .search_exports_exact(unknown_name)
                                     .into_iter()
-                                    .map(|handle_to_import_from| {
+                                    .map(|(handle_to_import_from, _)| {
                                         insert_import_edit_with_forced_import_format(
                                             &ast,
                                             handle.dupe(),

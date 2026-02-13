@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly"
-version = "0.41.3"
+version = "0.52.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -23,51 +23,57 @@ clap = { version = "4.5.42", features = ["cargo", "derive", "env", "string", "un
 crossbeam-channel = "0.5.15"
 dashmap = { version = "5.5.3", features = ["rayon", "serde"] }
 dupe = "0.9.1"
-enum-iterator = "2.1"
+enum-iterator = "2.3.0"
+faster-hex = "0.6.1"
 fuzzy-matcher = "0.3.7"
 indicatif = { version = "0.18.3", features = ["futures", "improved_unicode", "rayon", "tokio"] }
 itertools = "0.14.0"
-lsp-server = "0.7.2"
-lsp-types = "0.94.1"
+lsp-server = "0.7.9"
+lsp-types = { git = "https://github.com/astral-sh/lsp-types", rev = "3512a9f33eadc5402cfab1b8f7340824c8ca1439" }
 num-traits = { version = "0.2.19", default-features = false }
 parse-display = "0.8.2"
 paste = "1.0.14"
+percent-encoding = "2.1"
 pyrefly_build = { path = "../crates/pyrefly_build" }
 pyrefly_bundled = { path = "../crates/pyrefly_bundled" }
 pyrefly_config = { path = "../crates/pyrefly_config" }
 pyrefly_derive = { path = "../crates/pyrefly_derive" }
+pyrefly_graph = { path = "../crates/pyrefly_graph" }
 pyrefly_python = { path = "../crates/pyrefly_python" }
 pyrefly_types = { path = "../crates/pyrefly_types" }
 pyrefly_util = { path = "../crates/pyrefly_util" }
 rayon = "1.11.0"
-regex = "1.11.1"
-ruff_annotate_snippets = { git = "https://github.com/astral-sh/ruff/", rev = "9bee8376a17401f9736b45fdefffb62edc2f1668" }
-ruff_notebook = { git = "https://github.com/astral-sh/ruff/", rev = "9bee8376a17401f9736b45fdefffb62edc2f1668" }
-ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "9bee8376a17401f9736b45fdefffb62edc2f1668", features = ["serde"] }
-ruff_python_parser = { git = "https://github.com/astral-sh/ruff/", rev = "9bee8376a17401f9736b45fdefffb62edc2f1668" }
-ruff_source_file = { git = "https://github.com/astral-sh/ruff/", rev = "9bee8376a17401f9736b45fdefffb62edc2f1668" }
-ruff_text_size = { git = "https://github.com/astral-sh/ruff/", rev = "9bee8376a17401f9736b45fdefffb62edc2f1668" }
+regex = "1.12.2"
+ruff_annotate_snippets = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
+ruff_notebook = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
+ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511", features = ["serde"] }
+ruff_python_parser = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
+ruff_source_file = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
+ruff_text_size = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 serde_repr = "0.1.14"
 starlark_map = "0.13.0"
 static_assertions = "1.1.0"
+tempfile = "3.22"
 tokio = { version = "1.47.1", features = ["macros", "rt"] }
-toml = { version = "0.9.8", features = ["preserve_order"] }
+toml = { version = "0.9.11", features = ["preserve_order"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tsp_types = { path = "../crates/tsp_types" }
-vec1 = { version = "1", features = ["serde"] }
+uuid = { version = "1.17", features = ["js", "rng-getrandom", "v4"] }
+vec1 = { version = "1.12.1", features = ["serde"] }
+web-time = "1.1.0"
 yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 
 [dev-dependencies]
 pretty_assertions = { version = "1.2", features = ["alloc"], default-features = false }
-tempfile = "3.22"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+backtrace-on-stack-overflow = "0.3"
 tikv-jemallocator = "0.6.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 mimalloc = "0.1.46"
 
 [lints]
-rust = { unexpected_cfgs = { check-cfg = ["cfg(fbcode_build)"], level = "warn" } }
+rust = { unexpected_cfgs = { check-cfg = ["cfg(fbcode_build)", 'cfg(feature, values("debug-stack-overflow"))'], level = "warn" } }

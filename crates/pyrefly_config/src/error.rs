@@ -7,11 +7,13 @@
 
 use std::collections::HashMap;
 
+use pyrefly_python::ignore::Tool;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::de::MapAccess;
 use serde::de::Visitor;
+use starlark_map::small_set::SmallSet;
 
 use crate::error_kind::ErrorKind;
 use crate::error_kind::Severity;
@@ -64,7 +66,14 @@ impl<'de> Deserialize<'de> for ErrorDisplayConfig {
                 while let Some(key) = map.next_key::<ErrorKind>()? {
                     let severity = match map.next_value::<serde_json::Value>()? {
                         serde_json::Value::Bool(false) => Severity::Ignore,
-                        serde_json::Value::Bool(true) => key.default_severity(),
+                        serde_json::Value::Bool(true) => {
+                            let default_severity = key.default_severity();
+                            if default_severity > Severity::Ignore {
+                                default_severity
+                            } else {
+                                Severity::Error
+                            }
+                        }
                         serde_json::Value::String(s) => {
                             serde_json::from_str::<Severity>(&format!("\"{s}\""))
                                 .map_err(serde::de::Error::custom)?
@@ -90,22 +99,19 @@ impl<'de> Deserialize<'de> for ErrorDisplayConfig {
 pub struct ErrorConfig<'a> {
     pub display_config: &'a ErrorDisplayConfig,
     pub ignore_errors_in_generated_code: bool,
-    pub permissive_ignores: bool,
-    pub ignore_missing_source: bool,
+    pub enabled_ignores: SmallSet<Tool>,
 }
 
 impl<'a> ErrorConfig<'a> {
     pub fn new(
         display_config: &'a ErrorDisplayConfig,
         ignore_errors_in_generated_code: bool,
-        permissive_ignores: bool,
-        ignore_missing_source: bool,
+        enabled_ignores: SmallSet<Tool>,
     ) -> Self {
         Self {
             display_config,
             ignore_errors_in_generated_code,
-            permissive_ignores,
-            ignore_missing_source,
+            enabled_ignores,
         }
     }
 }

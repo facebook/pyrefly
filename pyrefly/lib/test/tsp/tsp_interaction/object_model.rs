@@ -16,24 +16,25 @@ use std::thread::{self};
 use std::time::Duration;
 
 use crossbeam_channel::RecvTimeoutError;
-use crossbeam_channel::bounded;
-use lsp_server::Connection;
-use lsp_server::Message;
-use lsp_server::Notification;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::Url;
 use lsp_types::notification::Exit;
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow::read_to_string;
+use pyrefly_util::telemetry::NoTelemetry;
 use serde_json::Value;
 
 use crate::commands::lsp::IndexingMode;
 use crate::commands::tsp::TspArgs;
 use crate::commands::tsp::run_tsp;
+use crate::lsp::non_wasm::protocol::JsonRpcMessage;
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Notification;
+use crate::lsp::non_wasm::protocol::Request;
+use crate::lsp::non_wasm::protocol::Response;
+use crate::lsp::non_wasm::server::Connection;
 use crate::test::util::init_test;
 
 #[derive(Default)]
@@ -69,12 +70,12 @@ impl TestTspServer {
     }
 
     /// Send a message to this server
-    pub fn send_message(&self, message: Message) {
+    pub fn send_message(&self, msg: Message) {
         eprintln!(
             "client--->server {}",
-            serde_json::to_string(&message).unwrap()
+            serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
         );
-        if let Err(err) = self.sender.send_timeout(message.clone(), self.timeout) {
+        if let Err(err) = self.sender.send_timeout(msg, self.timeout) {
             panic!("Failed to send message to TSP server: {err:?}");
         }
     }
@@ -85,6 +86,7 @@ impl TestTspServer {
             id,
             method: "initialize".to_owned(),
             params,
+            activity_key: None,
         }))
     }
 
@@ -92,6 +94,7 @@ impl TestTspServer {
         self.send_message(Message::Notification(Notification {
             method: "initialized".to_owned(),
             params: serde_json::json!({}),
+            activity_key: None,
         }));
     }
 
@@ -100,6 +103,7 @@ impl TestTspServer {
             id,
             method: lsp_types::request::Shutdown::METHOD.to_owned(),
             params: serde_json::json!(null),
+            activity_key: None,
         }));
     }
 
@@ -107,6 +111,7 @@ impl TestTspServer {
         self.send_message(Message::Notification(Notification {
             method: Exit::METHOD.to_owned(),
             params: serde_json::json!(null),
+            activity_key: None,
         }));
     }
 
@@ -116,6 +121,7 @@ impl TestTspServer {
             id,
             method: "typeServer/getSupportedProtocolVersion".to_owned(),
             params: serde_json::json!(null),
+            activity_key: None,
         }));
     }
 
@@ -125,6 +131,7 @@ impl TestTspServer {
             id,
             method: "typeServer/getSnapshot".to_owned(),
             params: serde_json::json!(null),
+            activity_key: None,
         }));
     }
 
@@ -140,6 +147,7 @@ impl TestTspServer {
                     "text": read_to_string(&path).unwrap(),
                 },
             }),
+            activity_key: None,
         }));
     }
 
@@ -156,6 +164,7 @@ impl TestTspServer {
                     "text": content
                 }]
             }),
+            activity_key: None,
         }));
     }
 
@@ -175,6 +184,7 @@ impl TestTspServer {
                     "type": file_change_type
                 }]
             }),
+            activity_key: None,
         }));
     }
 
@@ -247,30 +257,33 @@ impl TestTspClient {
         }
     }
 
-    pub fn expect_message_helper<F>(&self, expected_message: Message, should_skip: F)
+    pub fn expect_message_helper<F>(&self, expected_msg: Message, should_skip: F)
     where
         F: Fn(&Message) -> bool,
     {
         loop {
             match self.receiver.recv_timeout(self.timeout) {
                 Ok(msg) => {
-                    eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
+                    let actual_str =
+                        serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap();
+
+                    eprintln!("client<---server {}", actual_str);
 
                     if should_skip(&msg) {
                         continue;
                     }
 
-                    let expected_str = serde_json::to_string(&expected_message).unwrap();
-                    let actual_str = serde_json::to_string(&msg).unwrap();
-
+                    let expected_str =
+                        serde_json::to_string(&JsonRpcMessage::from_message(expected_msg.clone()))
+                            .unwrap();
                     assert_eq!(&expected_str, &actual_str, "Response mismatch");
                     return;
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    panic!("Timeout waiting for response. Expected: {expected_message:?}");
+                    panic!("Timeout waiting for response. Expected: {expected_msg:?}");
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    panic!("Channel disconnected. Expected: {expected_message:?}");
+                    panic!("Channel disconnected. Expected: {expected_msg:?}");
                 }
             }
         }
@@ -285,7 +298,10 @@ impl TestTspClient {
     pub fn expect_any_message(&self) {
         match self.receiver.recv_timeout(self.timeout) {
             Ok(msg) => {
-                eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
+                eprintln!(
+                    "client<---server {}",
+                    serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+                );
             }
             Err(RecvTimeoutError::Timeout) => {
                 panic!("Timeout waiting for response");
@@ -300,7 +316,10 @@ impl TestTspClient {
     pub fn receive_any_message(&self) -> Message {
         match self.receiver.recv_timeout(self.timeout) {
             Ok(msg) => {
-                eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
+                eprintln!(
+                    "client<---server {}",
+                    serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+                );
                 msg
             }
             Err(RecvTimeoutError::Timeout) => {
@@ -322,35 +341,29 @@ impl TspInteraction {
     pub fn new() -> Self {
         init_test();
 
-        let (language_client_sender, language_client_receiver) = bounded::<Message>(0);
-        let (language_server_sender, language_server_receiver) = bounded::<Message>(0);
+        let (conn_server, conn_client) = Connection::memory();
 
         let args = TspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
             workspace_indexing_limit: 0,
         };
-        let connection = Connection {
-            sender: language_client_sender,
-            receiver: language_server_receiver,
-        };
 
-        let connection = Arc::new(connection);
         let args = args.clone();
 
         let request_idx = Arc::new(Mutex::new(0));
 
-        let mut server = TestTspServer::new(language_server_sender, request_idx.clone());
+        let mut server = TestTspServer::new(conn_client.sender, request_idx.clone());
 
         // Spawn the server thread and store its handle
         let thread_handle = thread::spawn(move || {
-            run_tsp(connection, args)
+            run_tsp(conn_server, args, &NoTelemetry)
                 .map(|_| ())
                 .map_err(|e| std::io::Error::other(e.to_string()))
         });
 
         server.server_thread = Some(thread_handle);
 
-        let client = TestTspClient::new(language_client_receiver);
+        let client = TestTspClient::new(conn_client.receiver);
 
         Self { server, client }
     }

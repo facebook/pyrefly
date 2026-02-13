@@ -22,10 +22,18 @@ import {
   ServerOptions,
 } from 'vscode-languageclient/node';
 import {PythonExtension} from '@vscode/python-extension';
+import {updateStatusBar, getStatusBarItem} from './status-bar';
+import {runDocstringFoldingCommand} from './docstring';
+import {
+  triggerMsPythonRefreshLanguageServers,
+  disableWindsurfPyrightIfInstalled,
+  disableBasedPyrightIfInstalled,
+  disableCursorPyrightIfInstalled,
+} from './extension-interop';
 
 let client: LanguageClient;
-let statusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel;
+let traceOutputChannel: vscode.OutputChannel;
 
 /// Get a setting at the path, or throw an error if it's not set.
 function requireSetting<T>(path: string): T {
@@ -34,150 +42,6 @@ function requireSetting<T>(path: string): T {
     throw new Error(`Setting "${path}" was not configured`);
   }
   return ret;
-}
-
-/// Update the status bar based on current configuration
-async function updateStatusBar() {
-  const document = vscode.window.activeTextEditor?.document;
-  if (
-    document == null ||
-    (document.uri.scheme !== 'file' &&
-      document.uri.scheme !== 'vscode-notebook-cell' && document.uri.scheme !== 'untitled') ||
-    document.languageId !== 'python'
-  ) {
-    statusBarItem?.hide();
-    return;
-  }
-  let status;
-  try {
-    status = await client.sendRequest(
-      'pyrefly/textDocument/typeErrorDisplayStatus',
-      client.code2ProtocolConverter.asTextDocumentItem(document),
-    );
-  } catch {
-    statusBarItem?.hide();
-    return;
-  }
-
-  if (!statusBarItem) {
-    statusBarItem = vscode.window.createStatusBarItem(
-      vscode.StatusBarAlignment.Right,
-    );
-    statusBarItem.name = 'Pyrefly';
-  }
-
-  switch (status) {
-    case 'disabled-due-to-missing-config-file':
-      statusBarItem.text = 'Pyrefly (error-off)';
-      statusBarItem.tooltip =
-        new vscode.MarkdownString(`Pyrefly type checking is disabled by default.
-Create a [\`pyrefly.toml\`](https://pyrefly.org/en/docs/configuration/) file or set disableTypeErrors to false in settings to show type errors.`);
-      break;
-    case 'disabled-in-ide-config':
-      statusBarItem.text = 'Pyrefly (error-off)';
-      statusBarItem.tooltip =
-        new vscode.MarkdownString(`Pyrefly type checking is explicitly disabled.
-No errors will be shown even if there is a [\`pyrefly.toml\`](https://pyrefly.org/en/docs/configuration/) file.`);
-      break;
-    case 'disabled-in-config-file':
-      statusBarItem.text = 'Pyrefly (error-off)';
-      statusBarItem.tooltip = new vscode.MarkdownString(
-        `Pyrefly type checking is disabled through a config file.`,
-      );
-      break;
-    case 'enabled-in-ide-config':
-      statusBarItem.text = 'Pyrefly';
-      statusBarItem.tooltip = new vscode.MarkdownString(
-        'Pyrefly type checking is explicitly enabled.\nType errors will always be shown.',
-      );
-      break;
-    case 'enabled-in-config-file':
-      statusBarItem.text = 'Pyrefly';
-      statusBarItem.tooltip = new vscode.MarkdownString(
-        'Pyrefly type checking is enabled through a config file.',
-      );
-      break;
-    default:
-      statusBarItem?.hide();
-      return;
-  }
-  statusBarItem.show();
-}
-
-async function getDocstringRanges(
-  document: vscode.TextDocument,
-): Promise<vscode.Range[]> {
-  const identifier = client.code2ProtocolConverter.asTextDocumentIdentifier(
-    document,
-  );
-  const response = (await client.sendRequest(
-    'pyrefly/textDocument/docstringRanges',
-    identifier,
-  )) as Array<{
-    start: {line: number; character: number};
-    end: {line: number; character: number};
-  }> | null;
-
-  if (!response) {
-    return [];
-  }
-
-  return response.map(range => client.protocol2CodeConverter.asRange(range));
-}
-
-async function runDocstringFoldingCommand(
-  commandId: 'editor.fold' | 'editor.unfold',
-): Promise<void> {
-  const editor = vscode.window.activeTextEditor;
-  if (
-    editor == null ||
-    editor.document.uri.scheme !== 'file' ||
-    editor.document.languageId !== 'python'
-  ) {
-    return;
-  }
-
-  try {
-    const ranges = await getDocstringRanges(editor.document);
-    if (ranges.length === 0) {
-      return;
-    }
-
-    const seen = new Set<string>();
-    const uniqueRanges = ranges.filter(range => {
-      const key = `${range.start.line}:${range.start.character}`;
-      if (seen.has(key)) {
-        return false;
-      }
-      seen.add(key);
-      return true;
-    });
-
-    const selectionLines = uniqueRanges
-      .map(range => {
-        if (range.start.line === range.end.line) {
-          return null;
-        }
-        return range.start.line;
-      })
-      .filter((line): line is number => line != null)
-      .filter((line, index, arr) => arr.indexOf(line) === index)
-      .sort((a, b) => a - b);
-
-    if (selectionLines.length === 0) {
-      return;
-    }
-
-    await vscode.commands.executeCommand(commandId, {
-      selectionLines,
-    });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : `Unknown error: ${String(error)}`;
-    outputChannel?.appendLine(
-      `Failed to ${commandId === 'editor.fold' ? 'fold' : 'unfold'} docstrings: ${message}`,
-    );
-  }
 }
 
 /**
@@ -235,6 +99,13 @@ export async function activate(context: ExtensionContext) {
     );
   }
 
+  // Initialize the trace output channel for separate trace logs
+  if (!traceOutputChannel) {
+    traceOutputChannel = vscode.window.createOutputChannel(
+      'Pyrefly language server trace',
+    );
+  }
+
   const path: string = requireSetting('pyrefly.lspPath');
   const args: [string] = requireSetting('pyrefly.lspArguments');
 
@@ -264,6 +135,8 @@ export async function activate(context: ExtensionContext) {
       {scheme: 'untitled', language: 'python'},
       // Support for notebook cells
       {scheme: 'vscode-notebook-cell', language: 'python'},
+      // Support for in-memory documents like the Positron Console
+      {scheme: 'inmemory', language: 'python'},
     ],
     // Support for notebooks
     // @ts-ignore
@@ -276,6 +149,7 @@ export async function activate(context: ExtensionContext) {
       ],
     },
     outputChannel: outputChannel,
+    traceOutputChannel: traceOutputChannel,
     middleware: {
       workspace: {
         configuration: async (
@@ -308,7 +182,7 @@ export async function activate(context: ExtensionContext) {
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(async () => {
-      await updateStatusBar();
+      await updateStatusBar(client);
     }),
   );
 
@@ -327,7 +201,7 @@ export async function activate(context: ExtensionContext) {
           settings: {},
         });
       }
-      await updateStatusBar();
+      await updateStatusBar(client);
     }),
   );
 
@@ -336,6 +210,7 @@ export async function activate(context: ExtensionContext) {
       await client.stop();
       // Clear the output channel but don't dispose it
       outputChannel.clear();
+      traceOutputChannel.clear();
       client = new LanguageClient(
         'pyrefly',
         'Pyrefly language server',
@@ -348,13 +223,13 @@ export async function activate(context: ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('pyrefly.foldAllDocstrings', async () => {
-      await runDocstringFoldingCommand('editor.fold');
+      await runDocstringFoldingCommand(client, outputChannel, 'editor.fold');
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('pyrefly.unfoldAllDocstrings', async () => {
-      await runDocstringFoldingCommand('editor.unfold');
+      await runDocstringFoldingCommand(client, outputChannel, 'editor.unfold');
     }),
   );
 
@@ -369,46 +244,40 @@ export async function activate(context: ExtensionContext) {
     }
   });
 
+  // Disable Windsurf Pyright language services if the extension is installed
+  await disableWindsurfPyrightIfInstalled();
+
+  // Disable Cursor Pyright language services if the extension is installed
+  await disableCursorPyrightIfInstalled();
+
+  // Disable Based Pyright language services if the extension is installed and Pyrefly is enabled
+  const pyreflyDisabled = vscode.workspace
+    .getConfiguration('python.pyrefly')
+    .get<boolean>('disableLanguageServices', false);
+  if (!pyreflyDisabled) {
+    await disableBasedPyrightIfInstalled();
+  }
+
   // Start the client. This will also launch the server
   await client.start();
 
-  await updateStatusBar();
-  context.subscriptions.push(statusBarItem);
-}
-
-/**
- * This function will trigger the ms-python extension to reasses which language server to spin up.
- * It does this by changing languageServer setting: this triggers a refresh of active language
- * servers:
- * https://github.com/microsoft/vscode-python/blob/main/src/client/languageServer/watcher.ts#L296
- *
- * We then change the setting back so we don't end up messing up the users settings.
- */
-async function triggerMsPythonRefreshLanguageServers() {
-  const config = vscode.workspace.getConfiguration('python');
-  const setting = 'languageServer';
-  let previousSetting = config.get(setting);
-  // without the target, we will crash here with "Unable to write to Workspace Settings
-  // because no workspace is opened. Please open a workspace first and try again."
-  await config.update(
-    setting,
-    previousSetting === 'None' ? 'Default' : 'None',
-    vscode.ConfigurationTarget.Global,
-  );
-  await config.update(
-    setting,
-    previousSetting,
-    vscode.ConfigurationTarget.Global,
-  );
+  await updateStatusBar(client);
+  const statusBarItem = getStatusBarItem();
+  if (statusBarItem) {
+    context.subscriptions.push(statusBarItem);
+  }
 }
 
 export function deactivate(): Thenable<void> | undefined {
   if (!client) {
     return undefined;
   }
-  // Dispose the output channel when the extension is deactivated
+  // Dispose the output channels when the extension is deactivated
   if (outputChannel) {
     outputChannel.dispose();
+  }
+  if (traceOutputChannel) {
+    traceOutputChannel.dispose();
   }
   return client.stop();
 }

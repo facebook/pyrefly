@@ -4,6 +4,13 @@ title: IDE Installation
 description: How to add Pyrefly Language Server and Typechecking to your IDE
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # Add Pyrefly to your IDE
 Pyrefly seamlessly integrates into IDEs with our [VSCode](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly) and [OpenVSX](https://open-vsx.org/extension/meta/pyrefly) extensions. For other editors like vim/emacs, see [other editors](#other-editors).
 
@@ -19,10 +26,11 @@ Not seeing inlay hints in VS Code? Try setting `editor.inlayHints.enabled` to `t
 :::
 
 :::tip
-Want type error squiggles to show up in VS Code? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your VS Code settings, or create a `pyrefly.toml` file in your project root.
+Want type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
 :::
 
 ## Customization
+
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
 
 The following configuration options are IDE-specific and exposed as VSCode settings:
@@ -31,20 +39,67 @@ The following configuration options are IDE-specific and exposed as VSCode setti
 - Disable certain language services
   - `python.pyrefly.disabledLanguageServices` [json: {}]: a config to disable certain lsp methods from pyrefly. For example, if you want go-to definition but not find-references.
 - Disable type errors
-  - `python.pyrefly.displayTypeErrors` [enum: default, force-on, force-off]: If `'default'`, Pyrefly will only provide type check squiggles in the IDE if your file is covered by a [Pyrefly configuration](../configuration). If `'force-off'`, Pyrefly will never provide type check squiggles in the IDE. If `'force-on'`, Pyrefly will always provide type check squiggles in the IDE.
+  - `python.pyrefly.displayTypeErrors` [enum: default, force-on, force-off, error-missing-imports]: If `'default'`, Pyrefly will only provide type checking diagnostics in the IDE if your file is covered by a [Pyrefly configuration](../configuration). If `'force-off'`, Pyrefly will never provide type check diagnostics in the IDE. If `'force-on'`, Pyrefly will always provide type check diagnostics in the IDE. If `'error-missing-imports'`, Pyrefly will only show errors for missing imports and missing sources (`missing-import`, `missing-source`, and `missing-source-for-stubs`). Note that syntax errors (`invalid-syntax` and `parse-error`) are shown by default in every mode besides `force-off`.
 - Specify a custom Pyrefly Binary (lspPath)
   - `pyrefly.lspPath` [string: '']: If your platform is not supported, you can build pyrefly from source and specify the binary path with the `lspPath` config.
 - Use a specific interpreter
   - If the [`Python`](https://marketplace.visualstudio.com/items?itemName=ms-python.python) VSCode extension is installed, [selecting an interpreter](https://code.visualstudio.com/docs/python/environments) will override the interpreter and settings Pyrefly uses to type check your project, even if one is specified in your Pyrefly configuration.
   - `python.defaultInterpreterPath` will override the default interpreter selected by VSCode for your workspace.
+- Control hover tooltip links
+  - `python.analysis.showHoverGoToLinks` [boolean: true]: Controls whether hover tooltips include "Go to definition" and "Go to type definition" navigation links. Set to `false` for cleaner tooltips with only type information.
+- Control comment section folding
+  - `pyrefly.commentFoldingRanges` [boolean: false]: Controls whether comment section folding ranges are included in the editor. When `true`, comments following the pattern `# Section Name ----` (with 4+ trailing dashes) create collapsible regions, similar to R's code section convention. Set to `true` to enable this feature.
+
+When used with non-VSCode editors, these options can also be configured by sending them via `initializationOptions` in the LSP [initialization](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#initialize) request.
+
+Below is an example of a value that can be passed for `initializationOptions`:
+```json
+{
+  "pythonPath": "/usr/bin/python3",
+  "commentFoldingRanges": true,
+  "pyrefly": {
+    "displayTypeErrors": "default",
+    "disableLanguageServices": false,
+    "extraPaths": ["/path/to/extra/modules"],
+    "analysis": {
+      "diagnosticMode": "workspace",
+      "importFormat": "absolute",
+      "inlayHints": {
+        "callArgumentNames": "off",
+        "functionReturnTypes": true,
+        "pytestParameters": false,
+        "variableTypes": true
+      },
+      "showHoverGoToLinks": true
+    },
+    "disabledLanguageServices": {
+      "definition": false,
+      "declaration": false,
+      "typeDefinition": false,
+      "codeAction": false,
+      "completion": false,
+      "documentHighlight": false,
+      "references": false,
+      "rename": false,
+      "signatureHelp": false,
+      "hover": false,
+      "inlayHint": false,
+      "documentSymbol": false,
+      "semanticTokens": false,
+      "implementation": false
+    }
+  }
+}
+```
 
 ## Issues?
+
 If you experience issues with the Pyrefly extension, please create an [issue](https://github.com/facebook/pyrefly/issues) on github.
 
 ## Other Editors
 Support for other editors is community-driven. If you would like to set this up, please contribute.
 
-### Windsurf, Cursor and Kiro
+### Antigravity, Windsurf, Cursor and Kiro
 
 You can use Pyrefly in your favorite AI editor that supports [OpenVSX](https://open-vsx.org/extension/meta/pyrefly) extensions. Search for "Pyrefly" in the extension marketplace and install it. Similar to VSCode, Pyrefly will automatically activate when you open a Python file.
 
@@ -72,7 +127,7 @@ PyCharm users can enable native Pyrefly support in the settings:
 
 4. Select which options should be enabled.
 
-For more information, refer to [PyCharm documentation](https://www.jetbrains.com/help/pycharm/2025.3/lsp-tools.html#pyrefly).
+For more information, refer to [PyCharm documentation](https://www.jetbrains.com/help/pycharm/lsp-tools.html#pyrefly).
 
 ### Neovim
 
@@ -192,6 +247,23 @@ require("mason-lspconfig").setup {
         [This Youtube tutorial](https://youtu.be/IZnhl121yo0?si=VINhYDEySX48_8GY) explains setting up a language server in more depth and with a more organized setup, so check it out if you want to learn more.
         :::
 
+        :::info
+        Want type error squiggles to show up in your editor by default? You can create a `pyrefly.toml` in your project root, add a `[tool.pyrefly]` section in your `pyproject.toml`, or add the following to the config object passed into `vim.lsp.config`.
+
+        ```
+        {
+            settings = {
+                python = {
+                    pyrefly = {
+                        displayTypeError = 'force-on'
+                    }
+                }
+            }
+        }
+        ```
+        :::
+
+
     </details>
 
     <details>
@@ -225,6 +297,26 @@ Ensure the pyrefly is on `$PATH`, add following snippet to your `coc-settings.js
   }
 },
 ```
+
+:::tip
+Type errors aren't shown unless a configuration exists. To always display type errors with coc.nvim, add the following `initializationOptions` to your configuration:
+```json
+"languageserver": {
+  "pyrefly": {
+    "command": "pyrefly",
+    "args": ["lsp"],
+    "filetypes": ["python"],
+    "rootPatterns": ["pyrefly.toml", "pyproject.toml", ".git"],
+    "initializationOptions": {
+      "pyrefly": {
+        "displayTypeErrors": "force-on"
+      }
+    }
+  }
+}
+```
+Use `"default"` to only show type errors when a configuration exists, `"force-off"` to never show them, or `"error-missing-imports"` to only show import-related errors - this can help you determine if your Python interpreter is set correctly and all packages are installed.
+:::
 
 ### Vim + ALE
 Pull the latest version of ALE and add the following lines to your configuration
@@ -277,6 +369,44 @@ language-servers = ["pyrefly"]
 
 See the documentation [here](https://lsp.sublimetext.io/language_servers/#pyrefly).
 
+### Positron
+
+Positron comes with Pyrefly out of the box. See the documentation [here](https://positron.posit.co/guide-python.html#settings).
+
 ### Jupyter Lab
 
 Pyrefly may be used in Jupyter Lab through the [jupyterlab-lsp](https://jupyterlab-lsp.readthedocs.io/en/latest/Installation.html) extension.
+
+### Zed
+
+Zed users can install the Pyrefly extension from [here](https://zed.dev/extensions/pyrefly) or by visiting the extensions marketplace:
+
+<video
+  src="/videos/zed.mov"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+Here's an example of a Zed config with Pyrefly integration:
+
+```json
+{
+  "lsp": {
+    "pyrefly": {
+      "binary": {
+        "path": ".venv/bin/pyrefly",
+        "arguments": ["lsp"]
+      }
+    }
+  },
+  "languages": {
+    "Python": {
+      "language_servers": ["pyrefly"],
+    }
+  }
+}
+```

@@ -5,7 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fmt::Write;
+
+use pyrefly_python::sys_info::PythonVersion;
+
 use crate::test::util::TestEnv;
+use crate::test::util::testcase_for_macro;
 use crate::testcase;
 
 testcase!(
@@ -160,8 +165,8 @@ assert_type(y, Generator[int, None, None])
 testcase!(
     test_bad_loop_command,
     r#"
-break  # E: Cannot `break` outside loop
-continue  # E: Cannot `continue` outside loop
+break  # E: `break` outside loop
+continue  # E: `continue` outside loop
     "#,
 );
 
@@ -285,7 +290,7 @@ assert_type(x, Literal[1, 2])
 testcase!(
     test_exception_handler,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Exception1(Exception): pass
 class Exception2(Exception): pass
@@ -296,21 +301,21 @@ x2 = (Exception1, Exception2)
 try:
     pass
 except int as e1:  # E: Invalid exception class: `int` does not inherit from `BaseException`
-    reveal_type(e1)  # E: revealed type: int
+    assert_type(e1, int)
 except int:  # E: Invalid exception class
     pass
 except Exception as e2:
-    reveal_type(e2)  # E: revealed type: Exception
+    assert_type(e2, Exception)
 except ExceptionGroup as e3:
-    reveal_type(e3)  # E: revealed type: ExceptionGroup[Exception]
+    assert_type(e3, ExceptionGroup[Exception])
 except (Exception1, Exception2) as e4:
-    reveal_type(e4)  # E: revealed type: Exception1 | Exception2
+    assert_type(e4, Exception1 | Exception2)
 except Exception1 as e5:
-    reveal_type(e5)  # E: revealed type: Exception1
+    assert_type(e5, Exception1)
 except x1 as e6:
-    reveal_type(e6)  # E: revealed type: Exception
+    assert_type(e6, Exception)
 except x2 as e7:
-    reveal_type(e7)  # E: revealed type: Exception1 | Exception2
+    assert_type(e7, Exception1 | Exception2)
 "#,
 );
 
@@ -396,7 +401,7 @@ def test(x: int):
         case 1:
             assert_type(x, Literal[1])
         case 2 as q:
-            assert_type(x, int)
+            assert_type(x, Literal[2])
             assert_type(q, Literal[2])
         case q:
             assert_type(x, int)
@@ -513,7 +518,7 @@ def fun(x: A | B | C) -> None:
             assert_type(x, B)
     match x:
         case B(3, "B") as y:
-            assert_type(x, A | B | C)
+            assert_type(x, B)
             assert_type(y, B)
     match x:
         case A(1, "a") | B(2, "b"):
@@ -630,7 +635,7 @@ def test(x: Foo | Bar) -> None:
             assert_type(x, Bar)
             assert_type(x.x, str)  # we want to narrow this to Literal["bar"]
         case Bar(a) as b:
-            assert_type(x, Foo | Bar)
+            assert_type(x, Bar)
             assert_type(b, Bar)
             assert_type(a, str)
             assert_type(b, Bar)
@@ -711,7 +716,7 @@ x: list[int] = [1, 2, 3]
 match x:
     case [a] | a: # E: name capture `a` makes remaining patterns unreachable
         assert_type(a, list[int] | int)
-    case [b] | _:
+    case [b] | _:  # E: alternative patterns bind different names
         assert_type(b, int)  # E: `b` may be uninitialized
 
 match x:
@@ -721,12 +726,25 @@ match x:
 );
 
 testcase!(
-    test_crashing_match,
+    test_crashing_match_sequence,
     r#"
 match []:
     case [[1]]:
         pass
     case _:
+        pass
+"#,
+);
+
+testcase!(
+    test_crashing_match_star,
+    r#"
+match []:
+    case *x: # E: Parse error: Star pattern cannot be used here
+        pass
+    case *x | 1: # E: Parse error: Star pattern cannot be used here # E: alternative patterns bind different names
+        pass
+    case 1 | *x: # E: Parse error: Star pattern cannot be used here # E: alternative patterns bind different names
         pass
 "#,
 );
@@ -1163,7 +1181,7 @@ f(C())
 testcase!(
     test_boolean_op_narrowing_example,
     r#"
-from typing import Sequence, reveal_type
+from typing import Sequence, assert_type
 class A:
     def foo(self) -> bool:
         raise NotImplementedError()
@@ -1175,7 +1193,7 @@ class B:
 def f(a: A) -> tuple[int, bool]:
     return a.i(), (
         (isinstance(a, B) and a.bar()) or
-        reveal_type(a).foo()  # E: revealed type: A
+        assert_type(a, A).foo()
     )
 "#,
 );
@@ -1207,6 +1225,19 @@ def test_oops() -> None:
     assert val, "oops"
 "#,
 );
+
+#[test]
+fn test_many_subscript_assignments_do_not_stack_overflow() -> anyhow::Result<()> {
+    let mut contents =
+        String::from("new_val: dict[str, int] = {}\nvalues: dict[str, dict[str, int]] = {}\n");
+    for i in 0..600 {
+        writeln!(&mut contents, "values[\"K{i}\"] = {{}}").unwrap();
+    }
+    for i in 0..600 {
+        writeln!(&mut contents, "values[\"K{i}\"][\"K{i}\"] = {i}").unwrap();
+    }
+    testcase_for_macro(TestEnv::new(), &contents, file!(), line!())
+}
 
 // Regression test for a stack overflow we had at one point.
 testcase!(
@@ -1306,5 +1337,346 @@ def test_keyword_pattern_not_special(x: float) -> None:
     match x:
         case float(real=r):
             assert_type(r, float)
+"#,
+);
+
+testcase!(
+    test_pep765_break_continue_return_in_finally_3_14,
+    TestEnv::new_with_version(PythonVersion {
+        major: 3,
+        minor: 14,
+        micro: 0,
+    }),
+    r#"
+def test():
+    try:
+        pass
+    finally:
+        return # E: in a `finally` block
+
+for _ in []:
+    try:
+        pass
+    finally:
+        break # E: in a `finally` block
+for _ in []:
+    try:
+        pass
+    finally:
+        continue # E: in a `finally` block
+
+try:
+    pass
+finally:
+    def f():
+        return 42 # OK
+
+try:
+    pass
+finally:
+    def f():
+        try:
+            pass
+        finally:
+            return 42 # E: in a `finally` block
+
+try:
+    pass
+finally:
+    for _ in []:
+        try:
+            pass
+        finally:
+            break # E: in a `finally` block
+    "#,
+);
+
+testcase!(
+    test_pep765_break_continue_return_in_finally_3_13,
+    TestEnv::new_with_version(PythonVersion {
+        major: 3,
+        minor: 13,
+        micro: 0,
+    }),
+    r#"
+# For now, we won't emit a PEP765 syntax error for 3.13 and below
+def test():
+    try:
+        pass
+    finally:
+        return
+
+for _ in []:
+    try:
+        pass
+    finally:
+        break
+for _ in []:
+    try:
+        pass
+    finally:
+        continue
+    "#,
+);
+
+testcase!(
+    test_noreturn_branch_termination,
+    r#"
+from typing import NoReturn, assert_type
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: str | bytes | bool) -> str | bytes:
+    if isinstance(x, str):
+        pass
+    elif isinstance(x, bytes):
+        pass
+    else:
+        raises()
+    return x  # Should be ok - x is str | bytes here
+
+def g(x: str | None) -> str:
+    if x is None:
+        raises()
+    return x  # Should be ok - x is str here
+
+def h(x: int | str) -> None:
+    if isinstance(x, int):
+        y = x + 1
+    else:
+        raises()
+    assert_type(y, int)  # y should be int, not str | int
+"#,
+);
+
+testcase!(
+    test_noreturn_nested_branches,
+    r#"
+from typing import NoReturn, assert_type
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: str | int | None) -> str:
+    if x is None:
+        raises()
+    else:
+        if isinstance(x, str):
+            return x
+        else:
+            raises()
+    # Should not be reachable, but if it were, x would be str
+"#,
+);
+
+testcase!(
+    test_noreturn_with_assignment_after,
+    r#"
+from typing import assert_type, NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: str | None):
+    if x is None:
+        raises()
+        y = "unreachable"  # This makes the branch NOT terminate
+    assert_type(x, str | None)
+"#,
+);
+
+testcase!(
+    test_noreturn_all_branches_terminate,
+    r#"
+from typing import assert_type, NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: int | str):
+    if isinstance(x, str):
+        raises()
+    else:
+        raises()
+    # All branches terminate with a NoReturn call; when Pyrefly
+    # encounters this it just ignores the NoReturn and goes ahead
+    # producing the union.
+    assert_type(x, int | str)
+"#,
+);
+
+testcase!(
+    test_non_noreturn_with_termination_key,
+    r#"
+from typing import assert_type
+
+def maybe_raises() -> None:
+    """Not NoReturn - might return normally."""
+    if True:
+        raise Exception()
+
+def f(cond: bool) -> str:
+    if cond:
+        x = "defined"
+    else:
+        maybe_raises()  # Has termination key, but is NOT NoReturn
+    return x  # E: `x` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_non_noreturn_elif,
+    r#"
+def maybe_raises() -> None:
+    if True:
+        raise Exception()
+
+def f(x: int) -> str:
+    if x == 1:
+        y = "one"
+    elif x == 2:
+        maybe_raises()
+    else:
+        maybe_raises()
+    return y  # E: `y` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_declared_variable_with_noreturn_else_false_positive,
+    r#"
+from typing import NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: int) -> str:
+    y: str
+    if x == 1:
+        y = "one"
+    elif x == 2:
+        y = "two"
+    else:
+        raises()
+    return y
+"#,
+);
+
+testcase!(
+    test_if_elif_enum_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(c: Color) -> str:
+    if c == Color.RED:
+        return "warm"
+    elif c == Color.GREEN:
+        return "natural"
+    elif c == Color.BLUE:
+        return "cool"
+"#,
+);
+
+testcase!(
+    bug = "isinstance exhaustiveness not yet working for all union patterns",
+    test_if_elif_isinstance_exhaustive,
+    r#"
+def f(x: int | str) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if isinstance(x, int):
+        return "int"
+    elif isinstance(x, str):
+        return "str"
+"#,
+);
+
+testcase!(
+    test_if_elif_non_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(c: Color) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if c == Color.RED:
+        return "warm"
+    elif c == Color.GREEN:
+        return "natural"
+    # Missing Color.BLUE case - should always error
+"#,
+);
+
+testcase!(
+    test_if_elif_with_else_trivially_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(c: Color) -> str:
+    if c == Color.RED:
+        return "warm"
+    elif c == Color.GREEN:
+        return "natural"
+    else:
+        return "cool"
+"#,
+);
+
+testcase!(
+    test_if_elif_literal_union_exhaustive,
+    r#"
+from typing import Literal
+
+def f(x: Literal["a", "b", "c"]) -> str:
+    if x == "a":
+        return "first"
+    elif x == "b":
+        return "second"
+    elif x == "c":
+        return "third"
+"#,
+);
+
+testcase!(
+    bug = "mixed is/isinstance narrowing exhaustiveness not yet working",
+    test_if_elif_mixed_narrowing,
+    r#"
+def f(x: int | None) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if x is None:
+        return "none"
+    elif isinstance(x, int):
+        return "int"
+"#,
+);
+
+testcase!(
+    test_if_elif_bool_exhaustive,
+    r#"
+def f(x: bool) -> str:
+    if x:
+        return "true"
+    elif not x:
+        return "false"
+"#,
+);
+
+testcase!(
+    test_if_elif_multiple_subjects,
+    r#"
+def f(x: int | str, y: int | str) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if isinstance(x, int):
+        return "x is int"
+    elif isinstance(y, str):
+        return "y is str"
+    # Different subjects in different branches - cannot determine exhaustiveness
 "#,
 );

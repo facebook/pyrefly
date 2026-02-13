@@ -8,6 +8,7 @@
 pub mod bundled;
 pub mod finder;
 pub mod parse;
+pub mod third_party;
 pub mod typeshed;
 pub mod typeshed_third_party;
 

@@ -16,11 +16,13 @@ pub const MAGIC_METHOD_NAMES: &[&str] = &[
     "__aiter__",
     "__anext__",
     "__and__",
+    "__ascii__",
     "__await__",
     "__bool__",
     "__bytes__",
     "__call__",
     "__ceil__",
+    "__class__",
     "__class_getitem__",
     "__complex__",
     "__contains__",
@@ -123,11 +125,16 @@ pub const MAGIC_METHOD_NAMES: &[&str] = &[
     "__xor__",
 ];
 
+pub const ABS: Name = Name::new_static("__abs__");
 pub const AENTER: Name = Name::new_static("__aenter__");
 pub const AEXIT: Name = Name::new_static("__aexit__");
+pub const AITER: Name = Name::new_static("__aiter__");
 pub const ALL: Name = Name::new_static("__all__");
+pub const ANEXT: Name = Name::new_static("__anext__");
+pub const ASCII: Name = Name::new_static("__ascii__");
 pub const BOOL: Name = Name::new_static("__bool__");
 pub const CALL: Name = Name::new_static("__call__");
+pub const CLASS: Name = Name::new_static("__class__");
 pub const CLASS_GETITEM: Name = Name::new_static("__class_getitem__");
 pub const CONTAINS: Name = Name::new_static("__contains__");
 pub const DATACLASS_FIELDS: Name = Name::new_static("__dataclass_fields__");
@@ -137,6 +144,7 @@ pub const DOC: Name = Name::new_static("__doc__");
 pub const ENTER: Name = Name::new_static("__enter__");
 pub const EQ: Name = Name::new_static("__eq__");
 pub const EXIT: Name = Name::new_static("__exit__");
+pub const FORMAT: Name = Name::new_static("__format__");
 pub const GE: Name = Name::new_static("__ge__");
 pub const GET: Name = Name::new_static("__get__");
 pub const GETATTR: Name = Name::new_static("__getattr__");
@@ -157,10 +165,13 @@ pub const NEW: Name = Name::new_static("__new__");
 pub const NEXT: Name = Name::new_static("__next__");
 pub const POS: Name = Name::new_static("__pos__");
 pub const POST_INIT: Name = Name::new_static("__post_init__");
+pub const REPLACE: Name = Name::new_static("__replace__");
+pub const REPR: Name = Name::new_static("__repr__");
 pub const SET: Name = Name::new_static("__set__");
 pub const SETATTR: Name = Name::new_static("__setattr__");
 pub const SETITEM: Name = Name::new_static("__setitem__");
 pub const SLOTS: Name = Name::new_static("__slots__");
+pub const STR: Name = Name::new_static("__str__");
 
 pub const RICH_CMPS: &[Name] = &[LT, LE, EQ, NE, GT, GE];
 /// Rich comparison methods supplied by the `functools.total_ordering` decorator

@@ -54,13 +54,20 @@ impl LinedBuffer {
         self.buffer.lines()
     }
 
+    /// The parser can emit ranges whose end extends past EOF (e.g. unterminated
+    /// triple-quoted strings). Clamp to the maximum valid offset so we can still
+    /// render a useful location instead of panicking (see #1698).
+    pub fn clamp_position(&self, offset: TextSize) -> TextSize {
+        let buffer_len = self.buffer.len();
+        if offset.to_usize() > buffer_len {
+            TextSize::try_from(buffer_len).unwrap()
+        } else {
+            offset
+        }
+    }
+
     pub fn display_pos(&self, offset: TextSize, notebook: Option<&Notebook>) -> DisplayPos {
-        assert!(
-            offset.to_usize() <= self.buffer.len(),
-            "offset out of range, expected {} <= {}",
-            offset.to_usize(),
-            self.buffer.len()
-        );
+        let offset = self.clamp_position(offset);
         let LineColumn { line, column } = self.lines.line_column(offset, &self.buffer);
         if let Some(notebook) = notebook
             && let Some((cell, cell_line)) = self.get_cell_and_line_from_concatenated_line(
@@ -90,6 +97,10 @@ impl LinedBuffer {
     }
 
     pub fn code_at(&self, range: TextRange) -> &str {
+        let range = TextRange::new(
+            self.clamp_position(range.start()),
+            self.clamp_position(range.end()),
+        );
         match self.buffer.get(Range::<usize>::from(range)) {
             Some(code) => code,
             None => panic!(
@@ -503,6 +514,18 @@ mod tests {
         assert_eq!(
             lined_buffer.code_at(lined_buffer.from_display_range(&range(2, 2, 2, 4))),
             "do"
+        );
+    }
+
+    #[test]
+    fn test_display_pos_clamps_out_of_range_offset() {
+        let contents = Arc::new("i:\"\"\"".to_owned());
+        let lined_buffer = LinedBuffer::new(Arc::clone(&contents));
+        let eof = TextSize::new(contents.len() as u32);
+        let past_eof = eof.checked_add(TextSize::from(1)).unwrap();
+        assert_eq!(
+            lined_buffer.display_pos(eof, None),
+            lined_buffer.display_pos(past_eof, None)
         );
     }
 }

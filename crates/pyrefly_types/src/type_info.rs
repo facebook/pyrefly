@@ -98,9 +98,25 @@ impl TypeInfo {
         }
     }
 
+    pub fn map_ty(self, f: impl FnOnce(Type) -> Type) -> Self {
+        Self {
+            ty: f(self.ty),
+            facets: self.facets,
+        }
+    }
+
+    pub fn record_key_completion(&mut self, facets: &Vec1<FacetKind>, ty: Option<Type>) {
+        if let Some((facet, rest)) = facets.as_slice().split_first() {
+            let narrowed = self
+                .facets
+                .get_or_insert_with(|| Box::new(NarrowedFacets::default()));
+            narrowed.ensure_completion_path(facet, rest, ty);
+        }
+    }
+
     pub fn type_at_facet(&self, facet: &FacetKind) -> Option<&Type> {
         match self.get_at_facet(facet) {
-            None | Some(NarrowedFacet::WithoutRoot(..)) => None,
+            None | Some(NarrowedFacet::WithoutRoot { .. }) => None,
             Some(NarrowedFacet::Leaf(ty)) | Some(NarrowedFacet::WithRoot(ty, _)) => Some(ty),
         }
     }
@@ -109,9 +125,9 @@ impl TypeInfo {
         match self.get_at_facet(facet) {
             None => TypeInfo::of_ty(fallback()),
             Some(NarrowedFacet::Leaf(ty)) => Self::of_ty(ty.clone()),
-            Some(NarrowedFacet::WithoutRoot(narrowed_facets)) => Self {
+            Some(NarrowedFacet::WithoutRoot { facets, .. }) => Self {
                 ty: fallback(),
-                facets: Some(Box::new(narrowed_facets.clone())),
+                facets: Some(Box::new(facets.clone())),
             },
             Some(NarrowedFacet::WithRoot(ty, narrowed_facets)) => Self {
                 ty: ty.clone(),
@@ -121,9 +137,6 @@ impl TypeInfo {
     }
 
     pub fn with_narrow(&self, facets: &Vec1<FacetKind>, ty: Type) -> Self {
-        if ty.is_error() {
-            return self.clone();
-        }
         let mut type_info = self.clone();
         type_info.add_narrow(facets, ty);
         type_info
@@ -228,6 +241,66 @@ impl TypeInfo {
         }
     }
 
+    /// Return the known narrowings for dictionary-style key facets at the provided prefix.
+    ///
+    /// The `prefix` is the sequence of facets (attributes, indexes, and keys) that identify the
+    /// container whose keys we are interested in. When the prefix is empty, this inspects the
+    /// top-level facets on the `TypeInfo` itself.
+    pub fn key_facets_at(&self, prefix: &[FacetKind]) -> Vec<(String, Option<Type>)> {
+        fn collect_keys(facets: &NarrowedFacets) -> Vec<(String, Option<Type>)> {
+            facets
+                .0
+                .iter()
+                .filter_map(|(facet, narrowed)| {
+                    if let FacetKind::Key(key) = facet {
+                        let ty = match narrowed {
+                            NarrowedFacet::Leaf(ty) => Some(ty.clone()),
+                            NarrowedFacet::WithRoot(ty, _) => Some(ty.clone()),
+                            NarrowedFacet::WithoutRoot { completion_ty, .. } => {
+                                completion_ty.clone()
+                            }
+                        };
+                        Some((key.clone(), ty))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
+
+        fn descend<'a>(
+            mut current: &'a NarrowedFacets,
+            prefix: &[FacetKind],
+        ) -> Option<&'a NarrowedFacets> {
+            for facet in prefix {
+                let narrowed = current.0.get(facet)?;
+                match narrowed {
+                    NarrowedFacet::Leaf(_) => return None,
+                    NarrowedFacet::WithRoot(_, nested) => {
+                        current = nested;
+                    }
+                    NarrowedFacet::WithoutRoot { facets, .. } => {
+                        current = facets;
+                    }
+                }
+            }
+            Some(current)
+        }
+
+        match &self.facets {
+            Some(facets) => {
+                if prefix.is_empty() {
+                    collect_keys(facets.as_ref())
+                } else if let Some(target) = descend(facets.as_ref(), prefix) {
+                    collect_keys(target)
+                } else {
+                    Vec::new()
+                }
+            }
+            None => Vec::new(),
+        }
+    }
+
     pub fn ty(&self) -> &Type {
         &self.ty
     }
@@ -256,7 +329,9 @@ impl TypeInfo {
 impl Display for TypeInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.ty().fmt(f)?;
-        if let Some(facets) = &self.facets {
+        if let Some(facets) = &self.facets
+            && facets.has_displayable_content()
+        {
             write!(f, " ({facets})")?;
         }
         Ok(())
@@ -276,12 +351,27 @@ const NARROWED_FACETS_LIMIT: usize = 50;
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq)]
 struct NarrowedFacets(SmallMap<FacetKind, NarrowedFacet>);
 
+impl Default for NarrowedFacets {
+    fn default() -> Self {
+        Self(SmallMap::new())
+    }
+}
+
 impl NarrowedFacets {
     fn insert(&mut self, facet: FacetKind, value: NarrowedFacet) {
         // Only insert if there is space, or if the key is already present (so we overwrite)
         if self.0.len() < NARROWED_FACETS_LIMIT || self.0.contains_key(&facet) {
             self.0.insert(facet, value);
         }
+    }
+
+    /// Returns true if this facets structure has any content that would be displayed.
+    /// Empty `WithoutRoot` entries don't contribute to display output.
+    fn has_displayable_content(&self) -> bool {
+        self.0.iter().any(|(_, value)| match value {
+            NarrowedFacet::Leaf(_) | NarrowedFacet::WithRoot(_, _) => true,
+            NarrowedFacet::WithoutRoot { facets, .. } => facets.has_displayable_content(),
+        })
     }
 
     fn add_narrow(&mut self, facet: &FacetKind, more_facets: &[FacetKind], ty: Type) {
@@ -328,9 +418,9 @@ impl NarrowedFacets {
                             narrowed_facet.add_narrow(more_facets, ty);
                         }
                         NarrowedFacet::Leaf(..) => {}
-                        NarrowedFacet::WithoutRoot(narrowed_facets)
-                        | NarrowedFacet::WithRoot(_, narrowed_facets) => {
-                            narrowed_facets.update_for_assignment(next_facet, remaining_facets, ty);
+                        NarrowedFacet::WithoutRoot { facets, .. }
+                        | NarrowedFacet::WithRoot(_, facets) => {
+                            facets.update_for_assignment(next_facet, remaining_facets, ty);
                         }
                     }
                 } else if let Some(ty) = ty {
@@ -347,6 +437,35 @@ impl NarrowedFacets {
 
     fn of_narrow(facet: FacetKind, more_facets: &[FacetKind], ty: Type) -> Self {
         Self(smallmap! {facet => NarrowedFacet::new(more_facets, ty)})
+    }
+
+    fn ensure_completion_path(
+        &mut self,
+        facet: &FacetKind,
+        rest: &[FacetKind],
+        completion_ty: Option<Type>,
+    ) {
+        let entry = self.0.entry(facet.clone()).or_insert_with(|| {
+            if rest.is_empty() {
+                NarrowedFacet::WithoutRoot {
+                    completion_ty: None,
+                    facets: NarrowedFacets::default(),
+                }
+            } else {
+                let mut nested = NarrowedFacets::default();
+                nested.ensure_completion_path(&rest[0], &rest[1..], completion_ty.clone());
+                NarrowedFacet::WithoutRoot {
+                    completion_ty: None,
+                    facets: nested,
+                }
+            }
+        });
+
+        if let Some((next, tail)) = rest.split_first() {
+            entry.ensure_completion_child(next, tail, completion_ty);
+        } else {
+            entry.set_completion_ty(completion_ty);
+        }
     }
 
     fn join(
@@ -401,6 +520,11 @@ impl NarrowedFacets {
     ) -> fmt::Result {
         let mut first = true;
         for (facet, value) in self.0.iter() {
+            // Skip WithoutRoot entries with no displayable content
+            if matches!(value, NarrowedFacet::WithoutRoot { facets, .. } if !facets.has_displayable_content())
+            {
+                continue;
+            }
             if first {
                 first = false
             } else {
@@ -410,10 +534,13 @@ impl NarrowedFacets {
                 NarrowedFacet::Leaf(ty) => Self::fmt_type_with_label(prefix, facet, ty, f),
                 NarrowedFacet::WithRoot(ty, facets) => {
                     Self::fmt_type_with_label(prefix, facet, ty, f)?;
-                    write!(f, ", ")?;
-                    facets.fmt_with_prefix_and_facet(prefix, facet, f)
+                    if facets.has_displayable_content() {
+                        write!(f, ", ")?;
+                        facets.fmt_with_prefix_and_facet(prefix, facet, f)?;
+                    }
+                    Ok(())
                 }
-                NarrowedFacet::WithoutRoot(facets) => {
+                NarrowedFacet::WithoutRoot { facets, .. } => {
                     facets.fmt_with_prefix_and_facet(prefix, facet, f)
                 }
             }?;
@@ -478,16 +605,20 @@ enum NarrowedFacet {
     /// This facet is narrowed, and has one or more narrowed sub-facet (WithRoot)
     WithRoot(Type, NarrowedFacets),
     /// This facet is not narrowed, and has one or more narrowed sub-facet (WithoutRoot)
-    WithoutRoot(NarrowedFacets),
+    WithoutRoot {
+        completion_ty: Option<Type>,
+        facets: NarrowedFacets,
+    },
 }
 
 impl NarrowedFacet {
     fn new(facets: &[FacetKind], ty: Type) -> Self {
         match facets {
             [] => Self::Leaf(ty),
-            [facet, more_facets @ ..] => {
-                Self::WithoutRoot(NarrowedFacets::of_narrow((*facet).clone(), more_facets, ty))
-            }
+            [facet, more_facets @ ..] => Self::WithoutRoot {
+                completion_ty: None,
+                facets: NarrowedFacets::of_narrow((*facet).clone(), more_facets, ty),
+            },
         }
     }
 
@@ -501,41 +632,68 @@ impl NarrowedFacet {
     fn clear_index_narrows(&mut self, facets: &[FacetKind]) {
         match self {
             Self::Leaf(_) => {}
-            Self::WithRoot(_, narrowed_facets) | Self::WithoutRoot(narrowed_facets) => {
-                narrowed_facets.clear_index_narrows(facets)
-            }
+            Self::WithRoot(_, narrowed_facets)
+            | Self::WithoutRoot {
+                facets: narrowed_facets,
+                ..
+            } => narrowed_facets.clear_index_narrows(facets),
         }
     }
 
     fn with_narrow(self, facets: &[FacetKind], narrowed_ty: Type) -> Self {
         match facets {
-            [] => {
-                // We are setting a narrow at the current node (potentially overriding an existing narrow; it is
-                // up to callers to make sure this works correctly, we just take what was given).
-                match self {
-                    Self::Leaf(_) => Self::Leaf(narrowed_ty),
-                    Self::WithRoot(_, narrowed_facets) | Self::WithoutRoot(narrowed_facets) => {
-                        Self::WithRoot(narrowed_ty, narrowed_facets)
+            [] => match self {
+                Self::Leaf(_) => Self::Leaf(narrowed_ty),
+                Self::WithRoot(_, narrowed_facets)
+                | Self::WithoutRoot {
+                    facets: narrowed_facets,
+                    ..
+                } => Self::WithRoot(narrowed_ty, narrowed_facets),
+            },
+            [facet, more_facets @ ..] => match self {
+                Self::Leaf(root_ty) => {
+                    let narrowed_facets =
+                        NarrowedFacets::of_narrow((*facet).clone(), more_facets, narrowed_ty);
+                    Self::WithRoot(root_ty, narrowed_facets)
+                }
+                Self::WithoutRoot { mut facets, .. } => {
+                    facets.add_narrow(facet, more_facets, narrowed_ty);
+                    Self::WithoutRoot {
+                        completion_ty: None,
+                        facets,
                     }
                 }
+                Self::WithRoot(root_ty, mut narrowed_facets) => {
+                    narrowed_facets.add_narrow(facet, more_facets, narrowed_ty);
+                    Self::WithRoot(root_ty, narrowed_facets)
+                }
+            },
+        }
+    }
+
+    fn set_completion_ty(&mut self, ty: Option<Type>) {
+        if let NarrowedFacet::WithoutRoot { completion_ty, .. } = self {
+            *completion_ty = ty;
+        }
+    }
+
+    fn ensure_completion_child(
+        &mut self,
+        facet: &FacetKind,
+        rest: &[FacetKind],
+        completion_ty: Option<Type>,
+    ) {
+        match self {
+            Self::Leaf(root_ty) => {
+                let mut nested = NarrowedFacets::default();
+                nested.ensure_completion_path(facet, rest, completion_ty);
+                *self = Self::WithRoot(root_ty.clone(), nested);
             }
-            [facet, more_facets @ ..] => {
-                // We are setting a narrow in a subtree. We need to preserve any existing tree.
-                match self {
-                    Self::Leaf(root_ty) => {
-                        let narrowed_facets =
-                            NarrowedFacets::of_narrow((*facet).clone(), more_facets, narrowed_ty);
-                        Self::WithRoot(root_ty, narrowed_facets)
-                    }
-                    Self::WithoutRoot(mut narrowed_facets) => {
-                        narrowed_facets.add_narrow(facet, more_facets, narrowed_ty);
-                        Self::WithoutRoot(narrowed_facets)
-                    }
-                    Self::WithRoot(root_ty, mut narrowed_facets) => {
-                        narrowed_facets.add_narrow(facet, more_facets, narrowed_ty);
-                        Self::WithRoot(root_ty, narrowed_facets)
-                    }
-                }
+            Self::WithRoot(_, nested) => {
+                nested.ensure_completion_path(facet, rest, completion_ty);
+            }
+            Self::WithoutRoot { facets, .. } => {
+                facets.ensure_completion_path(facet, rest, completion_ty);
             }
         }
     }
@@ -554,20 +712,19 @@ impl NarrowedFacet {
                         acc.push(item)
                     }
                 }
-            };
+            }
         }
         let mut ty_branches = Some(Vec::with_capacity(branches.len()));
         let mut facets_branches = Some(Vec::with_capacity(branches.len()));
-        for facet in branches {
-            let (ty, facets) = match facet {
+        for branch in branches {
+            let (ty, facets) = match branch {
                 Self::WithRoot(ty, facets) => (Some(ty), Some(facets)),
                 Self::Leaf(ty) => (Some(ty), None),
-                Self::WithoutRoot(facets) => (None, Some(facets)),
+                Self::WithoutRoot { facets, .. } => (None, Some(facets)),
             };
             monadic_push_option(&mut ty_branches, ty);
             monadic_push_option(&mut facets_branches, facets);
             if let (None, None) = (&ty_branches, &facets_branches) {
-                // Not needed for correctness, but saves some work.
                 return None;
             }
         }
@@ -577,25 +734,24 @@ impl NarrowedFacet {
                 union_types,
                 is_subset_eq,
                 join_style.flat_map(|base_facet| {
-                    base_facet.as_ref().and_then(|f| match f {
+                    base_facet.as_ref().and_then(|facet| match facet {
                         NarrowedFacet::WithRoot(ty, _) | NarrowedFacet::Leaf(ty) => {
                             Some(ty.clone())
                         }
-                        NarrowedFacet::WithoutRoot(_) => None,
+                        NarrowedFacet::WithoutRoot { .. } => None,
                     })
                 }),
             )
         });
-        let facets = facets_branches.and_then(|facets_branches| {
+        let facets = facets_branches.and_then(|branches| {
             NarrowedFacets::join(
-                facets_branches,
+                branches,
                 union_types,
                 is_subset_eq,
                 join_style.map(|base_facet| {
-                    base_facet.as_ref().and_then(|f| match f {
-                        NarrowedFacet::WithRoot(_, facets) | NarrowedFacet::WithoutRoot(facets) => {
-                            Some(facets.clone())
-                        }
+                    base_facet.as_ref().and_then(|facet| match facet {
+                        NarrowedFacet::WithRoot(_, facets)
+                        | NarrowedFacet::WithoutRoot { facets, .. } => Some(facets.clone()),
                         NarrowedFacet::Leaf(_) => None,
                     })
                 }),
@@ -605,7 +761,10 @@ impl NarrowedFacet {
             (None, None) => None,
             (Some(ty), None) => Some(Self::Leaf(ty)),
             (Some(ty), Some(facets)) => Some(Self::WithRoot(ty, facets)),
-            (None, Some(facets)) => Some(Self::WithoutRoot(facets)),
+            (None, Some(facets)) => Some(Self::WithoutRoot {
+                completion_ty: None,
+                facets,
+            }),
         }
     }
 }
@@ -829,7 +988,7 @@ mod tests {
         );
         // this clears the narrowing for both x.y[0] and x.y[1], but not x.y
         type_info.invalidate_all_indexes_for_assignment(&[x(), y()]);
-        assert_eq!(type_info.to_string(), "Foo (_.x.y: Bar, )");
+        assert_eq!(type_info.to_string(), "Foo (_.x.y: Bar)");
     }
 
     #[test]

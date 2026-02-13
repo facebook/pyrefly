@@ -13,6 +13,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::Deprecation;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
@@ -33,6 +34,7 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::types::globals::ImplicitGlobal;
 
@@ -74,6 +76,19 @@ pub enum DefinitionStyle {
     /// A statement like `del x` defines `x` in the current scope, even if `x` has no
     /// other definition.
     Delete,
+}
+
+impl DefinitionStyle {
+    /// Returns true if this definition style represents an import from another module.
+    pub fn is_import(&self) -> bool {
+        matches!(
+            self,
+            DefinitionStyle::ImportAs(..)
+                | DefinitionStyle::ImportAsEq(..)
+                | DefinitionStyle::Import(..)
+                | DefinitionStyle::ImportModule(..)
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -130,15 +145,25 @@ pub struct Definitions {
     /// All the modules that are imported with `from x import *`.
     pub import_all: SmallMap<ModuleName, TextRange>,
     /// The `__all__` variable contents.
-    pub dunder_all: Vec<DunderAllEntry>,
+    pub dunder_all: DunderAll,
     /// If the containing module `foo` is a __init__ file, then this is the set of submodules
     /// that are guaranteed to be imported under `foo` when `foo` is itself imported in downstream
     /// files.
     pub implicitly_imported_submodules: SmallSet<Name>,
     /// Deprecated names that are defined in this module.
-    pub deprecated: SmallSet<Name>,
+    pub deprecated: SmallMap<Name, Deprecation>,
     /// Special exports defined in this module
     pub special_exports: SmallMap<Name, SpecialExport>,
+}
+
+/// Whether `__all__` was explicitly defined by the user or synthesized from module definitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum DunderAllKind {
+    /// `__all__` was synthesized from module definitions
+    #[default]
+    Inferred,
+    /// `__all__` was explicitly defined by the user
+    Specified,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -147,6 +172,13 @@ pub enum DunderAllEntry {
     Module(TextRange, ModuleName),
     // We have to have this explicitly, as you might remove something in a Module
     Remove(TextRange, Name),
+}
+
+/// The `__all__` variable contents with tracking of whether it was user-specified.
+#[derive(Debug, Clone, Default)]
+pub struct DunderAll {
+    pub kind: DunderAllKind,
+    pub entries: Vec<DunderAllEntry>,
 }
 
 impl DunderAllEntry {
@@ -189,7 +221,9 @@ struct DefinitionsBuilder<'a> {
 }
 
 fn is_private_name(name: &Name) -> bool {
-    name.starts_with('_')
+    // Names starting with underscore are private, except for a single underscore `_`
+    // which is commonly used as an alias for gettext.
+    name.starts_with('_') && name.as_str() != "_"
 }
 
 fn implicitly_imported_submodule(
@@ -201,16 +235,6 @@ fn implicitly_imported_submodule(
         .strip_prefix(importing_module_name.components().as_slice())
         .and_then(|components| components.first())
         .cloned()
-}
-
-fn is_deprecated_decorator(decorator: &Decorator) -> bool {
-    decorator.expression.as_call_expr().is_some_and(|x| {
-        x.func.as_name_expr().is_some_and(|x| {
-            x.id == "deprecated"
-                || x.id == "warnings.deprecated"
-                || x.id == "typing_extensions.deprecated"
-        })
-    })
 }
 
 fn is_overload_decorator(decorator: &Decorator) -> bool {
@@ -229,6 +253,7 @@ impl Definitions {
             inner: Definitions::default(),
         };
         builder.stmts(x);
+
         builder.inner
     }
 
@@ -263,7 +288,9 @@ impl Definitions {
         }
         if style == ModuleStyle::Executable {
             for (x, range) in self.import_all.iter() {
-                self.dunder_all.push(DunderAllEntry::Module(*range, *x));
+                self.dunder_all
+                    .entries
+                    .push(DunderAllEntry::Module(*range, *x));
             }
         }
         for (name, def) in self.definitions.iter() {
@@ -277,6 +304,7 @@ impl Definitions {
                     ))
             {
                 self.dunder_all
+                    .entries
                     .push(DunderAllEntry::Name(def.range, name.clone()));
             }
         }
@@ -287,6 +315,7 @@ impl Definitions {
         for name in extra {
             if let Some(def) = self.definitions.get(name) {
                 self.dunder_all
+                    .entries
                     .push(DunderAllEntry::Name(def.range, name.clone()))
             }
         }
@@ -428,7 +457,10 @@ impl<'a> DefinitionsBuilder<'a> {
                             && a.name.id == dunder::ALL
                             && let Some(module) = name
                         {
-                            self.inner.dunder_all = vec![DunderAllEntry::Module(x.range, module)]
+                            self.inner.dunder_all = DunderAll {
+                                kind: DunderAllKind::Specified,
+                                entries: vec![DunderAllEntry::Module(x.range, module)],
+                            }
                         }
                         self.add_identifier(a.asname.as_ref().unwrap_or(&a.name), style);
                     }
@@ -440,13 +472,11 @@ impl<'a> DefinitionsBuilder<'a> {
                 decorator_list,
                 ..
             }) => {
-                // If the class is decorated with `@deprecated`, we mark it as deprecated.
-                let mut is_deprecated = false;
-                for d in decorator_list {
-                    is_deprecated = is_deprecated || is_deprecated_decorator(d);
-                }
-                if is_deprecated {
-                    self.inner.deprecated.insert(name.id.clone());
+                if let Some(decoration) = decorator_list
+                    .iter()
+                    .find_map(|d| parse_deprecation(&d.expression))
+                {
+                    self.inner.deprecated.insert(name.id.clone(), decoration);
                 }
                 self.add_identifier_with_body(
                     name,
@@ -478,7 +508,10 @@ impl<'a> DefinitionsBuilder<'a> {
                 for t in &x.targets {
                     self.expr_lvalue(t);
                     if DunderAllEntry::is_all(t) {
-                        self.inner.dunder_all = DunderAllEntry::as_list(&x.value);
+                        self.inner.dunder_all = DunderAll {
+                            kind: DunderAllKind::Specified,
+                            entries: DunderAllEntry::as_list(&x.value),
+                        };
                     }
                 }
             }
@@ -489,7 +522,10 @@ impl<'a> DefinitionsBuilder<'a> {
                 if let Some(v) = &x.value
                     && DunderAllEntry::is_all(&x.target)
                 {
-                    self.inner.dunder_all = DunderAllEntry::as_list(v.as_ref());
+                    self.inner.dunder_all = DunderAll {
+                        kind: DunderAllKind::Specified,
+                        entries: DunderAllEntry::as_list(v.as_ref()),
+                    };
                 }
                 match &*x.target {
                     Expr::Name(x) => {
@@ -508,8 +544,10 @@ impl<'a> DefinitionsBuilder<'a> {
             Stmt::AugAssign(x) => {
                 self.named_in_expr(&x.value);
                 if DunderAllEntry::is_all(&x.target) && x.op == Operator::Add {
+                    self.inner.dunder_all.kind = DunderAllKind::Specified;
                     self.inner
                         .dunder_all
+                        .entries
                         .extend(DunderAllEntry::as_list(&x.value));
                 }
                 if let Expr::Name(name) = &*x.target {
@@ -541,14 +579,17 @@ impl<'a> DefinitionsBuilder<'a> {
                     && arguments.len() == 1
                     && arguments.keywords.is_empty()
                 {
+                    self.inner.dunder_all.kind = DunderAllKind::Specified;
                     match attr.as_str() {
                         "extend" => self
                             .inner
                             .dunder_all
+                            .entries
                             .extend(DunderAllEntry::as_list(&arguments.args[0])),
                         "append" => self
                             .inner
                             .dunder_all
+                            .entries
                             .extend(DunderAllEntry::as_item(&arguments.args[0])),
                         "remove" => {
                             if let Some(DunderAllEntry::Name(range, remove)) =
@@ -556,6 +597,7 @@ impl<'a> DefinitionsBuilder<'a> {
                             {
                                 self.inner
                                     .dunder_all
+                                    .entries
                                     .push(DunderAllEntry::Remove(range, remove));
                             }
                         }
@@ -564,7 +606,9 @@ impl<'a> DefinitionsBuilder<'a> {
                 }
             }
             Stmt::TypeAlias(x) => {
-                self.named_in_expr(&x.value);
+                // Note: We don't call named_in_expr here because named expressions
+                // are not allowed inside type aliases (PEP 695). Type aliases create
+                // their own scope, so any walrus operators would be scoped there anyway.
                 if matches!(&*x.name, Expr::Name(_)) {
                     self.expr_lvalue(&x.name)
                 }
@@ -576,15 +620,21 @@ impl<'a> DefinitionsBuilder<'a> {
                 ..
             }) => {
                 let mut is_overload = false;
-                let mut is_deprecated = false;
+                let mut deprecated_decoration = None;
                 for d in decorator_list {
                     is_overload = is_overload || is_overload_decorator(d);
-                    is_deprecated = is_deprecated || is_deprecated_decorator(d);
+                    if deprecated_decoration.is_none() {
+                        deprecated_decoration = parse_deprecation(&d.expression);
+                    }
                 }
                 // If the function is not an overload and decorated with
                 // `@deprecated`, we mark it as deprecated.
-                if is_deprecated && !is_overload {
-                    self.inner.deprecated.insert(name.id.clone());
+                if let Some(deprecated_decoration) = deprecated_decoration
+                    && !is_overload
+                {
+                    self.inner
+                        .deprecated
+                        .insert(name.id.clone(), deprecated_decoration);
                 }
                 self.add_identifier_with_body(
                     name,
@@ -737,7 +787,7 @@ mod tests {
             is_init,
             &SysInfo::default(),
         );
-        res.dunder_all.iter_mut().for_each(unrange);
+        res.dunder_all.entries.iter_mut().for_each(unrange);
         res
     }
 
@@ -812,6 +862,8 @@ match x():
                 "qux", "moo", "mod", "x", "z", "w", "n", "X", "Y", "case0", "case1",
             ],
         );
+        // No explicit __all__, so it should be inferred
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Inferred);
     }
 
     #[test]
@@ -830,8 +882,9 @@ match (x7 := 42):
     case int(): pass
 (x8 := 42)[y] = 42
 assert (x9 := 42), (x10 := "oops")
-type y = (x11 := int)
 # Named expressions inside expression-level scopes should not appear in definitions.
+# This includes type aliases which create their own scope (PEP 695).
+type y = (x11 := int)
 lambda x: (z := 42)
 {z := "str" for _ in [1]}
 {(z := "str"):1 for _ in [1]}
@@ -842,7 +895,7 @@ lambda x: (z := 42)
         assert_definition_names(
             &defs,
             &[
-                "x0", "y", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
+                "x0", "y", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10",
             ],
         );
     }
@@ -866,6 +919,8 @@ def bar(x: str) -> str: ...
         );
         assert_import_all(&defs, &[]);
         assert_definition_names(&defs, &["overload", "foo", "bar"]);
+        // No explicit __all__, so it should be inferred
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Inferred);
 
         let foo = defs.definitions.get(&Name::new_static("foo")).unwrap();
         assert_eq!(
@@ -902,6 +957,7 @@ __all__.remove('r')
         );
         assert_import_all(&defs, &["foo"]);
         assert_definition_names(&defs, &["a", "b", "__all__"]);
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Specified);
 
         let loc = TextRange::default();
         let a = &DunderAllEntry::Name(loc, Name::new_static("a"));
@@ -909,7 +965,7 @@ __all__.remove('r')
         let foo = &DunderAllEntry::Module(loc, ModuleName::from_str("foo"));
         let r = &DunderAllEntry::Remove(loc, Name::new_static("r"));
         assert_eq!(
-            defs.dunder_all.map(|x| x),
+            defs.dunder_all.entries.map(|x| x),
             vec![a, b, a, b, foo, a, b, foo, a, r]
         );
     }
@@ -925,10 +981,11 @@ __all__: list[str] = ["a", "b"]
         "#,
         );
         assert_definition_names(&defs, &["a", "b", "__all__"]);
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Specified);
         let loc = TextRange::default();
         let a = &DunderAllEntry::Name(loc, Name::new_static("a"));
         let b = &DunderAllEntry::Name(loc, Name::new_static("b"));
-        assert_eq!(defs.dunder_all.map(|x| x), vec![a, b]);
+        assert_eq!(defs.dunder_all.entries.map(|x| x), vec![a, b]);
     }
 
     #[test]
@@ -942,9 +999,10 @@ from _collections_abc import __all__ as __all__
         );
         assert_import_all(&defs, &["_collections_abc"]);
         assert_definition_names(&defs, &["__all__"]);
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Specified);
 
         assert_eq!(
-            defs.dunder_all,
+            defs.dunder_all.entries,
             vec![DunderAllEntry::Module(
                 TextRange::default(),
                 ModuleName::from_str("_collections_abc")

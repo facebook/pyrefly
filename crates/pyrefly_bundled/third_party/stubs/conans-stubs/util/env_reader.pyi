@@ -1,0 +1,3 @@
+from _typeshed import Incomplete
+
+def get_env(env_key, default: Incomplete | None = ..., environment: Incomplete | None = ...): ...

@@ -21,7 +21,6 @@
 #![deny(clippy::derive_partial_eq_without_eq)]
 #![deny(clippy::inefficient_to_string)]
 #![deny(clippy::str_to_string)]
-#![deny(clippy::string_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
 #![feature(const_type_name)]
 #![feature(if_let_guard)]
@@ -40,6 +39,7 @@ pub mod fs_anyhow;
 pub mod gas;
 pub mod globs;
 pub mod includes;
+pub mod interned_path;
 pub mod lined_buffer;
 pub mod lock;
 pub mod locked_map;
@@ -50,8 +50,13 @@ pub mod panic;
 pub mod prelude;
 pub mod recurser;
 pub mod ruff_visitors;
+pub mod small_map1;
 pub mod small_set1;
+pub mod stdlib;
+pub mod suggest;
+pub mod tarjan;
 pub mod task_heap;
+pub mod telemetry;
 pub mod test_path;
 pub mod thread_pool;
 pub mod trace;

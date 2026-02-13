@@ -136,7 +136,7 @@ testcase!(
 from typing import TypeVarTuple
 
 _Ts = TypeVarTuple("_Ts")
-def f(*args: *_Ts) -> None: 
+def f(*args: *_Ts) -> None:
     f(*args)
 "#,
 );
@@ -149,5 +149,227 @@ from typing import Unpack, TypeVarTuple
 _Ts = TypeVarTuple("_Ts")
 class A:
     def f(self, *args: Unpack[_Ts]): ...
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_unpack_quantified,
+    r#"
+from typing import Callable
+
+def test[*Ts, T](f: Callable[[*Ts], T], t: tuple[*Ts], *args: *Ts):
+    # we can unpack a quantified type var tuple if it matches the expected type exactly
+    x: tuple[*Ts] = (*args,)
+    f(*args)
+    x = t
+    x = (*t,)
+
+    # This error message could be improved
+    x = (*args, *args)  # E: `tuple[ElementOf[Ts] | Unknown, ...]` is not assignable to variable `x` with type `tuple[*Ts]`
+    x = (*args, 1)  # E: `tuple[*Ts, Literal[1]]` is not assignable to variable `x` with type `tuple[*Ts]`
+    x = (1, *args)  # E: `tuple[Literal[1], *Ts]` is not assignable to variable `x` with type `tuple[*Ts]`
+    x = (*t, *t)  # E: `tuple[ElementOf[Ts] | Unknown, ...]` is not assignable to variable `x` with type `tuple[*Ts]`
+    x = (*t, 1)  # E: `tuple[*Ts, Literal[1]]` is not assignable to variable `x` with type `tuple[*Ts]`
+    x = (1, *t)  # E: `tuple[Literal[1], *Ts]` is not assignable to variable `x` with type `tuple[*Ts]`
+    f(*args, *args)  # E: Expected at most one unpacked variadic argument
+    f(1, *args)  # E: Unpacked argument `tuple[Literal[1], *Ts]` is not assignable to varargs type `tuple[*Ts]`
+    f(*args, 1)  # E: Unpacked argument `tuple[*Ts, Literal[1]]` is not assignable to varargs type `tuple[*Ts]`
+    f(*t, *t)  # E: Expected at most one unpacked variadic argument
+    f(1, *t)  # E: Unpacked argument `tuple[Literal[1], *Ts]` is not assignable to varargs type `tuple[*Ts]`
+    f(*t, 1)  # E: Unpacked argument `tuple[*Ts, Literal[1]]` is not assignable to varargs type `tuple[*Ts]`
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_callable_resolves_to_empty,
+    r#"
+from typing import Callable, assert_type
+
+def test[*Ts, T](f: Callable[[*Ts], T], *args: *Ts) -> tuple[*Ts]:
+    x: T = f(*args)
+    return (*args,)
+
+assert_type(test(lambda: 1), tuple[()])
+
+fun: Callable[[int], int] = lambda x: x + 1
+assert_type(test(fun, 1), tuple[int])
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_resolves_to_empty,
+    r#"
+from typing import Callable, assert_type
+
+def test[*Ts](*args: *Ts) -> tuple[*Ts]:
+    return (*args,)
+
+assert_type(test(), tuple[()])
+assert_type(test(1), tuple[int])
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_slice_empty,
+    r#"
+from typing import assert_type
+
+def f[*Ts](*x: *Ts) -> None:
+    assert_type(x[1:0], tuple[()])
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_bound_method_resolves_to_empty,
+    r#"
+from collections.abc import Callable, Awaitable
+from typing import TypeVarTuple
+
+class Nursery:
+    def start_soon[*PosArgsT](self, func: Callable[[*PosArgsT], Awaitable[None]], *args: *PosArgsT) -> None:
+        pass
+
+class B:
+    async def bound(self) -> None:
+        pass
+
+    def fn(self):
+        n = Nursery()
+        n.start_soon(self.bound)
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_subscript,
+    r#"
+from typing import assert_type
+
+def test[*Ts](prefix_only: tuple[int, str, *Ts], prefix_and_suffix: tuple[int, str, *Ts, bool, str], suffix_only: tuple[*Ts, bool, str, int]):
+    # Positive indexing in prefix
+    assert_type(prefix_only[0], int)
+    assert_type(prefix_only[1], str)
+    assert_type(prefix_and_suffix[0], int)
+    assert_type(prefix_and_suffix[1], str)
+
+    # Negative indexing in suffix
+    assert_type(suffix_only[-1], int)
+    assert_type(suffix_only[-2], str)
+    assert_type(suffix_only[-3], bool)
+    assert_type(prefix_and_suffix[-1], str)
+    assert_type(prefix_and_suffix[-2], bool)
+
+    # Slice within prefix
+    assert_type(prefix_only[0:1], tuple[int])
+    assert_type(prefix_only[0:2], tuple[int, str])
+    assert_type(prefix_only[1:2], tuple[str])
+    assert_type(prefix_and_suffix[0:1], tuple[int])
+    assert_type(prefix_and_suffix[0:2], tuple[int, str])
+    assert_type(prefix_and_suffix[1:2], tuple[str])
+
+    # Slice ending in prefix
+    assert_type(prefix_only[:1], tuple[int])
+    assert_type(prefix_only[:2], tuple[int, str])
+    assert_type(prefix_and_suffix[:1], tuple[int])
+    assert_type(prefix_and_suffix[:2], tuple[int, str])
+
+    # Slice starting in prefix
+    assert_type(prefix_only[1:], tuple[str, *Ts])
+    assert_type(prefix_and_suffix[1:], tuple[str, *Ts, bool, str])
+    assert_type(prefix_only[2:], tuple[*Ts])
+    assert_type(prefix_and_suffix[2:], tuple[*Ts, bool, str])
+
+    # Slice ending in suffix
+    assert_type(prefix_and_suffix[:-1], tuple[int, str, *Ts, bool])
+    assert_type(prefix_and_suffix[:-2], tuple[int, str, *Ts])
+    assert_type(prefix_and_suffix[1:-1], tuple[str, *Ts, bool])
+
+    # Unhandled cases (these should fall back and not crash)
+    prefix_only[5:]
+    prefix_and_suffix[5:6]
+    prefix_and_suffix[5:6:2]
+    suffix_only[10:20]
+    prefix_and_suffix[-10:-5]
+    prefix_only[::2]
+    suffix_only[::-1]
+    prefix_only[:-10]
+    prefix_only[:10]
+    prefix_and_suffix[1:10:3]
+    prefix_and_suffix[-1:]
+    prefix_only[-5]
+    prefix_and_suffix[-5]
+    prefix_and_suffix[10]
+
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_swap,
+    r#"
+def test[T, *Ts](t1: tuple[T, *Ts], t2: tuple[*Ts, T]):
+    t1 = (t2[-1], *t2[:-1])
+    t2 = (*t1[1:], t1[0])
+"#,
+);
+
+testcase!(
+    bug = "conformance: TypeVarTuple should allow compatible tuple types when solving (maybe related to issue 105)",
+    test_typevartuple_compatible_tuple_types,
+    r#"
+from typing import TypeVarTuple
+
+Ts = TypeVarTuple("Ts")
+
+def func2(arg1: tuple[*Ts], arg2: tuple[*Ts]) -> tuple[*Ts]: ...
+
+func2((0,), (0.0,))  # E: Argument `tuple[float]` is not assignable to parameter `arg2` with type `tuple[int]`
+"#,
+);
+
+testcase!(
+    bug = "conformance: TypeVarTuple specialized with empty tuple should simplify correctly",
+    test_typevartuple_specialization_empty,
+    r#"
+from typing import TypeVarTuple, assert_type
+
+Ts = TypeVarTuple("Ts")
+
+IntTuple = tuple[int, *Ts]
+
+def func4(a: IntTuple[()]):
+    assert_type(a, tuple[int])  # E: assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed
+"#,
+);
+
+testcase!(
+    bug = "conformance: TypeVarTuple generic alias with single type arg should simplify correctly",
+    test_typevartuple_specialization_single_arg,
+    r#"
+from typing import TypeVar, TypeVarTuple, assert_type
+
+T = TypeVar("T")
+Ts = TypeVarTuple("Ts")
+
+VariadicTuple = tuple[T, *Ts]
+
+def func6(b: VariadicTuple[float]):
+    assert_type(b, tuple[float])  # E: assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed
+"#,
+);
+
+testcase!(
+    bug = "conformance: TypeVarTuple with unbounded tuple should work with type aliases",
+    test_typevartuple_specialization_unbounded,
+    r#"
+from typing import TypeVar, TypeVarTuple, assert_type
+
+T1 = TypeVar("T1")
+Ts = TypeVarTuple("Ts")
+
+TA9 = tuple[*Ts, T1]
+TA10 = TA9[*tuple[int, ...]]  # E: Unpacked argument cannot be used for type parameter T1
+
+def func11(a: TA10, b: TA9[*tuple[int, ...], str]):
+    assert_type(a, tuple[*tuple[int, ...], int])  # E: assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed
+    assert_type(b, tuple[*tuple[int, ...], str])
 "#,
 );

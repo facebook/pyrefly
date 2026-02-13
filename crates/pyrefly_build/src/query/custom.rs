@@ -6,6 +6,9 @@
  */
 
 use std::fmt::Debug;
+use std::fmt::Display;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
 use serde::Deserialize;
@@ -15,7 +18,7 @@ use vec1::Vec1;
 use crate::query::SourceDbQuerier;
 
 /// Args and settings for querying a custom source DB.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub struct CustomQueryArgs {
     /// The command to run.
@@ -27,10 +30,30 @@ pub struct CustomQueryArgs {
     /// <arg>
     /// ...
     /// ```
-    /// and `<arg-flag>` is either `--file` or `--target`, depending on the type
-    /// of `<arg>`
-    /// and `<arg>` is an absolute path to a file or a build system's target.
-    command: Vec1<String>,
+    ///
+    /// `<arg-flag>` is either `--file` or `--target`, depending on the type
+    /// of `<arg>`, and `<arg>` is an absolute path to a file or a build system's target.
+    pub command: Vec1<String>,
+
+    /// The root of the repository. Repo roots here will be shared between configs.
+    #[serde(default)]
+    pub repo_root: Option<PathBuf>,
+}
+
+impl CustomQueryArgs {
+    pub fn get_repo_root(&self, cwd: &std::path::Path) -> anyhow::Result<PathBuf> {
+        Ok(self.repo_root.as_deref().unwrap_or(cwd).to_path_buf())
+    }
+}
+
+impl Display for CustomQueryArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "command: {:?}, repo_root: {:?}",
+            self.command, self.repo_root
+        )
+    }
 }
 
 /// A querier allowing for a custom command when querying and constructing source DB.
@@ -44,7 +67,7 @@ impl CustomQuerier {
 }
 
 impl SourceDbQuerier for CustomQuerier {
-    fn construct_command(&self) -> Command {
+    fn construct_command(&self, _: Option<&Path>) -> Command {
         let mut cmd = Command::new(self.0.command.first());
         cmd.args(self.0.command.iter().skip(1));
         cmd

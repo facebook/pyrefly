@@ -11,7 +11,7 @@
 //! Originally specified in <https://peps.python.org/pep-0484/>.
 //!
 //! You can also use the name of the linter, e.g. `# pyright: ignore`,
-//! `# pyrefly: ignore`, `# mypy: ignore`.
+//! `# pyrefly: ignore`.
 //!
 //! You can specify a specific error code, e.g. `# type: ignore[invalid-type]`.
 //! Note that Pyright will only honor such codes after `# pyright: ignore[code]`.
@@ -21,52 +21,124 @@
 //!
 //! For Pyre compatibility we also allow `# pyre-ignore` and `# pyre-fixme`
 //! as equivalents to `pyre: ignore`, and `# pyre-ignore-all-errors` as
-//! an equivalent to `type: ignore-errors`.
+//! an equivalent to `type: ignore` on its own line.
 //!
 //! We are permissive with whitespace, allowing `#type:ignore[code]` and
-//! `#  type:  ignore  [  code  ]`, but do not allow a space after the colon.
+//! `#  type:  ignore  [  code  ]`, but do not allow a space before the colon.
 
+use std::iter::Peekable;
+use std::str::CharIndices;
+
+use clap::ValueEnum;
 use dupe::Dupe;
+use enum_iterator::Sequence;
 use pyrefly_util::lined_buffer::LineNumber;
+use serde::Deserialize;
+use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use starlark_map::smallset;
+
+/// Finds the byte offset of the first '#' character that starts a comment, tracking
+/// whether we're inside a multi-line triple-quoted string.
+///
+/// `in_triple_quote` should be `Some('"')` or `Some('\'')` if the line begins
+/// inside an open triple-quoted string from a previous line, or `None` otherwise.
+///
+/// Returns `(comment_start, new_triple_quote_state)`.
+fn find_comment_start(line: &str, in_triple_quote: Option<char>) -> (Option<usize>, Option<char>) {
+    let mut chars = line.char_indices().peekable();
+    let mut triple_quote = in_triple_quote;
+    let mut single_quote = None;
+
+    let advance_if_matches = |chars: &mut Peekable<CharIndices>, q| {
+        if chars.peek().is_some_and(|(_, next)| *next == q) {
+            chars.next();
+            true
+        } else {
+            false
+        }
+    };
+
+    while let Some((idx, ch)) = chars.next() {
+        if let Some(q) = triple_quote {
+            // Inside triple-quoted string
+            if ch == '\\' {
+                // Skip next char if escaped
+                chars.next();
+            } else if ch == q
+                // This check consumes zero, one, or two additional chars:
+                // - zero or one: this is a single quote or a pair of quotes, not interesting
+                // - two: this is the end of a triple-quoted string
+                && advance_if_matches(&mut chars, q)
+                && advance_if_matches(&mut chars, q)
+            {
+                triple_quote = None;
+            }
+            continue;
+        }
+
+        if let Some(q) = single_quote {
+            // Inside regular string
+            if ch == '\\' {
+                // Skip next char if escaped
+                chars.next();
+            } else if ch == q {
+                single_quote = None;
+            }
+            continue;
+        }
+
+        // Normal code.
+        match ch {
+            '"' | '\'' => {
+                if advance_if_matches(&mut chars, ch) {
+                    if advance_if_matches(&mut chars, ch) {
+                        triple_quote = Some(ch);
+                    } else {
+                        // We've advanced past the opening and closing quotes of an empty string
+                    }
+                } else {
+                    single_quote = Some(ch);
+                }
+            }
+            '#' => return (Some(idx), None),
+            _ => {}
+        }
+    }
+    (None, triple_quote)
+}
 
 /// Finds the byte offset of the first '#' character that starts a comment.
 /// Returns None if no comment is found or if all '#' are inside strings.
-/// Handles escape sequences and single/double quotes.
+/// Handles escape sequences, single/double quotes, and triple-quoted strings.
 ///
 /// This is string-aware parsing that avoids treating '#' inside strings as comments.
 /// For example: `x = "hello # world"  # real comment` correctly identifies the second '#'.
 pub fn find_comment_start_in_line(line: &str) -> Option<usize> {
-    let mut chars = line.char_indices().peekable();
-    let mut in_string = None; // None, Some('"'), or Some('\'')
-
-    while let Some((idx, ch)) = chars.next() {
-        match (ch, in_string) {
-            ('\\', Some(_)) => {
-                chars.next();
-            } // Skip next char if escaped
-            ('"' | '\'', None) => in_string = Some(ch), // Enter string
-            (q, Some(quote)) if q == quote => in_string = None, // Exit string
-            ('#', None) => return Some(idx),            // Found comment!
-            _ => {}
-        }
-    }
-    None
+    find_comment_start(line, None).0
 }
 
 /// The name of the tool that is being suppressed.
-#[derive(PartialEq, Debug, Clone, Hash, Eq, Dupe, Copy)]
+/// Note that the variant names and docstrings are displayed in `pyrefly check --help`.
+#[derive(PartialEq, Debug, Clone, Hash, Eq, Dupe, Copy, Sequence)]
+#[derive(Deserialize, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
 pub enum Tool {
-    /// Indicates a `type: ignore`.
-    Any,
-    /// Indicates a `pyrefly: ignore`.
+    /// Enables `# type: ignore`
+    Type,
+    /// Enables `# pyrefly: ignore` and `# pyrefly: ignore-errors`
     Pyrefly,
-    /// Includes the `pyre-ignore` and `pyre-fixme` hints, along with `pyre: ignore`.
-    Pyre,
+    /// Enables `# pyright: ignore`
     Pyright,
+    /// Enables `# mypy: ignore-errors`
     Mypy,
+    /// Enables `# ty: ignore`
     Ty,
+    /// Enables `# pyre: ignore`, `# pyre-ignore`, `# pyre-fixme`, and `# pyre-ignore-all-errors`
+    Pyre,
+    /// Enables `# zuban: ignore`
+    Zuban,
 }
 
 impl Tool {
@@ -75,14 +147,23 @@ impl Tool {
 
     fn from_comment(x: &str) -> Option<Self> {
         match x {
-            "type" => Some(Tool::Any),
+            "type" => Some(Tool::Type),
             "pyrefly" => Some(Tool::Pyrefly),
             "pyre" => Some(Tool::Pyre),
             "pyright" => Some(Tool::Pyright),
             "mypy" => Some(Tool::Mypy),
             "ty" => Some(Tool::Ty),
+            "zuban" => Some(Tool::Zuban),
             _ => None,
         }
+    }
+
+    pub fn default_enabled() -> SmallSet<Self> {
+        smallset! { Self::Type, Self::Pyrefly }
+    }
+
+    pub fn all() -> SmallSet<Self> {
+        enum_iterator::all::<Self>().collect()
     }
 }
 
@@ -148,32 +229,46 @@ pub struct Suppression {
     tool: Tool,
     /// The permissible error kinds, use empty Vec to mean any are allowed
     kind: Vec<String>,
+    /// The line number where the suppression comment is located.
+    /// This may differ from the line the suppression applies to
+    /// (e.g., when the comment is on the line above).
+    comment_line: LineNumber,
+}
+
+impl Suppression {
+    /// Returns the line number where the suppression comment is located.
+    pub fn comment_line(&self) -> LineNumber {
+        self.comment_line
+    }
+
+    /// Returns the error codes that this suppression applies to.
+    /// An empty slice means the suppression applies to all error codes.
+    pub fn error_codes(&self) -> &[String] {
+        &self.kind
+    }
+
+    /// Returns the tool that this suppression is for.
+    pub fn tool(&self) -> Tool {
+        self.tool
+    }
 }
 
 /// Record the position of lines affected by `# type: ignore[valid-type]` suppressions.
 /// For now we don't record the content of the ignore, but we could.
 #[derive(Debug, Clone, Default)]
 pub struct Ignore {
-    // The line number here represents the line that the suppression applies to,
-    // not the line of the suppression comment.
+    /// The line number here represents the line that the suppression applies to,
+    /// not the line of the suppression comment.
     ignores: SmallMap<LineNumber, Vec<Suppression>>,
-    /// Do we have a generic or Pyrefly-specific ignore-all directive?
-    ignore_all_strict: bool,
-    /// Do we have any ignore-all directive, regardless of tool?
-    ignore_all_permissive: bool,
+    /// All the tools with an ignore-all directive, with the line number that the directive is on.
+    ignore_all: SmallMap<Tool, LineNumber>,
 }
 
 impl Ignore {
     pub fn new(code: &str) -> Self {
-        let ignores = Self::parse_ignores(code);
-        let ignore_all = Self::parse_ignore_all(code);
-        let ignore_all_strict =
-            ignore_all.contains_key(&Tool::Pyrefly) || ignore_all.contains_key(&Tool::Any);
-        let ignore_all_permissive = !ignore_all.is_empty();
         Self {
-            ignores,
-            ignore_all_strict,
-            ignore_all_permissive,
+            ignores: Self::parse_ignores(code),
+            ignore_all: Self::parse_ignore_all(code),
         }
     }
 
@@ -220,16 +315,25 @@ impl Ignore {
         // If we see a comment on a non-code line, apply it to the next non-comment line.
         let mut pending = Vec::new();
         let mut line = LineNumber::default();
+        let mut in_triple_quote = None;
         for (idx, line_str) in code.lines().enumerate() {
+            let (comment_start, new_state) = find_comment_start(line_str, in_triple_quote);
+            in_triple_quote = new_state;
+            let comments = if let Some(comment_start) = comment_start {
+                &line_str[comment_start..]
+            } else {
+                ""
+            };
+            let is_comment_only_line = comment_start
+                .is_some_and(|comment_start| line_str[..comment_start].trim_start().is_empty());
             line = LineNumber::from_zero_indexed(idx as u32);
-            let mut xs = line_str.split('#');
-            let first = xs.next().unwrap_or("");
-            if !pending.is_empty() && (line_str.is_empty() || !first.trim_start().is_empty()) {
+            if !pending.is_empty() && (line_str.is_empty() || !is_comment_only_line) {
                 ignores.entry(line).or_default().append(&mut pending);
             }
-            for x in xs {
-                if let Some(supp) = Self::parse_ignore_comment(x) {
-                    if first.trim_start().is_empty() {
+            // We know `#` is at the beginning, so the first split is an empty string
+            for x in comments.split('#').skip(1) {
+                if let Some(supp) = Self::parse_ignore_comment(x, line) {
+                    if is_comment_only_line {
                         pending.push(supp);
                     } else {
                         ignores.entry(line).or_default().push(supp);
@@ -247,7 +351,8 @@ impl Ignore {
     }
 
     /// Given the content of a comment, parse it as a suppression.
-    fn parse_ignore_comment(l: &str) -> Option<Suppression> {
+    /// The comment_line parameter indicates which line the comment is on.
+    fn parse_ignore_comment(l: &str, comment_line: LineNumber) -> Option<Suppression> {
         let mut lex = Lexer(l);
         lex.trim_start();
 
@@ -270,11 +375,13 @@ impl Ignore {
             return Some(Suppression {
                 tool,
                 kind: inside.split(',').map(|x| x.trim().to_owned()).collect(),
+                comment_line,
             });
         } else if gap || lex.word_boundary() {
             return Some(Suppression {
                 tool,
                 kind: Vec::new(),
+                comment_line,
             });
         }
         None
@@ -283,33 +390,33 @@ impl Ignore {
     pub fn is_ignored(
         &self,
         start_line: LineNumber,
-        end_line: LineNumber,
         kind: &str,
-        permissive_ignores: bool,
+        enabled_ignores: &SmallSet<Tool>,
     ) -> bool {
-        if self.ignore_all_strict || (permissive_ignores && self.ignore_all_permissive) {
+        if enabled_ignores
+            .iter()
+            .any(|tool| self.ignore_all.contains_key(tool))
+        {
             return true;
         }
-
-        // We allow an ignore on any line within the range.
-        // We convert to/from zero-indexed because LineNumber does not implement Step.
-        for line in start_line.to_zero_indexed()..=end_line.to_zero_indexed() {
-            if let Some(suppressions) = self.ignores.get(&LineNumber::from_zero_indexed(line))
-                && suppressions.iter().any(|supp| match supp.tool {
-                    // We only check the subkind if they do `# pyrefly: ignore`
-                    Tool::Pyrefly => supp.kind.is_empty() || supp.kind.iter().any(|x| x == kind),
-                    Tool::Any => true,
-                    _ => permissive_ignores,
-                })
-            {
-                return true;
-            }
+        if let Some(suppressions) = self.ignores.get(&start_line)
+            && suppressions.iter().any(|supp| {
+                enabled_ignores.contains(&supp.tool)
+                    && match supp.tool {
+                        // We only check the subkind if they do `# pyrefly: ignore`
+                        Tool::Pyrefly => {
+                            supp.kind.is_empty() || supp.kind.iter().any(|x| x == kind)
+                        }
+                        _ => true,
+                    }
+            })
+        {
+            return true;
         }
-
         false
     }
 
-    /// Similar to `is_ignored``, but it only returns true if the error is ignored
+    /// Similar to `is_ignored`, but it only returns true if the error is ignored
     /// by a suppression that targets a specific line.
     pub fn is_ignored_by_suppression_line(
         &self,
@@ -317,7 +424,7 @@ impl Ignore {
         start_line: LineNumber,
         end_line: LineNumber,
         kind: &str,
-        permissive_ignores: bool,
+        enabled_ignores: &SmallSet<Tool>,
     ) -> bool {
         // If the error does not overlap the range, skip the more expensive check
         if start_line > suppression_line || end_line < suppression_line {
@@ -326,11 +433,13 @@ impl Ignore {
         let Some(suppressions) = self.ignores.get(&suppression_line) else {
             return false;
         };
-        if suppressions.iter().any(|supp| match supp.tool {
-            // We only check the subkind if they do `# pyrefly: ignore`
-            Tool::Pyrefly => supp.kind.is_empty() || supp.kind.iter().any(|x| x == kind),
-            Tool::Any => true,
-            _ => permissive_ignores,
+        if suppressions.iter().any(|supp| {
+            enabled_ignores.contains(&supp.tool)
+                && match supp.tool {
+                    // We only check the subkind if they do `# pyrefly: ignore`
+                    Tool::Pyrefly => supp.kind.is_empty() || supp.kind.iter().any(|x| x == kind),
+                    _ => true,
+                }
         }) {
             return true;
         }
@@ -345,7 +454,7 @@ impl Ignore {
                 ignore
                     .1
                     .iter()
-                    .any(|s| s.tool == Tool::Pyrefly || s.tool == Tool::Any)
+                    .any(|s| s.tool == Tool::Pyrefly || s.tool == Tool::Type)
             }))
         } else {
             Box::new(ignore_iter.filter(|ignore| ignore.1.iter().any(|s| s.tool == Tool::Pyrefly)))
@@ -362,6 +471,11 @@ impl Ignore {
     /// Gets the suppressions for a specific line.
     pub fn get(&self, line: &LineNumber) -> Option<&Vec<Suppression>> {
         self.ignores.get(line)
+    }
+
+    /// Returns true if there are no suppressions.
+    pub fn is_empty(&self) -> bool {
+        self.ignores.is_empty() && self.ignore_all.is_empty()
     }
 }
 
@@ -384,28 +498,74 @@ mod tests {
             );
         }
 
-        f("stuff # type: ignore # and then stuff", &[(Tool::Any, 1)]);
-        f("more # stuff # type: ignore", &[(Tool::Any, 1)]);
+        f("stuff # type: ignore # and then stuff", &[(Tool::Type, 1)]);
+        f("more # stuff # type: ignore", &[(Tool::Type, 1)]);
         f(" pyrefly: ignore", &[]);
         f("normal line", &[]);
         f(
-            "code # mypy: ignore\n# pyre-fixme\nmore code",
-            &[(Tool::Mypy, 1), (Tool::Pyre, 3)],
+            "code # pyright: ignore\n# pyre-fixme\nmore code",
+            &[(Tool::Pyright, 1), (Tool::Pyre, 3)],
         );
         f(
-            "# type: ignore\n# mypy: ignore\n# bad\n\ncode",
-            &[(Tool::Any, 4), (Tool::Mypy, 4)],
+            "# type: ignore\n# pyright: ignore\n# bad\n\ncode",
+            &[(Tool::Type, 4), (Tool::Pyright, 4)],
         );
+
+        // Ignore `# pyrefly: ignore` inside a string but not before/after
+        f("x = 1 + '# pyrefly: ignore'", &[]);
+        f("x = ''  # pyrefly: ignore", &[(Tool::Pyrefly, 1)]);
+        f("x = '''# pyrefly: ignore'''", &[]);
+        f(
+            r#"
+x = """
+x = 1  # pyrefly: ignore
+"""
+        "#,
+            &[],
+        );
+        f(
+            r#"
+import textwrap
+textwrap.dedent("""\
+x = 1  # pyrefly: ignore
+""")
+        "#,
+            &[],
+        );
+        f(
+            r#"
+x = """  # pyrefly: ignore
+"""
+        "#,
+            &[],
+        );
+        f(
+            r#"
+x = """
+# pyrefly: ignore"""
+        "#,
+            &[],
+        );
+        f(
+            r#"
+x = """
+"""  # pyrefly: ignore
+        "#,
+            &[(Tool::Pyrefly, 3)],
+        );
+        f("x = ''''''  # pyrefly: ignore", &[(Tool::Pyrefly, 1)]);
     }
 
     #[test]
     fn test_parse_ignore_comment() {
         fn f(x: &str, tool: Option<Tool>, kind: &[&str]) {
+            let dummy_line = LineNumber::default();
             assert_eq!(
-                Ignore::parse_ignore_comment(x),
+                Ignore::parse_ignore_comment(x, dummy_line),
                 tool.map(|tool| Suppression {
                     tool,
                     kind: kind.map(|x| (*x).to_owned()),
+                    comment_line: dummy_line,
                 }),
                 "{x:?}"
             );
@@ -422,19 +582,23 @@ mod tests {
         f("pyrefly: ignore[bad-]", Some(Tool::Pyrefly), &["bad-"]);
 
         // Check spacing
-        f(" type: ignore ", Some(Tool::Any), &[]);
-        f("type:ignore", Some(Tool::Any), &[]);
+        f(" type: ignore ", Some(Tool::Type), &[]);
+        f("type:ignore", Some(Tool::Type), &[]);
         f("type :ignore", None, &[]);
 
         // Check extras
         // Mypy rejects that, Pyright accepts it
-        f("type: ignore because it is wrong", Some(Tool::Any), &[]);
+        f("type: ignore because it is wrong", Some(Tool::Type), &[]);
         f("type: ignore_none", None, &[]);
         f("type: ignore1", None, &[]);
-        f("type: ignore?", Some(Tool::Any), &[]);
+        f("type: ignore?", Some(Tool::Type), &[]);
 
-        f("mypy: ignore", Some(Tool::Mypy), &[]);
-        f("mypy: ignore[something]", Some(Tool::Mypy), &["something"]);
+        f("pyright: ignore", Some(Tool::Pyright), &[]);
+        f(
+            "pyright: ignore[something]",
+            Some(Tool::Pyright),
+            &["something"],
+        );
 
         f("pyre-ignore", Some(Tool::Pyre), &[]);
         f("pyre-ignore[7]", Some(Tool::Pyre), &["7"]);
@@ -446,8 +610,15 @@ mod tests {
         );
         f("pyre-fixme: core type error", Some(Tool::Pyre), &[]);
 
+        f("zuban: ignore", Some(Tool::Zuban), &[]);
+        f(
+            "zuban: ignore[something]",
+            Some(Tool::Zuban),
+            &["something"],
+        );
+
         // For a malformed comment, at least do something with it (works well incrementally)
-        f("type: ignore[hello", Some(Tool::Any), &["hello"]);
+        f("type: ignore[hello", Some(Tool::Type), &["hello"]);
     }
 
     #[test]
@@ -499,10 +670,10 @@ mod tests {
             &[(Tool::Pyrefly, 3)],
         );
         f("x = 5\n# pyrefly: ignore-errors", &[]);
-        f("# type: ignore\n\nx = 5", &[(Tool::Any, 1)]);
+        f("# type: ignore\n\nx = 5", &[(Tool::Type, 1)]);
         f(
             "# comment\n# type: ignore\n# comment\nx = 5",
-            &[(Tool::Any, 2)],
+            &[(Tool::Type, 2)],
         );
         f("# type: ignore\nx = 5", &[]);
         f("# pyre-ignore-all-errors\nx = 5", &[(Tool::Pyre, 1)]);

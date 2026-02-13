@@ -5,135 +5,170 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
-use lsp_server::RequestId;
-use lsp_server::Response;
-use lsp_types::Url;
+use std::collections::HashSet;
 
+use lsp_types::RegistrationParams;
+use lsp_types::Url;
+use lsp_types::request::RegisterCapability;
+use lsp_types::request::Request as _;
+use serde::Deserialize;
+use serde_json::json;
+use tempfile::TempDir;
+
+use crate::commands::lsp::IndexingMode;
+use crate::lsp::non_wasm::protocol::Message;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::test::lsp::lsp_interaction::object_model::LspMessageError;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
+pub fn expect_watched_files(
+    interaction: &LspInteraction,
+) -> Result<HashSet<String>, LspMessageError> {
+    let params: RegistrationParams = interaction.client.expect_message(
+        &format!("Request {}", RegisterCapability::METHOD),
+        |msg| {
+            if let Message::Request(x) = msg
+                && x.method == RegisterCapability::METHOD
+            {
+                Some(Ok(serde_json::from_value(x.params).unwrap()))
+            } else {
+                None
+            }
+        },
+    )?;
+    assert!(params.registrations.iter().any(|x| x.id == "FILEWATCHER"));
+    #[derive(Deserialize)]
+    struct Pattern {
+        #[serde(rename = "globPattern")]
+        glob_pattern: String,
+    }
+    #[derive(Deserialize)]
+    struct Options {
+        watchers: Vec<Pattern>,
+    }
+    let patterns = params
+        .registrations
+        .into_iter()
+        .filter_map(|r| r.register_options)
+        .filter_map(|o| serde_json::from_value::<Options>(o).ok())
+        .flat_map(|o| o.watchers)
+        .map(|w| w.glob_pattern)
+        .collect();
+    Ok(patterns)
+}
+
 /// Initialize a test interaction with file watcher enabled.
-/// Returns the interaction after consuming the initial file watcher registration.
-fn setup_file_watcher_test() -> LspInteraction {
+/// Returns the TempDir (to keep it alive) and the interaction after consuming
+/// the initial file watcher registration.
+fn setup_file_watcher_test() -> (TempDir, LspInteraction) {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
 
     let scope_uri = Url::from_file_path(root.path()).unwrap();
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        file_watch: true,
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            file_watch: true,
+            ..Default::default()
+        })
+        .unwrap();
 
-    // Consume the initial registration
-    interaction.client.expect_file_watcher_register();
+    (root, interaction)
+}
 
-    // Acknowledge the registration
-    interaction.server.send_message(Message::Response(Response {
-        id: RequestId::from(1),
-        result: None,
-        error: None,
-    }));
+/// Test that file watcher registration happens even when no specific patterns are watched.
+/// This ensures the server always registers file watchers after initialization.
+#[test]
+fn test_file_watcher_registered_on_initialization() {
+    let (_root, interaction) = setup_file_watcher_test();
 
-    // Open a file to start the test
-    interaction.server.did_open("text_document.py");
+    interaction.shutdown().unwrap();
+}
+
+/// Test that incremental pattern additions only send register (no unregister first)
+/// when the change is small enough.
+#[test]
+fn test_incremental_pattern_addition() {
+    let (_root, interaction) = setup_file_watcher_test();
+
+    // Opening a new file with a new extension shouldn't trigger full re-watch
+    // Just an incremental register for new patterns
+    interaction.client.did_open("text_document.py");
+    let text_document_watched = expect_watched_files(&interaction).unwrap();
 
     interaction
+        .client
+        .did_open("imports_builtins/imports_builtins.py");
+
+    // We only watch new files, even though some similar files should be watched.
+    let builtins_watched = expect_watched_files(&interaction).unwrap();
+    assert!(text_document_watched.is_disjoint(&builtins_watched));
+
+    interaction
+        .client
+        .did_open("imports_builtins/site-packages/typing.py");
+
+    // Opening a new file with an already opened config watches no new files.
+    let new_builtins_watched = expect_watched_files(&interaction).unwrap();
+    assert!(new_builtins_watched.is_empty());
+
+    // The test passes if shutdown succeeds without seeing unregister requests
+    interaction.shutdown().unwrap();
 }
 
-/// Test that file modifications (metadata-only changes) do NOT trigger watcher re-registration
+/// Test that multiple consecutive DidChangeWatchedFiles notifications are
+/// eventually processed. This simulates a burst of file system events (e.g., git
+/// checkout) where many files change at once. The first two notifications are
+/// for files that didn't change on disk (noise).
 #[test]
-fn test_file_modification_no_reregister() {
-    let interaction = setup_file_watcher_test();
+fn test_consecutive_file_watcher_events() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("streaming");
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            workspace_folders: Some(vec![(
+                "streaming".to_owned(),
+                Url::from_file_path(root_path.clone()).unwrap(),
+            )]),
+            file_watch: true,
+            ..Default::default()
+        })
+        .unwrap();
 
-    // Send a file change notification (modification only)
-    interaction.server.file_modified("text_document.py");
+    let b_path = root_path.join("b.py");
+    let c_path = root_path.join("c.py");
 
-    // Give the server time to process - if it were going to re-register, it would do so quickly
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    interaction.client.did_open("c.py");
+    interaction.client.did_open("b.py");
+    interaction
+        .client
+        .expect_file_watcher_register()
+        .expect("Register file watcher for b");
 
-    // The test passes if shutdown succeeds without seeing any registration requests
-    // The shutdown will consume remaining messages and any unexpected registration
-    // would cause the test to hang or fail
-    interaction.shutdown();
-}
+    std::fs::write(&b_path, "").unwrap();
 
-/// Test that file creation DOES trigger watcher re-registration
-#[test]
-fn test_file_creation_triggers_reregister() {
-    let interaction = setup_file_watcher_test();
+    // Send multiple DidChangeWatchedFiles notifications in rapid succession.
+    // The first few are noise (those files didn't change on disk); only the
+    // last notification (b.py) carries a real change.
+    interaction.client.file_modified("a.py");
+    interaction.client.file_modified("a.py");
+    interaction.client.file_modified("a.py");
+    interaction.client.file_modified("a.py");
+    interaction.client.file_modified("a.py");
+    interaction.client.file_modified("b.py");
 
-    // Send a file creation notification
-    interaction.server.file_created("new_file.py");
+    // Verify that b.py was re-read from disk and d now shows the type error.
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(c_path.clone(), 1)
+        .expect("Failed to receive diagnostics after file watcher events");
 
-    // Expect unregister then register
-    interaction.client.expect_file_watcher_unregister();
-    interaction.client.expect_file_watcher_register();
-
-    interaction.shutdown();
-}
-
-/// Test that file deletion DOES trigger watcher re-registration
-#[test]
-fn test_file_deletion_triggers_reregister() {
-    let interaction = setup_file_watcher_test();
-
-    // Send a file deletion notification
-    interaction.server.file_deleted("text_document.py");
-
-    // Expect unregister then register
-    interaction.client.expect_file_watcher_unregister();
-    interaction.client.expect_file_watcher_register();
-
-    interaction.shutdown();
-}
-
-/// Test that config file changes DOES trigger watcher re-registration
-#[test]
-fn test_config_file_change_triggers_reregister() {
-    let interaction = setup_file_watcher_test();
-
-    // Send a config file change notification
-    interaction.server.file_modified("pyrefly.toml");
-
-    // Expect unregister then register
-    interaction.client.expect_file_watcher_unregister();
-    interaction.client.expect_file_watcher_register();
-
-    interaction.shutdown();
-}
-
-/// Test that multiple file modifications (batch) do NOT trigger watcher re-registration
-#[test]
-fn test_multiple_file_modifications_no_reregister() {
-    let interaction = setup_file_watcher_test();
-
-    // Send multiple file change notifications (modifications only)
-    interaction.server.file_modified("text_document.py");
-    interaction.server.file_modified("utf.py");
-
-    // Give the server time to process - if it were going to re-register, it would do so quickly
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
-    // The test passes if shutdown succeeds without seeing any registration requests
-    interaction.shutdown();
-}
-
-/// Test that mixed events (modification + creation) DOES trigger watcher re-registration
-#[test]
-fn test_mixed_events_triggers_reregister() {
-    let interaction = setup_file_watcher_test();
-
-    // Send mixed file change notifications (modification + creation)
-    interaction.server.file_modified("text_document.py");
-    interaction.server.file_created("new_file.py");
-
-    // Expect unregister then register (because of creation)
-    interaction.client.expect_file_watcher_unregister();
-    interaction.client.expect_file_watcher_register();
-
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

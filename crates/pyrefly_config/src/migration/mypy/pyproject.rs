@@ -81,6 +81,20 @@ struct MypySection {
     follow_imports: Option<String>,
     #[serde(default)]
     overrides: Vec<ModuleSection>,
+    #[serde(default)]
+    warn_redundant_casts: Option<bool>,
+    #[serde(default)]
+    disallow_untyped_defs: Option<bool>,
+    #[serde(default)]
+    disallow_incomplete_defs: Option<bool>,
+    #[serde(default)]
+    disallow_any_generics: Option<bool>,
+    #[serde(default)]
+    strict: Option<bool>,
+    #[serde(default)]
+    report_deprecated_as_note: Option<bool>,
+    #[serde(default)]
+    allow_redefinitions: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -158,6 +172,51 @@ fn pyproject_to_ini(raw_file: &str) -> anyhow::Result<Ini> {
     }
     if let Some(follow_imports) = mypy.follow_imports {
         ini.set("mypy", "follow_imports", Some(follow_imports));
+    }
+    if let Some(warn_redundant_casts) = mypy.warn_redundant_casts {
+        ini.set(
+            "mypy",
+            "warn_redundant_casts",
+            Some(warn_redundant_casts.to_string()),
+        );
+    }
+    if let Some(disallow_untyped_defs) = mypy.disallow_untyped_defs {
+        ini.set(
+            "mypy",
+            "disallow_untyped_defs",
+            Some(disallow_untyped_defs.to_string()),
+        );
+    }
+    if let Some(disallow_incomplete_defs) = mypy.disallow_incomplete_defs {
+        ini.set(
+            "mypy",
+            "disallow_incomplete_defs",
+            Some(disallow_incomplete_defs.to_string()),
+        );
+    }
+    if let Some(disallow_any_generics) = mypy.disallow_any_generics {
+        ini.set(
+            "mypy",
+            "disallow_any_generics",
+            Some(disallow_any_generics.to_string()),
+        );
+    }
+    if let Some(strict) = mypy.strict {
+        ini.set("mypy", "strict", Some(strict.to_string()));
+    }
+    if let Some(report_deprecated_as_note) = mypy.report_deprecated_as_note {
+        ini.set(
+            "mypy",
+            "report_deprecated_as_note",
+            Some(report_deprecated_as_note.to_string()),
+        );
+    }
+    if let Some(allow_redefinitions) = mypy.allow_redefinitions {
+        ini.set(
+            "mypy",
+            "allow_redefinitions",
+            Some(allow_redefinitions.to_string()),
+        );
     }
 
     // Add the per-module sections

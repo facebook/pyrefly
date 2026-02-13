@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -80,6 +81,20 @@ def decorated(x: int) -> str:
    return f"{x}"
 
 assert_type(decorated, Callable[[int], list[set[str]]])
+    "#,
+);
+
+testcase!(
+    test_parameter_type_inferred_from_decorator,
+    r#"
+from typing import Callable, reveal_type
+
+def enforce_int_arg(func: Callable[[int], None]) -> Callable[[int], None]:
+    return func
+
+@enforce_int_arg
+def takes_inferred(i) -> None:
+    reveal_type(i)  # E: revealed type: int
     "#,
 );
 
@@ -561,4 +576,122 @@ class A:
     f = classmethod(f)
 assert_type(A.f(), type[A])  # E: assert_type(A, type[A])  # E: `type[A]` is not assignable to parameter `cls` with type `A`
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/793 - we don't
+// want the `contextmanager` decorator to lose the "forall-ness" of the decorated
+// function.
+testcase!(
+    test_contextmanager_preserves_tparams_and_forall,
+    r#"
+import contextlib
+from contextlib import contextmanager
+from typing import Iterator, List, assert_type
+
+@contextmanager
+def generic_ctx[T](val: T) -> Iterator[T]:
+    yield val
+
+def test(x: int, items: List[int]):
+    with generic_ctx(x) as val:
+        assert_type(val, int)
+    m = generic_ctx(items)
+    assert_type(m, contextlib._GeneratorContextManager[List[int], None, None])
+"#,
+);
+
+// When we preserve "forall-ness" of decorated callables, we need to make sure
+// that we don't accidentally leak `Type::Quantified` when a decorator returns
+// a generic non-callable type.
+testcase!(
+    test_decorator_returns_non_callable_produces_gradual_type,
+    r#"
+from typing import TypeVar, Callable, List, assert_type, Any
+
+def list_decorator[T](f: Callable[[T], T]) -> List[T]: ...
+
+@list_decorator
+def my_func[T](x: T) -> T:
+    return x
+
+def test():
+    assert_type(my_func, List[Any])
+"#,
+);
+
+// If a decorator returns a callable that has additional tparams that weren't
+// in the original function, we need to make sure the decorated function type is
+// generic over all tparams.
+testcase!(
+    test_decorator_adds_new_tparams_to_forall,
+    r#"
+from typing import TypeVar, Callable, Tuple, assert_type
+
+def add_generic[T, S](f: Callable[[T], T]) -> Callable[[T, S], Tuple[T, S]]:
+    return lambda x, y: (f(x), y)
+
+@add_generic
+def my_func[T](x: T) -> T:
+    return x
+
+def test(x: int, y: str):
+    res = my_func(x, y)
+    assert_type(res, Tuple[int, str])
+"#,
+);
+
+// If a decorator converts a generic callable into a non-generic, we should drop the callable's tparams
+testcase!(
+    test_decorator_strips_tparams_and_forall,
+    r#"
+from typing import TypeVar, Callable, Tuple, reveal_type
+
+def add_generic[T](f: Callable[[T], T]) -> Callable[[object], None]:
+    ...
+
+@add_generic
+def my_func[T](x: T) -> T:
+    return x
+
+reveal_type(my_func)  # E: revealed type: (object) -> None
+"#,
+);
+
+fn env_numba() -> TestEnv {
+    let mut env = TestEnv::one_with_path(
+        "numba",
+        "numba/__init__.pyi",
+        r#"
+from numba.core.decorators import jit, njit
+"#,
+    );
+    env.add_with_path(
+        "numba.core.decorators",
+        "numba/core/decorators.pyi",
+        r#"
+def jit(*args, **kwargs): ...
+def njit(*args, **kwargs): ...
+"#,
+    );
+    env
+}
+
+testcase!(
+    test_numba_jit_decorators_preserve_signature,
+    env_numba(),
+    r#"
+import numba
+from typing import assert_type
+
+@numba.jit(nopython=True)
+def test1(a: int, b: int) -> int:
+    return a + b
+
+@numba.njit(cache=True)
+def test2(a: int, b: int) -> int:
+    return a + b
+
+assert_type(test1(1, 2), int)
+assert_type(test2(1, 2), int)
+"#,
 );

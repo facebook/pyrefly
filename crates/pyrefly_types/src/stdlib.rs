@@ -8,15 +8,27 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::nesting_context::NestingContext;
+use pyrefly_python::qname::QName;
 use pyrefly_python::sys_info::PythonVersion;
+use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 
 use crate::class::Class;
 use crate::class::ClassType;
+use crate::heap::TypeHeap;
 use crate::types::TArgs;
 use crate::types::TParams;
 use crate::types::Type;
+
+/// Names of special forms that should be clickable in type hints.
+/// These are defined as annotated assignments in typing.pyi (e.g., `Literal: _SpecialForm`)
+/// rather than as classes, so they require special handling.
+const SPECIAL_FORM_NAMES: &[&str] = &["Literal", "LiteralString", "Never", "NoReturn"];
 
 #[derive(Debug, Clone)]
 struct StdlibError {
@@ -32,8 +44,16 @@ pub struct Stdlib {
     bool: StdlibResult<ClassType>,
     int: StdlibResult<ClassType>,
     bytes: StdlibResult<ClassType>,
+    bytearray: StdlibResult<ClassType>,
     float: StdlibResult<ClassType>,
     complex: StdlibResult<ClassType>,
+    decimal: StdlibResult<ClassType>,
+    date: StdlibResult<ClassType>,
+    datetime: StdlibResult<ClassType>,
+    time: StdlibResult<ClassType>,
+    timedelta: StdlibResult<ClassType>,
+    path: StdlibResult<ClassType>,
+    uuid: StdlibResult<ClassType>,
     slice: StdlibResult<(Class, Arc<TParams>)>,
     base_exception: StdlibResult<ClassType>,
     /// Introduced in Python 3.11.
@@ -42,7 +62,10 @@ pub struct Stdlib {
     exception_group: Option<StdlibResult<(Class, Arc<TParams>)>>,
     list: StdlibResult<(Class, Arc<TParams>)>,
     dict: StdlibResult<(Class, Arc<TParams>)>,
+    deque: StdlibResult<(Class, Arc<TParams>)>,
+    frozenset: StdlibResult<(Class, Arc<TParams>)>,
     dict_items: StdlibResult<(Class, Arc<TParams>)>,
+    dict_keys: StdlibResult<(Class, Arc<TParams>)>,
     dict_values: StdlibResult<(Class, Arc<TParams>)>,
     mapping: StdlibResult<(Class, Arc<TParams>)>,
     set: StdlibResult<(Class, Arc<TParams>)>,
@@ -51,6 +74,7 @@ pub struct Stdlib {
     async_iterable: StdlibResult<(Class, Arc<TParams>)>,
     async_iterator: StdlibResult<(Class, Arc<TParams>)>,
     mutable_sequence: StdlibResult<(Class, Arc<TParams>)>,
+    sequence: StdlibResult<(Class, Arc<TParams>)>,
     generator: StdlibResult<(Class, Arc<TParams>)>,
     async_generator: StdlibResult<(Class, Arc<TParams>)>,
     awaitable: StdlibResult<(Class, Arc<TParams>)>,
@@ -80,6 +104,7 @@ pub struct Stdlib {
     none_type: StdlibResult<ClassType>,
     function_type: StdlibResult<ClassType>,
     method_type: StdlibResult<ClassType>,
+    module_type: StdlibResult<ClassType>,
     enum_meta: StdlibResult<ClassType>,
     enum_flag: StdlibResult<ClassType>,
     enum_class: StdlibResult<ClassType>,
@@ -94,20 +119,27 @@ pub struct Stdlib {
     object: StdlibResult<ClassType>,
     /// Introduced in Python 3.10.
     union_type: Option<StdlibResult<ClassType>>,
+    /// QNames for special forms (Literal, Any, Never, etc.) to enable go-to-definition for inlay hints.
+    special_form_qnames: SmallMap<&'static str, QName>,
+    generic_alias: StdlibResult<ClassType>,
+    // string.templatelib.Template for t-strings
+    template: Option<StdlibResult<ClassType>>,
 }
 
 impl Stdlib {
     pub fn new(
         version: PythonVersion,
         lookup_class: &dyn Fn(ModuleName, &Name) -> Option<(Class, Arc<TParams>)>,
+        lookup_export_location: &dyn Fn(ModuleName, &Name) -> Option<(Module, TextRange)>,
     ) -> Self {
-        Self::new_with_bootstrapping(false, version, lookup_class)
+        Self::new_with_bootstrapping(false, version, lookup_class, lookup_export_location)
     }
 
     pub fn new_with_bootstrapping(
         bootstrapping: bool,
         version: PythonVersion,
         lookup_class: &dyn Fn(ModuleName, &Name) -> Option<(Class, Arc<TParams>)>,
+        lookup_export_location: &dyn Fn(ModuleName, &Name) -> Option<(Module, TextRange)>,
     ) -> Self {
         let builtins = ModuleName::builtins();
         let types = ModuleName::types();
@@ -116,6 +148,7 @@ impl Stdlib {
         let enum_ = ModuleName::enum_();
         let type_checker_internals = ModuleName::type_checker_internals();
         let collections_abc = ModuleName::collections_abc();
+        let string_templatelib = ModuleName::string_templatelib();
 
         let lookup_generic =
             |module: ModuleName, name: &'static str, args: usize| match lookup_class(
@@ -149,13 +182,35 @@ impl Stdlib {
             }
         };
 
+        let mut special_form_qnames = SmallMap::new();
+        for &name in SPECIAL_FORM_NAMES {
+            let name_obj = Name::new_static(name);
+            // Try typing first, then typing_extensions for backports
+            let location = lookup_export_location(typing, &name_obj)
+                .or_else(|| lookup_export_location(typing_extensions, &name_obj));
+
+            if let Some((module, range)) = location {
+                let identifier = Identifier::new(name_obj, range);
+                let qname = QName::new(identifier, NestingContext::toplevel(), module);
+                special_form_qnames.insert(name, qname);
+            }
+        }
+
         Self {
             str: lookup_concrete(builtins, "str"),
             bool: lookup_concrete(builtins, "bool"),
             int: lookup_concrete(builtins, "int"),
             bytes: lookup_concrete(builtins, "bytes"),
+            bytearray: lookup_concrete(builtins, "bytearray"),
             float: lookup_concrete(builtins, "float"),
             complex: lookup_concrete(builtins, "complex"),
+            decimal: lookup_concrete(ModuleName::from_str("decimal"), "Decimal"),
+            date: lookup_concrete(ModuleName::from_str("datetime"), "date"),
+            datetime: lookup_concrete(ModuleName::from_str("datetime"), "datetime"),
+            time: lookup_concrete(ModuleName::from_str("datetime"), "time"),
+            timedelta: lookup_concrete(ModuleName::from_str("datetime"), "timedelta"),
+            path: lookup_concrete(ModuleName::from_str("pathlib"), "Path"),
+            uuid: lookup_concrete(ModuleName::from_str("uuid"), "UUID"),
             slice: lookup_generic(builtins, "slice", 3),
             base_exception: lookup_concrete(builtins, "BaseException"),
             base_exception_group: version
@@ -166,7 +221,10 @@ impl Stdlib {
                 .then(|| lookup_generic(builtins, "ExceptionGroup", 1)),
             list: lookup_generic(builtins, "list", 1),
             dict: lookup_generic(builtins, "dict", 2),
+            deque: lookup_generic(ModuleName::collections(), "deque", 1),
+            frozenset: lookup_generic(builtins, "frozenset", 1),
             dict_items: lookup_generic(collections_abc, "dict_items", 2),
+            dict_keys: lookup_generic(collections_abc, "dict_keys", 2),
             dict_values: lookup_generic(collections_abc, "dict_values", 2),
             set: lookup_generic(builtins, "set", 1),
             tuple: lookup_generic(builtins, "tuple", 1),
@@ -179,6 +237,7 @@ impl Stdlib {
             async_iterable: lookup_generic(typing, "AsyncIterable", 1),
             async_iterator: lookup_generic(typing, "AsyncIterator", 1),
             mutable_sequence: lookup_generic(typing, "MutableSequence", 1),
+            sequence: lookup_generic(typing, "Sequence", 1),
             generator: lookup_generic(typing, "Generator", 3),
             async_generator: lookup_generic(typing, "AsyncGenerator", 2),
             awaitable: lookup_generic(typing, "Awaitable", 1),
@@ -192,6 +251,7 @@ impl Stdlib {
             traceback_type: lookup_concrete(types, "TracebackType"),
             function_type: lookup_concrete(types, "FunctionType"),
             method_type: lookup_concrete(types, "MethodType"),
+            module_type: lookup_concrete(types, "ModuleType"),
             mapping: lookup_generic(typing, "Mapping", 2),
             enum_meta: lookup_concrete(enum_, "EnumMeta"),
             enum_flag: lookup_concrete(enum_, "Flag"),
@@ -203,6 +263,11 @@ impl Stdlib {
             union_type: version
                 .at_least(3, 10)
                 .then(|| lookup_concrete(types, "UnionType")),
+            special_form_qnames,
+            generic_alias: lookup_concrete(types, "GenericAlias"),
+            template: version
+                .at_least(3, 14)
+                .then(|| lookup_concrete(string_templatelib, "Template")),
         }
     }
 
@@ -214,7 +279,7 @@ impl Stdlib {
     /// It works because the lookups only need a tiny subset of all `AnswersSolver` functionality,
     /// none of which actually depends on `Stdlib`.
     pub fn for_bootstrapping() -> Stdlib {
-        Self::new_with_bootstrapping(true, PythonVersion::default(), &|_, _| None)
+        Self::new_with_bootstrapping(true, PythonVersion::default(), &|_, _| None, &|_, _| None)
     }
 
     fn unwrap<T>(x: &StdlibResult<T>) -> &T {
@@ -290,8 +355,40 @@ impl Stdlib {
         Self::primitive(&self.complex)
     }
 
+    pub fn decimal(&self) -> &ClassType {
+        Self::primitive(&self.decimal)
+    }
+
     pub fn bytes(&self) -> &ClassType {
         Self::primitive(&self.bytes)
+    }
+
+    pub fn bytearray(&self) -> &ClassType {
+        Self::primitive(&self.bytearray)
+    }
+
+    pub fn date(&self) -> &ClassType {
+        Self::primitive(&self.date)
+    }
+
+    pub fn datetime(&self) -> &ClassType {
+        Self::primitive(&self.datetime)
+    }
+
+    pub fn time(&self) -> &ClassType {
+        Self::primitive(&self.time)
+    }
+
+    pub fn timedelta(&self) -> &ClassType {
+        Self::primitive(&self.timedelta)
+    }
+
+    pub fn path(&self) -> &ClassType {
+        Self::primitive(&self.path)
+    }
+
+    pub fn uuid(&self) -> &ClassType {
+        Self::primitive(&self.uuid)
     }
 
     pub fn str(&self) -> &ClassType {
@@ -340,6 +437,22 @@ impl Stdlib {
         Self::apply(&self.list, vec![x])
     }
 
+    pub fn list_object(&self) -> &Class {
+        &Self::unwrap(&self.list).0
+    }
+
+    pub fn deque(&self, x: Type) -> ClassType {
+        Self::apply(&self.deque, vec![x])
+    }
+
+    pub fn frozenset(&self, x: Type) -> ClassType {
+        Self::apply(&self.frozenset, vec![x])
+    }
+
+    pub fn frozenset_object(&self) -> &Class {
+        &Self::unwrap(&self.frozenset).0
+    }
+
     pub fn dict(&self, key: Type, value: Type) -> ClassType {
         Self::apply(&self.dict, vec![key, value])
     }
@@ -352,6 +465,10 @@ impl Stdlib {
         Self::apply(&self.dict_items, vec![key, value])
     }
 
+    pub fn dict_keys(&self, key: Type, value: Type) -> ClassType {
+        Self::apply(&self.dict_keys, vec![key, value])
+    }
+
     pub fn dict_values(&self, key: Type, value: Type) -> ClassType {
         Self::apply(&self.dict_values, vec![key, value])
     }
@@ -360,8 +477,16 @@ impl Stdlib {
         Self::apply(&self.mapping, vec![key, value])
     }
 
+    pub fn mapping_object(&self) -> &Class {
+        &Self::unwrap(&self.mapping).0
+    }
+
     pub fn set(&self, x: Type) -> ClassType {
         Self::apply(&self.set, vec![x])
+    }
+
+    pub fn set_object(&self) -> &Class {
+        &Self::unwrap(&self.set).0
     }
 
     pub fn iterable(&self, x: Type) -> ClassType {
@@ -378,6 +503,10 @@ impl Stdlib {
 
     pub fn mutable_sequence(&self, x: Type) -> ClassType {
         Self::apply(&self.mutable_sequence, vec![x])
+    }
+
+    pub fn sequence(&self, x: Type) -> ClassType {
+        Self::apply(&self.sequence, vec![x])
     }
 
     pub fn generator(&self, yield_ty: Type, send_ty: Type, return_ty: Type) -> ClassType {
@@ -424,14 +553,14 @@ impl Stdlib {
         Self::primitive(&self.param_spec_kwargs)
     }
 
-    pub fn param_spec_args_as_tuple(&self) -> ClassType {
-        self.tuple(self.object().clone().to_type())
+    pub fn param_spec_args_as_tuple(&self, heap: &TypeHeap) -> ClassType {
+        self.tuple(heap.mk_class_type(self.object().clone()))
     }
 
-    pub fn param_spec_kwargs_as_dict(&self) -> ClassType {
+    pub fn param_spec_kwargs_as_dict(&self, heap: &TypeHeap) -> ClassType {
         self.dict(
-            self.str().clone().to_type(),
-            self.object().clone().to_type(),
+            heap.mk_class_type(self.str().clone()),
+            heap.mk_class_type(self.object().clone()),
         )
     }
 
@@ -451,7 +580,23 @@ impl Stdlib {
         Self::primitive(&self.method_type)
     }
 
+    pub fn module_type(&self) -> &ClassType {
+        Self::primitive(&self.module_type)
+    }
+
     pub fn property(&self) -> &ClassType {
         Self::primitive(&self.property)
+    }
+
+    pub fn special_form_qname(&self, name: &str) -> Option<&QName> {
+        self.special_form_qnames.get(name)
+    }
+
+    pub fn generic_alias(&self) -> &ClassType {
+        Self::primitive(&self.generic_alias)
+    }
+
+    pub fn template(&self) -> Option<&ClassType> {
+        Some(Self::primitive(self.template.as_ref()?))
     }
 }

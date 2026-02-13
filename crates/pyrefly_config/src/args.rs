@@ -10,12 +10,14 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 use clap::Parser;
+use pyrefly_python::ignore::Tool;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::display;
 
+use crate::base::RecursionOverflowHandler;
 use crate::base::UntypedDefBehavior;
 use crate::config::ConfigFile;
 use crate::config::validate_path;
@@ -112,14 +114,6 @@ pub struct ConfigOverrideArgs {
     /// related import errors.
     #[arg(long)]
     ignore_missing_imports: Option<Vec<String>>,
-    /// Ignore missing source packages when only type stubs are available, allowing imports to proceed without source validation.
-    #[arg(
-        long,
-        default_missing_value = "true",
-        require_equals = true,
-        num_args = 0..=1
-    )]
-    ignore_missing_source: Option<bool>,
     /// Whether to ignore type errors in generated code.
     #[arg(
         long,
@@ -150,7 +144,8 @@ pub struct ConfigOverrideArgs {
     /// Controls how Pyrefly analyzes function definitions that lack type annotations on parameters and return values.
     #[arg(long)]
     untyped_def_behavior: Option<UntypedDefBehavior>,
-    /// Whether Pyrefly will respect ignore statements for other tools, e.g. `# mypy: ignore`.
+    /// Whether Pyrefly will respect ignore statements for other tools, e.g. `# pyright: ignore`.
+    /// Equivalent to passing the names of all tools to `--enabled-ignores`.
     #[arg(
         long,
         default_missing_value = "true",
@@ -158,18 +153,39 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     permissive_ignores: Option<bool>,
-    /// Force this rule to emit an error. Can be used multiple times.
-    #[arg(long, hide_possible_values = true)]
+    /// Respect ignore directives from only these tools. Can be passed multiple times or as a comma-separated list.
+    /// Defaults to type,pyrefly. Passing the names of all tools is equivalent to `--permissive-ignores`.
+    #[arg(long, value_delimiter = ',')]
+    enabled_ignores: Option<Vec<Tool>>,
+    /// Force this rule to emit an error. Can be passed multiple times or as a comma-separated list.
+    #[arg(long, hide_possible_values = true, value_delimiter = ',')]
     error: Vec<ErrorKind>,
-    /// Force this rule to emit a warning. Can be used multiple times.
-    #[arg(long, hide_possible_values = true)]
+    /// Force this rule to emit a warning. Can be passed multiple times or as a comma-separated list.
+    #[arg(long, hide_possible_values = true, value_delimiter = ',')]
     warn: Vec<ErrorKind>,
-    /// Do not emit diagnostics for this rule. Can be used multiple times.
-    #[arg(long, hide_possible_values = true)]
+    /// Do not emit diagnostics for this rule. Can be passed multiple times or as a comma-separated list.
+    #[arg(long, hide_possible_values = true, value_delimiter = ',')]
     ignore: Vec<ErrorKind>,
-    /// Force this rule to emit an info-level diagnostic. Can be used multiple times.
-    #[arg(long, hide_possible_values = true)]
+    /// Force this rule to emit an info-level diagnostic. Can be passed multiple times or as a comma-separated list.
+    #[arg(long, hide_possible_values = true, value_delimiter = ',')]
     info: Vec<ErrorKind>,
+    /// Maximum recursion depth before triggering overflow protection.
+    /// Set to 0 to disable (default). This helps detect potential stack overflow situations.
+    #[arg(long)]
+    recursion_depth_limit: Option<u32>,
+    /// How to handle when recursion depth limit is exceeded.
+    #[arg(long)]
+    recursion_overflow_handler: Option<RecursionOverflowHandler>,
+    /// Whether to enable tensor shape type inference.
+    /// When enabled, integer literals can be used as type arguments (e.g., Tensor[2, 3]),
+    /// and type variables can participate in dimension arithmetic.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    tensor_shapes: Option<bool>,
 }
 
 impl ConfigOverrideArgs {
@@ -230,6 +246,11 @@ impl ConfigOverrideArgs {
                 display::commas_iter(|| ignore_info_conflicts.iter().map(|&&s| s))
             ));
         }
+        if self.permissive_ignores.is_some() && self.enabled_ignores.is_some() {
+            return Err(anyhow::anyhow!(
+                "Cannot use both `--permissive-ignores` and `--enabled-ignores`"
+            ));
+        }
         Ok(())
     }
 
@@ -282,14 +303,39 @@ impl ConfigOverrideArgs {
         if let Some(x) = &self.use_ignore_files {
             config.use_ignore_files = *x;
         }
-        if let Some(x) = &self.ignore_missing_source {
-            config.ignore_missing_source = *x;
-        }
         if let Some(x) = &self.untyped_def_behavior {
             config.root.untyped_def_behavior = Some(*x);
         }
-        if let Some(x) = self.permissive_ignores {
-            config.root.permissive_ignores = Some(x);
+        match (self.permissive_ignores, &self.enabled_ignores) {
+            // Special case: if the underlying config sets enabled-ignores and --permissive-ignores
+            // is passed on the command-line, we overwrite enabled-ignores.
+            (Some(x), None)
+                if config.root.permissive_ignores.is_none()
+                    && config.root.enabled_ignores.is_some() =>
+            {
+                config.root.enabled_ignores = Some(if x {
+                    Tool::all()
+                } else {
+                    Tool::default_enabled()
+                });
+            }
+            // Special case: if the underlying config sets permissive-ignores and --enabled-ignores
+            // is passed on the command-line, we disable permissive-ignores and use the specified tools.
+            (None, Some(x))
+                if config.root.permissive_ignores.is_some()
+                    && config.root.enabled_ignores.is_none() =>
+            {
+                config.root.permissive_ignores = None;
+                config.root.enabled_ignores = Some(x.iter().cloned().collect());
+            }
+            _ => {
+                if let Some(x) = self.permissive_ignores {
+                    config.root.permissive_ignores = Some(x);
+                }
+                if let Some(x) = &self.enabled_ignores {
+                    config.root.enabled_ignores = Some(x.iter().cloned().collect());
+                }
+            }
         }
         if let Some(wildcards) = &self.replace_imports_with_any {
             config.root.replace_imports_with_any = Some(
@@ -313,48 +359,31 @@ impl ConfigOverrideArgs {
         if let Some(x) = &self.infer_with_first_use {
             config.root.infer_with_first_use = Some(*x);
         }
+        if let Some(x) = &self.recursion_depth_limit {
+            config.root.recursion_depth_limit = Some(*x);
+        }
+        if let Some(x) = &self.recursion_overflow_handler {
+            config.root.recursion_overflow_handler = Some(*x);
+        }
+        if let Some(x) = &self.tensor_shapes {
+            config.root.tensor_shapes = Some(*x);
+        }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
-            let mut missing_source_severity = None;
-            let mut apply_severity = |error_kind: &ErrorKind, severity| {
-                error_config.set_error_severity(*error_kind, severity);
-                if *error_kind == ErrorKind::MissingSource {
-                    missing_source_severity = Some(severity);
-                }
-            };
             for error_kind in &self.error {
-                apply_severity(error_kind, Severity::Error);
+                error_config.set_error_severity(*error_kind, Severity::Error);
             }
             for error_kind in &self.warn {
-                apply_severity(error_kind, Severity::Warn);
+                error_config.set_error_severity(*error_kind, Severity::Warn);
             }
             for error_kind in &self.ignore {
-                apply_severity(error_kind, Severity::Ignore);
+                error_config.set_error_severity(*error_kind, Severity::Ignore);
             }
             for error_kind in &self.info {
-                apply_severity(error_kind, Severity::Info);
+                error_config.set_error_severity(*error_kind, Severity::Info);
             }
-            missing_source_severity
         };
         let root_errors = config.root.errors.get_or_insert_default();
-        let missing_source_severity = apply_error_settings(root_errors);
-        // Make sure CLI takes precedence by overriding both the error config and ignore_missing_source
-        // if only one is explicitly overridden.
-        match (missing_source_severity, self.ignore_missing_source) {
-            (Some(severity), None) => {
-                config.ignore_missing_source = severity == Severity::Ignore;
-            }
-            (None, Some(ignore_missing_source)) => {
-                root_errors.set_error_severity(
-                    ErrorKind::MissingSource,
-                    if ignore_missing_source {
-                        Severity::Ignore
-                    } else {
-                        Severity::Error
-                    },
-                );
-            }
-            _ => {}
-        }
+        apply_error_settings(root_errors);
         for sub_config in config.sub_configs.iter_mut() {
             let sub_config_errors = sub_config.settings.errors.get_or_insert_default();
             apply_error_settings(sub_config_errors);

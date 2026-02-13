@@ -1,3 +1,8 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
 # IMPORTANT: *Any* change to this file will kick off an upload of a new version of pyrefly to PyPI,
 # and a new VSCode extension although the upload will likely fail if you haven't changed the version number.
 #
@@ -13,4 +18,4 @@
 # * After updating the version, run `arc autocargo -p pyrefly` to regenerate `Cargo.toml`
 #   and put the resulting diff up for review. Once the diff lands, the new version should be
 #   available on PyPI within a few hours.
-VERSION = "0.41.3"
+VERSION = "0.52.0"

@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+// @lint-ignore-every SPELL deliberately testing bad spelling
+
 use crate::testcase;
 
 testcase!(
@@ -15,6 +17,91 @@ class C:
 
     def m(self) -> None:
         x  # E: Could not find name `x`
+"#,
+);
+
+testcase!(
+    test_unknown_name_suggests_similar,
+    r#"
+long_variable_name = 1
+long_variable_name2 = long_variuble_name  # E: Did you mean `long_variable_name`?
+"#,
+);
+
+testcase!(
+    test_unknown_name_suggests_from_enclosing_scope,
+    r#"
+outer_value = 10
+def f() -> int:
+    return outer_vlaue  # E: Did you mean `outer_value`?
+"#,
+);
+
+testcase!(
+    test_unknown_name_no_suggest_from_future_defs,
+    r#"
+future_value = missing  # E: `missing` is uninitialized  # !E: Did you mean
+missing = 1
+"#,
+);
+
+testcase!(
+    test_unknown_name_no_suggest_from_class_scope_in_method,
+    r#"
+class C:
+    x = 1
+    def m(self) -> int:
+        return x  # E: Could not find name `x`  # !E: Did you mean
+"#,
+);
+
+testcase!(
+    test_unknown_name_suggests_in_class_body,
+    r#"
+class Foo:
+    abc = 42
+    y = ab + 42  # E: Did you mean `abc`?
+"#,
+);
+
+testcase!(
+    test_unknown_name_no_suggest_single_letter_names,
+    r#"
+a = 1
+b = 2
+aa  # E: Could not find name `aa`  # !E: Did you mean
+"#,
+);
+
+testcase!(
+    test_unknown_name_prefers_inner_scope,
+    r#"
+value = 0
+def f() -> int:
+    local_value = 1
+    return local_valu  # E: Did you mean `local_value`?
+"#,
+);
+
+testcase!(
+    test_unknown_name_ties_prefer_shallower_scope,
+    r#"
+global_value = 1
+def outer() -> int:
+    global_value2 = 2
+    def inner() -> int:
+        globl_value = 3
+        return globl_valu  # E: Did you mean `globl_value`?
+    return inner()
+"#,
+);
+
+testcase!(
+    test_unknown_name_no_suggestion_when_far,
+    r#"
+alpha = 1
+beta = 2
+missing_completely = gamma  # E: Could not find name `gamma`  # !E: Did you mean
 "#,
 );
 
@@ -88,6 +175,40 @@ def test():
     async with AsyncContextManager(): pass  # E: `async with` can only be used inside an async function
 async def test_async():
     async with AsyncContextManager(): pass  # ok
+"#,
+);
+
+testcase!(
+    test_await_and_async_comprehensions,
+    r#"
+from typing import Any
+
+# A bare (parenthesized) generator containing an await immediately produces an
+# AsyncGenerator[_, _] result. It is legal to use in a synchronous function, although
+# it cannot be iterated except in an async function.
+#
+# Other kinds of comprehensions (list, set, etc) cannot use `await` unless in an async
+# function.
+
+def test(xs: Any):
+    (await x for x in xs)  # Ok
+    [await x for x in xs]  # E:
+    {await x for x in xs}  # E:
+    {0: await x for x in xs}  # E:
+    {await x: 0 for x in xs}  # E:
+
+    (x async for x in xs)  # OK
+    [x async for x in xs]  # E:
+    {x async for x in xs}  # E:
+    {x: 0 async for x in xs}  # E:
+
+    (x for x in await xs)  # E:
+    [x for x in await xs]  # E:
+    {x for x in await xs}  # E:
+    {x: 0 for x in await xs}  # E:
+
+    (await x async for x in (await y async for y in xs))  # Ok
+    [await x async for x in (await y async for y in xs)]  # E: `async` # E: `await`
 "#,
 );
 
@@ -166,7 +287,7 @@ def outer():
 testcase!(
     test_nonlocal_finds_global,
     r#"
-from typing import reveal_type
+from typing import Any, assert_type
 x: str = ""
 def f() -> None:
     nonlocal x  # E: Found `x`, but it is coming from the global scope
@@ -174,10 +295,10 @@ def outer():
     x: int = 5
     def middle():
         global x
-        reveal_type(x)  # E: revealed type: str
+        assert_type(x, str)
         def inner():
             nonlocal x  # E: Found `x`, but it is coming from the global scope
-            reveal_type(x)  # E: revealed type: Unknown
+            assert_type(x, Any)
 "#,
 );
 
@@ -443,7 +564,7 @@ def f() -> None:
 testcase!(
     test_comprehension_shadows_variable,
     r#"
-from typing import assert_type, reveal_type
+from typing import assert_type
 x: list[int] = [1, 2, 3]
 y = [x for x in x]
 assert_type(y, list[int])
@@ -592,22 +713,22 @@ __all__ += []  # E: `__all__` is uninitialized
 testcase!(
     test_aug_assign_lookup_inconsistencies,
     r#"
-from typing import reveal_type
+from typing import assert_type, Any
 def f():
-    reveal_type(x)  # E: revealed type: Unknown  # E: `x` is uninitialized
+    assert_type(x, Any)  # E: `x` is uninitialized
     x += 5  # E: `x` is uninitialized
-    reveal_type(x)  # E: revealed type: Unknown
+    assert_type(x, Any)
 "#,
 );
 
 testcase!(
     test_del_defines_a_local,
     r#"
-from typing import reveal_type
+from typing import Any, assert_type
 x = 5
 def f():
-    reveal_type(y)  # E: revealed type: Unknown  # E: `y` is uninitialized
-    reveal_type(x)  # E: revealed type: Unknown  # E: `x` is uninitialized
+    assert_type(y, Any)  # E: `y` is uninitialized
+    assert_type(x, Any)  # E: `x` is uninitialized
     del y  # E: `y` is uninitialized
     del x  # E: `x` is uninitialized
 f()
@@ -666,23 +787,32 @@ class C:
 "#,
 );
 
+testcase!(
+    test_class_scope_annotation_shadows_function,
+    r#"
+class D:
+    def int(self) -> None:
+        ...
+    y: int = 0  # E: Expected a type form
+"#,
+);
+
 // Nested scopes - except for parameter scopes - cannot see a containing class
 // body. This applies not only to methods but also other scopes like lambda, inner
 // class bodies, and comprehensions. See https://github.com/facebook/pyrefly/issues/264
 testcase!(
-    bug = "All these should show `Literal['string']`. The issue with comprehension persists, see also the next test case.",
     test_class_scope_lookups_when_skip,
     r#"
-from typing import reveal_type
+from typing import assert_type, Literal
 x = 'string'
 class A:
     x = 42
     def f():
-        reveal_type(x) # E: revealed type: Literal['string']
-    lambda_f = lambda: reveal_type(x) # E: revealed type: Literal['string']
+        assert_type(x, Literal['string'])
+    lambda_f = lambda: assert_type(x, Literal['string'])
     class B:
-        reveal_type(x) # E: revealed type: Literal['string']
-    [reveal_type(x) for _ in range(1)] # E: revealed type: Literal['string']
+        assert_type(x, Literal['string'])
+    [assert_type(x, Literal['string']) for _ in range(1)]
 "#,
 );
 
@@ -735,5 +865,35 @@ class C:
     class Inner:
         def g(self, z = x):  # E: Could not find name `x`
             pass
+    "#,
+);
+
+testcase!(
+    test_global_in_inner_function,
+    r#"
+from typing import assert_type
+
+x: int = 1
+
+def outer():
+    x: str = ""
+
+    def inner():
+        global x
+        assert_type(x, int)
+    "#,
+);
+
+testcase!(
+    test_global_with_same_name_as_local,
+    r#"
+from typing import assert_type, Literal
+
+x = 42
+
+def f():
+    global x
+    assert_type(x, Literal[42])
+    x = "foo"
     "#,
 );

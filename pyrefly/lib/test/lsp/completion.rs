@@ -14,10 +14,30 @@ use ruff_text_size::TextSize;
 use crate::state::lsp::ImportFormat;
 use crate::state::require::Require;
 use crate::state::state::State;
+use crate::state::state::Transaction;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state;
+
+// Some assertions compare literal completion dumps. pretty_assertions decorates
+// diffs with ANSI escapes, so we strip them to keep the expected strings stable.
+fn strip_ansi(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            for next in chars.by_ref() {
+                if next == 'm' {
+                    break;
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
 
 #[derive(Default)]
 struct ResultsFilter {
@@ -117,6 +137,14 @@ fn get_test_report(
     }
 }
 
+fn dict_field_labels(txn: &Transaction<'_>, handle: &Handle, position: TextSize) -> Vec<String> {
+    txn.completion(handle, position, ImportFormat::Absolute, true)
+        .into_iter()
+        .filter(|item| item.kind == Some(CompletionItemKind::FIELD))
+        .map(|item| item.label)
+        .collect()
+}
+
 #[test]
 fn dot_complete_basic_test() {
     let code = r#"
@@ -150,6 +178,177 @@ Completion Results:
         .trim(),
         report.trim(),
     );
+}
+
+#[test]
+fn dict_key_completion_from_literal() {
+    let code = r#"
+def use_dict():
+    data = {"foo": 1, "bar": 2}
+    data[""]
+#        ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.trim().contains(
+            r#"
+# main.py
+4 |     data[""]
+             ^
+Completion Results:
+- (Field) bar: Literal[2]
+- (Field) foo: Literal[1]
+"#
+            .trim()
+        )
+    );
+}
+
+#[test]
+fn dict_key_completion_from_nested_literal() {
+    let code = r#"
+def nested():
+    config = {"user": {"name": "Alice"}}
+    config["user"][""]
+#                  ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let labels = dict_field_labels(&txn, handle, position);
+    assert_eq!(labels, vec!["name".to_owned()]);
+}
+
+#[test]
+fn dict_key_completion_from_outer_literal() {
+    let code = r#"
+def nested():
+    config = {"user": {"name": "Alice"}}
+    config["user"][""]
+#           ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let labels = dict_field_labels(&txn, handle, position);
+    assert_eq!(labels, vec!["user".to_owned()]);
+}
+
+#[test]
+fn dict_key_completion_from_typed_dict() {
+    let code = r#"
+from typing import TypedDict
+
+class User(TypedDict):
+    name: str
+    age: int
+
+u: User
+u[""]
+#  ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.trim().contains(
+            r#"
+# main.py
+9 | u[""]
+       ^
+Completion Results:
+- (Field) age: int
+- (Field) name: str
+"#
+            .trim()
+        )
+    );
+}
+
+#[test]
+fn dict_key_completion_from_typed_dict_get() {
+    let code = r#"
+from typing import TypedDict
+
+class Dimension(TypedDict):
+    x: int
+    y: int
+    z: int
+
+dim: Dimension
+dim.get("")
+#        ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.contains(
+            r#"
+Completion Results:
+- (Field) x: int
+- (Field) y: int
+- (Field) z: int
+"#
+            .trim()
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn dict_key_completion_from_typed_dict_get_keyword() {
+    let code = r#"
+from typing import TypedDict
+
+class Dimension(TypedDict):
+    x: int
+    y: int
+    z: int
+
+dim: Dimension
+dim.get(key="")
+#             ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.contains(
+            r#"
+Completion Results:
+- (Value) 'x': Literal['x'] inserting `x`
+- (Field) x: int
+- (Field) y: int
+- (Field) z: int
+"#
+            .trim()
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn dict_key_completion_from_typed_dict_literal() {
+    let code = r#"
+from typing import TypedDict
+
+class Config(TypedDict):
+    name: str
+    age: int
+
+cfg: Config = {"": 1}
+#             ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(report.contains("- (Field) age: int"));
+    assert!(report.contains("- (Field) name: str"));
 }
 
 #[test]
@@ -1035,17 +1234,11 @@ isins
          ^
 Completion Results:
 - (Function) isinstance
-- (Class) FirstHeaderLineIsContinuationDefect: from email.errors import FirstHeaderLineIsContinuationDefect
-
-- (Class) MissingHeaderBodySeparatorDefect: from email.errors import MissingHeaderBodySeparatorDefect
+- (Class) DivisionImpossible: from decimal import DivisionImpossible
 
 - (Function) disjoint_base: from typing_extensions import disjoint_base
 
-- (Function) distributions: from importlib.metadata import distributions
-
 - (Function) fix_missing_locations: from ast import fix_missing_locations
-
-- (Function) packages_distributions: from importlib.metadata import packages_distributions
 
 - (Function) timerfd_settime_ns: from os import timerfd_settime_ns
 
@@ -1072,7 +1265,7 @@ foo(
 4 | foo(
         ^
 Completion Results:
-- (Value) 'foo': Literal['foo']
+- (Value) 'foo': Literal['foo'] inserting `'foo'`
 - (Variable) x=: Literal['foo']
 "#
         .trim(),
@@ -1096,16 +1289,16 @@ foo(
 4 | foo(
         ^
 Completion Results:
-- (Value) '"': Literal['"']
-- (Value) '\'': Literal['\'']
-- (Value) '\\': Literal['\\']
-- (Value) '\a': Literal['\a']
-- (Value) '\b': Literal['\b']
-- (Value) '\f': Literal['\f']
-- (Value) '\n': Literal['\n']
-- (Value) '\r': Literal['\r']
-- (Value) '\t': Literal['\t']
-- (Value) '\v': Literal['\v']
+- (Value) '"': Literal['"'] inserting `'"'`
+- (Value) '\'': Literal['\''] inserting `'\''`
+- (Value) '\\': Literal['\\'] inserting `'\\'`
+- (Value) '\a': Literal['\a'] inserting `'\a'`
+- (Value) '\b': Literal['\b'] inserting `'\b'`
+- (Value) '\f': Literal['\f'] inserting `'\f'`
+- (Value) '\n': Literal['\n'] inserting `'\n'`
+- (Value) '\r': Literal['\r'] inserting `'\r'`
+- (Value) '\t': Literal['\t'] inserting `'\t'`
+- (Value) '\v': Literal['\v'] inserting `'\v'`
 - (Variable) x=: Literal['\a', '\b', '\t', '\n', '\v', '\f', '\r', '"', '\'', '\\']
 "#
         .trim(),
@@ -1129,9 +1322,9 @@ foo("
 4 | foo("
          ^
 Completion Results:
-- (Value) 'a\nb': Literal['a\nb']
-- (Variable) x=: Literal['a\nb']"#
-            .trim(),
+- (Value) 'a\nb': Literal['a\nb'] inserting `a
+b`"#
+        .trim(),
         report.trim(),
     );
 }
@@ -1152,8 +1345,8 @@ foo(
 4 | foo(
         ^
 Completion Results:
-- (Value) 'bar': Literal['bar']
-- (Value) 'foo': Literal['foo']
+- (Value) 'bar': Literal['bar'] inserting `'bar'`
+- (Value) 'foo': Literal['foo'] inserting `'foo'`
 - (Variable) x=: Literal['bar', 'foo']
 "#
         .trim(),
@@ -1177,9 +1370,33 @@ foo('
 4 | foo('
          ^
 Completion Results:
-- (Value) 'bar': Literal['bar']
-- (Value) 'foo': Literal['foo']
-- (Variable) x=: Literal['bar', 'foo']
+- (Value) 'bar': Literal['bar'] inserting `bar`
+- (Value) 'foo': Literal['foo'] inserting `foo`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_match_value() {
+    let code = r#"
+from typing import Literal
+x: Literal['a', 'b'] = 'a'
+match x:
+    case ':
+#         ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 |     case ':
+              ^
+Completion Results:
+- (Value) 'a': Literal['a'] inserting `a`
+- (Value) 'b': Literal['b'] inserting `b`
 "#
         .trim(),
         report.trim(),
@@ -1204,8 +1421,8 @@ foo(
 5 | foo(
         ^
 Completion Results:
-- (Value) 'bar': Literal['bar']
-- (Value) 'foo': Literal['foo']
+- (Value) 'bar': Literal['bar'] inserting `'bar'`
+- (Value) 'foo': Literal['foo'] inserting `'foo'`
 - (Variable) x=: Literal['bar', 'foo']
 "#
         .trim(),
@@ -1229,7 +1446,7 @@ foo(
 4 | foo(
         ^
 Completion Results:
-- (Value) 1: Literal[1]
+- (Value) 1: Literal[1] inserting `1`
 - (Variable) x=: Literal[1] | LiteralString
 "#
         .trim(),
@@ -1254,8 +1471,8 @@ foo(
 5 | foo(
         ^
 Completion Results:
-- (Value) 'foo': Literal['foo']
-- (Value) 1: Literal[1]
+- (Value) 'foo': Literal['foo'] inserting `'foo'`
+- (Value) 1: Literal[1] inserting `1`
 - (Variable) x=: Literal['foo', 1] | Foo
 "#
         .trim(),
@@ -1263,7 +1480,6 @@ Completion Results:
     );
 }
 
-// todo(kylei): provide editttext to remove the quotes
 #[test]
 fn completion_literal_do_not_duplicate_quotes() {
     let code = r#"
@@ -1281,8 +1497,8 @@ foo(''
 5 | foo(''
          ^
 Completion Results:
-- (Value) 'foo': Literal['foo']
-- (Value) 1: Literal[1]
+- (Value) 'foo': Literal['foo'] inserting `foo`
+- (Value) 1: Literal[1] inserting `1`
 "#
         .trim(),
         report.trim(),
@@ -1294,7 +1510,7 @@ Completion Results:
 #[test]
 fn completion_dict() {
     let code = r#"
-x = {"a": 3, "b", 4}
+x = {"a": 3, "b": 4}
 x["
 # ^
 "#;
@@ -1306,7 +1522,6 @@ x["
 3 | x["
       ^
 Completion Results:
-- (Variable) x: dict[int | str, int]
 "#
         .trim(),
         report.trim(),
@@ -1596,15 +1811,85 @@ T = Literal
 2 | T = Literal
             ^
 Completion Results:
-- (Variable) AnyOrLiteralStr: from _typeshed import AnyOrLiteralStr
-
 - (Variable) Literal: from typing import Literal
 
 - (Variable) Literal: from typing_extensions import Literal
 
 - (Variable) LiteralString: from typing import LiteralString
 
+- (Variable) AnyOrLiteralStr: from _typeshed import AnyOrLiteralStr
+
 - (Variable) StrOrLiteralStr: from _typeshed import StrOrLiteralStr
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn autoimport_prefers_public_reexport_for_dotted_private_module() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("_foo_bar", "Thing = 1\n"),
+            ("foo.bar", "from _foo_bar import Thing\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from foo.bar import Thing
+
+- (Variable) Thing: from _foo_bar import Thing
+
+
+
+# _foo_bar.py
+
+# foo.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn autoimport_prefers_shorter_module() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("a.b", "Thing = 1\n"),
+            ("a.b.c", "Thing = 2\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from a.b import Thing
+
+- (Variable) Thing: from a.b.c import Thing
+
+
+
+# a.b.py
+
+# a.b.c.py
 "#
         .trim(),
         report.trim(),
@@ -1618,7 +1903,7 @@ T = foooooo
 #       ^
 "#;
     let files = [("main", code), ("bar", "foooooo = 1")];
-    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
 
@@ -1644,7 +1929,7 @@ T = foooooo
             .completion(handle, position, ImportFormat::Absolute, false);
     completions
         .into_iter()
-        .find(|item| item.label == "foooooo (import bar)")
+        .find(|item| item.label == "foooooo")
         .expect("expected foooooo to be in completions");
 }
 
@@ -1876,7 +2161,6 @@ Completion Results:
 - (Variable) _LiteralInteger
 - (Variable) _M_contra
 - (Variable) _NegativeInteger
-- (Class) _NotImplementedType
 - (Variable) _Opener
 - (Variable) _P
 - (Variable) _PositiveInteger
@@ -2299,5 +2583,166 @@ Completion Results:
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn test_no_completion_in_comments() {
+    let code = r#"
+# This is a comment
+#      ^
+import sys
+x = sys.version
+#       ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let positions = extract_cursors_for_test(code);
+    let txn = state.transaction();
+
+    // Position 0: inside comment - should return empty
+    let comment_completions = txn.completion(handle, positions[0], ImportFormat::Absolute, true);
+    assert!(
+        comment_completions.is_empty(),
+        "Expected no completions in comment, but got {} completions",
+        comment_completions.len()
+    );
+
+    // Position 1: normal code - should return completions
+    let normal_completions = txn.completion(handle, positions[1], ImportFormat::Absolute, true);
+    assert!(
+        !normal_completions.is_empty(),
+        "Expected completions in normal code but got none"
+    );
+}
+
+#[test]
+fn completion_sorts_incompatible_call_argument_last() {
+    let code = r#"
+class Base:
+    pass
+
+class Derived(Base):
+    pass
+
+class Other:
+    pass
+
+def needs_base(x: Base) -> None:
+    pass
+
+val_exact = Base()
+val_compatible = Derived()
+val_incompatible = Other()
+val = val_exact
+
+needs_base(val)
+#           ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true);
+
+    let exact_index = completions
+        .iter()
+        .position(|item| item.label == "val_exact");
+    let compatible_index = completions
+        .iter()
+        .position(|item| item.label == "val_compatible");
+    let incompatible_index = completions
+        .iter()
+        .position(|item| item.label == "val_incompatible");
+
+    let exact = exact_index.and_then(|idx| completions.get(idx));
+    let compatible = compatible_index.and_then(|idx| completions.get(idx));
+    let incompatible = incompatible_index.and_then(|idx| completions.get(idx));
+
+    assert!(
+        exact.is_some() && compatible.is_some() && incompatible.is_some(),
+        "Expected completions for exact_val, compatible_val, and incompatible_val."
+    );
+
+    let exact_sort = exact
+        .and_then(|item| item.sort_text.as_deref())
+        .unwrap_or("");
+    let compatible_sort = compatible
+        .and_then(|item| item.sort_text.as_deref())
+        .unwrap_or("");
+    let incompatible_sort = incompatible
+        .and_then(|item| item.sort_text.as_deref())
+        .unwrap_or("");
+
+    assert!(
+        !exact_sort.ends_with('z'),
+        "Exact type should not be demoted (sort_text={exact_sort:?})."
+    );
+    assert!(
+        !compatible_sort.ends_with('z'),
+        "Compatible type should not be demoted (sort_text={compatible_sort:?})."
+    );
+    assert!(
+        incompatible_sort.ends_with('z'),
+        "Incompatible type should be demoted (sort_text={incompatible_sort:?})."
+    );
+
+    assert!(
+        exact_index.unwrap() < incompatible_index.unwrap(),
+        "Exact type should sort ahead of incompatible type."
+    );
+    assert!(
+        compatible_index.unwrap() < incompatible_index.unwrap(),
+        "Compatible type should sort ahead of incompatible type."
+    );
+}
+
+#[test]
+fn bound_method_completions_include_descriptor_attributes() {
+    // Make sure completions work for bound methods from custom descriptors.
+    // See: https://github.com/facebook/pyrefly/issues/821
+    let code = r#"
+from __future__ import annotations
+from typing import Callable
+
+class CachedMethod:
+    def __init__(self, fn: Callable[[Constraint], int]) -> None:
+        self._fn = fn
+
+    def __get__(self, obj: Constraint | None, owner: type[Constraint]) -> CachedMethod:
+        return self
+
+    def __call__(self, obj: Constraint) -> int:
+        return self._fn(obj)
+
+    def clear_cache(self, obj: Constraint) -> None: ...
+
+def cache_on_self(fn: Callable[[Constraint], int]) -> CachedMethod:
+    return CachedMethod(fn)
+
+class Constraint:
+    @cache_on_self
+    def pointwise_read_writes(self) -> int:
+        return 0
+
+    def use_cached_method(self) -> None:
+        self.pointwise_read_writes.
+#                                  ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true);
+
+    let completion_labels: Vec<_> = completions.iter().map(|c| c.label.as_str()).collect();
+
+    // The descriptor's `clear_cache` method should appear in completions
+    assert!(
+        completion_labels.contains(&"clear_cache"),
+        "Expected `clear_cache` in completions for bound method from custom descriptor.\n\
+         This attribute is defined on CachedMethod and should be accessible.\n\
+         Got completions: {:?}",
+        completion_labels
     );
 }

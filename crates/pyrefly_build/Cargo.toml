@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_build"
-version = "0.41.3"
+version = "0.52.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -11,6 +11,7 @@ license = "MIT"
 [dependencies]
 anyhow = "1.0.98"
 dupe = "0.9.1"
+itertools = "0.14.0"
 pyrefly_python = { path = "../pyrefly_python" }
 pyrefly_util = { path = "../pyrefly_util" }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
@@ -19,10 +20,13 @@ starlark_map = "0.13.0"
 static_interner = "0.1.1"
 tempfile = "3.22"
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
-vec1 = { version = "1", features = ["serde"] }
+vec1 = { version = "1.12.1", features = ["serde"] }
 
 [dev-dependencies]
 pretty_assertions = { version = "1.2", features = ["alloc"], default-features = false }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+which = "4.2.4"
 
 [lints]
 rust = { unexpected_cfgs = { check-cfg = ["cfg(fbcode_build)"], level = "warn" } }

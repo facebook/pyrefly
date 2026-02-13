@@ -135,16 +135,14 @@ def simple_implicit_return() -> int:  # E: missing an explicit `return`
     pass
 
 def generator_with_return() -> Generator[int, Any, str]:
-    # TODO(stroxler): this yield error message needs some wordsmithing!
-    yield "oops"  # E: Type of yielded value `Literal['oops']` is not assignable to declared return type `int`
+    yield "oops"  # E: Yielded type `Literal['oops']` is not assignable to declared yield type `int`
     return 55  # E: Returned type `Literal[55]` is not assignable to declared return type `str`
 
 async def simple_async() -> int:
     return "oops"  # E: Returned type `Literal['oops']` is not assignable to declared return type `int`
 
 async def async_generator() -> AsyncGenerator[int, None]:
-    # TODO(stroxler): this yield error message needs some wordsmithing!
-    yield "oops"  # E: Type of yielded value `Literal['oops']` is not assignable to declared return type `int`
+    yield "oops"  # E: Yielded type `Literal['oops']` is not assignable to declared yield type `int`
 
 def marked_as_generator_but_does_not_yield() -> Generator[int, Any, str]:
     return "str"  # E: Returned type `Literal['str']` is not assignable to declared return type `Generator[int, Any, str]`

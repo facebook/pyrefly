@@ -117,20 +117,27 @@ impl PyrightConfig {
 #[serde(rename_all = "lowercase")]
 pub enum DiagnosticLevel {
     None,
+    Hint,
     Information,
     Warning,
     Error,
 }
 
 impl DiagnosticLevel {
-    fn to_bool(&self) -> bool {
-        !matches!(self, Self::None)
+    fn to_severity(&self) -> Severity {
+        match self {
+            Self::None => Severity::Ignore,
+            Self::Information => Severity::Info,
+            Self::Hint => Severity::Info,
+            Self::Warning => Severity::Warn,
+            Self::Error => Severity::Error,
+        }
     }
 }
 
-impl From<DiagnosticLevel> for bool {
+impl From<DiagnosticLevel> for Severity {
     fn from(value: DiagnosticLevel) -> Self {
-        value.to_bool()
+        value.to_severity()
     }
 }
 
@@ -142,17 +149,23 @@ pub enum DiagnosticLevelOrBool {
 }
 
 impl DiagnosticLevelOrBool {
-    fn to_bool(&self) -> bool {
+    fn to_severity(&self) -> Severity {
         match self {
-            Self::DiagnosticLevel(dl) => dl.to_bool(),
-            Self::Bool(b) => *b,
+            Self::DiagnosticLevel(dl) => dl.to_severity(),
+            Self::Bool(b) => {
+                if *b {
+                    Severity::Error
+                } else {
+                    Severity::Ignore
+                }
+            }
         }
     }
 }
 
-impl From<DiagnosticLevelOrBool> for bool {
+impl From<DiagnosticLevelOrBool> for Severity {
     fn from(value: DiagnosticLevelOrBool) -> Self {
-        value.to_bool()
+        value.to_severity()
     }
 }
 
@@ -161,40 +174,211 @@ impl From<DiagnosticLevelOrBool> for bool {
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-/// Rule overrides for pyright
+#[serde(default)]
 pub struct RuleOverrides {
+    // Import rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[serde(default)]
-    pub report_missing_imports: Option<bool>,
+    pub report_missing_imports: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[serde(default)]
-    pub report_missing_module_source: Option<bool>,
+    pub report_missing_module_source: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_missing_type_stubs: Option<Severity>,
+
+    // Type annotation rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_invalid_type_form: Option<Severity>,
+
+    // Abstract/instantiation rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_abstract_usage: Option<Severity>,
+
+    // Type checking rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_argument_type: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_assert_type_failure: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_assignment_type: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_attribute_access_issue: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_call_issue: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_inconsistent_overload: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_index_issue: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_invalid_type_arguments: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_no_overload_implementation: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_operator_issue: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_optional_subscript: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_optional_member_access: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_optional_call: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_optional_iterable: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_optional_context_manager: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_optional_operand: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_return_type: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_typed_dict_not_required_access: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_private_usage: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_deprecated: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_incompatible_method_override: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_incompatible_variable_override: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_possibly_unbound_variable: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_uninitialized_instance_variable: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_invalid_string_escape_sequence: Option<Severity>,
+
+    // Unknown/implicit any rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_unknown_parameter_type: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_unknown_argument_type: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_unknown_lambda_type: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_unknown_variable_type: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_unknown_member_type: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_missing_parameter_type: Option<Severity>,
+
+    // Type variable rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_invalid_type_var_use: Option<Severity>,
+
+    // Redundancy/unnecessary code rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_unnecessary_is_instance: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_unnecessary_cast: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_unnecessary_comparison: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_unnecessary_contains: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_assert_always_true: Option<Severity>,
+
+    // Name/variable rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_undefined_variable: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_unbound_variable: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_unhashable: Option<Severity>,
+
+    // Coroutine rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_unused_coroutine: Option<Severity>,
 }
 
 impl RuleOverrides {
     /// Consume the RuleOverrides to turn it into an ErrorDisplayConfig map.
     pub fn to_config(self) -> Option<ErrorDisplayConfig> {
         let mut map = HashMap::new();
+        let mut add = |value, kind| {
+            // If multiple Pyright overrides map to the same Pyrefly error
+            // use the maximum severity.
+            if let Some(value) = value
+                && map.get(&kind).is_none_or(|x| *x < value)
+            {
+                map.insert(kind, value);
+            }
+        };
         // For each ErrorKind, there are one or more RuleOverrides fields.
         // The ErrorDisplayConfig map has an entry for an ErrorKind if at least one of the RuleOverrides for that ErrorKind is present.
         // The value of that ErrorKind's entry is found by or'ing together the present RuleOverrides.
-        if let Some(import_error) = [
-            self.report_missing_imports,
-            self.report_missing_module_source,
-        ]
-        .into_iter()
-        .flatten()
-        .reduce(|acc, x| acc | x)
-        {
-            map.insert(
-                ErrorKind::MissingImport,
-                if import_error {
-                    Severity::Error
-                } else {
-                    Severity::Ignore
-                },
-            );
-        }
+        add(self.report_missing_imports, ErrorKind::MissingImport);
+        add(self.report_missing_module_source, ErrorKind::MissingSource);
+        add(self.report_missing_type_stubs, ErrorKind::UntypedImport);
+        add(self.report_invalid_type_form, ErrorKind::InvalidAnnotation);
+        add(self.report_abstract_usage, ErrorKind::BadInstantiation);
+        add(self.report_argument_type, ErrorKind::BadArgumentType);
+        add(self.report_assert_type_failure, ErrorKind::AssertType);
+        add(self.report_assignment_type, ErrorKind::BadAssignment);
+        add(
+            self.report_attribute_access_issue,
+            ErrorKind::MissingAttribute,
+        );
+        add(
+            self.report_inconsistent_overload,
+            ErrorKind::InconsistentOverload,
+        );
+        add(self.report_index_issue, ErrorKind::BadIndex);
+        add(
+            self.report_invalid_type_arguments,
+            ErrorKind::BadSpecialization,
+        );
+        add(
+            self.report_no_overload_implementation,
+            ErrorKind::InvalidOverload,
+        );
+        add(self.report_operator_issue, ErrorKind::UnsupportedOperation);
+        add(self.report_return_type, ErrorKind::BadReturn);
+        add(self.report_private_usage, ErrorKind::NoAccess);
+        add(self.report_deprecated, ErrorKind::Deprecated);
+        add(
+            self.report_incompatible_method_override,
+            ErrorKind::BadOverride,
+        );
+        add(
+            self.report_incompatible_variable_override,
+            ErrorKind::BadOverride,
+        );
+        add(
+            self.report_possibly_unbound_variable,
+            ErrorKind::UnboundName,
+        );
+        add(
+            self.report_uninitialized_instance_variable,
+            ErrorKind::ImplicitlyDefinedAttribute,
+        );
+        add(
+            self.report_unknown_parameter_type,
+            ErrorKind::UnannotatedParameter,
+        );
+        add(
+            self.report_missing_parameter_type,
+            ErrorKind::UnannotatedParameter,
+        );
+        add(self.report_unknown_argument_type, ErrorKind::ImplicitAny);
+        add(self.report_unknown_variable_type, ErrorKind::ImplicitAny);
+        add(self.report_unknown_member_type, ErrorKind::ImplicitAny);
+        add(self.report_invalid_type_var_use, ErrorKind::InvalidTypeVar);
+        add(self.report_unnecessary_cast, ErrorKind::RedundantCast);
+        add(self.report_undefined_variable, ErrorKind::UnknownName);
+        add(self.report_unbound_variable, ErrorKind::UnboundName);
+        add(self.report_unused_coroutine, ErrorKind::UnusedCoroutine);
 
         if map.is_empty() {
             None

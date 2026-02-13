@@ -95,9 +95,9 @@ class Y2(Y): pass
 class S2(S): pass
 
 def foo(b: bool) -> Generator[Y2, S, R]:
-    s1 = yield Y() # E: Type of yielded value `Y` is not assignable to declared return type `Y2`
+    s1 = yield Y() # E: Yielded type `Y` is not assignable to declared yield type `Y2`
     s2 = yield Y2()
-    s3 = yield None # E: Type of yielded value `None` is not assignable to declared return type `Y2`
+    s3 = yield None # E: Yielded type `None` is not assignable to declared yield type `Y2`
 
     assert_type(s1, S)
     assert_type(s2, S)
@@ -111,7 +111,7 @@ def foo(b: bool) -> Generator[Y2, S, R]:
 def bar() -> Generator[Y, S2, None]:
     s1 = yield Y()
     s2 = yield Y2()
-    s3 = yield None # E: Type of yielded value `None` is not assignable to declared return type `Y`
+    s3 = yield None # E: Yielded type `None` is not assignable to declared yield type `Y`
 
     r = yield from foo(True) # OK
 
@@ -121,11 +121,11 @@ def bar() -> Generator[Y, S2, None]:
     assert_type(r, R)
 
 def baz() -> Generator[Y2, S2, None]:
-    s = yield from bar() # E: Cannot yield from a generator of type `Generator[Y, S2, None]` because it does not match the declared return type `Generator[Y2, S2, Unknown]`
+    s = yield from bar() # E: Cannot yield from `Generator[Y, S2, None]`, which is not assignable to declared return type `Generator[Y2, S2, Unknown]`
     assert_type(s, None)
 
 def qux() -> Generator[Y, S, None]:
-    s = yield from bar() # E: Cannot yield from a generator of type `Generator[Y, S2, None]` because it does not match the declared return type `Generator[Y, S, Unknown]`
+    s = yield from bar() # E: Cannot yield from `Generator[Y, S2, None]`, which is not assignable to declared return type `Generator[Y, S, Unknown]`
     assert_type(s, None)
 "#,
 );
@@ -442,6 +442,21 @@ async def test_implicit_generators() -> None:
     assert_type((x for x in [1] if await predicate()), AsyncGenerator[int, None])
     assert_type((x for x in await get_list()), Generator[int, None, None])
     assert_type((x for _ in [1] for x in await get_list()), AsyncGenerator[int, None])
+"#,
+);
+
+testcase!(
+    test_async_generator_comprehension_with_nested_await,
+    r#"
+from typing import AsyncGenerator, assert_type
+
+async def some_async_func(x: int) -> bool:
+    return x % 2 == 0
+
+async def main() -> None:
+    # await is nested inside a comparison expression in the condition
+    generator = (x for x in [1, 2, 3] if await some_async_func(x) == True)
+    assert_type(generator, AsyncGenerator[int, None])
 "#,
 );
 

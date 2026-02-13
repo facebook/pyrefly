@@ -4,6 +4,13 @@ title: Pyrefly Error Kinds
 description: Pyrefly error categories and suppression codes
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # Pyrefly Error Kinds
 
 An _error kind_ categorizes an error by the part of the typing specification
@@ -11,6 +18,32 @@ that an error is related to. Every error has exactly one kind.
 
 The main use of error kinds is as short names ("slugs") that can be used in
 error suppression comments.
+
+Diagnostics have several possible severity levels, which can be [configured](../configuration#errors) in `pyrefly.toml` or via CLI:
+- ignore: the diagnostic is not emitted and does not cause a nonzero exit in the CLI
+- info: the diagnostic shows up blue in the IDE and does not cause a nonzero exit in the CLI
+- warn: the diagnostic shows up yellow in the IDE and causes a nonzero exit in the CLI
+- error: the diagnostic shows up red in the IDE and causes a nonzero exit in the CLI
+
+The default severity for diagnostics is `error` unless otherwise noted. Diagnostics with default severity `ignore` must be explicitly enabled to be emitted.
+
+## abstract-method-call
+
+This error is raised when code attempts to invoke a method decorated with
+`@abstractmethod`. Abstract methods have no implementation, so calling them is
+always invalid, even if the signature would otherwise match.
+
+```python
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> "Base": ...
+
+Base.build()
+# Cannot call abstract method `Base.build` [abstract-method-call]
+```
 
 ## annotation-mismatch
 
@@ -142,6 +175,23 @@ This error occurs when a type that cannot be used as a context manager appears i
 class A:
     def __enter__(self): ...
 with A(): ...  # `A` is missing an `__exit__` method!
+```
+
+## bad-dunder-all
+
+This error occurs when `__all__` is explicitly defined for a module but contains an entry that cannot be found in the module's definitions, wildcard imports, or submodules (for `__init__.py` files).
+
+```python
+__all__ = ["x", "y"]  # Name `y` is listed in `__all__` but is not defined in the module
+x = 5
+```
+
+To fix this error, either define the missing name or remove it from `__all__`:
+
+```python
+__all__ = ["x", "y"]
+x = 5
+y = 10  # Now `y` is defined
 ```
 
 ## bad-function-definition
@@ -378,7 +428,9 @@ a, b, c = two_elems()
 
 ## deprecated
 
-This error occurs on usage of a deprecated class or function:
+This warning occurs on usage of a deprecated class or function.
+
+The default severity of this diagnostic is `warn`.
 
 ```python
 from warnings import deprecated
@@ -391,26 +443,20 @@ f()  # deprecated!
 
 Pyrefly emits this error when a class defines abstract members but is not declared abstract (for example, it does not inherit from `abc.ABC` or use `abc.ABCMeta`). Such classes cannot be instantiated because they have unimplemented abstract methods. Add `ABC` as a base class, adjust the metaclass, or provide concrete implementations to resolve the issue.
 
-This error defaults to `Ignore`, so opt in by enabling it in your configuration if you want to enforce explicit abstract base classes.
+The default severity of this diagnostic is `ignore`.
 
 ## implicit-any
 
-This error is emitted when a Pyrefly infers an implicit `Any` type in your code. This is common in gradually-typed code, but reduces type safety so we provide this error for users that want to enforce fully-typed codebases.
+This error is emitted when Pyrefly infers an implicit `Any` type in your code for type variables or generic parameters that cannot be determined. This is common in gradually-typed code, but reduces type safety so we provide this error for users that want to enforce fully-typed codebases.
 
-This error is off by default. Typically, it can be fixed by providing an explicit type annotation.
+Typically, it can be fixed by providing explicit type arguments or default values for type variables.
+
+The default severity of this diagnostic is `ignore`.
 
 ```python
-# this only errors when return type inference is disabled
-def missing_return_annotation():
-    return 1
-
-def missing_param_annotation(x: int, y) -> int:
-    return x
-
 # this only errors when first-use inference is disabled
-x = []
+x = []  # error: infers list[Any]
 ```
-
 
 ## implicit-import
 
@@ -429,7 +475,7 @@ do not recognize as always executing. We recognize constructors and some test
 setup methods; we will emit an error for any attributes defined by assignment
 in other methods.
 
-This error is off by default, and must be manually enabled in the configuration.
+The default severity of this diagnostic is `ignore`.
 
 ```python
 class C:
@@ -590,6 +636,23 @@ def f(x, *args: P1.args, **kwargs: P2.kwargs) -> None:
 
 Here, `P1.args` and `P2.kwargs` can't be used together; `*args` and `**kwargs` must come from the same `ParamSpec`.
 
+## invalid-pattern
+
+This error is reported when a pattern is invalid at runtime. For example, enum members are values,
+so they must be matched as value patterns (without `()`), not class patterns:
+
+```python
+from enum import Enum
+
+class Color(Enum):
+  RED = "red"
+
+def describe(color: Color) -> None:
+  match color:
+    case Color.RED():  # Invalid pattern: use `Color.RED` (without parentheses)
+      pass
+```
+
 ## invalid-self-type
 
 This error occurs when `Self` is used in a context Pyrefly does not currently support.
@@ -684,6 +747,27 @@ def two_tups[*Xs, *Ys](xs: tuple[*Xs], ys: tuple[*Ys]) -> None:
   ...
 ```
 
+## invalid-variance
+
+An error caused by a type variable being used in a position incompatible with its declared variance.
+
+For example, a covariant type variable cannot be used in a contravariant position (such as a method parameter), and a contravariant type variable cannot be used in a covariant position (such as a return type).
+
+```python
+from typing import TypeVar, Generic
+
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class BadCovariant(Generic[T_co]):
+    # Error: covariant type variable used in contravariant position
+    def set_value(self, value: T_co) -> None: ...
+
+class BadContravariant(Generic[T_contra]):
+    # Error: contravariant type variable used in covariant position
+    def get_value(self) -> T_contra: ...
+```
+
 ## invalid-yield
 
 This error arises when `yield` is used in a way that is not allowed. For example:
@@ -747,10 +831,38 @@ os.perkeo  # missing-attribute
 In this example, `os.bacarat` is treated as a module name, so failing to find it results in an `missing-import`.
 `from os import joker` does not tell us if `joker` is a module, class, function, etc., so it is treated as the more general `missing-module-attribute`.
 
+## missing-override-decorator
+
+A method overrides a parent class method but does not have the `@override` decorator.
+
+This error supports strict override enforcement as specified in the [typing spec](https://typing.python.org/en/latest/spec/class-compat.html#strict-enforcement-per-project). When enabled, it requires all overriding methods to be explicitly marked with `@typing.override`.
+
+```python
+from typing import override
+
+class Base:
+    def foo(self) -> None: ...
+
+class Derived(Base):
+    def foo(self) -> None: ...  # missing-override-decorator
+
+    @override
+    def foo(self) -> None: ...  # OK
+```
+
+The default severity of this diagnostic is `ignore`. To enable strict override enforcement, set the severity to `error` in your configuration:
+
+```toml
+[tool.pyrefly]
+errors = { missing-override-decorator = "error" }
+```
+
 ## missing-source
 
 Pyrefly was able to find a stubs package but no corresponding source package. For example, this can
 happen if you install the `types-requests` package but forget to install `requests`.
+
+The default severity of this diagnostic is `ignore`.
 
 ## missing-source-for-stubs
 
@@ -791,6 +903,24 @@ def f(x: int | str) -> int | str:
     return x
 
 f(1.0)
+```
+
+## non-exhaustive-match
+
+Pyrefly warns when a `match` statement over an `Enum` attempts to enumerate the members
+but forgets at least one case. Add the missing members or a default arm.
+
+```python
+from enum import Enum
+
+class Color(Enum):
+  RED = "red"
+  BLUE = "blue"
+
+def describe(color: Color) -> str:
+  match color:  # non-exhaustive-match
+    case Color.RED:
+      return "danger"
 ```
 
 ## not-a-type
@@ -851,11 +981,39 @@ for val in x:  # not-iterable
   ...
 ```
 
+## not-required-key-access
+
+This warning indicates that a [`TypedDict`](https://typing.python.org/en/latest/spec/typeddict.html)
+key marked `NotRequired` (or inherited from a `total=False` TypedDict) is being accessed without
+first ensuring that the key is present. Even if the value type is non-optional, the key itself may
+not exist at runtime, so Pyrefly encourages guarding the access with an `in` check or a `.get()`
+call.
+
+The default severity of this diagnostic is `ignore`.
+
+```python
+from typing import NotRequired, TypedDict
+
+class Movie(TypedDict):
+    title: str
+    year: NotRequired[int]
+
+def describe(movie: Movie) -> int:
+    return movie["year"]  # not-required-key-access
+
+def safe_describe(movie: Movie) -> int:
+    if "year" in movie:
+        return movie["year"]  # OK: key presence established
+    raise ValueError("Missing year")
+```
+
 ## open-unpacking
 
 This error is reported on an attempt to unpack an
 [open](https://typing.python.org/en/latest/spec/glossary.html#term-open) TypedDict that potentially
 has items incompatible with the TypedDict it is being unpacked into.
+
+The default severity of this diagnostic is `ignore`.
 
 Example:
 ```python
@@ -918,9 +1076,20 @@ x = Ex()
 x.meaning = 0
 ```
 
+## redefinition
+
+Pyrefly reports this error when a name that already has an annotation in the current scope is annotated again with a different type. Re-annotating the same variable can lead to confusing types; prefer introducing a new name instead.
+
+```python
+def f(x: int) -> None:
+    x: str = str(x)  # redefinition
+```
+
 ## redundant-cast
 
 This warning is raised when `typing.cast()` is used to cast a value to a type it is already compatible with. Such casts are unnecessary and can be removed to improve code clarity.
+
+The default severity of this diagnostic is `warn`.
 
 ```python
 import typing
@@ -954,7 +1123,57 @@ if "abc":
 
 ## reveal-type
 
-Pyrefly uses this error to communicate the output of the [`reveal_type`](https://typing.python.org/en/latest/spec/directives.html#reveal-type) function.
+Pyrefly uses this diagnostic to communicate the output of the [`reveal_type`](https://typing.python.org/en/latest/spec/directives.html#reveal-type) function.
+
+The default severity of this diagnostic is `info`.
+
+## unannotated-attribute
+
+This error is raised when a class attribute is missing a type annotation and is initialized with the `None` literal. Without an explicit annotation, Pyrefly infers the type as `Any | None`, which reduces type safety. To fix it, add an explicit type annotation to the attribute.
+
+The default severity of this diagnostic is `ignore`.
+
+```python
+class MyClass:
+    # error: This expression is implicitly inferred to be `Any | None`. Please provide an explicit type annotation.
+    value = None
+
+# Fixed version:
+class MyClass:
+    value: int | None = None
+```
+
+## unannotated-parameter
+
+This error is raised when a function parameter is missing a type annotation. This helps enforce fully-typed codebases by ensuring all parameters have explicit types. To fix it, add a type annotation to the parameter.
+
+Note: The `self` and `cls` parameters are excluded from this check as they are implicitly typed.
+
+The default severity of this diagnostic is `ignore`.
+
+```python
+def process_data(x: int, y):  # error: `process_data` is missing an annotation for parameter `y`
+    return x + y
+
+# Fixed version:
+def process_data(x: int, y: int) -> int:
+    return x + y
+```
+
+## unannotated-return
+
+This error is raised when a function is missing a return type annotation. This helps enforce fully-typed codebases by ensuring all functions declare their return types explicitly. To fix it, add a return type annotation to the function.
+
+The default severity of this diagnostic is `ignore`.
+
+```python
+def calculate_sum(x: int, y: int):  # error: `calculate_sum` is missing a return annotation
+    return x + y
+
+# Fixed version:
+def calculate_sum(x: int, y: int) -> int:
+    return x + y
+```
 
 ## unbound-name
 
@@ -999,6 +1218,82 @@ def where() -> None:
   global spoon
 ```
 
+## unnecessary-comparison
+
+This warning is raised when an identity comparison (`is` or `is not`) is made between
+literals whose comparison result is statically known.
+
+The default severity of this diagnostic is `warn`.
+
+```python
+def test0() -> None:
+    # Different literals are always different objects
+    if 1 is 2:  # unnecessary-comparison: always False
+        pass
+    # Same singletons are always the same object
+    if True is not False:  # unnecessary-comparison: always True
+        pass
+
+def test1(x: object) -> None:
+    # Comparing an instance to a class is always False
+    if x is int:  # unnecessary-comparison: did you mean isinstance(x, int)?
+        pass
+```
+
+This check is relatively conservative and only warns on limited cases where the comparison is highly likely to be redundant.
+
+## unreachable
+
+This error is raised when a `return` or `yield` can never be reached because it comes
+after a statement that always exits the current flow, such as `return`, `raise`, `break`, or `continue`.
+
+```python
+def example():
+    return 1
+    return 2  # This `return` statement is unreachable [unreachable]
+
+def generator():
+    return
+    yield 1  # This `yield` expression is unreachable [unreachable]
+
+def loop_example():
+    while True:
+        break
+        return 1  # This `return` statement is unreachable [unreachable]
+```
+
+Note that `yield` statements can follow other `yield` statements without error, since generators
+can produce multiple values:
+
+```python
+def valid_generator():
+    yield 1
+    yield 2  # This is valid
+```
+
+## unsafe-overlap
+
+Protocols decorated with `@runtime_checkable` may be used in `isinstance` and `issubclass` checks, but the runtime will only checks that all the required attributes are present, without looking at their types.
+
+This error occurs when the object you're checking against the protocol has all the required attributes, but their types are not compatible.
+
+In the example below, `C` should not match with `P`, but the `isinstance` check will succeed at runtime.
+
+```python
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class P(Protocol):
+    x: int
+
+class C:
+    x: str
+
+c = C()
+if isinstance(c, P):
+    pass
+```
+
 ## unsupported
 
 This error indicates that pyrefly does not currently support a typing feature.
@@ -1025,6 +1320,8 @@ Type information for some third-party libraries is shipped in a stubs package se
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
 
+The default severity of this diagnostic is `ignore`.
+
 ## unused-coroutine
 
 If the result of an async function call is not awaited or used, we will raise an error.
@@ -1037,4 +1334,25 @@ async def bar():
     foo()  # error
     await foo()  # ok
     x = foo()  # ok
+```
+
+## unused-ignore
+
+This error is raised when a `# pyrefly: ignore` comment is not used to suppress an error, and can be safely removed.
+
+The default severity of this diagnostic is `ignore`.
+
+## variance-mismatch
+
+The inferred variance of a type variable does not match its declared variance. This warning is raised for protocols where the way a type variable is used implies a different variance than what was declared. For example, if a protocol only uses `T` in covariant positions but `T` is declared as invariant, this warning suggests declaring `T` as covariant.
+
+The default severity of this diagnostic is `warn`.
+
+```python
+from typing import Protocol, TypeVar
+
+T = TypeVar("T")
+
+class A(Protocol[T]):  # variance-mismatch: Type variable `T` in class `A` is declared as invariant, but could be covariant based on its usage
+    def f(self) -> T: ...
 ```

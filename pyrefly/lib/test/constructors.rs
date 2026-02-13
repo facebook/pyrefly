@@ -30,14 +30,15 @@ def test(f: type[A | B]) -> A | B:
 );
 
 testcase!(
+    bug = "There should be no errors",
     test_generic_class,
     r#"
-from typing import assert_type, reveal_type
+from typing import assert_type
 class Box[T]:
     def __init__(self, x: T): pass
 
     def wrap(self) -> Box[Box[T]]:
-        return Box(self)
+        return Box(self)  # E: Argument `Box[Box[Box[T]]]` is not assignable to parameter `self`  # E: `Self@Box` is not assignable to parameter `x`
 
 def f() -> int:
     return 1
@@ -91,6 +92,7 @@ class A[T]:
 );
 
 testcase!(
+    bug = "Spurious 'Box[Box[Box[T]]] is not assignable...' errors",
     test_generic_init_in_generic_class,
     r#"
 from typing import assert_type
@@ -99,9 +101,9 @@ class Box[T]:
         pass
     def wrap(self, x: bool) -> Box[Box[T]]:
         if x:
-            return Box(self, self)  # ok
+            return Box(self, self)  # E: `Box[Box[Box[T]]]` is not assignable to parameter `self`
         else:
-            return Box(self, 42)  # E: Argument `Literal[42]` is not assignable to parameter `y` with type `Self@Box`
+            return Box(self, 42)  # E: `Box[Box[Box[T]]]` is not assignable to parameter `self`  # E: Argument `Literal[42]` is not assignable to parameter `y` with type `Self@Box`
 b = Box[int]("hello", "world")
 assert_type(b, Box[int])
 assert_type(b.wrap(True), Box[Box[int]])
@@ -120,7 +122,6 @@ def test(c: C):
     "#,
 );
 
-// This is the same pyre1 behavior. We infer bivariance here in T1 as well as T2"
 testcase!(
     test_init_self_annotation_in_generic_class,
     r#"
@@ -128,8 +129,9 @@ class C[T1]:
     def __init__[T2](self: T2, x: T2):
         pass
 def test(c: C[int]):
-    C[int](c)  
-    C[str](c)  
+    C[int](c)
+    # Even though T1 is bivariant in C, we follow mypy and pyright's lead in treating it as invariant.
+    C[str](c)  # E: `C[int]` is not assignable to parameter `x` with type `C[str]`
     "#,
 );
 
@@ -420,7 +422,7 @@ from typing import Self
 class A:
     def __new__(cls: type[Self]): ...
 A.__new__(A)  # OK
-A.__new__(int) # E: Argument `type[int]` is not assignable to parameter `cls` with type `type[A]` in function `A.__new__`
+A.__new__(int) # E: `int` is not assignable to upper bound `A` of type variable `Self@A`
     "#,
 );
 
@@ -430,7 +432,7 @@ testcase!(
 class A:
     def __new__(cls): ...
 A.__new__(A)  # OK
-A.__new__(int)  # E: Argument `type[int]` is not assignable to parameter `cls` with type `type[A]` in function `A.__new__`
+A.__new__(int)  # E: `int` is not assignable to upper bound `A` of type variable `Self@A`
     "#,
 );
 
@@ -558,5 +560,228 @@ class A:
     def __init__(self, x: str):
         pass
 A(0) # E: `A.__new__` is deprecated # E: `Literal[0]` is not assignable to parameter `x` with type `str`
+    "#,
+);
+
+testcase!(
+    test_annotate_self,
+    r#"
+from typing import assert_type
+class A[T]:
+    def __init__(self: A[str]): pass
+assert_type(A(), A[str])
+    "#,
+);
+
+testcase!(
+    test_targ_mismatch,
+    r#"
+class A[T]:
+    def __init__(self, x: T):
+        pass
+a = A(0)
+b: A[str] = a  # E: `A[int]` is not assignable to `A[str]`
+    "#,
+);
+
+testcase!(
+    test_overloaded_init,
+    r#"
+from typing import Literal, assert_type, overload
+
+class A: ...
+class B: ...
+
+class C[T]:
+    @overload
+    def __init__(self: C[A], x: Literal[True]) -> None: ...
+    @overload
+    def __init__(self: C[B], x: Literal[False]) -> None: ...
+    def __init__(self, x):
+        pass
+
+assert_type(C(True), C[A])
+assert_type(C(False), C[B])
+    "#,
+);
+
+testcase!(
+    test_generic_in_generic,
+    r#"
+from typing import Literal, assert_type, overload
+
+class A: ...
+class B: ...
+
+class TypeEngine[T]: ...
+
+class UUID[T: (A, B)](TypeEngine[T]):
+    @overload
+    def __init__(self: UUID[A], as_uuid: Literal[True]) -> None: ...
+    @overload
+    def __init__(self: UUID[B], as_uuid: Literal[False]) -> None: ...
+    def __init__(self, as_uuid): ...
+
+class Column[T]:
+    def __init__(self, ty: TypeEngine[T]) -> None: ...
+
+assert_type(Column(UUID(as_uuid=False)), Column[B])
+    "#,
+);
+
+testcase!(
+    test_typevar_with_explicit_any_default,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+
+T = TypeVar("T", bound=int, default=Any)
+
+class A(Generic[T]):
+    def __new__(cls, x: T) -> A[T]: ...
+
+assert_type(A(0), A[int])
+A("oops")  # E: `str` is not assignable to upper bound `int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_typevar_with_explicit_any_default_in_nested_constructor_call,
+    r#"
+from typing import Any, assert_type
+
+class A[T = Any]:
+    def __new__(cls, x: T) -> A[T]: ...
+
+class B[T: int | A[Any] = Any]:
+    def __new__(cls, x: list[A[T]]) -> B[A[T]]: ...
+
+assert_type(B([A(0)]), B[A[int]])
+B([A("oops")])  # E: `str` is not assignable to upper bound `A[Any] | int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_init_overload_with_self,
+    r#"
+from typing import Generic, TypeVar, overload, Callable
+T = TypeVar("T")
+class C(Generic[T]):
+    @overload
+    def __init__(self: "C[int]", x: int) -> None:
+        ...
+    @overload
+    def __init__(self: "C[str]", x: str) -> None:
+        ...
+    def __init__(self, x: int | str) -> None:
+        ...
+
+def takes_Cint(x: Callable[[int], C[int]]) -> None:
+    pass
+def takes_Cstr(x: Callable[[str], C[str]]) -> None:
+    pass
+def takes_Cstr_wrong(x: Callable[[str], C[int]]) -> None:
+    pass
+takes_Cint(C)
+takes_Cstr(C)
+takes_Cstr_wrong(C) # E: Argument `type[C]` is not assignable to parameter `x` with type `(str) -> C[int]` in function `takes_Cstr_wrong`
+    "#,
+);
+
+testcase!(
+    test_init_class_scoped_typevars_in_self,
+    r#"
+from typing import Generic, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+
+class Class8(Generic[T1, T2]):
+    def __init__(self: "Class8[T2, T1]") -> None:  # E: `__init__` method self type cannot reference class type parameters `T2`, `T1`
+        pass
+"#,
+);
+
+testcase!(
+    test_constructor_typevar_scope,
+    r#"
+from typing import Generic, TypeVar
+T = TypeVar("T")
+class Ok1(Generic[T]):
+    def __init__(self: "Ok1[int]") -> None:
+        pass
+class Ok2[T]:
+    def __init__(self: "Ok2[int]") -> None:
+        pass
+class Ok3(Generic[T]):
+    def __init__(self) -> None:
+        pass
+class Ok4[T]:
+    def __init__(self) -> None:
+        pass
+class Ok5(Generic[T]):
+    def __init__[V](self: "Ok5[V]", arg: V) -> None:
+        pass
+class Ok6[T]:
+    def __init__[V](self: "Ok6[V]", arg: V) -> None:
+        pass
+class Bad1(Generic[T]):
+    def __init__(self: "Bad1[T]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+class Bad2[T]:
+    def __init__(self: "Bad2[T]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+"#,
+);
+
+testcase!(
+    test_constructor_typevar_scope_nested,
+    r#"
+from typing import Generic, TypeVar
+T = TypeVar("T")
+# Nested type variables should also be detected (e.g., Foo[list[T]])
+class Bad1(Generic[T]):
+    def __init__(self: "Bad1[list[T]]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+class Bad2[T]:
+    def __init__(self: "Bad2[tuple[T, int]]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+"#,
+);
+
+testcase!(
+    test_constructor_typevar_scope_overload,
+    r#"
+from typing import Generic, TypeVar, overload
+T = TypeVar("T")
+# Overloaded __init__ methods should also be checked
+class Bad1(Generic[T]):
+    @overload
+    def __init__(self: "Bad1[T]", x: int) -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        ...
+    @overload
+    def __init__(self: "Bad1[str]", x: str) -> None:
+        ...
+    def __init__(self, x: int | str) -> None:
+        pass
+class Ok1(Generic[T]):
+    @overload
+    def __init__(self: "Ok1[int]", x: int) -> None:
+        ...
+    @overload
+    def __init__(self: "Ok1[str]", x: str) -> None:
+        ...
+    def __init__(self, x: int | str) -> None:
+        pass
+"#,
+);
+
+testcase!(
+    test_class_scoped_typevar_in_decorated_init,
+    r#"
+from typing import Any
+def decorate(f) -> Any: ...
+class A[T]:
+    @decorate
+    def __init__(self: A[T]): ...  # E: self type cannot reference class type parameter `T`
     "#,
 );

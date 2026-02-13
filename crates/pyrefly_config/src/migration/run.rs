@@ -23,7 +23,7 @@ use tracing::warn;
 
 use crate::config::ConfigFile;
 use crate::migration::mypy;
-use crate::migration::mypy::MypyConfig;
+use crate::migration::mypy::ini::parse_mypy_config;
 use crate::migration::pyright;
 use crate::migration::pyright::PyrightConfig;
 use crate::pyproject::PyProject;
@@ -125,7 +125,7 @@ impl Args {
                 "Migrating mypy config file from: `{}`",
                 original_config_path.display()
             );
-            MypyConfig::parse_mypy_config(&original_config_path)?
+            parse_mypy_config(&original_config_path)?
         } else if original_config_path.file_name() == Some("pyproject.toml".as_ref()) {
             Self::load_from_pyproject(&original_config_path)
                 .context("Failed to load config from pyproject.toml")?

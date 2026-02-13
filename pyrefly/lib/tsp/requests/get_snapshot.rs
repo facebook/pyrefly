@@ -7,9 +7,10 @@
 
 //! Implementation of the getSnapshot TSP request
 
+use crate::lsp::non_wasm::server::TspInterface;
 use crate::tsp::server::TspServer;
 
-impl TspServer {
+impl<T: TspInterface> TspServer<T> {
     /// Get the current snapshot version
     ///
     /// The snapshot represents the current epoch of the global state.

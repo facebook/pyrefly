@@ -14,6 +14,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
+use pyrefly_types::callable::Deprecation;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::visit::VisitMut;
@@ -33,7 +34,7 @@ use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::display::ClassDisplayContext;
 use crate::types::keywords::DataclassKeywords;
-use crate::types::keywords::DataclassTransformKeywords;
+use crate::types::keywords::DataclassTransformMetadata;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
@@ -53,14 +54,16 @@ pub struct ClassMetadata {
     has_base_any: bool,
     is_new_type: bool,
     is_final: bool,
-    is_deprecated: bool,
+    deprecation: Option<Deprecation>,
     is_disjoint_base: bool,
     total_ordering_metadata: Option<TotalOrderingMetadata>,
     /// If this class is decorated with `typing.dataclass_transform(...)`, the keyword arguments
     /// that were passed to the `dataclass_transform` call.
-    dataclass_transform_metadata: Option<DataclassTransformKeywords>,
+    dataclass_transform_metadata: Option<DataclassTransformMetadata>,
     pydantic_model_kind: Option<PydanticModelKind>,
+    is_attrs_class: bool,
     django_model_metadata: Option<DjangoModelMetadata>,
+    is_marshmallow_schema: bool,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -91,12 +94,14 @@ impl ClassMetadata {
         has_base_any: bool,
         is_new_type: bool,
         is_final: bool,
-        is_deprecated: bool,
+        deprecation: Option<Deprecation>,
         is_disjoint_base: bool,
         total_ordering_metadata: Option<TotalOrderingMetadata>,
-        dataclass_transform_metadata: Option<DataclassTransformKeywords>,
+        dataclass_transform_metadata: Option<DataclassTransformMetadata>,
         pydantic_model_kind: Option<PydanticModelKind>,
+        is_attrs_class: bool,
         django_model_metadata: Option<DjangoModelMetadata>,
+        is_marshmallow_schema: bool,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass,
@@ -112,12 +117,14 @@ impl ClassMetadata {
             has_base_any,
             is_new_type,
             is_final,
-            is_deprecated,
+            deprecation,
             is_disjoint_base,
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
+            is_attrs_class,
             django_model_metadata,
+            is_marshmallow_schema,
         }
     }
 
@@ -136,12 +143,14 @@ impl ClassMetadata {
             has_base_any: false,
             is_new_type: false,
             is_final: false,
-            is_deprecated: false,
+            deprecation: None,
             is_disjoint_base: false,
             total_ordering_metadata: None,
             dataclass_transform_metadata: None,
             pydantic_model_kind: None,
+            is_attrs_class: false,
             django_model_metadata: None,
+            is_marshmallow_schema: false,
         }
     }
 
@@ -169,12 +178,21 @@ impl ClassMetadata {
         self.typed_dict_metadata.is_some()
     }
 
-    pub fn is_pydantic_base_model(&self) -> bool {
+    /// Returns true if this class is a pydantic model (BaseModel, RootModel, or BaseSettings).
+    pub fn is_pydantic_model(&self) -> bool {
         self.pydantic_model_kind.is_some()
     }
 
     pub fn is_django_model(&self) -> bool {
         self.django_model_metadata.is_some()
+    }
+
+    pub fn is_marshmallow_schema(&self) -> bool {
+        self.is_marshmallow_schema
+    }
+
+    pub fn is_attrs_class(&self) -> bool {
+        self.is_attrs_class
     }
 
     pub fn pydantic_model_kind(&self) -> Option<PydanticModelKind> {
@@ -206,8 +224,8 @@ impl ClassMetadata {
         false
     }
 
-    pub fn is_deprecated(&self) -> bool {
-        self.is_deprecated
+    pub fn deprecation(&self) -> Option<&Deprecation> {
+        self.deprecation.as_ref()
     }
 
     pub fn is_disjoint_base(&self) -> bool {
@@ -272,7 +290,7 @@ impl ClassMetadata {
         self.dataclass_metadata.as_ref()
     }
 
-    pub fn dataclass_transform_metadata(&self) -> Option<&DataclassTransformKeywords> {
+    pub fn dataclass_transform_metadata(&self) -> Option<&DataclassTransformMetadata> {
         self.dataclass_transform_metadata.as_ref()
     }
 
@@ -313,16 +331,8 @@ impl ClassSynthesizedField {
 }
 
 /// A class's synthesized fields, such as a dataclass's `__init__` method.
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default, VisitMut)]
 pub struct ClassSynthesizedFields(SmallMap<Name, ClassSynthesizedField>);
-
-impl VisitMut<Type> for ClassSynthesizedFields {
-    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
-        for field in self.0.values_mut() {
-            field.visit_mut(f);
-        }
-    }
-}
 
 impl ClassSynthesizedFields {
     pub fn new(fields: SmallMap<Name, ClassSynthesizedField>) -> Self {
@@ -363,10 +373,11 @@ impl Display for ClassSynthesizedFields {
 
 /// A struct representing a class's metaclass. A value of `None` indicates
 /// no explicit metaclass, in which case the default metaclass is `type`.
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
 pub enum Metaclass {
     Direct(ClassType),
     Inherited(ClassType),
+    #[default]
     None,
 }
 
@@ -377,12 +388,6 @@ impl Display for Metaclass {
             Self::Inherited(metaclass) => write!(f, "inherited({metaclass})"),
             Self::None => write!(f, "type"),
         }
-    }
-}
-
-impl Default for Metaclass {
-    fn default() -> Self {
-        Self::None
     }
 }
 
@@ -472,6 +477,10 @@ pub struct DjangoModelMetadata {
     /// The name of the field that has primary_key=True, if any.
     /// If None, the model uses the default auto-generated `id` field.
     pub custom_primary_key_field: Option<Name>,
+    /// Names of ForeignKey fields
+    pub foreign_key_fields: Vec<Name>,
+    /// Names of fields with choices=...
+    pub fields_with_choices: Vec<Name>,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
@@ -620,6 +629,7 @@ impl Linearization {
             Err(_) => return Linearization::empty(),
         };
         let mut ancestor_chains = Vec::new();
+        let mut seen_ancestors: SmallMap<Class, ClassType> = SmallMap::new();
         for (base, mro) in bases_with_mro {
             match &*mro {
                 ClassMro::Resolved(ancestors) => {
@@ -628,6 +638,44 @@ impl Linearization {
                         .map(|ancestor| ancestor.substitute_with(&base.substitution()))
                         .rev()
                         .collect::<Vec<_>>();
+                    let mut check_conflicting_targs = |ctype: &ClassType| -> bool {
+                        if let Some(prev) = seen_ancestors.get(ctype.class_object())
+                            && (prev.targs().len() != ctype.targs().len()
+                                || prev
+                                    .targs()
+                                    .as_slice()
+                                    .iter()
+                                    .zip(ctype.targs().as_slice())
+                                    .any(|(ta, tb)| ta != tb && !ta.is_any() && !tb.is_any()))
+                        {
+                            let ctx = ClassDisplayContext::new(&[cls, ctype.class_object()]);
+                            // TODO: Extend this error message to say where in the class bases the mismatch comes from
+                            // we will need to wire additional information for this.
+                            errors.add(
+                                cls.range(),
+                                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                                vec1![format!(
+                                    "Class `{}` has inconsistent type arguments for base class `{}`: `{}` and `{}`",
+                                    ctx.display(cls),
+                                    ctx.display(ctype.class_object()),
+                                    Type::ClassType(prev.clone()),
+                                    Type::ClassType(ctype.clone()),
+                                )],
+                            );
+                            true
+                        } else {
+                            seen_ancestors.insert(ctype.class_object().dupe(), ctype.clone());
+                            false
+                        }
+                    };
+
+                    for ancestor in ancestors_through_base.iter() {
+                        if check_conflicting_targs(ancestor) {
+                            break;
+                        }
+                    }
+                    check_conflicting_targs(base);
+
                     ancestor_chains.push(AncestorChain::from_base_and_ancestors(
                         base.clone(),
                         ancestors_through_base,

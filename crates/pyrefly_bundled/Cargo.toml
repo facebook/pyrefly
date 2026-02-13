@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_bundled"
-version = "0.41.3"
+version = "0.52.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -16,5 +16,6 @@ tar = "0.4.44"
 zstd = "0.13"
 
 [build-dependencies]
+sha2 = "0.10.6"
 tar = "0.4.44"
 zstd = { version = "0.13", features = ["experimental", "zstdmt"] }

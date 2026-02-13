@@ -15,6 +15,7 @@ use starlark_map::small_set::SmallSet;
 use tracing::warn;
 
 use crate::module::bundled::BundledStub;
+use crate::module::third_party::get_bundled_third_party;
 use crate::module::typeshed::typeshed;
 use crate::module::typeshed_third_party::typeshed_third_party;
 
@@ -47,6 +48,20 @@ pub fn to_real_path(path: &ModulePath) -> Option<PathBuf> {
             }?;
             Some(typeshed_path.join(&**path))
         }
+        ModulePathDetails::BundledThirdParty(path) => {
+            let bundled_third_party = get_bundled_third_party().ok()?;
+            let bundled_path = match bundled_third_party.materialized_path_on_disk() {
+                Ok(bundled_path) => Some(bundled_path),
+                Err(err) => {
+                    warn!(
+                        "Bundled Third Party Stubs unable to be loaded on disk, {}",
+                        err
+                    );
+                    None
+                }
+            }?;
+            Some(bundled_path.join(&**path))
+        }
     }
 }
 
@@ -59,7 +74,8 @@ pub fn collect_symbol_def_paths(t: &Type) -> Vec<(QName, PathBuf)> {
             let module_path = qname.module_path();
             let file_path = match module_path.details() {
                 ModulePathDetails::BundledTypeshed(_)
-                | ModulePathDetails::BundledTypeshedThirdParty(_) => {
+                | ModulePathDetails::BundledTypeshedThirdParty(_)
+                | ModulePathDetails::BundledThirdParty(_) => {
                     to_real_path(module_path).unwrap_or_else(|| module_path.as_path().to_path_buf())
                 }
                 _ => module_path.as_path().to_path_buf(),

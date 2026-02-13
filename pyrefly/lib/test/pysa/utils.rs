@@ -12,6 +12,7 @@ use pyrefly_types::class::Class;
 use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
+use ruff_python_ast::name::Name;
 
 use crate::binding::binding::KeyClass;
 use crate::report::pysa::class::ClassId;
@@ -20,6 +21,7 @@ use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionNode;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::get_all_functions;
+use crate::report::pysa::global_variable::GlobalVariableRef;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleKey;
 use crate::state::require::Require;
@@ -42,7 +44,7 @@ pub fn get_handle_for_module_name(module_name: &str, transaction: &Transaction) 
         .handles()
         .into_iter()
         .find(|handle| handle.module().as_str() == module_name)
-        .expect("valid module name")
+        .unwrap_or_else(|| panic!("expected valid module name, got `{module_name}`"))
 }
 
 pub fn get_class(module_name: &str, class_name: &str, context: &ModuleContext) -> Class {
@@ -55,7 +57,7 @@ pub fn get_class(module_name: &str, class_name: &str, context: &ModuleContext) -
         .keys::<KeyClass>()
         .map(|idx| answers.get_idx(idx).unwrap().0.clone().unwrap())
         .find(|class| class.name() == class_name)
-        .expect("valid class name")
+        .unwrap_or_else(|| panic!("expected valid class name, got `{module_name}.{class_name}`"))
 }
 
 pub fn get_class_ref(module_name: &str, class_name: &str, context: &ModuleContext) -> ClassRef {
@@ -82,22 +84,28 @@ pub fn get_function_ref(
 
     // This is slow, but we don't care in tests.
     get_all_functions(&context)
+        .filter(|function| function.should_export(&context))
         .find(|function| function.name().as_str() == function_name)
-        .expect("valid function name")
+        .unwrap_or_else(|| {
+            panic!("expected valid function name, got `{module_name}.{function_name}`")
+        })
         .as_function_ref(&context)
 }
 
-pub fn get_method_ref(
+fn get_method_ref_with_predicate(
     module_name: &str,
     class_name: &str,
     function_name: &str,
     context: &ModuleContext,
+    predicate: impl Fn(&FunctionNode) -> bool,
 ) -> FunctionRef {
     let handle = get_handle_for_module_name(module_name, context.transaction);
     let context = ModuleContext::create(handle, context.transaction, context.module_ids).unwrap();
 
     // This is slow, but we don't care in tests.
     get_all_functions(&context)
+        .filter(|function| function.should_export(&context))
+        .filter(|function| predicate(function))
         .find(|function| match function {
             FunctionNode::DecoratedFunction(decorated_function) => {
                 function.name().as_str() == function_name
@@ -109,8 +117,48 @@ pub fn get_method_ref(
                 class.name().as_str() == class_name && name.as_str() == function_name
             }
         })
-        .expect("valid method name")
+        .unwrap_or_else(|| {
+            panic!("expected valid method name, got `{module_name}.{class_name}.{function_name}`")
+        })
         .as_function_ref(&context)
+}
+
+pub fn get_method_ref(
+    module_name: &str,
+    class_name: &str,
+    function_name: &str,
+    context: &ModuleContext,
+) -> FunctionRef {
+    get_method_ref_with_predicate(module_name, class_name, function_name, context, |_| true)
+}
+
+pub fn get_property_setter_ref(
+    module_name: &str,
+    class_name: &str,
+    function_name: &str,
+    context: &ModuleContext,
+) -> FunctionRef {
+    get_method_ref_with_predicate(
+        module_name,
+        class_name,
+        function_name,
+        context,
+        |function| function.is_property_setter(),
+    )
+}
+
+pub fn get_global_ref(
+    module_name: &str,
+    global_name: &str,
+    context: &ModuleContext,
+) -> GlobalVariableRef {
+    let handle = get_handle_for_module_name(module_name, context.transaction);
+    let context = ModuleContext::create(handle, context.transaction, context.module_ids).unwrap();
+    GlobalVariableRef {
+        module_id: context.module_id,
+        module_name: context.handle.module(),
+        name: Name::new(global_name),
+    }
 }
 
 pub fn create_location(

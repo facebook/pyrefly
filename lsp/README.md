@@ -38,3 +38,6 @@ settings:
   but not find-references.
 - `pyrefly.lspPath` [string: '']: if your platform is not supported, you can
   build pyrefly from source and specify the binary here.
+- `python.analysis.showHoverGoToLinks` [boolean: true]: Controls whether hover
+  tooltips include "Go to definition" and "Go to type definition" navigation
+  links. Set to `false` for cleaner tooltips with only type information.

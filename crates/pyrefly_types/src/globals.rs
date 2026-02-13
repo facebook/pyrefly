@@ -11,18 +11,20 @@
 
 use std::iter;
 
+use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
 
+use super::heap::TypeHeap;
 use super::stdlib::Stdlib;
 use super::types::Type;
 
 #[derive(Debug, Clone)]
 pub struct ImplicitGlobal {
     name: Name,
-    ty: fn(&Stdlib) -> Type,
+    ty: fn(&Stdlib, &TypeHeap) -> Type,
 }
 
-fn dict_str_any(stdlib: &Stdlib) -> Type {
+fn dict_str_any(stdlib: &Stdlib, _heap: &TypeHeap) -> Type {
     stdlib
         .dict(stdlib.str().clone().to_type(), Type::any_explicit())
         .clone()
@@ -31,26 +33,26 @@ fn dict_str_any(stdlib: &Stdlib) -> Type {
 
 const IMPLICIT_GLOBALS: &[ImplicitGlobal] = &[
     ImplicitGlobal::new("__annotations__", dict_str_any),
-    ImplicitGlobal::new("__builtins__", |_| Type::any_explicit()),
-    ImplicitGlobal::new("__cached__", |stdlib| stdlib.str().clone().to_type()),
-    ImplicitGlobal::new("__debug__", |stdlib| stdlib.bool().clone().to_type()),
+    ImplicitGlobal::new("__builtins__", |_, _| Type::any_explicit()),
+    ImplicitGlobal::new("__cached__", |stdlib, _| stdlib.str().clone().to_type()),
+    ImplicitGlobal::new("__debug__", |stdlib, _| stdlib.bool().clone().to_type()),
     ImplicitGlobal::new("__dict__", dict_str_any),
-    ImplicitGlobal::new("__file__", |stdlib| stdlib.str().clone().to_type()),
-    ImplicitGlobal::new("__loader__", |_| Type::any_explicit()),
-    ImplicitGlobal::new("__name__", |stdlib| stdlib.str().clone().to_type()),
-    ImplicitGlobal::new("__package__", |stdlib| {
+    ImplicitGlobal::new("__file__", |stdlib, _| stdlib.str().clone().to_type()),
+    ImplicitGlobal::new("__loader__", |_, _| Type::any_explicit()),
+    ImplicitGlobal::new("__name__", |stdlib, _| stdlib.str().clone().to_type()),
+    ImplicitGlobal::new("__package__", |stdlib, _| {
         Type::optional(stdlib.str().clone().to_type())
     }),
-    ImplicitGlobal::new("__path__", |stdlib| {
+    ImplicitGlobal::new("__path__", |stdlib, _| {
         stdlib
             .mutable_sequence(stdlib.str().clone().to_type())
             .to_type()
     }),
-    ImplicitGlobal::new("__spec__", |_| Type::any_explicit()),
+    ImplicitGlobal::new("__spec__", |_, _| Type::any_explicit()),
 ];
 
 impl ImplicitGlobal {
-    const fn new(name: &'static str, ty: fn(&Stdlib) -> Type) -> Self {
+    const fn new(name: &'static str, ty: fn(&Stdlib, &TypeHeap) -> Type) -> Self {
         Self {
             name: Name::new_static(name),
             ty,
@@ -66,7 +68,7 @@ impl ImplicitGlobal {
 
     #[allow(dead_code)]
     pub fn from_name(name: &Name) -> Option<ImplicitGlobal> {
-        if name.starts_with("__") && name.ends_with("__") {
+        if is_dunder(name.as_str()) {
             IMPLICIT_GLOBALS.iter().find(|x| &x.name == name).cloned()
         } else {
             None
@@ -77,15 +79,15 @@ impl ImplicitGlobal {
         &self.name
     }
 
-    pub fn as_type(&self, stdlib: &Stdlib) -> Type {
-        (self.ty)(stdlib)
+    pub fn as_type(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
+        (self.ty)(stdlib, heap)
     }
 
     pub fn doc(has_docstring: bool) -> Self {
         if has_docstring {
-            Self::new("__doc__", |stdlib| stdlib.str().clone().to_type())
+            Self::new("__doc__", |stdlib, _| stdlib.str().clone().to_type())
         } else {
-            Self::new("__doc__", |_| Type::None)
+            Self::new("__doc__", |_, _| Type::None)
         }
     }
 }

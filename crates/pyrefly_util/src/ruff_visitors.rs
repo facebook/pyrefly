@@ -10,13 +10,13 @@ use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprFString;
+use ruff_python_ast::ExprTString;
 use ruff_python_ast::FStringPart;
 use ruff_python_ast::InterpolatedStringElement;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::Pattern;
 use ruff_python_ast::Stmt;
-use ruff_python_ast::TStringPart;
 use ruff_python_ast::TypeParams;
 use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::walk_arguments;
@@ -126,27 +126,10 @@ impl VisitMut for Expr {
             }
             Expr::TString(x) => {
                 for x in x.value.iter_mut() {
-                    match x {
-                        TStringPart::Literal(_) => {}
-                        TStringPart::FString(x) => {
-                            for x in x.elements.iter_mut() {
-                                match x {
-                                    InterpolatedStringElement::Literal(_) => {}
-                                    InterpolatedStringElement::Interpolation(x) => {
-                                        f(&mut x.expression)
-                                    }
-                                }
-                            }
-                        }
-                        TStringPart::TString(x) => {
-                            for x in x.elements.iter_mut() {
-                                match x {
-                                    InterpolatedStringElement::Literal(_) => {}
-                                    InterpolatedStringElement::Interpolation(x) => {
-                                        f(&mut x.expression)
-                                    }
-                                }
-                            }
+                    for x in x.elements.iter_mut() {
+                        match x {
+                            InterpolatedStringElement::Literal(_) => {}
+                            InterpolatedStringElement::Interpolation(x) => f(&mut x.expression),
                         }
                     }
                 }
@@ -238,6 +221,17 @@ impl Visit<Expr> for ExprFString {
     }
 }
 
+impl Visit<Expr> for ExprTString {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Expr)) {
+        self.value.iter().for_each(|x| {
+            x.elements.iter().for_each(|x| match x {
+                InterpolatedStringElement::Literal(_) => {}
+                InterpolatedStringElement::Interpolation(x) => f(&x.expression),
+            })
+        });
+    }
+}
+
 impl Visit for Expr {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Self)) {
         match self {
@@ -309,17 +303,7 @@ impl Visit for Expr {
                 x.recurse(f);
             }
             Expr::TString(x) => {
-                x.value.iter().for_each(|x| match x {
-                    TStringPart::Literal(_) => {}
-                    TStringPart::FString(x) => x.elements.iter().for_each(|x| match x {
-                        InterpolatedStringElement::Literal(_) => {}
-                        InterpolatedStringElement::Interpolation(x) => f(&x.expression),
-                    }),
-                    TStringPart::TString(x) => x.elements.iter().for_each(|x| match x {
-                        InterpolatedStringElement::Literal(_) => {}
-                        InterpolatedStringElement::Interpolation(x) => f(&x.expression),
-                    }),
-                });
+                x.recurse(f);
             }
             Expr::StringLiteral(_)
             | Expr::BytesLiteral(_)

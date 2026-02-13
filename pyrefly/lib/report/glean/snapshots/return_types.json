@@ -682,6 +682,16 @@
                       },
                       "target": {
                         "id": 0,
+                        "key": "return_types.Set"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 165
+                      },
+                      "target": {
+                        "id": 0,
                         "key": "typing.Set"
                       }
                     },
@@ -752,7 +762,27 @@
                       },
                       "target": {
                         "id": 0,
+                        "key": "return_types.Dict"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 4,
+                        "start": 106
+                      },
+                      "target": {
+                        "id": 0,
                         "key": "typing.Dict"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 4,
+                        "start": 169
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "return_types.List"
                       }
                     },
                     {
@@ -792,7 +822,27 @@
                       },
                       "target": {
                         "id": 0,
+                        "key": "return_types.List"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 4,
+                        "start": 81
+                      },
+                      "target": {
+                        "id": 0,
                         "key": "typing.List"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 5,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "return_types.Union"
                       }
                     },
                     {
@@ -812,7 +862,27 @@
                       },
                       "target": {
                         "id": 0,
+                        "key": "return_types.Union"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 5,
+                        "start": 15
+                      },
+                      "target": {
+                        "id": 0,
                         "key": "typing.Union"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 8,
+                        "start": 136
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "return_types.Optional"
                       }
                     },
                     {
@@ -833,6 +903,16 @@
                       "target": {
                         "id": 0,
                         "key": "return_types.FooClass"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 8,
+                        "start": 31
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "return_types.Callable"
                       }
                     },
                     {
@@ -1067,6 +1147,25 @@
           },
           "spans": [
             {
+              "length": 3,
+              "start": 284
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "return_types.Set"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "return_types.py"
+          },
+          "spans": [
+            {
               "length": 4,
               "start": 166
             }
@@ -1137,6 +1236,29 @@
           "spans": [
             {
               "length": 4,
+              "start": 200
+            },
+            {
+              "length": 4,
+              "start": 288
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "return_types.List"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "return_types.py"
+          },
+          "spans": [
+            {
+              "length": 4,
               "start": 225
             },
             {
@@ -1147,6 +1269,25 @@
           "target": {
             "id": 0,
             "key": "typing.Dict"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "return_types.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 225
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "return_types.Dict"
           }
         }
       },
@@ -1174,6 +1315,29 @@
           "target": {
             "id": 0,
             "key": "typing.Union"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "return_types.py"
+          },
+          "spans": [
+            {
+              "length": 5,
+              "start": 119
+            },
+            {
+              "length": 5,
+              "start": 134
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "return_types.Union"
           }
         }
       },
@@ -1248,6 +1412,25 @@
           "spans": [
             {
               "length": 8,
+              "start": 150
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "return_types.Callable"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "return_types.py"
+          },
+          "spans": [
+            {
+              "length": 8,
               "start": 255
             },
             {
@@ -1258,6 +1441,25 @@
           "target": {
             "id": 0,
             "key": "typing.Optional"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "return_types.py"
+          },
+          "spans": [
+            {
+              "length": 8,
+              "start": 255
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "return_types.Optional"
           }
         }
       }
@@ -1381,6 +1583,16 @@
               },
               "target": {
                 "id": 0,
+                "key": "return_types.Set"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 284
+              },
+              "target": {
+                "id": 0,
                 "key": "typing.Set"
               }
             },
@@ -1431,6 +1643,16 @@
               },
               "target": {
                 "id": 0,
+                "key": "return_types.List"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 200
+              },
+              "target": {
+                "id": 0,
                 "key": "typing.List"
               }
             },
@@ -1441,7 +1663,27 @@
               },
               "target": {
                 "id": 0,
+                "key": "return_types.Dict"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 225
+              },
+              "target": {
+                "id": 0,
                 "key": "typing.Dict"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 288
+              },
+              "target": {
+                "id": 0,
+                "key": "return_types.List"
               }
             },
             {
@@ -1491,7 +1733,27 @@
               },
               "target": {
                 "id": 0,
+                "key": "return_types.Union"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 119
+              },
+              "target": {
+                "id": 0,
                 "key": "typing.Union"
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 134
+              },
+              "target": {
+                "id": 0,
+                "key": "return_types.Union"
               }
             },
             {
@@ -1541,6 +1803,16 @@
               },
               "target": {
                 "id": 0,
+                "key": "return_types.Callable"
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 150
+              },
+              "target": {
+                "id": 0,
                 "key": "typing.Callable"
               }
             },
@@ -1552,6 +1824,16 @@
               "target": {
                 "id": 0,
                 "key": "typing.Callable"
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 255
+              },
+              "target": {
+                "id": 0,
+                "key": "return_types.Optional"
               }
             },
             {
@@ -1982,6 +2264,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "b53ee776cd31801ec9f22ea9787a58ad"
+    "schema_id": "835e529061f1429222e801fbfe85f209"
   }
 ]

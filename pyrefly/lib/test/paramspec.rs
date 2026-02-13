@@ -46,6 +46,40 @@ def test(x1: Callable[[int, str], int], x2: Callable[..., int]):
 );
 
 testcase!(
+    test_paramspec_middleware_kwargs_mismatch,
+    r#"
+from typing import Protocol, Any
+
+class ASGIApp:
+    pass
+
+class _MiddlewareFactory[**P](Protocol):
+    def __call__(self, app: ASGIApp, /, *args: P.args, **kwargs: P.kwargs) -> Any: ...
+
+class FastAPI:
+    def add_middleware[**P](
+        self,
+        middleware_class: _MiddlewareFactory[P],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> None:
+        pass
+
+class CORSMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        pass
+
+
+def use_middleware() -> None:
+    app = FastAPI()
+    app.add_middleware(
+        CORSMiddleware,
+        x="",  # E: Unexpected keyword argument `x`
+    )
+"#,
+);
+
+testcase!(
     test_param_spec_generic_function,
     r#"
 from typing import Callable, reveal_type
@@ -250,7 +284,7 @@ reveal_type(transform(bar)) # Should return (a: str, /, *args: bool) -> bool # E
 );
 
 testcase!(
-    bug = "P.args and P.kwargs should only work when P is in scope",
+    bug = "conformance: P.args and P.kwargs should only work when P is in scope",
     test_paramspec_component_usage,
     r#"
 from typing import Callable, ParamSpec
@@ -287,7 +321,7 @@ def puts_p_into_scope(f: Callable[P, int]) -> None:
 testcase!(
     test_paramspec_decorator,
     r#"
-from typing import Callable, ParamSpec, assert_type
+from typing import Callable, ParamSpec, assert_type, Any
 
 P = ParamSpec("P")
 
@@ -296,7 +330,31 @@ def decorator(f: Callable[P, int]) -> Callable[P, None]:
     assert_type(f(*args, **kwargs), int)    # Accepted, should resolve to int
     f(*kwargs, **args)    # Rejected # E: Expected *-unpacked P.args and **-unpacked P.kwargs
     f(1, *args, **kwargs) # Rejected # E: Expected 0 positional arguments, got 1
+
+  # Allow tuple[Any, ...] to match P.args, and dict[str, Any] to match P.kwargs
+  def bar(t1: tuple[Any, ...], t2: tuple[object, ...], d1: dict[str, Any], d2: dict[str, object]) -> None:
+    f(*t1, **d1) # OK
+    f(*t2, **d2) # # E: Expected *-unpacked P.args and **-unpacked P.kwargs
   return foo              # Accepted
+"#,
+);
+
+testcase!(
+    test_paramspec_args_kwargs_subscriptable,
+    r#"
+from typing import Callable, ParamSpec, TypeVar, assert_type
+
+FP = ParamSpec('FP')
+FR = TypeVar('FR')
+
+def decorate(f: Callable[FP, FR]) -> Callable[FP, FR]:
+  def wrapper(*args: FP.args, **kwargs: FP.kwargs) -> FR:
+    if len(args) > 0:
+      assert_type(args[0], object)
+    if 'foo' in kwargs:
+      assert_type(kwargs['foo'], object)
+    return f(*args, **kwargs)
+  return wrapper
 "#,
 );
 
@@ -378,7 +436,7 @@ P2 = ParamSpec("P2")
 def g(x: Callable[Concatenate[int, P2], int], *args: P2.args, **kwargs: P2.kwargs):
     f(x, 1)
     f(x)  # E: Expected 1 more positional argument in function `f`
-    f(x, 1, 2)  # Not OK, we aren't sure the 2nd param is an int 
+    f(x, 1, 2)  # Not OK, we aren't sure the 2nd param is an int
 "#,
 );
 
@@ -468,5 +526,57 @@ from typing import Callable
 def test[**P](v: Callable[P, None]):
     a: Callable[..., None] = v
     b: Callable[P, None] = a
+"#,
+);
+
+testcase!(
+    test_param_spec_empty,
+    r#"
+def foo[**P](x: int = 0, *args: P.args, **kwargs: P.kwargs):
+    pass
+foo()
+"#,
+);
+
+testcase!(
+    test_param_spec_optional_prefix_arg,
+    r#"
+from typing import Concatenate, ParamSpec, TypeVar, Callable
+
+class T:
+    def c1(self) -> None:
+        pass
+
+Res = TypeVar("Res", covariant=True)
+P = ParamSpec("P")
+
+def caller(
+    vals: list[T],
+    action: Callable[Concatenate[T, P], Res],
+    extra_arg: bool=True,
+    *args: P.args,
+    **kwargs: P.kwargs
+) -> None:
+    for val in vals:
+        if extra_arg:
+            _ = action(val, *args, **kwargs)
+
+caller([], T.c1)
+"#,
+);
+
+testcase!(
+    test_paramspec_any,
+    r#"
+from typing import Callable, Any, ParamSpec, Generic
+
+P = ParamSpec('P')
+
+class Task(Generic[P]):
+    __call__: Callable[P, None]
+
+# Any should be accepted as a valid ParamSpec argument
+def foo(task: Task[Any]) -> None:
+    pass
 "#,
 );

@@ -23,16 +23,17 @@ use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_build::source_db::Target;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::TextSize;
 use serde::Deserialize;
@@ -77,25 +78,29 @@ impl SourceDatabase for PlaygroundSourceDatabase {
 
     fn lookup(
         &self,
-        module_name: &ModuleName,
+        module_name: ModuleName,
         _: Option<&Path>,
         _: Option<ModuleStyle>,
     ) -> Option<ModulePath> {
-        self.module_mappings.get(module_name).cloned()
+        self.module_mappings.get(&module_name).cloned()
     }
 
-    fn handle_from_module_path(&self, path: ModulePath) -> Option<Handle> {
+    fn handle_from_module_path(&self, path: &ModulePath) -> Option<Handle> {
         // It should be fine to just iterate through this naively, since there generally
         // shouldn't be too many files open in the web editor.
-        let (name, _) = self.module_mappings.iter().find(|(_, p)| *p == &path)?;
-        Some(Handle::new(name.dupe(), path, self.sys_info.dupe()))
+        let (name, _) = self.module_mappings.iter().find(|(_, p)| *p == path)?;
+        Some(Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
     }
 
-    fn requery_source_db(&self, _: SmallSet<ModulePathBuf>) -> anyhow::Result<bool> {
-        Ok(false)
+    fn query_source_db(
+        &self,
+        _: SmallSet<InternedPath>,
+        _: bool,
+    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
+        (Ok(false), TelemetrySourceDbRebuildInstanceStats::default())
     }
 
-    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern<'_>> {
+    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern> {
         self.module_mappings
             .values()
             .map(|p| WatchPattern::file(p.as_path().to_path_buf()))
@@ -104,6 +109,10 @@ impl SourceDatabase for PlaygroundSourceDatabase {
 
     fn get_target(&self, _: Option<&Path>) -> Option<Target> {
         None
+    }
+
+    fn get_generated_files(&self) -> SmallSet<InternedPath> {
+        SmallSet::new()
     }
 }
 
@@ -333,7 +342,7 @@ impl Playground {
         }
 
         let source_db = PlaygroundSourceDatabase::new(module_mappings, self.sys_info.dupe());
-        config.source_db = Some(Arc::new(Box::new(source_db)));
+        config.source_db = Some(ArcId::new(Box::new(source_db)));
 
         config.configure();
         let config = ArcId::new(config);
@@ -355,8 +364,12 @@ impl Playground {
 
         let handles: Vec<Handle> = self.handles.values().map(|handle| handle.dupe()).collect();
 
-        self.state
-            .run_with_committing_transaction(transaction, &handles, Require::Everything);
+        self.state.run_with_committing_transaction(
+            transaction,
+            &handles,
+            Require::Everything,
+            None,
+        );
         Some(format!(
             "{}.{}",
             desired_version.major, desired_version.minor
@@ -378,8 +391,12 @@ impl Playground {
 
             let handles: Vec<Handle> = self.handles.values().map(|handle| handle.dupe()).collect();
 
-            self.state
-                .run_with_committing_transaction(transaction, &handles, Require::Everything);
+            self.state.run_with_committing_transaction(
+                transaction,
+                &handles,
+                Require::Everything,
+                None,
+            );
 
             if self.handles.contains_key(&filename) {
                 self.active_filename = filename;
@@ -395,40 +412,136 @@ impl Playground {
 
     pub fn get_errors(&self) -> Vec<Diagnostic> {
         let mut all_diagnostics = Vec::new();
+        let transaction = self.state.transaction();
 
         for (filename, handle) in &self.handles {
-            let file_errors = self
-                .state
-                .transaction()
-                .get_errors([handle])
-                .collect_errors()
-                .shown
-                .into_map(|e| {
-                    let range = e.display_range();
-                    Diagnostic {
-                        start_line: range.start.line_within_file().get() as i32,
-                        start_col: range.start.column().get() as i32,
-                        end_line: range.end.line_within_file().get() as i32,
-                        end_col: range.end.column().get() as i32,
-                        message_header: e.msg_header().to_owned(),
-                        message_details: e.msg_details().unwrap_or("").to_owned(),
-                        kind: e.error_kind().to_name().to_owned(),
-                        // Severity values defined here: https://microsoft.github.io/monaco-editor/typedoc/enums/MarkerSeverity.html
-                        severity: match e.error_kind().default_severity() {
-                            Severity::Error => 8,
-                            Severity::Warn => 4,
-                            Severity::Info => 2,
-                            Severity::Ignore => 1,
-                        },
-                        filename: filename.clone(),
-                    }
-                });
+            let errors = transaction.get_errors([handle]);
+            let mut shown = errors.collect_errors().shown;
+            shown.extend(errors.collect_unused_ignore_errors_for_display().shown);
+            let file_errors = shown.into_map(|e| {
+                let range = e.display_range();
+                Diagnostic {
+                    start_line: range.start.line_within_file().get() as i32,
+                    start_col: range.start.column().get() as i32,
+                    end_line: range.end.line_within_file().get() as i32,
+                    end_col: range.end.column().get() as i32,
+                    message_header: e.msg_header().to_owned(),
+                    message_details: e.msg_details().unwrap_or("").to_owned(),
+                    kind: e.error_kind().to_name().to_owned(),
+                    // Severity values defined here: https://microsoft.github.io/monaco-editor/typedoc/enums/MarkerSeverity.html
+                    severity: match e.severity() {
+                        Severity::Error => 8,
+                        Severity::Warn => 4,
+                        Severity::Info => 2,
+                        Severity::Ignore => 1,
+                    },
+                    filename: filename.clone(),
+                }
+            });
             all_diagnostics.extend(file_errors);
+
+            // Add unused diagnostics
+            Self::append_unused_import_diagnostics(
+                &transaction,
+                handle,
+                filename,
+                &mut all_diagnostics,
+            );
+            Self::append_unused_variable_diagnostics(
+                &transaction,
+                handle,
+                filename,
+                &mut all_diagnostics,
+            );
+            Self::append_unused_parameter_diagnostics(
+                &transaction,
+                handle,
+                filename,
+                &mut all_diagnostics,
+            );
         }
 
         // Include any diagnostics gathered while loading config
         all_diagnostics.extend(self.config_diagnostics.iter().cloned());
         all_diagnostics
+    }
+
+    fn append_unused_import_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        filename: &str,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_imports() {
+                let range = module_info.display_range(unused.range);
+                items.push(Diagnostic {
+                    start_line: range.start.line_within_file().get() as i32,
+                    start_col: range.start.column().get() as i32,
+                    end_line: range.end.line_within_file().get() as i32,
+                    end_col: range.end.column().get() as i32,
+                    message_header: format!("Import `{}` is unused", unused.name.as_str()),
+                    message_details: String::new(),
+                    kind: "unused-import".to_owned(),
+                    // MarkerSeverity.Hint (1)
+                    severity: 1,
+                    filename: filename.to_owned(),
+                });
+            }
+        }
+    }
+
+    fn append_unused_variable_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        filename: &str,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_variables() {
+                let range = module_info.display_range(unused.range);
+                items.push(Diagnostic {
+                    start_line: range.start.line_within_file().get() as i32,
+                    start_col: range.start.column().get() as i32,
+                    end_line: range.end.line_within_file().get() as i32,
+                    end_col: range.end.column().get() as i32,
+                    message_header: format!("Variable `{}` is unused", unused.name.as_str()),
+                    message_details: String::new(),
+                    kind: "unused-variable".to_owned(),
+                    // MarkerSeverity.Hint (1)
+                    severity: 1,
+                    filename: filename.to_owned(),
+                });
+            }
+        }
+    }
+
+    fn append_unused_parameter_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        filename: &str,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_parameters() {
+                let range = module_info.display_range(unused.range);
+                items.push(Diagnostic {
+                    start_line: range.start.line_within_file().get() as i32,
+                    start_col: range.start.column().get() as i32,
+                    end_line: range.end.line_within_file().get() as i32,
+                    end_col: range.end.column().get() as i32,
+                    message_header: format!("Parameter `{}` is unused", unused.name.as_str()),
+                    message_details: String::new(),
+                    kind: "unused-parameter".to_owned(),
+                    // MarkerSeverity.Hint (1)
+                    severity: 1,
+                    filename: filename.to_owned(),
+                });
+            }
+        }
     }
 
     fn to_text_size(&self, transaction: &Transaction, pos: Position) -> Option<TextSize> {
@@ -441,7 +554,7 @@ impl Playground {
         let handle = self.handles.get(&self.active_filename)?;
         let transaction = self.state.transaction();
         let position = self.to_text_size(&transaction, pos)?;
-        let hover = get_hover(&transaction, handle, position)?;
+        let hover = get_hover(&transaction, handle, position, true)?;
         Some(MonacoHover {
             contents: vec![hover.contents],
         })
@@ -544,7 +657,11 @@ mod tests {
         let expected_errors: Vec<String> = Vec::new();
 
         let mut files = SmallMap::new();
-        files.insert("main.py".to_owned(), "from typing import *".to_owned());
+        // Use the List import to avoid unused import diagnostic
+        files.insert(
+            "main.py".to_owned(),
+            "from typing import List\nx: List[int] = []".to_owned(),
+        );
         state.update_sandbox_files(files, true);
         state.set_active_file("main.py");
 
@@ -567,11 +684,11 @@ mod tests {
         state.set_active_file("main.py");
 
         let expected_headers = &[
-            "Could not find import of `t`",
-            "Parse error: Expected 'import', found newline",
+            "Cannot find module `t`",
+            "Parse error: Expected `import`, found newline",
         ];
         let expected_details = &[
-            "  Looked in these locations:\n  Build system source database",
+            "  Did you mean `nt`?\n  Looked in these locations:\n  Build system source database",
             "",
         ];
         let expected_error_kinds = &[ErrorKind::MissingImport, ErrorKind::ParseError];
@@ -820,5 +937,78 @@ mod tests {
             state.handles.contains_key("foo/bar.py"),
             "Nested file should be in handles"
         );
+    }
+
+    #[test]
+    fn test_unused_import_diagnostics() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "main.py".to_owned(),
+            "from typing import List, Dict\nx: List[int] = []".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+
+        let errors = state.get_errors();
+        let unused_imports: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == "unused-import")
+            .collect();
+
+        assert_eq!(unused_imports.len(), 1, "Should detect 1 unused import");
+        assert_eq!(unused_imports[0].message_header, "Import `Dict` is unused");
+        assert_eq!(unused_imports[0].severity, 1); // MarkerSeverity.Hint
+    }
+
+    #[test]
+    fn test_unused_variable_diagnostics() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "main.py".to_owned(),
+            "def foo():\n    x = 42\n    y = 10\n    return y".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+
+        let errors = state.get_errors();
+        let unused_variables: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == "unused-variable")
+            .collect();
+
+        assert_eq!(unused_variables.len(), 1, "Should detect 1 unused variable");
+        assert_eq!(unused_variables[0].message_header, "Variable `x` is unused");
+        assert_eq!(unused_variables[0].severity, 1); // MarkerSeverity.Hint
+    }
+
+    #[test]
+    fn test_unused_parameter_diagnostics() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "main.py".to_owned(),
+            "def greet(name: str, age: int) -> str:\n    return f\"Hello {name}\"".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+
+        let errors = state.get_errors();
+        let unused_parameters: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == "unused-parameter")
+            .collect();
+
+        assert_eq!(
+            unused_parameters.len(),
+            1,
+            "Should detect 1 unused parameter"
+        );
+        assert_eq!(
+            unused_parameters[0].message_header,
+            "Parameter `age` is unused"
+        );
+        assert_eq!(unused_parameters[0].severity, 1); // MarkerSeverity.Hint
     }
 }

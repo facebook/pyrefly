@@ -26,8 +26,10 @@ macro_rules! table {
         pub struct $name {
             $($vis)* types: $t<$crate::binding::binding::Key>,
             $($vis)* expectations: $t<$crate::binding::binding::KeyExpect>,
+            $($vis)* type_aliases: $t<$crate::binding::binding::KeyTypeAlias>,
             $($vis)* consistent_override_checks: $t<$crate::binding::binding::KeyConsistentOverrideCheck>,
             $($vis)* exports: $t<$crate::binding::binding::KeyExport>,
+            $($vis)* decorators: $t<$crate::binding::binding::KeyDecorator>,
             $($vis)* decorated_functions: $t<$crate::binding::binding::KeyDecoratedFunction>,
             $($vis)* undecorated_functions: $t<$crate::binding::binding::KeyUndecoratedFunction>,
             $($vis)* classes: $t<$crate::binding::binding::KeyClass>,
@@ -36,6 +38,7 @@ macro_rules! table {
             $($vis)* class_fields: $t<$crate::binding::binding::KeyClassField>,
             $($vis)* class_synthesized_fields: $t<$crate::binding::binding::KeyClassSynthesizedFields>,
             $($vis)* variance: $t<$crate::binding::binding::KeyVariance>,
+            $($vis)* variance_checks: $t<$crate::binding::binding::KeyVarianceCheck>,
             $($vis)* annotations: $t<$crate::binding::binding::KeyAnnotation>,
             $($vis)* class_metadata: $t<$crate::binding::binding::KeyClassMetadata>,
             $($vis)* class_mros: $t<$crate::binding::binding::KeyClassMro>,
@@ -57,6 +60,12 @@ macro_rules! table {
             fn get_mut(&mut self) -> &mut Self::Value { &mut self.expectations }
         }
 
+        impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyTypeAlias> for $name {
+            type Value = $t<$crate::binding::binding::KeyTypeAlias>;
+            fn get(&self) -> &Self::Value { &self.type_aliases }
+            fn get_mut(&mut self) -> &mut Self::Value { &mut self.type_aliases }
+        }
+
         impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyConsistentOverrideCheck> for $name {
             type Value = $t<$crate::binding::binding::KeyConsistentOverrideCheck>;
             fn get(&self) -> &Self::Value { &self.consistent_override_checks }
@@ -67,6 +76,12 @@ macro_rules! table {
             type Value = $t<$crate::binding::binding::KeyExport>;
             fn get(&self) -> &Self::Value { &self.exports }
             fn get_mut(&mut self) -> &mut Self::Value { &mut self.exports }
+        }
+
+        impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyDecorator> for $name {
+            type Value = $t<$crate::binding::binding::KeyDecorator>;
+            fn get(&self) -> &Self::Value { &self.decorators }
+            fn get_mut(&mut self) -> &mut Self::Value { &mut self.decorators }
         }
 
         impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyDecoratedFunction> for $name {
@@ -115,6 +130,12 @@ macro_rules! table {
             type Value = $t<$crate::binding::binding::KeyVariance>;
             fn get(&self) -> &Self::Value { &self.variance }
             fn get_mut(&mut self) -> &mut Self::Value { &mut self.variance }
+        }
+
+        impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyVarianceCheck> for $name {
+            type Value = $t<$crate::binding::binding::KeyVarianceCheck>;
+            fn get(&self) -> &Self::Value { &self.variance_checks }
+            fn get_mut(&mut self) -> &mut Self::Value { &mut self.variance_checks }
         }
 
         impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyAnnotation> for $name {
@@ -184,8 +205,10 @@ macro_rules! table_for_each(
     ($e:expr, $f:expr) => {
         $f(&($e).types);
         $f(&($e).expectations);
+        $f(&($e).type_aliases);
         $f(&($e).consistent_override_checks);
         $f(&($e).exports);
+        $f(&($e).decorators);
         $f(&($e).decorated_functions);
         $f(&($e).undecorated_functions);
         $f(&($e).classes);
@@ -194,6 +217,7 @@ macro_rules! table_for_each(
         $f(&($e).class_fields);
         $f(&($e).class_synthesized_fields);
         $f(&($e).variance);
+        $f(&($e).variance_checks);
         $f(&($e).annotations);
         $f(&($e).class_metadata);
         $f(&($e).class_mros);
@@ -209,8 +233,10 @@ macro_rules! table_mut_for_each(
     ($e:expr, $f:expr) => {
         $f(&mut ($e).types);
         $f(&mut ($e).expectations);
+        $f(&mut ($e).type_aliases);
         $f(&mut ($e).consistent_override_checks);
         $f(&mut ($e).exports);
+        $f(&mut ($e).decorators);
         $f(&mut ($e).decorated_functions);
         $f(&mut ($e).undecorated_functions);
         $f(&mut ($e).classes);
@@ -219,6 +245,7 @@ macro_rules! table_mut_for_each(
         $f(&mut ($e).class_fields);
         $f(&mut ($e).class_synthesized_fields);
         $f(&mut ($e).variance);
+        $f(&mut ($e).variance_checks);
         $f(&mut ($e).annotations);
         $f(&mut ($e).class_metadata);
         $f(&mut ($e).class_mros);
@@ -234,8 +261,10 @@ macro_rules! table_try_for_each(
     ($e:expr, $f:expr) => {
         $f(&($e).types)?;
         $f(&($e).expectations)?;
+        $f(&($e).type_aliases)?;
         $f(&($e).consistent_override_checks)?;
         $f(&($e).exports)?;
+        $f(&($e).decorators)?;
         $f(&($e).decorated_functions)?;
         $f(&($e).undecorated_functions)?;
         $f(&($e).classes)?;
@@ -244,6 +273,7 @@ macro_rules! table_try_for_each(
         $f(&($e).class_fields)?;
         $f(&($e).class_synthesized_fields)?;
         $f(&($e).variance)?;
+        $f(&($e).variance_checks)?;
         $f(&($e).annotations)?;
         $f(&($e).class_metadata)?;
         $f(&($e).class_mros)?;

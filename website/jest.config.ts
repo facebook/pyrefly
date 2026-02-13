@@ -55,7 +55,10 @@ const config: Config.InitialOptions = {
         'monaco-editor': '<rootDir>/__mocks__/monaco-editor.ts',
         './usePythonWorker': '<rootDir>/__mocks__/usePythonWorkerMock.ts',
     },
-    setupFilesAfterEnv: ['@testing-library/jest-dom'],
+    setupFilesAfterEnv: [
+        '@testing-library/jest-dom',
+        '<rootDir>/setupTests.ts',
+    ],
 };
 
 export default config;

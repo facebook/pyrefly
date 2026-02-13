@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::char;
 use std::fmt;
 use std::fmt::Display;
 
@@ -29,6 +28,22 @@ use crate::stdlib::Stdlib;
 use crate::types::Type;
 
 assert_words!(Lit, 3);
+
+static LITERAL_STR_MAX_SIZE: usize = 4096;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub struct Literal {
+    pub value: Lit,
+    pub style: LitStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub enum LitStyle {
+    Implicit,
+    Explicit,
+}
 
 /// A literal value.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -54,7 +69,7 @@ pub struct LitEnum {
 impl Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Lit::Str(_) => write!(f, "{}", self.to_string_escaped(true)),
+            Lit::Str(_) => self.write_escaped(f, true),
             Lit::Int(x) => write!(f, "{x}"),
             Lit::Bool(x) => {
                 let s = if *x { "True" } else { "False" };
@@ -62,10 +77,15 @@ impl Display for Lit {
             }
             Lit::Bytes(bytes) => {
                 write!(f, "b'")?;
-                for byte in bytes {
-                    match char::from_u32(*byte as u32) {
-                        Some(ch) => write!(f, "{ch}")?,
-                        None => write!(f, "\\x{byte:02x}")?,
+                for byte in bytes.iter().copied() {
+                    match byte {
+                        b'\t' => write!(f, "\\t")?,
+                        b'\n' => write!(f, "\\n")?,
+                        b'\r' => write!(f, "\\r")?,
+                        b'\\' => write!(f, "\\\\")?,
+                        b'\'' => write!(f, "\\'")?,
+                        0x20..=0x7e => write!(f, "{}", byte as char)?,
+                        _ => write!(f, "\\x{byte:02x}")?,
                     }
                 }
                 write!(f, "'")
@@ -81,7 +101,7 @@ impl Lit {
     /// Returns the negated type, or None if literal can't be negated.
     pub fn negate(&self) -> Option<Type> {
         match self {
-            Lit::Int(x) => Some(Lit::Int(x.negate()).to_type()),
+            Lit::Int(x) => Some(Lit::Int(x.negate()).to_implicit_type()),
             _ => None,
         }
     }
@@ -89,9 +109,9 @@ impl Lit {
     /// Returns `+self` if the `+` operation is allowed, None otherwise.
     pub fn positive(&self) -> Option<Type> {
         match self {
-            Lit::Int(_) => Some(self.clone().to_type()),
-            Lit::Bool(true) => Some(Lit::Int(LitInt::new(1)).to_type()),
-            Lit::Bool(false) => Some(Lit::Int(LitInt::new(0)).to_type()),
+            Lit::Int(_) => Some(self.clone().to_implicit_type()),
+            Lit::Bool(true) => Some(LitInt::new(1).to_implicit_type()),
+            Lit::Bool(false) => Some(LitInt::new(0).to_implicit_type()),
             _ => None,
         }
     }
@@ -101,14 +121,17 @@ impl Lit {
         match self {
             Lit::Int(x) => {
                 let x = x.invert();
-                Some(Lit::Int(x).to_type())
+                Some(Lit::Int(x).to_implicit_type())
             }
             _ => None,
         }
     }
 
-    pub fn from_string_literal(x: &ExprStringLiteral) -> Self {
-        Lit::Str(x.value.to_str().into())
+    pub fn from_string_literal(x: &ExprStringLiteral) -> Option<Self> {
+        if x.value.len() > LITERAL_STR_MAX_SIZE {
+            return None;
+        }
+        Some(Lit::Str(x.value.to_str().into()))
     }
 
     pub fn from_bytes_literal(x: &ExprBytesLiteral) -> Self {
@@ -143,9 +166,20 @@ impl Lit {
         Lit::Bool(x.value)
     }
 
-    /// Convert a literal to a `Type::Literal`.
-    pub fn to_type(self) -> Type {
-        Type::Literal(self)
+    /// Convert a literal to an implicit (i.e., inferred) `Type::Literal`.
+    pub fn to_implicit_type(self) -> Type {
+        Type::Literal(Box::new(Literal {
+            value: self,
+            style: LitStyle::Implicit,
+        }))
+    }
+
+    /// Convert a literal to an explicit (i.e., type-annotated) `Type::Literal`.
+    pub fn to_explicit_type(self) -> Type {
+        Type::Literal(Box::new(Literal {
+            value: self,
+            style: LitStyle::Explicit,
+        }))
     }
 
     /// Convert a literal to a `ClassType` that is the general class_type of the literal.
@@ -173,33 +207,60 @@ impl Lit {
         }
     }
 
-    pub fn to_string_escaped(&self, use_single_quotes_for_string: bool) -> String {
+    /// Writes the escaped string representation directly to a formatter.
+    /// This avoids allocating intermediate strings for each character.
+    pub fn write_escaped(
+        &self,
+        f: &mut impl fmt::Write,
+        use_single_quotes_for_string: bool,
+    ) -> fmt::Result {
         match self {
             Lit::Str(s) => {
-                let escaped: String = s
-                    .chars()
-                    .map(|c| match c {
-                        // https://docs.python.org/3/reference/lexical_analysis.html#escape-sequences
-                        '\\' => "\\\\".to_owned(),
-                        '\'' if use_single_quotes_for_string => "\\'".to_owned(),
-                        '\"' if !use_single_quotes_for_string => "\\\"".to_owned(),
-                        '\x07' => "\\a".to_owned(), // \a
-                        '\x08' => "\\b".to_owned(), // \b
-                        '\x0c' => "\\f".to_owned(), // \f
-                        '\n' => "\\n".to_owned(),
-                        '\r' => "\\r".to_owned(),
-                        '\t' => "\\t".to_owned(),
-                        '\x0b' => "\\v".to_owned(), // \v
-                        _ => c.to_string(),
-                    })
-                    .collect::<String>();
-                if use_single_quotes_for_string {
-                    format!("'{escaped}'")
+                let quote = if use_single_quotes_for_string {
+                    '\''
                 } else {
-                    format!("\"{escaped}\"")
+                    '"'
+                };
+                f.write_char(quote)?;
+
+                // Batch non-escaped characters to minimize write calls
+                let mut start = 0;
+                for (i, c) in s.char_indices() {
+                    let escape = match c {
+                        '\\' => Some("\\\\"),
+                        '\'' if use_single_quotes_for_string => Some("\\'"),
+                        '\"' if !use_single_quotes_for_string => Some("\\\""),
+                        '\x07' => Some("\\a"),
+                        '\x08' => Some("\\b"),
+                        '\x0c' => Some("\\f"),
+                        '\n' => Some("\\n"),
+                        '\r' => Some("\\r"),
+                        '\t' => Some("\\t"),
+                        '\x0b' => Some("\\v"),
+                        _ => None,
+                    };
+                    if let Some(esc) = escape {
+                        if start < i {
+                            f.write_str(&s[start..i])?;
+                        }
+                        f.write_str(esc)?;
+                        start = i + c.len_utf8();
+                    }
                 }
+                if start < s.len() {
+                    f.write_str(&s[start..])?;
+                }
+
+                f.write_char(quote)
             }
-            lit => lit.to_string(),
+            lit => write!(f, "{lit}"),
         }
+    }
+
+    pub fn to_string_escaped(&self, use_single_quotes_for_string: bool) -> String {
+        let mut result = String::new();
+        self.write_escaped(&mut result, use_single_quotes_for_string)
+            .unwrap();
+        result
     }
 }

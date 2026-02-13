@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fmt;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -16,15 +18,17 @@ use ruff_notebook::Notebook;
 use ruff_python_ast::PySourceType;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::small_set::SmallSet;
 
 use crate::ignore::Ignore;
+use crate::ignore::Tool;
 use crate::module_name::ModuleName;
 use crate::module_path::ModulePath;
 
 pub static GENERATED_TOKEN: &str = concat!("@", "generated");
 
 /// Information about a module, notably its name, path, and contents.
-#[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash)]
+#[derive(Clone, Dupe, PartialEq, Eq, Hash)]
 pub struct Module(ArcId<ModuleInner>);
 
 #[derive(Debug, Clone)]
@@ -35,6 +39,15 @@ struct ModuleInner {
     is_generated: bool,
     contents: LinedBuffer,
     notebook: Option<Arc<Notebook>>,
+}
+
+impl Debug for Module {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Module")
+            .field("name", &self.0.name)
+            .field("path", &self.0.path)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Module {
@@ -168,13 +181,12 @@ impl Module {
         &self,
         source_range: &DisplayRange,
         error_kind: &str,
-        permissive_ignores: bool,
+        enabled_ignores: &SmallSet<Tool>,
     ) -> bool {
         self.0.ignore.is_ignored(
             source_range.start.line_within_file(),
-            source_range.end.line_within_file(),
             error_kind,
-            permissive_ignores,
+            enabled_ignores,
         )
     }
 

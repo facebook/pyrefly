@@ -15,7 +15,7 @@ jobs:
       pyrefly_version: ${{ steps.pyrefly-version.outputs.PYREFLY_VERSION }}
     steps:
       - name: Checkout repo (to see version.bzl in next step)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Get all history for all branches and tags
       - name: Get version
@@ -67,9 +67,13 @@ jobs:
             # necessary for glibc 2.31
             container: ubuntu:20.04
             github_env: $GITHUB_ENV
-          - os: macos-14
+          # x86 EOL on github-actions is august 2027 according to https://github.com/actions/runner-images/issues/13046
+          # we are currently cross-compiling but still running on macos-15-intel for the e2e tests. at EOL, we
+          # likely need to disable the e2e test for this platform (e2e test tries starting binary on the machine).
+          - os: macos-15-intel
             platform: darwin
             arch: x64
+            rust_target: x86_64-apple-darwin
             github_env: $GITHUB_ENV
           - os: macos-14
             platform: darwin
@@ -78,7 +82,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v6
       - name: Read rust-toolchain file
         # matrix.github_env is necessary to differentiate between windows and linux environment variables
         # https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#environment-files
@@ -112,7 +116,7 @@ jobs:
       - name: build pyrefly binary
         if: ${{ matrix.rust_target == '' }}
         run: cargo build --release --all-features --artifact-dir lsp/bin --manifest-path pyrefly/Cargo.toml -Z unstable-options
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -122,7 +126,7 @@ jobs:
         working-directory: lsp/
       - run: npx vsce package --target ${{ env.platform }} ${{needs.get_version.outputs.pyrefly_version}}
         working-directory: lsp/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: pyrefly-${{ env.platform }}
           path: "lsp/*.vsix"

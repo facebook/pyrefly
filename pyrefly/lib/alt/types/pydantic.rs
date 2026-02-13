@@ -26,19 +26,23 @@ impl Default for PydanticValidationFlags {
 }
 
 /// Configuration for a Pydantic model.
+/// For pydantic dataclasses, `frozen`, `extra`, and `strict` are `None` because
+/// they come from decorator arguments via dataclass_transform, not from this config.
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq, VisitMut, Default)]
 pub struct PydanticConfig {
-    pub frozen: bool,
+    pub frozen: Option<bool>,
     pub validation_flags: PydanticValidationFlags,
-    pub extra: bool,
-    pub strict: bool,
+    pub extra: Option<bool>,
+    pub strict: Option<bool>,
     pub pydantic_model_kind: PydanticModelKind,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq, VisitMut, Default)]
-
 pub enum PydanticModelKind {
     #[default]
     BaseModel,
     RootModel,
+    BaseSettings,
+    /// A class decorated with `@pydantic.dataclasses.dataclass`.
+    DataClass,
 }

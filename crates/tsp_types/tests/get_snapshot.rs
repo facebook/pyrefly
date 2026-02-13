@@ -5,104 +5,87 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Unit tests for TSP GetSnapshotRequest type construction and serialization
-//!
-//! These tests verify the GetSnapshotRequest parameter construction and validation by:
-//! 1. Testing TSP GetSnapshotRequest construction (no parameters required)
-//! 2. Testing serialization/deserialization round-trips
-//! 3. Testing method and id field validation
+//! Tests for GetSnapshotRequest type construction and serialization
 
 use tsp_types::GetSnapshotRequest;
+use tsp_types::GetSnapshotResponse;
 use tsp_types::LSPId;
 use tsp_types::TSPRequestMethods;
 
 #[test]
 fn test_get_snapshot_request_construction() {
-    // Test basic request construction
     let request = GetSnapshotRequest {
         method: TSPRequestMethods::TypeServerGetSnapshot,
         id: LSPId::Int(1),
         params: None,
     };
 
-    // Verify request construction
     assert_eq!(request.method, TSPRequestMethods::TypeServerGetSnapshot);
-    match request.id {
-        LSPId::Int(n) => assert_eq!(n, 1),
-        _ => panic!("Expected Number id"),
-    }
+    assert_eq!(request.id, LSPId::Int(1));
     assert!(request.params.is_none());
 }
 
 #[test]
-fn test_get_snapshot_request_different_id_types() {
-    // Test with Number ID
-    let request_number = GetSnapshotRequest {
+fn test_get_snapshot_request_with_string_id() {
+    let request = GetSnapshotRequest {
         method: TSPRequestMethods::TypeServerGetSnapshot,
-        id: LSPId::Int(42),
+        id: LSPId::String("request-1".to_owned()),
         params: None,
     };
 
-    // Test with String ID
-    let request_string = GetSnapshotRequest {
-        method: TSPRequestMethods::TypeServerGetSnapshot,
-        id: LSPId::String("snapshot-req-123".to_owned()),
-        params: None,
-    };
-
-    // Verify different ID types
-    match request_number.id {
-        LSPId::Int(n) => assert_eq!(n, 42),
-        _ => panic!("Expected Number id"),
-    }
-
-    match request_string.id {
-        LSPId::String(s) => assert_eq!(s, "snapshot-req-123"),
+    assert_eq!(request.method, TSPRequestMethods::TypeServerGetSnapshot);
+    match &request.id {
+        LSPId::String(s) => assert_eq!(s, "request-1"),
         _ => panic!("Expected String id"),
     }
 }
 
 #[test]
 fn test_get_snapshot_request_serialization() {
-    // Test that request can be properly serialized and deserialized
-    let original_request = GetSnapshotRequest {
+    let request = GetSnapshotRequest {
         method: TSPRequestMethods::TypeServerGetSnapshot,
-        id: LSPId::Int(999),
+        id: LSPId::Int(42),
         params: None,
     };
 
-    // Serialize to JSON
-    let json_str = serde_json::to_string(&original_request).expect("Failed to serialize");
-
-    // Deserialize back from JSON
-    let deserialized_request: GetSnapshotRequest =
+    // Test serialization round-trip
+    let json_str = serde_json::to_string(&request).expect("Failed to serialize");
+    let deserialized: GetSnapshotRequest =
         serde_json::from_str(&json_str).expect("Failed to deserialize");
 
-    // Verify round-trip serialization
-    assert_eq!(deserialized_request.method, original_request.method);
-    assert_eq!(deserialized_request.params, original_request.params);
-
-    match (&deserialized_request.id, &original_request.id) {
-        (LSPId::Int(d), LSPId::Int(o)) => assert_eq!(d, o),
-        _ => panic!("ID type mismatch"),
-    }
+    assert_eq!(deserialized.method, request.method);
+    assert_eq!(deserialized.id, request.id);
 }
 
 #[test]
-fn test_get_snapshot_request_json_structure() {
-    // Test that the JSON structure matches expected TSP format
+fn test_get_snapshot_response_type() {
+    // GetSnapshotResponse is an i32 (snapshot number)
+    let response: GetSnapshotResponse = 123;
+    assert_eq!(response, 123);
+
+    // Test serialization
+    let json_str = serde_json::to_string(&response).expect("Failed to serialize");
+    assert_eq!(json_str, "123");
+
+    let deserialized: GetSnapshotResponse =
+        serde_json::from_str(&json_str).expect("Failed to deserialize");
+    assert_eq!(deserialized, 123);
+}
+
+#[test]
+fn test_get_snapshot_request_json_format() {
     let request = GetSnapshotRequest {
         method: TSPRequestMethods::TypeServerGetSnapshot,
         id: LSPId::Int(1),
         params: None,
     };
 
-    let json_str = serde_json::to_string(&request).expect("Failed to serialize");
-    let json_value: serde_json::Value =
-        serde_json::from_str(&json_str).expect("Failed to parse JSON");
+    let json_value = serde_json::to_value(&request).expect("Failed to serialize");
 
-    // Verify JSON structure
-    assert_eq!(json_value["method"], "typeServer/getSnapshot");
-    assert_eq!(json_value["id"], 1);
-    assert!(json_value["params"].is_null());
+    // Verify the JSON structure
+    assert_eq!(
+        json_value["method"],
+        serde_json::json!("typeServer/getSnapshot")
+    );
+    assert_eq!(json_value["id"], serde_json::json!(1));
 }
