@@ -122,13 +122,17 @@ pub enum CallTargetLookup {
     /// When a type is not callable, still collect what can be called in callable "subcases". This is
     /// for example used for a union type that is not callable, but some of its "subcases" are callable.
     Error(Vec<CallTarget>),
+    /// `__call__` resolves back to the same class, creating infinite recursion
+    /// through descriptor resolution. This is distinct from `Error` because
+    /// the type *has* a `__call__`, it just can't be resolved to a concrete target.
+    CircularCall,
 }
 
 impl CallTargetLookup {
     pub fn is_error(&self) -> bool {
         match self {
             CallTargetLookup::Ok(..) => false,
-            CallTargetLookup::Error(..) => true,
+            CallTargetLookup::Error(..) | CallTargetLookup::CircularCall => true,
         }
     }
 }
@@ -309,7 +313,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .filter_map(|x| {
                         match self.as_call_target_impl(x, quantified.clone(), dunder_call) {
                             CallTargetLookup::Ok(target) => Some(*target),
-                            CallTargetLookup::Error(..) => None,
+                            CallTargetLookup::Error(..) | CallTargetLookup::CircularCall => None,
                         }
                     })
                     .collect::<Vec<_>>();
@@ -340,9 +344,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
                                 || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
                             if is_self_recursive {
-                                // __call__ resolves back to the same class, creating
-                                // circular resolution. Treat as callable with unknown type.
-                                CallTargetLookup::Ok(Box::new(CallTarget::Any(AnyStyle::Implicit)))
+                                CallTargetLookup::CircularCall
                             } else {
                                 self.as_call_target_impl(ty, Some(quantified), dunder_call)
                             }
@@ -354,9 +356,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
                                 || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
                             if is_self_recursive {
-                                // __call__ resolves back to the same class, creating
-                                // circular resolution. Treat as callable with unknown type.
-                                CallTargetLookup::Ok(Box::new(CallTarget::Any(AnyStyle::Implicit)))
+                                CallTargetLookup::CircularCall
                             } else {
                                 self.as_call_target_impl(ty, quantified, /* dunder_call */ true)
                             }
@@ -493,6 +493,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     context,
                 )
             }
+            CallTargetLookup::CircularCall => self.error_call_target(
+                errors,
+                range,
+                format!(
+                    "`__call__` on `{}` resolves back to the same type, creating infinite recursion at runtime",
+                    self.for_display(ty),
+                ),
+                ErrorKind::NotCallable,
+                context,
+            ),
         }
     }
 
