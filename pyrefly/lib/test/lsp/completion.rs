@@ -9,8 +9,10 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::module_name::ModuleName;
 use ruff_text_size::TextSize;
 
+use crate::state::lsp::CompletionResolveData;
 use crate::state::lsp::ImportFormat;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -97,8 +99,20 @@ fn get_test_report(
             } else {
                 false
             };
+            let builtin_module = ModuleName::builtins();
+            let is_builtin = data
+                .as_ref()
+                .and_then(|value| {
+                    serde_json::from_value::<CompletionResolveData>(value.clone()).ok()
+                })
+                .is_some_and(|info| match info {
+                    CompletionResolveData::Export { module, .. } => {
+                        module == builtin_module.as_str()
+                    }
+                });
+
             if (filter.include_keywords || kind != Some(CompletionItemKind::KEYWORD))
-                && (filter.include_builtins || data != Some(serde_json::json!("builtin")))
+                && (filter.include_builtins || !is_builtin)
             {
                 report.push_str("\n- (");
                 report.push_str(&format!("{:?}", kind.unwrap()));
