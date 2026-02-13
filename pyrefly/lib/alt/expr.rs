@@ -246,23 +246,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .into_ty()
     }
 
-    /// Check whether a type corresponds to a deprecated function or method, and if so, log a deprecation warning.
-    pub fn check_for_deprecated_call(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
-        let Some(deprecation) = ty.function_deprecation() else {
-            return;
-        };
-        let deprecated_function = ty
-            .to_func_kind()
-            .map(|func_kind| func_kind.format(self.module().name()));
-        if let Some(deprecated_function) = deprecated_function {
-            errors.add(
-                range,
-                ErrorInfo::Kind(ErrorKind::Deprecated),
-                deprecation.as_error_message(format!("`{deprecated_function}` is deprecated")),
-            );
-        }
-    }
-
     /// Like expr_infer_with_hint(), but returns a TypeInfo that includes narrowing information.
     pub fn expr_infer_type_info_with_hint(
         &self,
@@ -647,6 +630,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             want.ty().clone()
         } else {
             ty.promote_implicit_literals(self.stdlib)
+        }
+    }
+
+    /// Check whether a type corresponds to a deprecated function or method, and if so, log a deprecation warning.
+    fn check_for_deprecated_call(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
+        let Some(deprecation) = ty.function_deprecation() else {
+            return;
+        };
+        let deprecated_function = ty
+            .to_func_kind()
+            .map(|func_kind| func_kind.format(self.module().name()));
+        if let Some(deprecated_function) = deprecated_function {
+            errors.add(
+                range,
+                ErrorInfo::Kind(ErrorKind::Deprecated),
+                deprecation.as_error_message(format!("`{deprecated_function}` is deprecated")),
+            );
         }
     }
 
