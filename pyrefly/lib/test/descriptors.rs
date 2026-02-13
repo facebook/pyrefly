@@ -237,8 +237,8 @@ assert_type(b_instance(1), str)
 );
 
 // Test that a descriptor-based __call__ returning the same class doesn't cause
-// infinite recursion when called through a type variable bound. This pattern
-// would also cause RecursionError at runtime, so the "not callable" error is correct.
+// infinite recursion when called through a type variable bound. The circular
+// __call__ resolution is treated as callable with unknown return type.
 testcase!(
     test_descriptor_dunder_call_self_referencing_via_typevar,
     r#"
@@ -250,7 +250,7 @@ class SelfCallable:
     __call__: SelfDescriptor = SelfDescriptor()
 T = TypeVar("T", bound=SelfCallable)
 def f(x: T) -> None:
-    x()  # E: Expected a callable, got `T`
+    x()
     "#,
 );
 

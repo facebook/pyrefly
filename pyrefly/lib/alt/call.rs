@@ -340,7 +340,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
                                 || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
                             if is_self_recursive {
-                                CallTargetLookup::Error(vec![])
+                                // __call__ resolves back to the same class, creating
+                                // circular resolution. Treat as callable with unknown type.
+                                CallTargetLookup::Ok(Box::new(CallTarget::Any(AnyStyle::Implicit)))
                             } else {
                                 self.as_call_target_impl(ty, Some(quantified), dunder_call)
                             }
@@ -352,7 +354,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
                                 || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
                             if is_self_recursive {
-                                CallTargetLookup::Error(vec![])
+                                // __call__ resolves back to the same class, creating
+                                // circular resolution. Treat as callable with unknown type.
+                                CallTargetLookup::Ok(Box::new(CallTarget::Any(AnyStyle::Implicit)))
                             } else {
                                 self.as_call_target_impl(ty, quantified, /* dunder_call */ true)
                             }
