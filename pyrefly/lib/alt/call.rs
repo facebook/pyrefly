@@ -337,11 +337,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(quantified) = quantified {
                     self.quantified_instance_as_dunder_call(quantified.clone(), &cls)
                         .map_or(CallTargetLookup::Error(vec![]), |ty| {
-                            self.as_call_target_impl(ty, Some(quantified), dunder_call)
+                            let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
+                                || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
+                            if is_self_recursive {
+                                CallTargetLookup::Error(vec![])
+                            } else {
+                                self.as_call_target_impl(ty, Some(quantified), dunder_call)
+                            }
                         })
                 } else if dunder_call {
-                    // Avoid infinite recursion
-                    CallTargetLookup::Error(vec![])
+                    self.instance_as_dunder_call(&cls).map_or(
+                        CallTargetLookup::Error(vec![]),
+                        |ty| {
+                            let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
+                                || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
+                            if is_self_recursive {
+                                CallTargetLookup::Error(vec![])
+                            } else {
+                                self.as_call_target_impl(ty, quantified, /* dunder_call */ true)
+                            }
+                        },
+                    )
                 } else {
                     self.instance_as_dunder_call(&cls).map_or(
                         CallTargetLookup::Error(vec![]),

@@ -219,6 +219,41 @@ C().d = 42  # E:  Attribute `d` of class `C` is a read-only descriptor with no `
     "#,
 );
 
+testcase!(
+    test_descriptor_dunder_call,
+    r#"
+from typing import assert_type
+class SomeCallable:
+    def __call__(self, x: int) -> str:
+        return "a"
+class Descriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> SomeCallable:
+        return SomeCallable()
+class B:
+    __call__: Descriptor = Descriptor()
+b_instance = B()
+assert_type(b_instance(1), str)
+    "#,
+);
+
+// Test that a descriptor-based __call__ returning the same class doesn't cause
+// infinite recursion when called through a type variable bound. This pattern
+// would also cause RecursionError at runtime, so the "not callable" error is correct.
+testcase!(
+    test_descriptor_dunder_call_self_referencing_via_typevar,
+    r#"
+from typing import TypeVar
+class SelfDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> "SelfCallable":
+        return SelfCallable()
+class SelfCallable:
+    __call__: SelfDescriptor = SelfDescriptor()
+T = TypeVar("T", bound=SelfCallable)
+def f(x: T) -> None:
+    x()  # E: Expected a callable, got `T`
+    "#,
+);
+
 // Test that instance-only attributes with descriptor types are not treated as descriptors.
 // Descriptor protocol only applies to class-body initialized attributes; both annotation-only
 // and method-initialized attributes should allow assignment.

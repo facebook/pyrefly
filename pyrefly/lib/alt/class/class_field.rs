@@ -4242,14 +4242,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Return `__call__` as a bound method if instances of `cls` have `__call__`.
     /// This is what the runtime automatically does when we try to call an instance.
     pub fn instance_as_dunder_call(&self, cls: &ClassType) -> Option<Type> {
-        self.get_instance_attribute(cls, &dunder::CALL)
-            .and_then(|attr| attr.as_instance_method())
+        let attr = self.get_instance_attribute(cls, &dunder::CALL)?;
+        self.resolve_dunder_call_attr(attr)
     }
 
     /// Return `__call__` as bound method when called on `Self`.
     pub fn self_as_dunder_call(&self, cls: &ClassType) -> Option<Type> {
-        self.get_self_attribute(cls, &dunder::CALL)
-            .and_then(|attr| attr.as_instance_method())
+        let attr = self.get_self_attribute(cls, &dunder::CALL)?;
+        self.resolve_dunder_call_attr(attr)
     }
 
     /// Return `__call__` as a bound method if instances of `type_var` have `__call__`.
@@ -4260,8 +4260,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         quantified: Quantified,
         upper_bound: &ClassType,
     ) -> Option<Type> {
-        self.get_bounded_quantified_attribute(quantified, upper_bound, &dunder::CALL)
-            .and_then(|attr| attr.as_instance_method())
+        let attr = self.get_bounded_quantified_attribute(quantified, upper_bound, &dunder::CALL)?;
+        self.resolve_dunder_call_attr(attr)
     }
 
     fn callable_params_and_flags(mut ty: Type) -> Option<(ParamList, FuncFlags)> {
@@ -4277,5 +4277,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => None,
         }?;
         Some((params, flags))
+    }
+
+    fn resolve_dunder_call_attr(&self, attr: ClassAttribute) -> Option<Type> {
+        let errors = self.error_swallower();
+        // The range is only used for error reporting, and the error swallower
+        // discards all errors, so a default range is fine here.
+        let fake_range = TextRange::default();
+        self.resolve_get_class_attr(&dunder::CALL, attr, fake_range, &errors, None)
+            .ok()
     }
 }
