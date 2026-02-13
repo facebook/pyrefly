@@ -173,9 +173,35 @@ impl CalcStack {
         }
     }
 
+    /// Pop the current frame and drain any SCCs that completed during it.
+    ///
+    /// These two operations are always paired: every `pop` must be followed by
+    /// draining and committing completed SCCs.
+    ///
+    /// We pop before draining (not after) for two reasons:
+    /// - Lifecycle correctness: committed answers should correspond to fully
+    ///   unwound computations. Popping first ensures the stack no longer
+    ///   contains the completing frame when results are written to Calculation.
+    /// - `pop()` decrements `segment_size` on the top SCC. If we drained first,
+    ///   the completed SCC would already be gone from `scc_stack`, and `pop()`
+    ///   could incorrectly decrement a parent SCC's segment_size instead.
+    ///
+    /// Note that the `+ 1` in `on_calculation_finished`'s completion check
+    /// (`stack_len <= anchor_pos + 1`) is unrelated to this ordering — it
+    /// exists because completion is detected during calculation, while the
+    /// frame is still on the stack, well before we reach this method.
+    ///
+    /// Safety: `drain_completed_sccs` uses `std::mem::take` which drops the
+    /// `RefCell` borrow before returning the owned `Vec<Scc>`. By the time the
+    /// caller iterates the returned SCCs, no borrow on `self` is live.
+    fn pop_and_drain_completed_sccs(&self) -> Vec<Scc> {
+        self.pop();
+        self.drain_completed_sccs()
+    }
+
     /// Drain and return all completed SCCs that were collected during
-    /// `on_calculation_finished`. Used by `get_idx` to batch-commit
-    /// answers after a frame completes.
+    /// `on_calculation_finished`. Used by `pop_and_drain_completed_sccs`
+    /// to batch-commit answers after a frame completes.
     fn drain_completed_sccs(&self) -> Vec<Scc> {
         std::mem::take(&mut *self.pending_completed_sccs.borrow_mut())
     }
@@ -1244,9 +1270,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )
             }
         };
-        self.stack().pop();
-        // Batch-commit any SCCs that completed during this frame.
-        for scc in self.stack().drain_completed_sccs() {
+        for scc in self.stack().pop_and_drain_completed_sccs() {
             self.batch_commit_scc(scc);
         }
         result
