@@ -6,13 +6,13 @@
  */
 
 use dupe::Dupe;
-use pyrefly_python::ast::Ast;
 use pyrefly_python::module::Module;
 use ruff_python_ast::ModModule;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use super::extract_shared::find_enclosing_statement_range;
 use super::extract_shared::line_indent_and_start;
 
 const BODY_INDENT: &str = "    ";
@@ -60,16 +60,4 @@ pub(crate) fn generate_code_actions(
             class_text,
         ),
     ])
-}
-
-fn find_enclosing_statement_range(ast: &ModModule, selection: TextRange) -> Option<TextRange> {
-    let covering_nodes = Ast::locate_node(ast, selection.start());
-    for node in covering_nodes {
-        if let Some(stmt) = node.as_stmt_ref()
-            && stmt.range().contains_range(selection)
-        {
-            return Some(stmt.range());
-        }
-    }
-    None
 }
