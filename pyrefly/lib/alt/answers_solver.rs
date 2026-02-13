@@ -720,7 +720,7 @@ enum NodeState {
     Fresh,
     /// Node is currently being processed (on the Rust call stack).
     InProgress,
-    /// This is a break_at node: we've recorded a placeholder in Calculation
+    /// This is a break_at node: we've recorded a placeholder in SCC-local state
     /// but haven't computed the real answer yet.
     /// The Var is the placeholder variable recorded for this break_at node.
     HasPlaceholder(Var),
@@ -1452,14 +1452,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Attempt to record a cycle placeholder result to unwind a cycle from here.
     ///
-    /// Returns a `Result` where the normal case is `Err`, because another thread
-    /// might have already finished the cycle in which case we can just use that result
-    /// (which will come in an `Ok(result)` form)
+    /// Returns a `Result` where `Err(var)` is the normal case (placeholder created,
+    /// cycle should be unwound), and `Ok(value)` means another thread has already
+    /// committed a final answer so we can skip the cycle-breaking entirely.
     ///
-    /// TODO: eventually we should be recording this answer in a thread-local place rather
-    /// than in the Calculation for better isolation against data races. Once that plumbing
-    /// is in place, this code can probably be simplified to just return the recursive result;
-    /// we are doing extra work here to get partial protection against races through the mutex.
+    /// Note: The placeholder is recorded in SCC-local state (NodeState::HasPlaceholder),
+    /// not in the Calculation cell. Each thread that hits the same cycle creates its
+    /// own placeholder. The final answer IS written thread-locally via NodeState::Done
+    /// and only committed to Calculation during batch commit when the SCC completes.
     fn attempt_to_unwind_cycle_from_here<K: Solve<Ans>>(
         &self,
         current: &CalcId,
