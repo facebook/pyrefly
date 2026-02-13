@@ -1487,6 +1487,65 @@ class Outer:
 }
 
 #[test]
+fn extract_function_excludes_vars_defined_in_selection() {
+    // variables defined within the selection should not become parameters, even
+    // when they are later used in augmented assignments (e.g., total += price).
+    let code = r#"
+def calculate_total_price(prices: list[int]) -> float:
+    # EXTRACT-START
+    total = 0
+    for price in prices:
+        total += price
+    with_tax = total * 1.085
+    # EXTRACT-END
+    return with_tax
+"#;
+    let updated = apply_first_extract_action(code).expect("expected extract refactor action");
+    let expected = r#"
+def extracted_function(prices):
+    total = 0
+    for price in prices:
+        total += price
+    with_tax = total * 1.085
+    return with_tax
+
+def calculate_total_price(prices: list[int]) -> float:
+    # EXTRACT-START
+    with_tax = extracted_function(prices)
+    # EXTRACT-END
+    return with_tax
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_includes_var_from_augmented_assign_without_prior_def() {
+    // When the selection contains only an augmented assignment (e.g., x += 1)
+    // without a prior definition of that variable, the variable must still be
+    // added as a parameter to the extracted function.
+    let code = r#"
+def update(x: int) -> int:
+    # EXTRACT-START
+    x += 1
+    # EXTRACT-END
+    return x
+"#;
+    let updated = apply_first_extract_action(code).expect("expected extract refactor action");
+    let expected = r#"
+def extracted_function(x):
+    x += 1
+    return x
+
+def update(x: int) -> int:
+    # EXTRACT-START
+    x = extracted_function(x)
+    # EXTRACT-END
+    return x
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn extract_variable_basic_refactor() {
     let code = r#"
 def process(data):
