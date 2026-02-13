@@ -89,7 +89,7 @@ def f(): ...
 # main.py
 2 | def f(): ...
         ^
-Hover Result: None
+Hover Result: `() -> None`
 
 4 | def f(): ...
         ^
@@ -289,19 +289,19 @@ if False:
 # main.py
 3 |   def f():
           ^
-Hover Result: None
+Hover Result: `() -> None`
 
 7 |   x = 3
       ^
-Hover Result: None
+Hover Result: `Literal[3]`
 
 9 |   x
       ^
-Hover Result: None
+Hover Result: `Literal[3]`
 
 11 |   f
        ^
-Hover Result: None
+Hover Result: `() -> None`
 
 14 |   def f():
            ^
@@ -309,15 +309,15 @@ Hover Result: None
 
 18 |   x = 3
        ^
-Hover Result: None
+Hover Result: `Literal[3]`
 
 20 |   x
        ^
-Hover Result: None
+Hover Result: `Literal[3]`
 
 22 |   f
        ^
-Hover Result: None
+Hover Result: `() -> None`
 "#
         .trim(),
         report.trim(),

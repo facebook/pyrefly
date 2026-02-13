@@ -961,14 +961,22 @@ impl<'a> BindingsBuilder<'a> {
                         }
                     };
                     self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
-                    let new_narrow_ops = if this_branch_chosen == Some(false) {
-                        // Skip the body in this case - it typically means a check (e.g. a sys version,
-                        // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
+                    let new_narrow_ops = NarrowOps::from_expr(self, test.as_ref());
+                    if this_branch_chosen == Some(false) {
+                        // Skip contributing to flow merges, but still bind names so IDE features work.
+                        if self.should_bind_unreachable_branches() {
+                            self.bind_narrow_ops(
+                                &new_narrow_ops,
+                                NarrowUseLocation::Span(range),
+                                &Usage::Narrowing(None),
+                            );
+                            self.with_error_suppression(|builder| {
+                                builder.stmts(body, parent);
+                            });
+                        }
                         self.abandon_branch();
                         continue;
-                    } else {
-                        NarrowOps::from_expr(self, test.as_ref())
-                    };
+                    }
                     if let Some(test_expr) = test {
                         // Typecheck the test condition during solving.
                         self.insert_binding(

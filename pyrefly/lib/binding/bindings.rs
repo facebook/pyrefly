@@ -17,6 +17,7 @@ use pyrefly_graph::index::Index;
 use pyrefly_graph::index_map::IndexMap;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
@@ -227,6 +228,7 @@ pub struct BindingsBuilder<'a> {
     pub has_docstring: bool,
     pub scopes: Scopes,
     table: BindingTable,
+    error_suppression_depth: usize,
     pub untyped_def_behavior: UntypedDefBehavior,
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
@@ -462,6 +464,7 @@ impl Bindings {
             has_docstring: Ast::has_docstring(&x),
             scopes: Scopes::module(x.range, enable_trace),
             table: Default::default(),
+            error_suppression_depth: 0,
             untyped_def_behavior,
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
@@ -850,6 +853,7 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn init_static_scope(&mut self, x: &[Stmt], top_level: bool) {
+        let include_unreachable_defs = self.should_bind_unreachable_branches();
         self.scopes.init_current_static(
             x,
             &self.module_info,
@@ -862,6 +866,7 @@ impl<'a> BindingsBuilder<'a> {
                     .0
                     .insert(KeyAnnotation::Annotation(x))
             },
+            include_unreachable_defs,
         );
     }
 
@@ -869,6 +874,29 @@ impl<'a> BindingsBuilder<'a> {
         for x in xs {
             self.stmt(x, parent);
         }
+    }
+
+    pub fn with_error_suppression<R>(
+        &mut self,
+        f: impl FnOnce(&mut BindingsBuilder<'a>) -> R,
+    ) -> R {
+        self.error_suppression_depth += 1;
+        let result = f(self);
+        self.error_suppression_depth -= 1;
+        result
+    }
+
+    #[inline]
+    fn errors_suppressed(&self) -> bool {
+        self.error_suppression_depth > 0
+    }
+
+    pub(crate) fn should_bind_unreachable_branches(&self) -> bool {
+        matches!(
+            self.module_info.path().details(),
+            ModulePathDetails::FileSystem(_) | ModulePathDetails::Memory(_)
+        ) && self.module_info.name() != ModuleName::builtins()
+            && self.module_info.name() != ModuleName::extra_builtins()
     }
 
     fn inject_globals(&mut self) {
@@ -990,10 +1018,16 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn error(&self, range: TextRange, info: ErrorInfo, msg: String) {
+        if self.errors_suppressed() {
+            return;
+        }
         self.errors.add(range, info, vec1![msg]);
     }
 
     pub fn error_multiline(&self, range: TextRange, info: ErrorInfo, msg: Vec1<String>) {
+        if self.errors_suppressed() {
+            return;
+        }
         self.errors.add(range, info, msg);
     }
 
@@ -1334,20 +1368,38 @@ impl<'a> BindingsBuilder<'a> {
         idx: Idx<Key>,
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
-        self.check_for_type_alias_redefinition(name, idx);
-        let name = Hashed::new(name);
-        let write_info = self
-            .scopes
-            .define_in_current_flow(name, idx, style)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Name `{name}` not found in static scope of module `{}`.",
-                    self.module_info.name(),
-                )
-            });
+        let mut hashed_name = Hashed::new(name);
+        let allow_unreachable_defs =
+            self.errors_suppressed() && self.should_bind_unreachable_branches();
+        let mut write_info = self.scopes.define_in_current_flow(
+            hashed_name,
+            idx,
+            style.clone(),
+            allow_unreachable_defs,
+        );
+        if write_info.is_none() && allow_unreachable_defs {
+            let key_range = self.table.types.0.idx_to_key(idx).range();
+            self.scopes.add_synthetic_definition(name, key_range);
+            hashed_name = Hashed::new(name);
+            write_info = self.scopes.define_in_current_flow(
+                hashed_name,
+                idx,
+                style.clone(),
+                allow_unreachable_defs,
+            );
+        }
+        let write_info = write_info.unwrap_or_else(|| {
+            panic!(
+                "Name `{name}` not found in static scope of module `{}`.",
+                self.module_info.name(),
+            )
+        });
+        if !write_info.reachability.is_reachable() {
+            debug_assert!(allow_unreachable_defs);
+        }
         if let Some(range) = write_info.anywhere_range {
             self.table
-                .record_bind_in_anywhere(name.into_key().clone(), range, idx);
+                .record_bind_in_anywhere(hashed_name.into_key().clone(), range, idx);
         }
         write_info.annotation
     }

@@ -123,6 +123,7 @@ impl Exports {
             module_info.name(),
             module_info.path().is_init(),
             sys_info,
+            false,
         );
         definitions.inject_implicit_globals();
         definitions.ensure_dunder_all(module_info.path().style());
