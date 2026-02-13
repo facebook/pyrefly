@@ -36,6 +36,7 @@ mod provide_type;
 mod pytorch_benchmark;
 mod references;
 mod rename;
+mod safe_delete_file;
 mod semantic_tokens;
 mod type_definition;
 mod type_hierarchy;
