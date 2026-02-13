@@ -34,6 +34,7 @@ use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::recurser::Guard;
 use pyrefly_util::uniques::UniqueFactory;
+use pyrefly_util::visit::VisitMut;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
@@ -1272,6 +1273,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let local_errors = self.error_collector();
         let raw_answer = K::solve(self, binding, range, &local_errors);
+
+        // For exported keys, eagerly resolve all type variables in the answer.
+        // This avoids redundant clone+force work in solve_exported_key and post_solve,
+        // which would otherwise repeat this work on every cross-module lookup.
+        // Arc::unwrap_or_clone avoids cloning since the refcount is 1 here.
+        let raw_answer = if K::EXPORTED {
+            let mut forced = Arc::unwrap_or_clone(raw_answer);
+            forced.visit_mut(&mut |x| self.current.solver().deep_force_mut(x));
+            Arc::new(forced)
+        } else {
+            raw_answer
+        };
 
         if self.stack().is_scc_participant(&current) {
             // SCC path: store in NodeState::Done, defer Calculation write to batch commit.

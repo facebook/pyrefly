@@ -22,7 +22,6 @@ use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::uniques::UniqueFactory;
-use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -612,15 +611,6 @@ impl Answers {
         }
         answers_solver.validate_final_thread_state();
 
-        // Now force all types to be fully resolved.
-        fn post_solve<K: Keyed>(items: &mut SolutionsEntry<K>, solver: &Solver) {
-            for v in items.values_mut() {
-                let mut vv = (**v).clone();
-                vv.visit_mut(&mut |x| solver.deep_force_mut(x));
-                *v = Arc::new(vv);
-            }
-        }
-        table_mut_for_each!(&mut res, |items| post_solve(items, &self.solver));
         Solutions {
             module_info: bindings.module().dupe(),
             table: res,
@@ -656,10 +646,7 @@ impl Answers {
             thread_state,
             self.heap(),
         );
-        let v = solver.get_hashed_opt(key)?;
-        let mut vv = (*v).clone();
-        vv.visit_mut(&mut |x| self.solver.deep_force_mut(x));
-        Some(Arc::new(vv))
+        solver.get_hashed_opt(key)
     }
 
     pub fn get_idx<K: Keyed>(&self, k: Idx<K>) -> Option<Arc<K::Answer>>
