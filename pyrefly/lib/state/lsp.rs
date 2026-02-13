@@ -2758,7 +2758,7 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         import_format: ImportFormat,
         options: CompletionOptions,
-        mut mru_index: Option<F>,
+        mru_index: Option<F>,
     ) -> (Vec<CompletionItem>, bool)
     where
         F: FnMut(&CompletionItem) -> Option<usize>,
@@ -2771,16 +2771,13 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        let (mut results, is_incomplete) =
-            self.completion_sorted_opt_with_incomplete(handle, position, import_format, options);
-        if let Some(ref mut mru_index) = mru_index {
-            for item in &mut results {
-                let rank = mru_index(item).unwrap_or(9999).min(9999);
-                let base_sort_text = item.sort_text.as_deref().unwrap_or("0");
-                item.sort_text = Some(format!("{base_sort_text}.{rank:04}.{}", item.label));
-                item.preselect = if rank == 0 { Some(true) } else { None };
-            }
-        }
+        let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
+            handle,
+            position,
+            import_format,
+            options,
+            mru_index,
+        );
         results.sort_by(|item1, item2| {
             item1
                 .sort_text
