@@ -1019,6 +1019,12 @@ impl<'a> BindingsBuilder<'a> {
                         Key::SelfTypeLiteral(x.range()),
                         Binding::SelfTypeLiteral(current_class_idx, x.range()),
                     );
+                } else {
+                    self.error(
+                        x.range(),
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        "`Self` must appear within a class".to_owned(),
+                    );
                 }
             }
             _ => {}

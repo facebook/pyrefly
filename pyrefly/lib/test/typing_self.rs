@@ -236,9 +236,9 @@ testcase!(
     r#"
 from typing import Self
 
-def foo() -> Self: ...
-x: Self
-tupleSelf = tuple[Self]
+def foo() -> Self: ... # E: `Self` must appear within a class
+x: Self # E: `Self` must appear within a class
+tupleSelf = tuple[Self] # E: `Self` must appear within a class
     "#,
 );
 
@@ -249,7 +249,7 @@ testcase!(
 from typing import Self
 
 class A[T]: pass
-class B(A[Self]): pass
+class B(A[Self]): pass # E: `Self` must appear within a class
 class C:
     @staticmethod
     def foo(x: Self) -> Self: ...
