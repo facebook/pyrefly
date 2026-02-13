@@ -633,6 +633,14 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
+        // Fast path: check if the answer has already been computed in the Calculation cell.
+        // This avoids constructing a VarRecurser and AnswersSolver when the value is cached.
+        if let Some(idx) = bindings.key_to_idx_hashed_opt(key)
+            && let Some(v) = self.get_idx(idx)
+        {
+            return Some(v);
+        }
+        // Slow path: need to compute the answer.
         let recurser = &VarRecurser::new();
         let solver = AnswersSolver::new(
             answers,
