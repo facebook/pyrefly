@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_build"
-version = "0.51.2"
+version = "0.52.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -20,7 +20,7 @@ starlark_map = "0.13.0"
 static_interner = "0.1.1"
 tempfile = "3.22"
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
-vec1 = { version = "1", features = ["serde"] }
+vec1 = { version = "1.12.1", features = ["serde"] }
 
 [dev-dependencies]
 pretty_assertions = { version = "1.2", features = ["alloc"], default-features = false }

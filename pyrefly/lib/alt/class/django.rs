@@ -100,7 +100,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect();
 
                 if transformed != union.to_vec() {
-                    Some(unions(transformed))
+                    Some(unions(transformed, self.heap))
                 } else {
                     None
                 }
@@ -308,7 +308,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         if label_types.is_empty() || label_types.len() < enum_members.len() {
             // Members without a custom label type have default label type str.
-            label_types.push(self.stdlib.str().clone().to_type());
+            label_types.push(self.heap.mk_class_type(self.stdlib.str().clone()));
         }
 
         // Also include the type of __empty__ field if it exists, since it contributes to label types
@@ -350,14 +350,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut fields = SmallMap::new();
 
         let field_specs = [
-            (LABELS, self.stdlib.list(label_type.clone()).to_type()),
+            (
+                LABELS,
+                self.heap
+                    .mk_class_type(self.stdlib.list(label_type.clone())),
+            ),
             (LABEL, self.property(cls, LABEL, label_type.clone())),
-            (VALUES, self.stdlib.list(values_type.clone()).to_type()),
+            (
+                VALUES,
+                self.heap
+                    .mk_class_type(self.stdlib.list(values_type.clone())),
+            ),
             (
                 CHOICES,
-                self.stdlib
-                    .list(self.heap.mk_concrete_tuple(vec![values_type, label_type]))
-                    .to_type(),
+                self.heap.mk_class_type(
+                    self.stdlib
+                        .list(self.heap.mk_concrete_tuple(vec![values_type, label_type])),
+                ),
             ),
         ];
 
@@ -393,7 +402,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .django_model_metadata()
             .and_then(|dm| dm.custom_primary_key_field.as_ref())
         {
-            let instance_type = self.as_class_type_unchecked(model).to_type();
+            let instance_type = self.heap.mk_class_type(self.as_class_type_unchecked(model));
             let pk_type = self.attr_infer_for_type(
                 &instance_type,
                 pk_field_name,
@@ -450,7 +459,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for element in elements {
             let inner_tuple = element.as_tuple_expr()?;
             let string_lit = inner_tuple.elts.first()?.as_string_literal_expr()?;
-            choice_literals.push(Lit::from_string_literal(string_lit).to_implicit_type());
+            choice_literals.push(Lit::from_string_literal(string_lit)?.to_implicit_type());
         }
 
         if choice_literals.is_empty() {
@@ -464,7 +473,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// The method takes self and returns str.
     fn get_display_method(&self, cls: &Class, method_name: &Name) -> ClassSynthesizedField {
         let params = vec![self.class_self_param(cls, false)];
-        let ret = self.stdlib.str().clone().to_type();
+        let ret = self.heap.mk_class_type(self.stdlib.str().clone());
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), ret),
             metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), method_name.clone()),

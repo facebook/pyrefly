@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprName;
@@ -12,6 +13,7 @@ use ruff_python_ast::Identifier;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
+use crate::binding::binding::KeyClass;
 use crate::binding::bindings::BindingsBuilder;
 use crate::export::special::SpecialExport;
 
@@ -95,6 +97,9 @@ pub enum BaseClass {
     BaseClassExpr(BaseClassExpr),
     InvalidExpr(Expr),
     NamedTuple(TextRange),
+    /// A namedtuple class synthesized anonymously as a base class,
+    /// e.g. `class Foo(namedtuple("Foo", ["a", "b"]))`.
+    SynthesizedBase(Idx<KeyClass>, TextRange),
 }
 
 impl BaseClass {
@@ -121,6 +126,7 @@ impl Ranged for BaseClass {
             BaseClass::BaseClassExpr(base_expr) => base_expr.range(),
             BaseClass::InvalidExpr(expr) => expr.range(),
             BaseClass::NamedTuple(range) => *range,
+            BaseClass::SynthesizedBase(_, range) => *range,
         }
     }
 }

@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -15,7 +16,6 @@ use dupe::Dupe;
 use pyrefly_graph::calculation::Calculation;
 use pyrefly_graph::index::Idx;
 use pyrefly_graph::index_map::IndexMap;
-use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::DisplayWith;
@@ -30,10 +30,12 @@ use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::answers_solver::CalcId;
 use crate::alt::answers_solver::ThreadState;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::alt::traits::Solve;
+use crate::binding::binding::AnyIdx;
 use crate::binding::binding::ChangedExport;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
@@ -43,6 +45,7 @@ use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
 use crate::config::base::RecursionLimitConfig;
+use crate::dispatch_anyidx;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
@@ -438,6 +441,22 @@ pub trait LookupAnswer: Sized {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>;
+
+    /// Commit a preliminary answer to a specific module's Calculation cell.
+    /// Used for cross-module batch commit when an SCC spans module boundaries.
+    ///
+    /// Returns true if the commit was performed, false if the implementation
+    /// does not support cross-module commits.
+    ///
+    /// Default implementation returns false (not supported).
+    fn commit_to_module(
+        &self,
+        _calc_id: CalcId,
+        _answer: Arc<dyn Any + Send + Sync>,
+        _errors: Option<Arc<ErrorCollector>>,
+    ) -> bool {
+        false
+    }
 }
 
 impl Answers {
@@ -651,6 +670,41 @@ impl Answers {
         self.table.get::<K>().get(k)?.get()
     }
 
+    /// Commit a type-erased answer to this module's Calculation cell.
+    /// Target-side entry point for cross-module batch commit.
+    /// Returns true if the write won the first-write-wins race.
+    pub fn commit_preliminary(&self, any_idx: &AnyIdx, answer: Arc<dyn Any + Send + Sync>) -> bool {
+        dispatch_anyidx!(any_idx, self, commit_typed, answer)
+    }
+
+    /// Typed commit for a specific key type. Downcasts the answer and writes
+    /// to the Calculation cell. Returns true if this write won the first-write-wins
+    /// race (i.e., the answer was actually stored).
+    fn commit_typed<K: Keyed>(&self, idx: Idx<K>, answer: Arc<dyn Any + Send + Sync>) -> bool
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+    {
+        let typed_answer: Arc<K::Answer> = Arc::unwrap_or_clone(
+            answer
+                .downcast::<Arc<K::Answer>>()
+                .expect("Answers::commit_typed: type mismatch in cross-module batch commit"),
+        );
+        // Get the calculation cell from the answer table
+        if let Some(calculation) = self.table.get::<K>().get(idx) {
+            // No recursive placeholder can exist in the Calculation cell because
+            // placeholders are stored only in SCC-local NodeState::HasPlaceholder.
+            let (_answer, did_write) = calculation.record_value(typed_answer, |_var, _ans| {
+                unreachable!(
+                    "Recursive placeholder found in Calculation cell during cross-module \
+                     batch commit; placeholders should only exist in SCC-local NodeState"
+                )
+            });
+            did_write
+        } else {
+            false
+        }
+    }
+
     fn deep_force(&self, t: Type) -> Type {
         self.solver.deep_force(t)
     }
@@ -788,24 +842,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ty: _,
                 is_deprecated: _,
                 definition,
-                docstring_range: _,
                 is_reexport: _,
             } in self.completions(base.clone(), Some(attribute_name), false)
             {
                 match definition {
-                    Some(AttrDefinition::FullyResolved(TextRangeWithModule { module, range })) => {
-                        if module.path() != self.bindings().module().path() {
+                    AttrDefinition::FullyResolved {
+                        cls,
+                        range,
+                        docstring_range: _,
+                    } => {
+                        if cls.module_path() != self.bindings().module().path() {
                             index
                                 .lock()
                                 .externally_defined_attribute_references
-                                .entry(module.path().dupe())
+                                .entry(cls.module_path().dupe())
                                 .or_default()
                                 .push((range, attribute_reference_range))
                         }
                     }
-                    Some(AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                        module_name,
-                    }) => {
+                    AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
                         index
                             .lock()
                             .externally_defined_variable_references
@@ -813,7 +868,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .or_default()
                             .push(attribute_reference_range);
                     }
-                    Some(AttrDefinition::Submodule { module_name }) => {
+                    AttrDefinition::Submodule { module_name } => {
                         // For submodule access (e.g., `b` in `a.b`), record as a reference to
                         // the submodule. The last component of module_name is the attribute name.
                         if let Some(parent) = module_name.parent() {
@@ -825,7 +880,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .push(attribute_reference_range);
                         }
                     }
-                    None => {}
                 }
             }
         }

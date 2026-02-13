@@ -69,7 +69,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .noreturn_to_never()
                     .anon_callables()
                     .anon_typed_dicts(self.stdlib)
-                    .distribute_type_over_union()
+                    .distribute_type_over_union(self.heap)
                     .simplify_intersections();
                 // Make assert_type(Self@SomeClass, typing.Self) work.
                 ty.subst_self_type_mut(&self_form);
@@ -285,7 +285,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         self.check_arg_is_class_object(obj, class_or_tuple, &FunctionKind::IsInstance, errors);
-        self.stdlib.bool().clone().to_type()
+        self.heap.mk_class_type(self.stdlib.bool().clone())
     }
 
     pub fn call_issubclass(
@@ -295,7 +295,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         self.check_arg_is_class_object(cls, class_or_tuple, &FunctionKind::IsSubclass, errors);
-        self.stdlib.bool().clone().to_type()
+        self.heap.mk_class_type(self.stdlib.bool().clone())
     }
 
     pub(crate) fn check_type_is_class_object(
@@ -455,7 +455,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 self.check_type(
                     &ty,
-                    &self.stdlib.builtins_type().clone().to_type(),
+                    &self.heap.mk_class_type(self.stdlib.builtins_type().clone()),
                     range,
                     errors,
                     &|| {
@@ -479,7 +479,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Use the class type to access the field
                 let class_type = self.as_class_type_unchecked(cls);
                 let ty = self.type_of_attr_get(
-                    &class_type.to_type(),
+                    &self.heap.mk_class_type(class_type),
                     field_name,
                     range,
                     &self.error_swallower(),
@@ -519,7 +519,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Verify that the `cls` argument has type `type`.
             self.check_type(
                 &ty,
-                &self.stdlib.builtins_type().clone().to_type(),
+                &self.heap.mk_class_type(self.stdlib.builtins_type().clone()),
                 object_or_class_expr.range(),
                 errors,
                 &|| {

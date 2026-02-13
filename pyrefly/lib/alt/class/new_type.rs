@@ -33,8 +33,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // we want to provide use the raw tuple type rather than the `tuple` class.
             self.heap.mk_tuple(tuple_ancestor.clone())
         } else {
-            self.promote_nontypeddict_silently_to_classtype(base_class)
-                .to_type()
+            self.heap
+                .mk_class_type(self.promote_nontypeddict_silently_to_classtype(base_class))
         }
     }
 

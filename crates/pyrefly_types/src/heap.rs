@@ -21,6 +21,7 @@ use crate::callable::ParamList;
 use crate::callable::Params;
 use crate::callable::Required;
 use crate::class::ClassType;
+use crate::dimension::SizeExpr;
 use crate::keywords::KwCall;
 use crate::literal::LitStyle;
 use crate::literal::Literal;
@@ -43,7 +44,7 @@ use crate::types::Union;
 /// A factory for constructing types.
 ///
 /// Currently returns boxed types; will be backed by an arena in the future.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TypeHeap(());
 
 impl TypeHeap {
@@ -354,5 +355,15 @@ impl TypeHeap {
     /// Create a `Type::Never` with the given style.
     pub fn mk_never_style(&self, style: crate::types::NeverStyle) -> Type {
         Type::Never(style)
+    }
+
+    /// Create a `Type::Dim` wrapping an inner type.
+    pub fn mk_dim(&self, inner: Type) -> Type {
+        Type::Dim(Box::new(inner))
+    }
+
+    /// Create a `Type::Size` from a SizeExpr.
+    pub fn mk_size(&self, size_expr: SizeExpr) -> Type {
+        Type::Size(size_expr)
     }
 }

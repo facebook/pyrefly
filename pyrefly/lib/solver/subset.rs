@@ -13,11 +13,13 @@ use itertools::EitherOrBoth;
 use itertools::Itertools;
 use itertools::izip;
 use pyrefly_python::dunder;
+use pyrefly_types::dimension::ShapeError;
+use pyrefly_types::dimension::SizeExpr;
+use pyrefly_types::dimension::contains_var_in_type;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::read_only::ReadOnlyReason;
 use pyrefly_types::special_form::SpecialForm;
-use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -947,17 +949,18 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         }
     }
 
-    fn can_be_recursive(&self, ty: &Type) -> bool {
-        match ty {
-            Type::ClassType(cls) => self.type_order.is_protocol(cls.class_object()),
-            Type::TypeAlias(_) => true,
+    fn can_be_recursive(&self, t1: &Type, t2: &Type) -> bool {
+        match (t1, t2) {
+            // We only care if the RHS is a protocol
+            (_, Type::ClassType(cls)) => self.type_order.is_protocol(cls.class_object()),
+            (Type::UntypedAlias(_), _) | (_, Type::UntypedAlias(_)) => true,
             _ => false,
         }
     }
 
     /// Implementation of subset equality for Type, other than Var.
     pub fn is_subset_eq_impl(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
-        let recursive_check = if self.can_be_recursive(got) || self.can_be_recursive(want) {
+        let recursive_check = if self.can_be_recursive(got, want) {
             Some((got.clone(), want.clone()))
         } else {
             None
@@ -1003,32 +1006,38 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 Ok(()) // everything is an instance of `object`
             }
             (
-                Type::Forall(box Forall {
+                Type::TypeAlias(box got)
+                | Type::Forall(box Forall {
                     body: Forallable::TypeAlias(got),
                     ..
                 }),
-                Type::TypeAlias(box TypeAliasData::Ref(want)),
-            ) if *got.name() == want.name => {
-                // TODO(rechen): remove this once we support generic recursive aliases. Right now,
-                // we replace TypeAliasData::Ref with Any when subscripting, which messes up
-                // is_subset_eq comparisons between the Ref and the equivalent Value.
-
-                Ok(())
+                Type::TypeAlias(box want)
+                | Type::Forall(box Forall {
+                    body: Forallable::TypeAlias(want),
+                    ..
+                }),
+            ) => {
+                // We're comparing two type aliases structurally, so we need their static, not
+                // runtime, types.
+                self.is_subset_eq(
+                    &self.type_order.get_type_alias(got).as_type(),
+                    &self.type_order.get_type_alias(want).as_type(),
+                )
             }
-            (Type::TypeAlias(box got), Type::TypeAlias(box want)) => self.is_subset_eq(
-                &self.type_order.untype_alias(got),
-                &self.type_order.untype_alias(want),
-            ),
-            (Type::TypeAlias(box TypeAliasData::Value(got)), _) => {
+            (Type::TypeAlias(got), _) => {
                 // We use `as_value` to get the alias's runtime type.
-                self.is_subset_eq(&got.as_value(self.type_order.stdlib()), want)
+                self.is_subset_eq(
+                    &self
+                        .type_order
+                        .get_type_alias(got)
+                        .as_value(self.type_order.stdlib()),
+                    want,
+                )
             }
-            (Type::TypeAlias(box got @ TypeAliasData::Ref(_)), _) => {
-                // A TypeAliasData::Ref appears on the lhs when we're comparing it structurally
-                // against a TypeAliasData::Value, so we need its static, not runtime, type.
+            (Type::UntypedAlias(box got), _) => {
                 self.is_subset_eq(&self.type_order.untype_alias(got), want)
             }
-            (_, Type::TypeAlias(box want)) => {
+            (_, Type::UntypedAlias(box want)) => {
                 self.is_subset_eq(got, &self.type_order.untype_alias(want))
             }
             (Type::Quantified(q), Type::Ellipsis) | (Type::Ellipsis, Type::Quantified(q))
@@ -1079,6 +1088,72 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Intersect(l), u) => any(l.0.iter(), |l| self.is_subset_eq(l, u)),
             (Type::Union(box Union { members: ls, .. }), u) => {
                 all(ls.iter(), |l| self.is_subset_eq(l, u))
+            }
+            // Size <: Size - expand bound Vars, canonicalize, and compare for structural equality
+            (Type::Size(s1), Type::Size(s2)) => {
+                // Expand any bound Vars in both expressions
+                let mut got_expanded = Type::Size(s1.clone());
+                let mut want_expanded = Type::Size(s2.clone());
+                self.solver.expand_dimension(&mut got_expanded);
+                self.solver.expand_dimension(&mut want_expanded);
+
+                // Check if the expanded "want" side contains unbound Vars in nested positions
+                if contains_var_in_type(&want_expanded) {
+                    return Err(SubsetError::TensorShape(
+                        ShapeError::nested_type_var_not_inferred(),
+                    ));
+                }
+
+                // Canonicalize and compare
+                let got_str = got_expanded.to_string();
+                let want_str = want_expanded.to_string();
+                let got_canonical = got_expanded.canonicalize();
+                let want_canonical = want_expanded.canonicalize();
+                if got_canonical == want_canonical {
+                    Ok(())
+                } else {
+                    Err(SubsetError::TensorShape(ShapeError::structural_mismatch(
+                        got_str,
+                        got_canonical.to_string(),
+                        want_str,
+                        want_canonical.to_string(),
+                    )))
+                }
+            }
+            // Size <: Quantified - expand, canonicalize Size, and compare
+            // A SizeExpr like (A + A) // 2 might simplify to A (a Quantified)
+            (Type::Size(s), Type::Quantified(q)) if matches!(q.kind, QuantifiedKind::TypeVar) => {
+                let mut got_expanded = Type::Size(s.clone());
+                self.solver.expand_dimension(&mut got_expanded);
+                let got_canonical = got_expanded.canonicalize();
+                let want_canonical = Type::Quantified(q.clone());
+                if got_canonical == want_canonical {
+                    Ok(())
+                } else {
+                    Err(SubsetError::TensorShape(ShapeError::structural_mismatch(
+                        Type::Size(s.clone()).to_string(),
+                        got_canonical.to_string(),
+                        Type::Quantified(q.clone()).to_string(),
+                        want_canonical.to_string(),
+                    )))
+                }
+            }
+            // Quantified <: Size - expand Size, canonicalize, and compare
+            (Type::Quantified(q), Type::Size(s)) if matches!(q.kind, QuantifiedKind::TypeVar) => {
+                let mut want_expanded = Type::Size(s.clone());
+                self.solver.expand_dimension(&mut want_expanded);
+                let got_canonical = Type::Quantified(q.clone());
+                let want_canonical = want_expanded.canonicalize();
+                if got_canonical == want_canonical {
+                    Ok(())
+                } else {
+                    Err(SubsetError::TensorShape(ShapeError::structural_mismatch(
+                        Type::Quantified(q.clone()).to_string(),
+                        got_canonical.to_string(),
+                        Type::Size(s.clone()).to_string(),
+                        want_canonical.to_string(),
+                    )))
+                }
             }
             (t1, Type::Quantified(q)) => match q.restriction() {
                 // This only works for constraints and not bounds, because a TypeVar must resolve to exactly one of its constraints.
@@ -1222,6 +1297,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     )
                 }
             }
+            // Type::Dim is a subtype of int
+            // This allows Dim[N] values to be passed where int parameters are expected
+            (Type::Dim(_), Type::ClassType(cls)) if cls.is_builtin("int") => Ok(()),
             (Type::Kwargs(_), _) => {
                 // We know kwargs will always be a dict w/ str keys
                 self.is_subset_eq(
@@ -1380,10 +1458,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::SelfType(got), _) => self.is_subset_eq(&Type::ClassType(got.clone()), want),
             (Type::Tuple(l), Type::Tuple(u)) => self.is_subset_tuple(l, u),
             (Type::Tuple(Tuple::Concrete(left_elts)), _) => {
-                let tuple_type = self
-                    .solver
-                    .heap
-                    .mk_class_type(self.type_order.stdlib().tuple(unions(left_elts.clone())));
+                let tuple_type = self.solver.heap.mk_class_type(
+                    self.type_order
+                        .stdlib()
+                        .tuple(unions(left_elts.clone(), &self.solver.heap)),
+                );
                 self.is_subset_eq(&tuple_type, want)
             }
             (Type::Tuple(Tuple::Unbounded(left_elt)), _) => {
@@ -1407,18 +1486,20 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     .chain(suffix)
                     .cloned()
                     .collect::<Vec<_>>();
-                let tuple_type = self
-                    .solver
-                    .heap
-                    .mk_class_type(self.type_order.stdlib().tuple(unions(elts)));
+                let tuple_type = self.solver.heap.mk_class_type(
+                    self.type_order
+                        .stdlib()
+                        .tuple(unions(elts, &self.solver.heap)),
+                );
                 self.is_subset_eq(&tuple_type, want)
             }
             (Type::Tuple(Tuple::Unpacked(box (prefix, middle, suffix))), _) => {
                 let elts = prefix.iter().chain(suffix).cloned().collect::<Vec<_>>();
-                let tuple_type = self
-                    .solver
-                    .heap
-                    .mk_class_type(self.type_order.stdlib().tuple(unions(elts)));
+                let tuple_type = self.solver.heap.mk_class_type(
+                    self.type_order
+                        .stdlib()
+                        .tuple(unions(elts, &self.solver.heap)),
+                );
                 self.is_subset_eq(&tuple_type, want)?;
                 self.is_subset_eq(middle, want)?;
                 Ok(())
@@ -1434,6 +1515,36 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 ),
                 t,
             ),
+            // Handle Type::Dim(...) <: Type::Dim(...) by delegating to is_subset_eq for inner types
+            // This relies on top-level rules for Size <: Size, Size <: Quantified, Quantified <: Size,
+            // Size <: Var, Var <: Size, etc.
+            (Type::Dim(l_inner), Type::Dim(u_inner)) => self.is_subset_eq(l_inner, u_inner),
+            // Literal[n] <: Dim[X] - convert literal to Size and check Size(n) <: X
+            (
+                Type::Literal(box Literal {
+                    value: Lit::Int(n), ..
+                }),
+                Type::Dim(box inner),
+            ) => {
+                let size_type = Type::Size(SizeExpr::Literal(n.as_i64().unwrap_or(0)));
+                self.is_subset_eq(&size_type, inner)
+            }
+            // Dim[X] <: Literal[n] - convert literal to Size and check X <: Size(n)
+            (
+                Type::Dim(box inner),
+                Type::Literal(box Literal {
+                    value: Lit::Int(n), ..
+                }),
+            ) => {
+                let size_type = Type::Size(SizeExpr::Literal(n.as_i64().unwrap_or(0)));
+                self.is_subset_eq(inner, &size_type)
+            }
+            // ClassType(int) <: Dim[...]
+            // Redirect: int <: Dim[...] becomes Dim[any_implicit] <: Dim[...]
+            (Type::ClassType(cls), want @ Type::Dim(_)) if cls.is_builtin("int") => {
+                self.is_subset_eq_impl(&Type::Dim(Box::new(Type::any_implicit())), want)
+            }
+            // ========== End Dim Subtyping Rules ==========
             (Type::Literal(l_lit), Type::Literal(u_lit)) => {
                 ok_or(l_lit.value == u_lit.value, SubsetError::Other)
             }
@@ -1586,7 +1697,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             .get_variance_from_class(got_class.class_object());
 
         for (got_arg, want_arg, param) in izip!(got, want, params.iter()) {
-            if param.quantified.kind() == QuantifiedKind::TypeVarTuple {
+            if param.kind() == QuantifiedKind::TypeVarTuple {
                 self.is_equal(got_arg, want_arg)?;
             } else {
                 match variances.get(param.name()) {

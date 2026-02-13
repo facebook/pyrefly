@@ -84,7 +84,10 @@ pub enum CallTarget {
     /// Method of a class. The `Type` is the self/cls argument.
     BoundMethod(Type, TargetWithTParams<Function>),
     /// A class object.
-    Class(ClassType, ConstructorKind),
+    /// The optional Quantified argument is for the case where this call target
+    /// occurs in a bounded type var, where the current class is being used as
+    /// the upper bound.
+    Class(ClassType, ConstructorKind, Option<Quantified>),
     /// A TypedDict.
     TypedDict(TypedDictInner),
     /// An overloaded function.
@@ -220,6 +223,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::ClassType(cls) => CallTargetLookup::Ok(Box::new(CallTarget::Class(
                     cls,
                     ConstructorKind::BareClassName,
+                    None,
                 ))),
                 Type::TypedDict(TypedDict::TypedDict(typed_dict)) => {
                     CallTargetLookup::Ok(Box::new(CallTarget::TypedDict(typed_dict)))
@@ -230,20 +234,53 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 CallTargetLookup::Ok(Box::new(CallTarget::Class(
                     cls,
                     ConstructorKind::TypeOfClass,
+                    None,
                 )))
             }
-            Type::Type(box Type::Tuple(tuple)) => CallTargetLookup::Ok(Box::new(
-                CallTarget::Class(self.erase_tuple_type(tuple), ConstructorKind::TypeOfClass),
-            )),
-            Type::Type(box Type::Quantified(quantified)) => {
-                CallTargetLookup::Ok(Box::new(CallTarget::Callable(TargetWithTParams(
+            Type::Type(box Type::Tuple(tuple)) => {
+                CallTargetLookup::Ok(Box::new(CallTarget::Class(
+                    self.erase_tuple_type(tuple),
+                    ConstructorKind::TypeOfClass,
                     None,
-                    Callable {
-                        // TODO: use upper bound to determine input parameters
-                        params: Params::Ellipsis,
-                        ret: Type::Quantified(quantified),
-                    },
-                ))))
+                )))
+            }
+            Type::Type(box Type::Quantified(quantified)) => {
+                let call_target = match quantified.restriction() {
+                    Restriction::Unrestricted => {
+                        // Assume this is object.__init__, reject any argument
+                        CallTarget::Callable(TargetWithTParams(
+                            None,
+                            Callable {
+                                params: Params::List(ParamList::new(vec![])),
+                                ret: Type::Quantified(quantified),
+                            },
+                        ))
+                    }
+                    Restriction::Bound(Type::ClassType(cls)) => {
+                        // Use the bound to determine call target, but keep
+                        // the original quantified for the return type to allow
+                        // type variables in the return type to be resolved.
+                        CallTarget::Class(
+                            cls.clone(),
+                            ConstructorKind::TypeOfClass,
+                            Some(*quantified),
+                        )
+                    }
+                    // For unhandled cases, we accept any arguments and return
+                    // the quantified type itself.
+                    // We can't handle constraints because we need to take
+                    // intersection of constructor types of all constraints,
+                    // which is currently not possible.
+                    _ => CallTarget::Callable(TargetWithTParams(
+                        None,
+                        Callable {
+                            // TODO: use upper bound to determine input parameters
+                            params: Params::Ellipsis,
+                            ret: Type::Quantified(quantified),
+                        },
+                    )),
+                };
+                CallTargetLookup::Ok(Box::new(call_target))
             }
             Type::Type(inner) if let Type::Any(style) = *inner => {
                 CallTargetLookup::Ok(Box::new(CallTarget::Any(style)))
@@ -300,11 +337,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(quantified) = quantified {
                     self.quantified_instance_as_dunder_call(quantified.clone(), &cls)
                         .map_or(CallTargetLookup::Error(vec![]), |ty| {
-                            self.as_call_target_impl(ty, Some(quantified), dunder_call)
+                            let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
+                                || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
+                            if is_self_recursive {
+                                // __call__ resolves back to the same class, creating
+                                // circular resolution. Treat as callable with unknown type.
+                                CallTargetLookup::Ok(Box::new(CallTarget::Any(AnyStyle::Implicit)))
+                            } else {
+                                self.as_call_target_impl(ty, Some(quantified), dunder_call)
+                            }
                         })
                 } else if dunder_call {
-                    // Avoid infinite recursion
-                    CallTargetLookup::Error(vec![])
+                    self.instance_as_dunder_call(&cls).map_or(
+                        CallTargetLookup::Error(vec![]),
+                        |ty| {
+                            let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
+                                || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
+                            if is_self_recursive {
+                                // __call__ resolves back to the same class, creating
+                                // circular resolution. Treat as callable with unknown type.
+                                CallTargetLookup::Ok(Box::new(CallTarget::Any(AnyStyle::Implicit)))
+                            } else {
+                                self.as_call_target_impl(ty, quantified, /* dunder_call */ true)
+                            }
+                        },
+                    )
                 } else {
                     self.instance_as_dunder_call(&cls).map_or(
                         CallTargetLookup::Error(vec![]),
@@ -332,6 +389,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 CallTargetLookup::Ok(Box::new(CallTarget::Class(
                     cls,
                     ConstructorKind::TypeOfClass,
+                    None,
                 )))
             }
             Type::Type(box Type::Intersect(box (_, fallback))) => {
@@ -852,7 +910,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         let res = match call_target {
-            CallTarget::Class(cls, constructor_kind) => {
+            CallTarget::Class(cls, constructor_kind, as_quantified_bound) => {
                 if cls.has_qname("typing", "Any") {
                     return self.error(
                         errors,
@@ -903,7 +961,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 };
-                self.construct_class(
+                let constructed_type = self.construct_class(
                     cls,
                     args,
                     keywords,
@@ -912,7 +970,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     errors,
                     context,
                     hint,
-                )
+                );
+                // Override the constructed type with the quantified bound if
+                // this class is being called via a quantified type with a class
+                // bound, to allow calls on TypeVars with class bounds to work
+                // as expected.
+                if let Some(quantified) = as_quantified_bound {
+                    Type::Quantified(Box::new(quantified))
+                } else {
+                    constructed_type
+                }
             }
             CallTarget::TypedDict(td) => self.construct_typed_dict(
                 td,
@@ -1230,7 +1297,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If the class has a custom metaclass and the return type of the metaclass's __call__
             // is not a subclass of the current class, use that and ignore __new__ and __init__
             if metaclass_call_attr_ty
-                .callable_return_type()
+                .callable_return_type(self.heap)
                 .is_some_and(|ret| !self.is_compatible_constructor_return(&ret, cls.class_object()))
             {
                 return metaclass_call_attr_ty;
@@ -1249,7 +1316,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .get_dunder_new(cls)
             .and_then(|t| self.bind_dunder_new(&t, cls.clone()))
         {
-            if t.callable_return_type()
+            if t.callable_return_type(self.heap)
                 .is_some_and(|ret| !self.is_compatible_constructor_return(&ret, cls.class_object()))
             {
                 // If the return type of __new__ is not a subclass of the current class, use that and ignore __init__

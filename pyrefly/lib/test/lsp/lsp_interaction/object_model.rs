@@ -1306,6 +1306,26 @@ impl LspInteraction {
         self.client.root = Some(root);
     }
 
+    pub fn create_notebook_cell(
+        &self,
+        file_name: &str,
+        cell_number: usize,
+        cell_contents: &str,
+    ) -> (Value, Value) {
+        let cell_uri = self.cell_uri(file_name, &format!("cell{}", cell_number + 1));
+        let cell = json!({
+            "kind": 2,
+            "document": cell_uri,
+        });
+        let doc = json!({
+            "uri": cell_uri,
+            "languageId": "python",
+            "version": 1,
+            "text": *cell_contents
+        });
+        (cell, doc)
+    }
+
     /// Opens a notebook document with the given cell contents.
     /// Each string in `cell_contents` becomes a separate code cell in the notebook.
     pub fn open_notebook(&self, file_name: &str, cell_contents: Vec<&str>) {
@@ -1317,17 +1337,9 @@ impl LspInteraction {
         let mut cell_text_documents = Vec::new();
 
         for (i, text) in cell_contents.iter().enumerate() {
-            let cell_uri = self.cell_uri(file_name, &format!("cell{}", i + 1));
-            cells.push(json!({
-                "kind": 2,
-                "document": cell_uri,
-            }));
-            cell_text_documents.push(json!({
-                "uri": cell_uri,
-                "languageId": "python",
-                "version": 1,
-                "text": *text
-            }));
+            let (cell, doc) = self.create_notebook_cell(file_name, i, text);
+            cells.push(cell);
+            cell_text_documents.push(doc);
         }
 
         self.client

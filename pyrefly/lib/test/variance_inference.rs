@@ -382,7 +382,6 @@ class ContraToContraToContra_WithTA(
 );
 
 testcase!(
-    bug = "conformance: Should warn when inferred variance differs from declared variance in protocols",
     test_protocols_variance_conformance,
     r#"
 from typing import Protocol, TypeVar
@@ -391,22 +390,22 @@ T1 = TypeVar("T1")
 T1_co = TypeVar("T1_co", covariant=True)
 T1_contra = TypeVar("T1_contra", contravariant=True)
 
-class AnotherBox(Protocol[T1]):  # should warn: T should be covariant
+class AnotherBox(Protocol[T1]):  # E: Type variable `T1` in class `AnotherBox` is declared as invariant, but could be covariant based on its usage
     def content(self) -> T1: ...
 
-class Protocol4(Protocol[T1]):  # should warn: T1 should be contravariant
+class Protocol4(Protocol[T1]):  # E: Type variable `T1` in class `Protocol4` is declared as invariant, but could be contravariant based on its usage
     def m1(self, p0: T1) -> None: ...
 
 class Protocol5(Protocol[T1_co]):
     def m1(self, p0: T1_co) -> None: ...  # E: Type variable `T1_co` is Covariant but is used in contravariant position
 
-class Protocol6(Protocol[T1]):  # should warn: T1 should be covariant
+class Protocol6(Protocol[T1]):  # E: Type variable `T1` in class `Protocol6` is declared as invariant, but could be covariant based on its usage
     def m1(self) -> T1: ...
 
 class Protocol7(Protocol[T1_contra]):
     def m1(self) -> T1_contra: ...  # E: Type variable `T1_contra` is Contravariant but is used in covariant position
 
-class Protocol12(Protocol[T1]):  # should warn: T1 should be covariant
+class Protocol12(Protocol[T1]):  # E: Type variable `T1` in class `Protocol12` is declared as invariant, but could be covariant based on its usage
     def __init__(self, x: T1) -> None: ...
 "#,
 );

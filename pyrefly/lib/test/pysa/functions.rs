@@ -287,13 +287,13 @@ class MyClass:
                 vec![FunctionParameter::Pos {
                     name: "cls".into(),
                     annotation: PysaType::from_type(
-                        &context.answers.heap().mk_type(
-                            ClassType::new(
+                        &context
+                            .answers
+                            .heap()
+                            .mk_type(context.answers.heap().mk_class_type(ClassType::new(
                                 get_class("test", "MyClass", context),
                                 Default::default(),
-                            )
-                            .to_type(),
-                        ),
+                            ))),
                         context,
                     ),
                     required: true,
@@ -468,14 +468,15 @@ def foo(x: int) -> int:
     return x
 "#,
     &|context: &ModuleContext| {
+        let heap = context.answers.heap();
         let callable_int_to_int = PysaType::from_type(
-            &context.answers.heap().mk_callable_from(Callable::list(
+            &heap.mk_callable_from(Callable::list(
                 ParamList::new(vec![Param::PosOnly(
                     None,
-                    context.stdlib.int().clone().to_type(),
+                    heap.mk_class_type(context.stdlib.int().clone()),
                     Required::Required,
                 )]),
-                context.stdlib.int().clone().to_type(),
+                heap.mk_class_type(context.stdlib.int().clone()),
             )),
             context,
         );
@@ -531,13 +532,14 @@ def foo(x: int) -> int:
     return x
 "#,
     &|context: &ModuleContext| {
-        let callable_int_to_int = context.answers.heap().mk_callable_from(Callable::list(
+        let heap = context.answers.heap();
+        let callable_int_to_int = heap.mk_callable_from(Callable::list(
             ParamList::new(vec![Param::PosOnly(
                 None,
-                context.stdlib.int().clone().to_type(),
+                heap.mk_class_type(context.stdlib.int().clone()),
                 Required::Required,
             )]),
-            context.stdlib.int().clone().to_type(),
+            heap.mk_class_type(context.stdlib.int().clone()),
         ));
         vec![
             create_function_definition(
@@ -605,14 +607,15 @@ def foo(x: int) -> int:
     return x
 "#,
     &|context: &ModuleContext| {
+        let heap = context.answers.heap();
         let callable_int_to_int = PysaType::from_type(
-            &context.answers.heap().mk_callable_from(Callable::list(
+            &heap.mk_callable_from(Callable::list(
                 ParamList::new(vec![Param::PosOnly(
                     None,
-                    context.stdlib.int().clone().to_type(),
+                    heap.mk_class_type(context.stdlib.int().clone()),
                     Required::Required,
                 )]),
-                context.stdlib.int().clone().to_type(),
+                heap.mk_class_type(context.stdlib.int().clone()),
             )),
             context,
         );
@@ -1140,10 +1143,13 @@ class B(A):
                     vec![FunctionParameter::Pos {
                         name: "cls".into(),
                         annotation: PysaType::from_type(
-                            &context.answers.heap().mk_type(
-                                ClassType::new(get_class("test", "A", context), Default::default())
-                                    .to_type(),
-                            ),
+                            &context
+                                .answers
+                                .heap()
+                                .mk_type(context.answers.heap().mk_class_type(ClassType::new(
+                                    get_class("test", "A", context),
+                                    Default::default(),
+                                ))),
                             context,
                         ),
                         required: true,
@@ -1163,10 +1169,13 @@ class B(A):
                     vec![FunctionParameter::Pos {
                         name: "cls".into(),
                         annotation: PysaType::from_type(
-                            &context.answers.heap().mk_type(
-                                ClassType::new(get_class("test", "B", context), Default::default())
-                                    .to_type(),
-                            ),
+                            &context
+                                .answers
+                                .heap()
+                                .mk_type(context.answers.heap().mk_class_type(ClassType::new(
+                                    get_class("test", "B", context),
+                                    Default::default(),
+                                ))),
                             context,
                         ),
                         required: true,

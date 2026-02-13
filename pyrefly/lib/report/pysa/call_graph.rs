@@ -214,12 +214,12 @@ impl ExpressionIdentifier {
     }
 
     fn regular(location: TextRange, module: &pyrefly_python::module::Module) -> Self {
-        ExpressionIdentifier::Regular(PysaLocation::new(module.display_range(location)))
+        ExpressionIdentifier::Regular(PysaLocation::from_text_range(location, module))
     }
 
     fn expr_name(expr: &ExprName, module: &pyrefly_python::module::Module) -> Self {
         ExpressionIdentifier::Identifier {
-            location: PysaLocation::new(module.display_range(expr.range())),
+            location: PysaLocation::from_text_range(expr.range(), module),
             identifier: expr.id.clone(),
         }
     }
@@ -1592,7 +1592,7 @@ impl ResolveCallResult {
 
 impl<'a> CallGraphVisitor<'a> {
     fn pysa_location(&self, location: TextRange) -> PysaLocation {
-        PysaLocation::new(self.module_context.module_info.display_range(location))
+        PysaLocation::from_text_range(location, &self.module_context.module_info)
     }
 
     fn add_callees(
@@ -2288,7 +2288,11 @@ impl<'a> CallGraphVisitor<'a> {
                     })
                     .unwrap()
             }
-            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Class(class_type, _))) => {
+            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Class(
+                class_type,
+                _,
+                _,
+            ))) => {
                 // Constructing a class instance.
                 let (init_method, new_method) = self
                     .module_context
@@ -2586,12 +2590,13 @@ impl<'a> CallGraphVisitor<'a> {
                          attr_type: callee_type,
                      }| {
                         // TODO(T252263933): Need more precise return types for `__getitem__` in `typed_dict.py`
-                        let return_type =
-                            if let Some(return_type) = callee_type.callable_return_type() {
-                                ScalarTypeProperties::from_type(&return_type, self.module_context)
-                            } else {
-                                ScalarTypeProperties::none()
-                            };
+                        let return_type = if let Some(return_type) =
+                            callee_type.callable_return_type(self.module_context.answers.heap())
+                        {
+                            ScalarTypeProperties::from_type(&return_type, self.module_context)
+                        } else {
+                            ScalarTypeProperties::none()
+                        };
                         DunderAttrCallees {
                             callees: self.resolve_pyrefly_target(
                                 Some(target),
@@ -2993,7 +2998,7 @@ impl<'a> CallGraphVisitor<'a> {
     // for a call expression, we could simply query its type (e.g., query the type of `c(1)`).
     fn get_return_type_for_callee(&self, callee_type: Option<&Type>) -> ScalarTypeProperties {
         callee_type
-            .and_then(|ty| ty.callable_return_type())
+            .and_then(|ty| ty.callable_return_type(self.module_context.answers.heap()))
             .map(|return_type| ScalarTypeProperties::from_type(&return_type, self.module_context))
             .unwrap_or(ScalarTypeProperties::none())
     }
@@ -3279,7 +3284,9 @@ impl<'a> CallGraphVisitor<'a> {
         } = self.call_targets_from_magic_dunder_attr(
             /* base */
             iter_callee_type
-                .and_then(|iter_callee_type| iter_callee_type.callable_return_type())
+                .and_then(|iter_callee_type| {
+                    iter_callee_type.callable_return_type(self.module_context.answers.heap())
+                })
                 .as_ref(),
             /* attribute */ Some(&next_callee_name),
             iter_range,
@@ -3973,7 +3980,7 @@ impl<'a> CallGraphVisitor<'a> {
                 if should_export_decorated_function(&decorated_function, self.module_context) {
                     let return_type = decorated_function
                         .ty
-                        .callable_return_type()
+                        .callable_return_type(self.module_context.answers.heap())
                         .map_or(ScalarTypeProperties::none(), |type_| {
                             ScalarTypeProperties::from_type(&type_, self.module_context)
                         });
@@ -4406,7 +4413,7 @@ pub fn resolve_decorator_callees(
         };
 
         if !callees.is_empty() {
-            let location = PysaLocation::new(context.module_info.display_range(range));
+            let location = PysaLocation::from_text_range(range, &context.module_info);
             assert!(
                 decorator_callees.insert(location, callees).is_none(),
                 "Found multiple decorators at the same location"

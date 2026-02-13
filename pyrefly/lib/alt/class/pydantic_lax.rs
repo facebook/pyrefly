@@ -36,7 +36,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn types_to_lax_union(&self, base_type: &ClassType, types: &[&ClassType]) -> Type {
         let display_name = self.lax_display_name_for_class(base_type);
-        let expanded_types: Vec<Type> = types.iter().map(|cls| (*cls).clone().to_type()).collect();
+        let expanded_types: Vec<Type> = types
+            .iter()
+            .map(|cls| self.heap.mk_class_type((*cls).clone()))
+            .collect();
         let mut union_type = self.unions(expanded_types);
         if let Type::Union(ref mut boxed_union) = union_type {
             boxed_union.display_name = Some(display_name.into_boxed_str());
@@ -148,7 +151,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             || class_obj.has_toplevel_qname(ModuleName::typing().as_str(), "Sequence")
             || class_obj.has_toplevel_qname(ModuleName::typing().as_str(), "Iterable")
         {
-            return Some(self.stdlib.iterable(first_ty).to_type());
+            return Some(self.heap.mk_class_type(self.stdlib.iterable(first_ty)));
         }
         None
     }
@@ -174,9 +177,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(box inner) => self.heap.mk_type(self.expand_type_for_lax_mode(inner)),
             // Tuple types: convert to Iterable[T] where T is a union of expanded element types
             Type::Tuple(tuple) => self
-                .stdlib
-                .iterable(self.get_tuple_element_type(tuple))
-                .to_type(),
+                .heap
+                .mk_class_type(self.stdlib.iterable(self.get_tuple_element_type(tuple))),
             // Container types: recursively expand all type arguments
             Type::ClassType(cls) if !cls.targs().as_slice().is_empty() => {
                 let class_obj = cls.class_object();
@@ -193,7 +195,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .cloned()
                         .unwrap_or_else(|| self.heap.mk_any_implicit());
                     let expanded_val = self.expand_type_for_lax_mode(&val_ty);
-                    return self.stdlib.mapping(key_ty, expanded_val).to_type();
+                    return self
+                        .heap
+                        .mk_class_type(self.stdlib.mapping(key_ty, expanded_val));
                 }
 
                 let expanded_targs = self.expand_types(targs);

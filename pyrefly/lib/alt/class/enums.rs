@@ -204,7 +204,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if self.has_superclass(first_base.class_object(), enum_class.class_object()) {
             self.mixed_in_enum_data_type(first_base.class_object())
         } else {
-            Some(first_base.clone().to_type())
+            Some(self.heap.mk_class_type(first_base.clone()))
         }
     }
 
@@ -218,10 +218,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             ty => ty,
         };
-        let int_ty = self.stdlib.int();
+        let int_ty = self.heap.mk_class_type(self.stdlib.int().clone());
         ty.transform(&mut |t| {
             if matches!(t, Type::ClassType(cls) if cls.has_qname(ModuleName::enum_().as_str(), "auto")) {
-                *t = int_ty.clone().to_type();
+                *t = int_ty.clone();
             }
         })
     }
@@ -292,6 +292,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }))
                 .to_implicit_type(),
             )
+        } else if let Type::ClassType(cls) = &ty
+            && cls.has_qname("enum", "nonmember")
+            && let [targ] = cls.targs().as_slice()
+        {
+            Some(targ.clone())
         } else {
             None
         }

@@ -497,7 +497,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 } else {
                     self.call_method_or_error(
-                        &self.stdlib.bytes().clone().to_type(),
+                        &self.heap.mk_class_type(self.stdlib.bytes().clone()),
                         &dunder::GETITEM,
                         range,
                         &[CallArg::expr(index_expr)],
@@ -508,7 +508,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             _ => self.call_method_or_error(
-                &self.stdlib.bytes().clone().to_type(),
+                &self.heap.mk_class_type(self.stdlib.bytes().clone()),
                 &dunder::GETITEM,
                 range,
                 &[CallArg::expr(index_expr)],

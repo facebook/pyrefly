@@ -26,6 +26,7 @@ use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 use tempfile::TempDir;
 
+use crate::commands::config_finder::default_config_finder;
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
@@ -454,4 +455,64 @@ fn test_notebook_reload_after_parse_failure() {
             .shown
             .len()
     );
+}
+
+/// Regression test for a crash where `get_module().finding().unwrap()` used to
+/// panic in `TransactionHandle::get()` (state.rs) when resolving a cross-module
+/// `TypeAliasRef` and the current module's config cannot find the defining module.
+///
+/// Scenario:
+/// - `baz` defines a recursive type alias `type Tree = int | list[Tree]`
+/// - `foo` re-exports `Tree` from `baz`
+/// - `main` imports `Tree` from `foo` and uses it in an annotation
+/// - `main`'s config can find `foo` but NOT `baz`
+/// - `foo`'s config can find both `foo` and `baz`
+///
+/// When `main` resolves the `TypeAliasRef { module: baz }` embedded in the
+/// recursive type, it calls `get_module(baz)` which returns `None` because
+/// `main`'s config cannot locate `baz`. This should be handled gracefully
+/// instead of panicking.
+#[test]
+fn test_crash_on_cross_module_type_alias_ref() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // main_proj/ contains main.py with a config that can see dep_proj/ but NOT extra/.
+    // dep_proj/ contains foo.py with a config that can see extra/.
+    // extra/ contains baz.py (no config needed, discovered via dep_proj's search path).
+    let main_proj = temp_dir.path().join("main_proj");
+    let dep_proj = temp_dir.path().join("dep_proj");
+    let extra = temp_dir.path().join("extra");
+    fs::create_dir_all(&main_proj).unwrap();
+    fs::create_dir_all(&dep_proj).unwrap();
+    fs::create_dir_all(&extra).unwrap();
+
+    fs::write(
+        main_proj.join("main.py"),
+        "from foo import Tree\nx: Tree = [[1]]",
+    )
+    .unwrap();
+    fs::write(dep_proj.join("foo.py"), "from baz import Tree as Tree").unwrap();
+    fs::write(extra.join("baz.py"), "type Tree = int | list[Tree]").unwrap();
+
+    // main's config: search-path includes main_proj and dep_proj, but NOT extra.
+    fs::write(
+        main_proj.join("pyrefly.toml"),
+        "search-path = [\".\", \"../dep_proj\"]\nskip-interpreter-query = true\n",
+    )
+    .unwrap();
+    // foo/baz's config: search-path includes dep_proj and extra.
+    fs::write(
+        dep_proj.join("pyrefly.toml"),
+        "search-path = [\".\", \"../extra\"]\nskip-interpreter-query = true\n",
+    )
+    .unwrap();
+
+    let finder = default_config_finder();
+    let main_path = ModulePath::filesystem(main_proj.join("main.py"));
+    let sys_info = SysInfo::new(PythonVersion::default(), PythonPlatform::linux());
+    let handle = Handle::new(ModuleName::from_str("main"), main_path, sys_info);
+
+    let state = State::new(finder);
+    let mut transaction = state.new_transaction(Require::Exports, None);
+    transaction.run(&[handle], Require::Everything);
 }

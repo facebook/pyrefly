@@ -46,12 +46,73 @@ use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::types::Type;
 
-/// Sort text prefix for autoimport completions from public modules.
-const SORT_AUTOIMPORT_PUBLIC: &str = "4a";
-/// Sort text prefix for autoimport completions from private modules (deprioritized).
-const SORT_AUTOIMPORT_PRIVATE: &str = "4b";
-/// Default sort text for autoimport completions (used when no explicit sort text is set).
-const SORT_AUTOIMPORT_DEFAULT: &str = "4";
+/// Classification of a completion item's source, used for ranking.
+#[derive(Clone, Copy, Default)]
+pub(crate) enum CompletionSource {
+    /// Keywords, variables, literals, builtins, dict keys, etc.
+    #[default]
+    Local,
+    /// Defined in another module, exposed from this one.
+    Reexport,
+    /// Auto-import from a public module path.
+    AutoimportPublic,
+    /// Auto-import from a private module path (segment starts with `_`).
+    AutoimportPrivate,
+}
+
+/// A completion item paired with ranking metadata.
+pub(crate) struct RankedCompletion {
+    pub(crate) item: CompletionItem,
+    pub(crate) source: CompletionSource,
+    pub(crate) is_incompatible: bool,
+}
+
+impl RankedCompletion {
+    /// Wraps a `CompletionItem` with default (local, compatible) ranking metadata.
+    pub(crate) fn new(item: CompletionItem) -> Self {
+        Self {
+            item,
+            source: CompletionSource::Local,
+            is_incompatible: false,
+        }
+    }
+}
+
+/// All completion ranking logic lives here. Assigns `sort_text` to each item
+/// based on its source classification, name prefix, and compatibility.
+fn assign_sort_text(ranked: &mut RankedCompletion) {
+    let is_deprecated = ranked
+        .item
+        .tags
+        .as_ref()
+        .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED));
+
+    if is_deprecated {
+        ranked.item.sort_text = Some("9".to_owned());
+        return;
+    }
+
+    let base = match ranked.source {
+        CompletionSource::AutoimportPrivate => "4b",
+        CompletionSource::AutoimportPublic => "4a",
+        CompletionSource::Reexport => "1",
+        CompletionSource::Local => {
+            if ranked.item.label.starts_with("__") {
+                "3"
+            } else if ranked.item.label.starts_with('_') {
+                "2"
+            } else {
+                "0"
+            }
+        }
+    };
+
+    ranked.item.sort_text = Some(if ranked.is_incompatible {
+        format!("{base}z")
+    } else {
+        base.to_owned()
+    });
+}
 
 /// Options that influence completion item formatting and behavior.
 #[derive(Clone, Copy, Debug, Default)]
@@ -76,7 +137,7 @@ impl Transaction<'_> {
     /// Adds completion items for literal types (e.g., `Literal["foo", "bar"]`).
     pub(crate) fn add_literal_completions_from_type(
         param_type: &Type,
-        completions: &mut Vec<CompletionItem>,
+        completions: &mut Vec<RankedCompletion>,
         in_string_literal: bool,
     ) {
         match param_type {
@@ -92,13 +153,13 @@ impl Transaction<'_> {
                 } else {
                     label.clone()
                 };
-                completions.push(CompletionItem {
+                completions.push(RankedCompletion::new(CompletionItem {
                     label,
                     kind: Some(CompletionItemKind::VALUE),
                     detail: Some(format!("{param_type}")),
                     insert_text: Some(insert_text),
                     ..Default::default()
-                });
+                }));
             }
             Type::Union(box Union { members, .. }) => {
                 for member in members {
@@ -112,7 +173,7 @@ impl Transaction<'_> {
     /// Adds completions for magic methods (dunder methods like `__init__`, `__str__`, etc.).
     pub(crate) fn add_magic_method_completions(
         identifier: &Identifier,
-        completions: &mut Vec<CompletionItem>,
+        completions: &mut Vec<RankedCompletion>,
     ) {
         let typed = identifier.as_str();
         if !typed.is_empty() && !typed.starts_with("__") {
@@ -120,34 +181,38 @@ impl Transaction<'_> {
         }
         for name in dunder::MAGIC_METHOD_NAMES {
             if name.starts_with(typed) {
-                completions.push(CompletionItem {
+                completions.push(RankedCompletion::new(CompletionItem {
                     label: (*name).to_owned(),
                     kind: Some(CompletionItemKind::METHOD),
                     ..Default::default()
-                });
+                }));
             }
         }
     }
 
     /// Adds completions for Python keywords (e.g., `if`, `for`, `class`, etc.).
-    pub(crate) fn add_keyword_completions(handle: &Handle, completions: &mut Vec<CompletionItem>) {
+    pub(crate) fn add_keyword_completions(
+        handle: &Handle,
+        completions: &mut Vec<RankedCompletion>,
+    ) {
         get_keywords(handle.sys_info().version())
             .iter()
             .for_each(|name| {
-                completions.push(CompletionItem {
+                completions.push(RankedCompletion::new(CompletionItem {
                     label: (*name).to_owned(),
                     kind: Some(CompletionItemKind::KEYWORD),
                     ..Default::default()
-                })
+                }))
             });
     }
 
     /// Adds function/method completion inserts with parentheses, using snippets when supported.
     pub(crate) fn add_function_call_parens(
-        completions: &mut [CompletionItem],
+        completions: &mut [RankedCompletion],
         supports_snippets: bool,
     ) {
-        for item in completions {
+        for ranked in completions {
+            let item = &mut ranked.item;
             if item.insert_text.is_some() || item.text_edit.is_some() {
                 continue;
             }
@@ -188,7 +253,7 @@ impl Transaction<'_> {
         &self,
         handle: &Handle,
         position: TextSize,
-        completions: &mut Vec<CompletionItem>,
+        completions: &mut Vec<RankedCompletion>,
     ) {
         if let Some((callables, overload_idx, _, _)) =
             self.get_callables_from_call(handle, position)
@@ -202,12 +267,12 @@ impl Transaction<'_> {
                     | Param::KwOnly(name, ty, _)
                     | Param::VarArg(Some(name), ty) => {
                         if name.as_str() != "self" {
-                            completions.push(CompletionItem {
+                            completions.push(RankedCompletion::new(CompletionItem {
                                 label: format!("{}=", name.as_str()),
                                 detail: Some(ty.to_string()),
                                 kind: Some(CompletionItemKind::VARIABLE),
                                 ..Default::default()
-                            });
+                            }));
                         }
                     }
                     Param::VarArg(None, _) | Param::Kwargs(_, _) | Param::PosOnly(None, _, _) => {}
@@ -222,12 +287,11 @@ impl Transaction<'_> {
         handle: &Handle,
         attr_info: &AttrInfo,
     ) -> Option<lsp_types::Documentation> {
-        let definition = attr_info.definition.as_ref()?.clone();
+        let definition = attr_info.definition.clone();
         let attribute_definition = self.resolve_attribute_definition(
             handle,
             &attr_info.name,
             definition,
-            attr_info.docstring_range,
             FindPreference::default(),
         );
 
@@ -249,7 +313,7 @@ impl Transaction<'_> {
         &self,
         handle: &Handle,
         identifier: Option<&Identifier>,
-        completions: &mut Vec<CompletionItem>,
+        completions: &mut Vec<RankedCompletion>,
     ) {
         if let Some(builtin_handle) = self
             .import_handle(handle, ModuleName::builtins(), None)
@@ -273,15 +337,44 @@ impl Transaction<'_> {
                             Some(k.to_lsp_completion_item_kind())
                         }),
                 };
-                completions.push(CompletionItem {
+                completions.push(RankedCompletion::new(CompletionItem {
                     label: name.as_str().to_owned(),
                     detail: None,
                     kind,
                     data: Some(serde_json::json!("builtin")),
                     ..Default::default()
-                });
+                }));
             }
         }
+    }
+
+    fn expected_call_argument_type(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        let (callables, chosen_overload_index, active_argument, _) =
+            self.get_callables_from_call(handle, position)?;
+        let callable = callables.get(chosen_overload_index)?.clone();
+        let params = Self::normalize_singleton_function_type_into_params(callable)?;
+        let arg_index = Self::active_parameter_index(&params, &active_argument)?;
+        let param = params.get(arg_index)?;
+        Some(param.as_type().clone())
+    }
+
+    fn is_incompatible_with_expected_type(
+        &self,
+        handle: &Handle,
+        expected_type: Option<&Type>,
+        actual_type: Option<&Type>,
+    ) -> bool {
+        let Some(expected_type) = expected_type else {
+            return false;
+        };
+        let Some(actual_type) = actual_type else {
+            return false;
+        };
+        self.ad_hoc_solve(handle, |solver| {
+            solver.is_subset_eq(actual_type, expected_type)
+        })
+        .map(|compatible| !compatible)
+        .unwrap_or(false)
     }
 
     /// Adds completions for local variables and returns true if any were added.
@@ -291,7 +384,8 @@ impl Transaction<'_> {
         handle: &Handle,
         identifier: Option<&Identifier>,
         position: TextSize,
-        completions: &mut Vec<CompletionItem>,
+        expected_type: Option<&Type>,
+        completions: &mut Vec<RankedCompletion>,
     ) -> bool {
         let mut has_added_any = false;
         if let Some(bindings) = self.get_bindings(handle)
@@ -339,21 +433,27 @@ impl Transaction<'_> {
                         t.function_deprecation().is_some()
                     }
                 });
-                let detail = ty.map(|t| t.to_string());
+                let detail = ty.as_ref().map(|t| t.to_string());
                 let documentation = self.get_documentation_from_export(export_info);
+                let is_incompatible =
+                    self.is_incompatible_with_expected_type(handle, expected_type, ty.as_ref());
 
                 has_added_any = true;
-                completions.push(CompletionItem {
-                    label: label.to_owned(),
-                    detail,
-                    kind: Some(kind),
-                    documentation,
-                    tags: if is_deprecated {
-                        Some(vec![CompletionItemTag::DEPRECATED])
-                    } else {
-                        None
+                completions.push(RankedCompletion {
+                    item: CompletionItem {
+                        label: label.to_owned(),
+                        detail,
+                        kind: Some(kind),
+                        documentation,
+                        tags: if is_deprecated {
+                            Some(vec![CompletionItemTag::DEPRECATED])
+                        } else {
+                            None
+                        },
+                        ..Default::default()
                     },
-                    ..Default::default()
+                    source: CompletionSource::Local,
+                    is_incompatible,
                 })
             }
         }
@@ -365,7 +465,7 @@ impl Transaction<'_> {
         &self,
         handle: &Handle,
         position: TextSize,
-        completions: &mut Vec<CompletionItem>,
+        completions: &mut Vec<RankedCompletion>,
         in_string_literal: bool,
     ) {
         if let Some((callables, chosen_overload_index, active_argument, _)) =
@@ -389,7 +489,7 @@ impl Transaction<'_> {
         &self,
         handle: &Handle,
         identifier: &Identifier,
-        completions: &mut Vec<CompletionItem>,
+        completions: &mut Vec<RankedCompletion>,
         import_format: ImportFormat,
         supports_completion_item_details: bool,
     ) {
@@ -401,11 +501,11 @@ impl Transaction<'_> {
             && let Some(ast) = self.get_ast(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
-            let autoimport_sort_text = |module_name: &str| {
+            let autoimport_source = |module_name: &str| {
                 if module_name.split('.').any(|part| part.starts_with('_')) {
-                    SORT_AUTOIMPORT_PRIVATE
+                    CompletionSource::AutoimportPrivate
                 } else {
-                    SORT_AUTOIMPORT_PUBLIC
+                    CompletionSource::AutoimportPublic
                 }
             };
             for (handle_to_import_from, name, export) in
@@ -435,28 +535,31 @@ impl Transaction<'_> {
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
 
-                completions.push(CompletionItem {
-                    label: name,
-                    detail: Some(insert_text),
-                    kind: export
-                        .symbol_kind
-                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                            Some(k.to_lsp_completion_item_kind())
-                        }),
-                    additional_text_edits,
-                    label_details: supports_completion_item_details.then_some(
-                        CompletionItemLabelDetails {
-                            detail: Some(auto_import_label_detail),
-                            description: Some(module_description),
+                completions.push(RankedCompletion {
+                    item: CompletionItem {
+                        label: name,
+                        detail: Some(insert_text),
+                        kind: export
+                            .symbol_kind
+                            .map_or(Some(CompletionItemKind::VARIABLE), |k| {
+                                Some(k.to_lsp_completion_item_kind())
+                            }),
+                        additional_text_edits,
+                        label_details: supports_completion_item_details.then_some(
+                            CompletionItemLabelDetails {
+                                detail: Some(auto_import_label_detail),
+                                description: Some(module_description),
+                            },
+                        ),
+                        tags: if export.deprecation.is_some() {
+                            Some(vec![CompletionItemTag::DEPRECATED])
+                        } else {
+                            None
                         },
-                    ),
-                    tags: if export.deprecation.is_some() {
-                        Some(vec![CompletionItemTag::DEPRECATED])
-                    } else {
-                        None
+                        ..Default::default()
                     },
-                    sort_text: Some(autoimport_sort_text(&imported_module).to_owned()),
-                    ..Default::default()
+                    source: autoimport_source(&imported_module),
+                    is_incompatible: false,
                 });
             }
 
@@ -465,7 +568,7 @@ impl Transaction<'_> {
                     continue;
                 }
                 let module_name_str = module_name.as_str().to_owned();
-                let module_sort_text = autoimport_sort_text(&module_name_str).to_owned();
+                let source = autoimport_source(&module_name_str);
                 if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
                 {
                     let (insert_text, additional_text_edits) = {
@@ -480,22 +583,66 @@ impl Transaction<'_> {
                     };
                     let auto_import_label_detail = format!(" (import {module_name_str})");
 
-                    completions.push(CompletionItem {
-                        label: module_name_str.clone(),
-                        detail: Some(insert_text),
-                        kind: Some(CompletionItemKind::MODULE),
-                        additional_text_edits,
-                        label_details: supports_completion_item_details.then_some(
-                            CompletionItemLabelDetails {
-                                detail: Some(auto_import_label_detail),
-                                description: Some(module_name_str.clone()),
-                            },
-                        ),
-                        sort_text: Some(module_sort_text),
-                        ..Default::default()
+                    completions.push(RankedCompletion {
+                        item: CompletionItem {
+                            label: module_name_str.clone(),
+                            detail: Some(insert_text),
+                            kind: Some(CompletionItemKind::MODULE),
+                            additional_text_edits,
+                            label_details: supports_completion_item_details.then_some(
+                                CompletionItemLabelDetails {
+                                    detail: Some(auto_import_label_detail),
+                                    description: Some(module_name_str.clone()),
+                                },
+                            ),
+                            ..Default::default()
+                        },
+                        source,
+                        is_incompatible: false,
                     });
                 }
             }
+        }
+    }
+
+    /// Suggest Literal values when completing inside a `match` value pattern.
+    ///
+    /// We can't reuse the call-argument literal completion path here because
+    /// `case <value>:` isn't a call site, so we never get parameter types to
+    /// infer literals from. Instead, we look for a match value/singleton
+    /// pattern at the cursor and pull the `match` subject's type to surface
+    /// its Literal members.
+    pub(crate) fn add_match_literal_completions(
+        &self,
+        handle: &Handle,
+        covering_nodes: &[AnyNodeRef],
+        completions: &mut Vec<RankedCompletion>,
+        in_string_literal: bool,
+    ) {
+        let mut is_match_value_pattern = false;
+        let mut subject = None;
+        for node in covering_nodes {
+            match node {
+                AnyNodeRef::PatternMatchValue(_) | AnyNodeRef::PatternMatchSingleton(_) => {
+                    is_match_value_pattern = true;
+                }
+                AnyNodeRef::StmtMatch(stmt_match) => {
+                    subject = Some(stmt_match.subject.as_ref());
+                }
+                _ => {}
+            }
+            if is_match_value_pattern && subject.is_some() {
+                break;
+            }
+        }
+        if !is_match_value_pattern {
+            return;
+        }
+        let Some(subject) = subject else {
+            return;
+        };
+        if let Some(subject_type) = self.get_type_trace(handle, subject.range()) {
+            Self::add_literal_completions_from_type(&subject_type, completions, in_string_literal);
         }
     }
 
@@ -512,7 +659,7 @@ impl Transaction<'_> {
             complete_function_parens,
             supports_snippet_completions,
         } = options;
-        let mut result = Vec::new();
+        let mut result: Vec<RankedCompletion> = Vec::new();
         let mut is_incomplete = false;
         let mut allow_function_call_parens = false;
         // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
@@ -524,11 +671,11 @@ impl Transaction<'_> {
             }) => {
                 if let Some(handle) = self.import_handle(handle, module_name, None).finding() {
                     if "import".starts_with(identifier.as_str()) {
-                        result.push(CompletionItem {
+                        result.push(RankedCompletion::new(CompletionItem {
                             label: "import".to_owned(),
                             kind: Some(CompletionItemKind::KEYWORD),
                             ..Default::default()
-                        })
+                        }))
                     }
                     let exports = self.get_exports(&handle);
                     for (name, export) in exports.iter() {
@@ -536,7 +683,7 @@ impl Transaction<'_> {
                             ExportLocation::ThisModule(export) => export.deprecation.is_some(),
                             ExportLocation::OtherModule(_, _) => false,
                         };
-                        result.push(CompletionItem {
+                        result.push(RankedCompletion::new(CompletionItem {
                             label: name.to_string(),
                             // todo(kylei): completion kind for exports
                             kind: Some(CompletionItemKind::VARIABLE),
@@ -546,7 +693,7 @@ impl Transaction<'_> {
                                 None
                             },
                             ..Default::default()
-                        })
+                        }))
                     }
                 }
             }
@@ -558,7 +705,7 @@ impl Transaction<'_> {
                 .import_prefixes(handle, ModuleName::from_name(identifier.id()))
                 .iter()
                 .for_each(|module_name| {
-                    result.push(CompletionItem {
+                    result.push(RankedCompletion::new(CompletionItem {
                         label: module_name
                             .components()
                             .last()
@@ -567,12 +714,13 @@ impl Transaction<'_> {
                         detail: Some(module_name.to_string()),
                         kind: Some(CompletionItemKind::MODULE),
                         ..Default::default()
-                    })
+                    }))
                 }),
             Some(IdentifierWithContext {
                 identifier: _,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
+                let expected_type = self.expected_call_argument_type(handle, position);
                 allow_function_call_parens = true;
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
@@ -595,22 +743,31 @@ impl Transaction<'_> {
                                 let detail =
                                     ty.clone().map(|t| t.as_lsp_string(LspDisplayMode::Hover));
                                 let documentation = self.get_docstring_for_attribute(handle, x);
-                                result.push(CompletionItem {
-                                    label: x.name.as_str().to_owned(),
-                                    detail,
-                                    kind,
-                                    documentation,
-                                    sort_text: if x.is_reexport {
-                                        Some("1".to_owned())
-                                    } else {
-                                        None
+                                let is_incompatible = self.is_incompatible_with_expected_type(
+                                    handle,
+                                    expected_type.as_ref(),
+                                    ty.as_ref(),
+                                );
+                                let source = if x.is_reexport {
+                                    CompletionSource::Reexport
+                                } else {
+                                    CompletionSource::Local
+                                };
+                                result.push(RankedCompletion {
+                                    item: CompletionItem {
+                                        label: x.name.as_str().to_owned(),
+                                        detail,
+                                        kind,
+                                        documentation,
+                                        tags: if x.is_deprecated {
+                                            Some(vec![CompletionItemTag::DEPRECATED])
+                                        } else {
+                                            None
+                                        },
+                                        ..Default::default()
                                     },
-                                    tags: if x.is_deprecated {
-                                        Some(vec![CompletionItemTag::DEPRECATED])
-                                    } else {
-                                        None
-                                    },
-                                    ..Default::default()
+                                    source,
+                                    is_incompatible,
                                 });
                             });
                     });
@@ -620,6 +777,14 @@ impl Transaction<'_> {
                 identifier,
                 context,
             }) => {
+                let expected_type = if matches!(
+                    context,
+                    IdentifierContext::Expr(ExprContext::Load | ExprContext::Invalid)
+                ) {
+                    self.expected_call_argument_type(handle, position)
+                } else {
+                    None
+                };
                 if matches!(
                     context,
                     IdentifierContext::Expr(ExprContext::Load | ExprContext::Invalid)
@@ -635,6 +800,7 @@ impl Transaction<'_> {
                     handle,
                     Some(&identifier),
                     position,
+                    expected_type.as_ref(),
                     &mut result,
                 );
                 if !has_local_completions {
@@ -664,10 +830,17 @@ impl Transaction<'_> {
             None => {
                 // todo(kylei): optimization, avoid duplicate ast walkss
                 if let Some(mod_module) = self.get_ast(handle) {
+                    let expected_type = self.expected_call_argument_type(handle, position);
                     let nodes = Ast::locate_node(&mod_module, position);
                     if nodes.is_empty() {
                         Self::add_keyword_completions(handle, &mut result);
-                        self.add_local_variable_completions(handle, None, position, &mut result);
+                        self.add_local_variable_completions(
+                            handle,
+                            None,
+                            position,
+                            expected_type.as_ref(),
+                            &mut result,
+                        );
                         self.add_builtins_autoimport_completions(handle, None, &mut result);
                     }
                     let in_string_literal = nodes
@@ -699,28 +872,9 @@ impl Transaction<'_> {
         if complete_function_parens && allow_function_call_parens {
             Self::add_function_call_parens(&mut result, supports_snippet_completions);
         }
-        for item in &mut result {
-            let sort_text = if item
-                .tags
-                .as_ref()
-                .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED))
-            {
-                "9"
-            } else if let Some(sort_text) = &item.sort_text {
-                // 1 is reserved for re-exports
-                sort_text.as_str()
-            } else if item.additional_text_edits.is_some() {
-                SORT_AUTOIMPORT_DEFAULT
-            } else if item.label.starts_with("__") {
-                "3"
-            } else if item.label.as_str().starts_with("_") {
-                "2"
-            } else {
-                "0"
-            }
-            .to_owned();
-            item.sort_text = Some(sort_text);
+        for ranked in &mut result {
+            assign_sort_text(ranked);
         }
-        (result, is_incomplete)
+        (result.into_iter().map(|r| r.item).collect(), is_incomplete)
     }
 }
