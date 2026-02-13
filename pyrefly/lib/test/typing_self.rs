@@ -88,7 +88,7 @@ class A:
 
     def f2(self):
         assert_type(self, Self)
-    
+
     def f3(self: Self) -> Self:
         assert_type(self, Self)
         return self
@@ -228,4 +228,41 @@ class SomeClass:
 assert_type(SomeClass().cache, dict[int, SomeClass])
 assert_type(SomeClass().get_instance(), SomeClass)
 "#,
+);
+
+testcase!(
+    bug = "Should error when Self is used at invalid locations",
+    test_self_outside_class,
+    r#"
+from typing import Self
+
+def foo() -> Self: ...
+x: Self
+tupleSelf = tuple[Self]
+    "#,
+);
+
+testcase!(
+    bug = "Should error when Self is used at invalid locations",
+    test_self_inside_class,
+    r#"
+from typing import Self
+
+class A[T]: pass
+class B(A[Self]): pass
+class C:
+    @staticmethod
+    def foo(x: Self) -> Self: ...
+    "#,
+);
+
+testcase!(
+    bug = "Should error when Self is used at invalid locations",
+    test_self_inside_metaclass,
+    r#"
+from typing import Self
+
+class C(type):
+    def foo(cls) -> Self: ...
+    "#,
 );
