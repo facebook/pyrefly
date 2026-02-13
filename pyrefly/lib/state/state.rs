@@ -1478,12 +1478,21 @@ impl<'a> Transaction<'a> {
                 {
                     return solutions.get_hashed_opt(key).duped();
                 } else if let Some(answers) = &lock.steps.answers {
+                    // Fast path: check if the answer is already computed in the
+                    // Calculation cell. This avoids duping Arcs and constructing
+                    // a TransactionHandle when the value is cached.
+                    if let Some(idx) = answers.0.key_to_idx_hashed_opt(key)
+                        && let Some(v) = answers.1.get_idx(idx)
+                    {
+                        return Some(v);
+                    }
+                    // Slow path: need full solve_exported_key for computation.
                     let load = lock.steps.load.dupe().unwrap();
                     let answers = answers.dupe();
                     drop(lock);
                     let stdlib = self.get_stdlib(&module_data.handle);
                     let lookup = self.lookup(module_data);
-                    return answers.1.solve_exported_key(
+                    let result = answers.1.solve_exported_key(
                         &lookup,
                         &lookup,
                         &answers.0,
@@ -1493,6 +1502,7 @@ impl<'a> Transaction<'a> {
                         key,
                         thread_state,
                     );
+                    return result;
                 }
             }
             drop(lock);
