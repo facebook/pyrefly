@@ -2656,15 +2656,13 @@ impl Server {
             ));
         };
 
-        let mut version_info = self.version_info.lock();
+        let version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
         if version < *old_version {
             return Err(anyhow::anyhow!(
                 "new_version < old_version in `textDocument/didChange` notification: new_version={version:?} old_version={old_version:?} text_document.uri={uri:?}"
             ));
         }
-        version_info.insert(file_path.clone(), version);
-        // drop this to avoid deadlock
         drop(version_info);
         let mut lock = self.open_files.write();
         let Some(original) = lock.get_mut(&file_path) else {
@@ -2678,6 +2676,8 @@ impl Server {
             params.content_changes,
         )));
         drop(lock);
+        // Update version_info only after the mutation has fully succeeded.
+        self.version_info.lock().insert(file_path.clone(), version);
         if !subsequent_mutation {
             info!(
                 "File {} changed, prepare to validate open files.",
@@ -2711,13 +2711,16 @@ impl Server {
             ));
         };
 
-        let mut version_info = self.version_info.lock();
+        let version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
         if version < *old_version {
             return Err(anyhow::anyhow!(
                 "new_version < old_version in `notebookDocument/didChange` notification: new_version={version:?} old_version={old_version:?} notebook_document.uri={uri:?}"
             ));
         }
+        // Drop version_info before mutating state. We'll update it after the
+        // mutation succeeds so that version and state stay consistent on error.
+        drop(version_info);
 
         let mut lock = self.open_files.write();
         let Some(original) = lock.get_mut(&file_path) else {
@@ -2743,8 +2746,6 @@ impl Server {
         if let Some(metadata) = &params.change.metadata {
             notebook_document.metadata = Some(metadata.clone());
         }
-        version_info.insert(file_path.clone(), version);
-        drop(version_info);
         notebook_document.version = version;
         // Changes to cells
         if let Some(change) = &params.change.cells {
@@ -2833,6 +2834,10 @@ impl Server {
         let new_notebook = Arc::new(LspNotebook::new(ruff_notebook, notebook_document));
         *original = Arc::new(LspFile::Notebook(new_notebook));
         drop(lock);
+        // Update version_info only after the mutation has fully succeeded, so
+        // that on error the version stays at the old value and subsequent
+        // notifications operate against consistent state.
+        self.version_info.lock().insert(file_path.clone(), version);
 
         if !subsequent_mutation {
             info!(
