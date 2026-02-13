@@ -198,7 +198,7 @@ struct CallTarget {
 fn find_enclosing_top_level_function(
     ast: &ModModule,
     position: TextSize,
-) -> Option<StmtFunctionDef> {
+) -> Option<&StmtFunctionDef> {
     let containing = find_containing_function_def(ast, position)?;
     if containing.class_def.is_some() {
         return None;
@@ -210,7 +210,7 @@ fn find_enclosing_top_level_function(
                 if function_def.range() == containing.function_def.range()
         )
     });
-    in_module_body.then(|| containing.function_def.clone())
+    in_module_body.then_some(containing.function_def)
 }
 
 /// Collects the positional parameters that we can safely rewrite.
