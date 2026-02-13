@@ -657,7 +657,7 @@ impl Transaction<'_> {
                 let module_name_str = module_name.as_str().to_owned();
                 let source = autoimport_source(&module_name_str);
                 if let Some((submodule_name, position, insert_text, imported_module)) =
-                    self.submodule_autoimport_edit(handle, &ast, &module_name, import_format)
+                    self.submodule_autoimport_edit(handle, &ast, module_name, import_format)
                 {
                     let import_text_edit = TextEdit {
                         range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
