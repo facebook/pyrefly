@@ -1335,6 +1335,31 @@ types (like `object`, `str`, ...) and types/type signatures from stdlib modules.
 - Default: none (resolves to bundled typeshed)
 - Flag equivalent: `--typeshed-path`
 
+### `baseline`
+
+Path to a baseline JSON file for comparing type errors. Errors matching the baseline
+are suppressed, so only newly-introduced errors are reported. This is useful when
+introducing type checking to a project for the first time, or when rolling out
+changes that would otherwise produce many new errors at once.
+
+To generate (or re-generate) the baseline file, run:
+
+```
+pyrefly check --baseline="<path to baseline file>" --update-baseline
+```
+
+See the [Error Suppressions docs](./error-suppressions.mdx#baseline-files-experimental) for
+more details on how baseline files work.
+
+- Type: path to a JSON file
+- Default: none (no baseline)
+- Flag equivalent: `--baseline`
+- Notes:
+    - `baseline` is a **project-level setting** and cannot be overridden in
+      [`sub-config`](#sub-configs) sections.
+    - Errors suppressed by the baseline file are still shown in the IDE.
+    - Errors are matched with the baseline by file, error code, and column number.
+
 ### `errors`
 
 Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.
@@ -1374,6 +1399,16 @@ _only_ want to see type errors on CLI/CI runs.
 - Notes: if you want to disable errors on CLI/CI runs as well, or if you're looking
   to turn on/off specific errors, you may be looking for the [`errors`](#errors) config
   option instead.
+
+### `skip-lsp-config-indexing`
+
+Disables automatic project indexing when running Pyrefly as a language server.
+Enabling this may speed up LSP startup and reduce resource usage on large projects,
+at the cost of some language server features that rely on a full project index.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: none
 
 ### `replace-imports-with-any`
 
@@ -3842,11 +3877,13 @@ def bar() -> int:
   />
 </pre>
 
-Pyrefly can automatically suppress all type errors in your project if you run:
+Pyrefly can automatically suppress all type errors in your project by running:
 
 ```
-pyrefly check --suppress-errors
+pyrefly suppress
 ```
+
+This is equivalent to `pyrefly check --suppress-errors`.
 
 ## Baseline Files (Experimental)
 
@@ -3893,7 +3930,7 @@ Upgrading the version of Pyrefly you're using, or a third party library you depe
 
 ```
 # step 1
-pyrefly check --suppress-errors
+pyrefly suppress
 ```
 
 ```
@@ -3903,11 +3940,15 @@ pyrefly check --suppress-errors
 
 ```
 # step 3
-pyrefly check --remove-unused-ignores
+pyrefly suppress --remove-unused
 ```
 Repeat the steps above until you get a clean formatting run and a clean type check.
 
 This will add ` # pyrefly: ignore` comments to your code that will enable you to silence errors, and come back and fix them at a later date. This can make the process of upgrading a large codebase much more manageable.
+
+:::note
+`pyrefly suppress` is equivalent to `pyrefly check --suppress-errors`, and `pyrefly suppress --remove-unused` is equivalent to `pyrefly check --remove-unused-ignores`.
+:::
 
 
 ---
@@ -4206,7 +4247,7 @@ You can use `uv`, `poetry`, `pip`, `pixi` or `conda` to install Pyrefly. The fol
 
 * `pyrefly init` will update your `pyproject.toml` file (or create a `pyrefly.toml` file) in your project directory, including some basic configuration. It will also attempt to [migrate](../migrating-to-pyrefly) your existing type checker configuration.
 * `pyrefly check --summarize-errors` will run the Pyrefly type checker on your project, providing a list of type errors and a summary of error types. The `--summarize-errors` flag is optional, remove it if you don't want summary stats.
-* `pyrefly check --suppress-errors` will mark all existing errors as ignored, allowing you to start with a clean check.
+* `pyrefly suppress` will mark all existing errors as ignored, allowing you to start with a clean check. (You can also use `pyrefly check --suppress-errors`.)
 
 
 Simply `cd` into your project directory and run:
@@ -4266,10 +4307,10 @@ Then, run `pyrefly check` again, and the tool will use your configuration option
 
 The tool may return a list of type errors; this is perfectly normal. You have a few options at this point:
 
-1. Use `# pyrefly: ignore` comments to silence the errors. This will get your project to a clean type-checking state, and you can reduce the number of errors as you go. We've included a script that can do this for you:
+1. Use `# pyrefly: ignore` comments to silence the errors. This will get your project to a clean type-checking state, and you can reduce the number of errors as you go. We've included a command that can do this for you:
 
 ```
-pyrefly check --suppress-errors
+pyrefly suppress
 ```
 
 2. Use extra configuration options to silence specific categories of errors or exclude files with more errors than average.
@@ -4282,7 +4323,7 @@ Upgrading the version of Pyrefly you're using or a third-party library you depen
 
 ```
 # Step 1
-pyrefly check --suppress-errors
+pyrefly suppress
 ```
 
 ```
@@ -4292,7 +4333,7 @@ pyrefly check --suppress-errors
 
 ```
 # Step 3
-pyrefly check --remove-unused-ignores
+pyrefly suppress --remove-unused
 ```
 
 Repeat these steps until you achieve a clean formatting run and a clean type check.
@@ -4344,8 +4385,19 @@ jobs:
       - name: Install Pyrefly
         run: pip install pyrefly
 
-      - name: Run Pyrefly Type Checker
-        run: pyrefly check
+        - name: Run Pyrefly Type Checker
+          run: pyrefly check
+```
+
+### Inline PR Annotations
+
+Pyrefly can emit errors as [GitHub Actions workflow commands](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions) so that type errors appear inline when reviewing pull requests.
+
+To enable this, pass `--output-format=github`:
+
+```
+        - name: Run Pyrefly Type Checker
+          run: pyrefly check --output-format=github
 ```
 
 ### A few notes about this setup:
@@ -4354,8 +4406,8 @@ jobs:
 - Simply drop in `pyrefly check` to existing workflows that build and test your environment.
 
 ```
-      - name: Run Pyrefly Type Checker
-        run: pyrefly check
+        - name: Run Pyrefly Type Checker
+          run: pyrefly check
 ```
 
 - Your `pyrefly.toml` or Pyrefly configs in your `pyproject.toml` will be automatically detected. Learn how to [configure Pyrefly here](../configuration).
@@ -5319,6 +5371,48 @@ pyrefly check app/ tests/
 ```
 
 Create a `pyrefly.toml` file to configure your project. Instructions [here](../configuration).
+
+
+---
+
+---
+title: Report
+
+description: Measure type coverage in your Python codebase with the Pyrefly report command.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Pyrefly Report
+
+Understanding how much of your codebase is annotated with types can help you track progress toward full type coverage. The `pyrefly report` command produces a machine-readable JSON report with information about functions, classes, and error suppressions in your code.
+
+:::warning Experimental
+This feature is experimental. The output format and behavior may change in future releases without notice.
+:::
+
+## Usage
+
+Run `pyrefly report` on a file or directory:
+
+```
+pyrefly report path/to/file.py
+pyrefly report path/to/directory/
+```
+
+The command outputs a JSON object keyed by file path. For each file, the report includes:
+
+- **Line count** — the total number of lines in the file.
+- **Functions** — every function and method, including its fully-qualified name, parameter annotations, and return annotation.
+- **Classes** — every class, along with a list of incompletely-annotated attributes (including those inherited from base classes).
+- **Suppressions** — every `# pyrefly: ignore[...]` comment, with the suppressed error codes.
+
+You can pipe the output to other tools (e.g. `jq`) or ingest it into dashboards to track annotation coverage over time.
 
 
 ---

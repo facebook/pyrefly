@@ -20,4 +20,5 @@
 - [FAQ](pyrefly-faq): Frequently Asked Questions about Pyrefly, a PEP 484 compliant Type Checker for Python and IDE extension.
 - [Typing Features and PEPS](python-features-and-peps): Typing features and associated PEPs available in each Python version.
 - [Python Typing 101](python-typing-for-beginners): A gentle, example‑driven introduction to static type hints in Python.
+- [Report](report): Measure type coverage in your Python codebase with the Pyrefly report command.
 - [Typing for Python Developers](typing-for-python-developers): Get to know Python's Type System with working examples
