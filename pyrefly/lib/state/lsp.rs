@@ -543,6 +543,33 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    pub(crate) fn submodule_autoimport_edit(
+        &self,
+        handle: &Handle,
+        ast: &ModModule,
+        module_name: &ModuleName,
+        import_format: ImportFormat,
+    ) -> Option<(String, TextSize, String, String)> {
+        let (parent_module_str, submodule_name) = module_name.as_str().rsplit_once('.')?;
+        let parent_handle = self
+            .import_handle(handle, ModuleName::from_str(parent_module_str), None)
+            .finding()?;
+        let (position, insert_text, imported_module) = insert_import_edit(
+            ast,
+            self.config_finder(),
+            handle.dupe(),
+            parent_handle,
+            submodule_name,
+            import_format,
+        );
+        Some((
+            submodule_name.to_owned(),
+            position,
+            insert_text,
+            imported_module,
+        ))
+    }
+
     fn type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
@@ -1971,18 +1998,18 @@ impl<'a> Transaction<'a> {
                             ));
                         }
 
-                        let mut aliased_modules = SmallSet::new();
-                        if let Some(module_name_str) = common_alias_target_module(unknown_name) {
-                            let module_name = ModuleName::from_str(module_name_str);
-                            if module_name != handle.module()
-                                && let Some(module_handle) =
-                                    self.import_handle(handle, module_name, None).finding()
-                            {
-                                let (position, insert_text, _) = import_regular_import_edit(
+                        for module_name in self.search_modules_fuzzy(unknown_name) {
+                            if module_name == handle.module() {
+                                continue;
+                            }
+                            if let Some((_submodule_name, position, insert_text, _)) = self
+                                .submodule_autoimport_edit(
+                                    handle,
                                     &ast,
-                                    module_handle,
-                                    Some(unknown_name),
-                                );
+                                    &module_name,
+                                    import_format,
+                                )
+                            {
                                 let range = TextRange::at(position, TextSize::new(0));
                                 let title = format!("Use common alias: `{}`", insert_text.trim());
                                 let is_private_import = module_name

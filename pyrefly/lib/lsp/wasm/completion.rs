@@ -656,32 +656,18 @@ impl Transaction<'_> {
                 }
                 let module_name_str = module_name.as_str().to_owned();
                 let source = autoimport_source(&module_name_str);
-                if let Some((parent_module_str, submodule_name)) =
-                    module_name.as_str().rsplit_once('.')
-                    && let Some(parent_handle) = self
-                        .import_handle(handle, ModuleName::from_str(parent_module_str), None)
-                        .finding()
+                if let Some((submodule_name, position, insert_text, imported_module)) =
+                    self.submodule_autoimport_edit(handle, &ast, &module_name, import_format)
                 {
-                    let (insert_text, additional_text_edits, imported_module) = {
-                        let (position, insert_text, module_name) = insert_import_edit(
-                            &ast,
-                            self.config_finder(),
-                            handle.dupe(),
-                            parent_handle,
-                            submodule_name,
-                            import_format,
-                        );
-                        let import_text_edit = TextEdit {
-                            range: module_info
-                                .to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                            new_text: insert_text.clone(),
-                        };
-                        (insert_text, Some(vec![import_text_edit]), module_name)
+                    let import_text_edit = TextEdit {
+                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
+                        new_text: insert_text.clone(),
                     };
+                    let additional_text_edits = Some(vec![import_text_edit]);
                     let auto_import_label_detail = format!(" (import {imported_module})");
                     completions.push(RankedCompletion {
                         item: CompletionItem {
-                            label: submodule_name.to_owned(),
+                            label: submodule_name,
                             detail: Some(insert_text),
                             kind: Some(CompletionItemKind::MODULE),
                             additional_text_edits,
