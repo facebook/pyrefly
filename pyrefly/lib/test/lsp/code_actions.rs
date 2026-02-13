@@ -549,6 +549,35 @@ my_export
 from d import my_export
 my_export
 # ^
+# Title: Generate variable `my_export`
+
+## Before:
+my_export
+# ^
+## After:
+my_export = None
+my_export
+# ^
+# Title: Generate function `my_export`
+
+## Before:
+my_export
+# ^
+## After:
+def my_export():
+    pass
+my_export
+# ^
+# Title: Generate class `my_export`
+
+## Before:
+my_export
+# ^
+## After:
+class my_export:
+    pass
+my_export
+# ^
 
 
 
@@ -587,6 +616,35 @@ BytesIO
 from _io import BytesIO
 BytesIO
 # ^
+# Title: Generate variable `BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+BytesIO = None
+BytesIO
+# ^
+# Title: Generate function `BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+def BytesIO():
+    pass
+BytesIO
+# ^
+# Title: Generate class `BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+class BytesIO:
+    pass
+BytesIO
+# ^
 "#
         .trim(),
         report.trim(),
@@ -614,6 +672,35 @@ my_module
 # ^
 ## After:
 import my_module
+my_module
+# ^
+# Title: Generate variable `my_module`
+
+## Before:
+my_module
+# ^
+## After:
+my_module = None
+my_module
+# ^
+# Title: Generate function `my_module`
+
+## Before:
+my_module
+# ^
+## After:
+def my_module():
+    pass
+my_module
+# ^
+# Title: Generate class `my_module`
+
+## Before:
+my_module
+# ^
+## After:
+class my_module:
+    pass
 my_module
 # ^
 "#
@@ -653,6 +740,41 @@ my_export
 from a import my_export
 my_export
 # ^
+# Title: Generate variable `my_export`
+
+## Before:
+# i am a comment
+my_export
+# ^
+## After:
+# i am a comment
+my_export = None
+my_export
+# ^
+# Title: Generate function `my_export`
+
+## Before:
+# i am a comment
+my_export
+# ^
+## After:
+# i am a comment
+def my_export():
+    pass
+my_export
+# ^
+# Title: Generate class `my_export`
+
+## Before:
+# i am a comment
+my_export
+# ^
+## After:
+# i am a comment
+class my_export:
+    pass
+my_export
+# ^
 "#
         .trim(),
         report.trim()
@@ -686,6 +808,41 @@ my_export
 ## After:
 from a import my_export
 from typing import List
+my_export
+# ^
+# Title: Generate variable `my_export`
+
+## Before:
+from typing import List
+my_export
+# ^
+## After:
+from typing import List
+my_export = None
+my_export
+# ^
+# Title: Generate function `my_export`
+
+## Before:
+from typing import List
+my_export
+# ^
+## After:
+from typing import List
+def my_export():
+    pass
+my_export
+# ^
+# Title: Generate class `my_export`
+
+## Before:
+from typing import List
+my_export
+# ^
+## After:
+from typing import List
+class my_export:
+    pass
 my_export
 # ^
 "#
@@ -722,6 +879,41 @@ my_export
 ## After:
 from a import my_export
 from a import another_thing
+my_export
+# ^
+# Title: Generate variable `my_export`
+
+## Before:
+from a import another_thing
+my_export
+# ^
+## After:
+from a import another_thing
+my_export = None
+my_export
+# ^
+# Title: Generate function `my_export`
+
+## Before:
+from a import another_thing
+my_export
+# ^
+## After:
+from a import another_thing
+def my_export():
+    pass
+my_export
+# ^
+# Title: Generate class `my_export`
+
+## Before:
+from a import another_thing
+my_export
+# ^
+## After:
+from a import another_thing
+class my_export:
+    pass
 my_export
 # ^
 "#
@@ -885,6 +1077,35 @@ TypeVar('T')
 from typing import TypeVar
 TypeVar('T')
 # ^
+# Title: Generate variable `TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+TypeVar = None
+TypeVar('T')
+# ^
+# Title: Generate function `TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+def TypeVar():
+    pass
+TypeVar('T')
+# ^
+# Title: Generate class `TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+class TypeVar:
+    pass
+TypeVar('T')
+# ^
 "#
         .trim(),
         report.trim()
@@ -932,6 +1153,88 @@ my_func()
 from a import my_func
 my_func()
 # ^
+# Title: Generate variable `my_func`
+
+## Before:
+my_func()
+# ^
+## After:
+my_func = None
+my_func()
+# ^
+# Title: Generate function `my_func`
+
+## Before:
+my_func()
+# ^
+## After:
+def my_func():
+    pass
+my_func()
+# ^
+# Title: Generate class `my_func`
+
+## Before:
+my_func()
+# ^
+## After:
+class my_func:
+    pass
+my_func()
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_in_function_scope() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", "def foo():\n    print(undef_var)\n#         ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 |     print(undef_var)
+              ^
+Code Actions Results:
+# Title: Generate variable `undef_var`
+
+## Before:
+def foo():
+    print(undef_var)
+#         ^
+## After:
+def foo():
+    undef_var = None
+    print(undef_var)
+#         ^
+# Title: Generate function `undef_var`
+
+## Before:
+def foo():
+    print(undef_var)
+#         ^
+## After:
+def foo():
+    def undef_var():
+        pass
+    print(undef_var)
+#         ^
+# Title: Generate class `undef_var`
+
+## Before:
+def foo():
+    print(undef_var)
+#         ^
+## After:
+def foo():
+    class undef_var:
+        pass
+    print(undef_var)
+#         ^
 "#
         .trim(),
         report.trim()

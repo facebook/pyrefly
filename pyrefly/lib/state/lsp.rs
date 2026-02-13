@@ -1926,6 +1926,7 @@ impl<'a> Transaction<'a> {
         let ast = self.get_ast(handle)?;
         let errors = self.get_errors(vec![handle]).collect_errors().shown;
         let mut import_actions = Vec::new();
+        let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
         for error in errors {
             match error.error_kind() {
@@ -1993,6 +1994,15 @@ impl<'a> Transaction<'a> {
                                 ));
                             }
                         }
+
+                        if let Some(mut actions) = quick_fixes::generate_code::generate_code_actions(
+                            &module_info,
+                            ast.as_ref(),
+                            error_range,
+                            unknown_name,
+                        ) {
+                            generate_actions.append(&mut actions);
+                        }
                     }
                 }
                 ErrorKind::RedundantCast => {
@@ -2037,6 +2047,7 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .map(|(title, module, range, insert_text, _, _)| (title, module, range, insert_text))
             .collect();
+        actions.extend(generate_actions);
         actions.extend(other_actions);
         (!actions.is_empty()).then_some(actions)
     }
