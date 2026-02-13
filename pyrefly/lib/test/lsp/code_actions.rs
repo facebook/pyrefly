@@ -710,6 +710,37 @@ my_module
 }
 
 #[test]
+fn insertion_test_common_alias_module_import() {
+    let code = r#"
+np
+# ^
+"#;
+    let files = [("numpy", "data = 1\n"), ("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let actions = state
+        .transaction()
+        .local_quickfix_code_actions_sorted(
+            handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+        )
+        .unwrap_or_default();
+    let (_, _, _, insert_text) = actions
+        .iter()
+        .find(|(title, _, _, _)| title == "Use common alias: `import numpy as np`")
+        .expect("expected common alias import code action");
+    assert_eq!(insert_text.trim(), "import numpy as np");
+    assert!(
+        !actions
+            .iter()
+            .any(|(_, _, _, insert_text)| insert_text.trim() == "import numpy"),
+        "expected alias import to suppress non-aliased import code action"
+    );
+}
+
+#[test]
 fn insertion_test_comments() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[
