@@ -1359,14 +1359,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )
         });
         if did_write && let Some(errors) = errors {
-            // TODO: ErrorCollector::extend takes `other: ErrorCollector` by value,
-            // but we have Arc<ErrorCollector>. We can use Arc::try_unwrap to
-            // consume the Arc if we hold the only reference, which should be the
-            // case during batch commit. This will be resolved when we wire up the
-            // full batch commit path.
-            if let Ok(errors) = Arc::try_unwrap(errors) {
-                self.base_errors.extend(errors);
-            }
+            // ErrorCollector::extend takes ownership. Arc::try_unwrap succeeds
+            // because the Arc refcount is 1: the ErrorCollector is moved (not
+            // cloned) at every step from creation through NodeState::Done, SCC
+            // completion, and into this consuming iteration. (Scc::merge may
+            // transiently clone a NodeState, but the original is dropped
+            // immediately, so the refcount returns to 1 before we get here.)
+            let errors = Arc::try_unwrap(errors).expect(
+                "Arc<ErrorCollector> refcount > 1 during batch commit; \
+                 errors would be silently lost. This indicates a bug in SCC lifecycle management.",
+            );
+            self.base_errors.extend(errors);
         }
     }
 
