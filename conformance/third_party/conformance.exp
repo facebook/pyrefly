@@ -3434,25 +3434,58 @@
     },
     {
       "code": -2,
-      "column": 23,
-      "concise_description": "Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`",
-      "description": "Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`",
-      "line": 62,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 29,
-      "stop_line": 62
-    },
-    {
-      "code": -2,
       "column": 12,
-      "concise_description": "revealed type: (*args: Unknown, **kwargs: Unknown) -> Class3",
-      "description": "revealed type: (*args: Unknown, **kwargs: Unknown) -> Class3",
+      "concise_description": "revealed type: (x: int) -> Class3",
+      "description": "revealed type: (x: int) -> Class3",
       "line": 63,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 16,
       "stop_line": 63
+    },
+    {
+      "code": -2,
+      "column": 3,
+      "concise_description": "Missing argument `x`",
+      "description": "Missing argument `x`",
+      "line": 65,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 5,
+      "stop_line": 65
+    },
+    {
+      "code": -2,
+      "column": 3,
+      "concise_description": "Missing argument `x`",
+      "description": "Missing argument `x`",
+      "line": 66,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 8,
+      "stop_line": 66
+    },
+    {
+      "code": -2,
+      "column": 4,
+      "concise_description": "Unexpected keyword argument `y`",
+      "description": "Unexpected keyword argument `y`",
+      "line": 66,
+      "name": "unexpected-keyword",
+      "severity": "error",
+      "stop_column": 5,
+      "stop_line": 66
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected 1 positional argument, got 2",
+      "description": "Expected 1 positional argument, got 2",
+      "line": 67,
+      "name": "bad-argument-count",
+      "severity": "error",
+      "stop_column": 8,
+      "stop_line": 67
     },
     {
       "code": -2,

@@ -1337,9 +1337,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (default_constructor(), false)
         };
         // Check the __init__ method and whether it comes from object or has been overridden
-        let (init_attr_ty, overrides_init) = if let Some(mut t) = self.get_dunder_init(cls, false) {
-            // Replace the return type with Self (the current class)
-            t.set_callable_return_type_for_constructor(class_type.clone());
+        let (init_attr_ty, overrides_init) = if let Some(t) = self.get_dunder_init(cls, false) {
+            // Try to strip self param and set return type (for generic handling)
+            let t = if let Type::BoundMethod(ref method) = t
+                && let Some(bound) = self.bind_dunder_init_for_callable(method)
+            {
+                bound
+            } else {
+                // Fallback: just set the return type without stripping self
+                let ret_type = t
+                    .callable_first_param(self.heap)
+                    .unwrap_or_else(|| class_type.clone());
+                let mut t = t;
+                t.visit_toplevel_callable_mut(&mut |c: &mut Callable| c.ret = ret_type.clone());
+                t
+            };
             (t, true)
         } else {
             (default_constructor(), false)

@@ -1403,29 +1403,6 @@ impl Type {
         }
     }
 
-    /// When a constructor is cast used as a callable, we need to set its return type to the instance type.
-    /// If a `self` type is in the callable, then this is set as the return type.
-    /// Otherwise, the return type is set to the class type.
-    /// This doesn't handle generics currently.
-    pub fn set_callable_return_type_for_constructor(&mut self, ret: Type) {
-        let mut set_ret = |callable: &mut Callable| {
-            match &callable.params {
-                Params::List(param_list)
-                    if let Some(first_param) = param_list.items().first()
-                        && let Param::Pos(_, ty, _) = first_param =>
-                {
-                    // Set the return type to the type of the first parameter
-                    // (i.e. `self`) if it exists and is positional.
-                    callable.ret = ty.clone();
-                }
-                _ => {
-                    callable.ret = ret.clone();
-                }
-            }
-        };
-        self.transform_toplevel_callable(&mut set_ret);
-    }
-
     pub fn callable_first_param(&self, heap: &TypeHeap) -> Option<Type> {
         let mut params = Vec::new();
         let mut get_param = |callable: &Callable| {
