@@ -69,11 +69,15 @@ yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 pretty_assertions = { version = "1.2", features = ["alloc"], default-features = false }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
-backtrace-on-stack-overflow = "0.3"
+backtrace-on-stack-overflow = { version = "0.3", optional = true }
 tikv-jemallocator = "0.6.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 mimalloc = "0.1.46"
 
+[features]
+debug-stack-overflow = ["dep:backtrace-on-stack-overflow"]
+default = []
+
 [lints]
-rust = { unexpected_cfgs = { check-cfg = ["cfg(fbcode_build)", 'cfg(feature, values("debug-stack-overflow"))'], level = "warn" } }
+rust = { unexpected_cfgs = { check-cfg = ["cfg(fbcode_build)"], level = "warn" } }
