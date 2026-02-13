@@ -26,6 +26,9 @@
 //! We are permissive with whitespace, allowing `#type:ignore[code]` and
 //! `#  type:  ignore  [  code  ]`, but do not allow a space before the colon.
 
+use std::iter::Peekable;
+use std::str::CharIndices;
+
 use clap::ValueEnum;
 use dupe::Dupe;
 use enum_iterator::Sequence;
@@ -36,28 +39,84 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallset;
 
+/// Finds the byte offset of the first '#' character that starts a comment, tracking
+/// whether we're inside a multi-line triple-quoted string.
+///
+/// `in_triple_quote` should be `Some('"')` or `Some('\'')` if the line begins
+/// inside an open triple-quoted string from a previous line, or `None` otherwise.
+///
+/// Returns `(comment_start, new_triple_quote_state)`.
+fn find_comment_start(line: &str, in_triple_quote: Option<char>) -> (Option<usize>, Option<char>) {
+    let mut chars = line.char_indices().peekable();
+    let mut triple_quote = in_triple_quote;
+    let mut single_quote = None;
+
+    let advance_if_matches = |chars: &mut Peekable<CharIndices>, q| {
+        if chars.peek().is_some_and(|(_, next)| *next == q) {
+            chars.next();
+            true
+        } else {
+            false
+        }
+    };
+
+    while let Some((idx, ch)) = chars.next() {
+        if let Some(q) = triple_quote {
+            // Inside triple-quoted string
+            if ch == '\\' {
+                // Skip next char if escaped
+                chars.next();
+            } else if ch == q
+                // This check consumes zero, one, or two additional chars:
+                // - zero or one: this is a single quote or a pair of quotes, not interesting
+                // - two: this is the end of a triple-quoted string
+                && advance_if_matches(&mut chars, q)
+                && advance_if_matches(&mut chars, q)
+            {
+                triple_quote = None;
+            }
+            continue;
+        }
+
+        if let Some(q) = single_quote {
+            // Inside regular string
+            if ch == '\\' {
+                // Skip next char if escaped
+                chars.next();
+            } else if ch == q {
+                single_quote = None;
+            }
+            continue;
+        }
+
+        // Normal code.
+        match ch {
+            '"' | '\'' => {
+                if advance_if_matches(&mut chars, ch) {
+                    if advance_if_matches(&mut chars, ch) {
+                        triple_quote = Some(ch);
+                    } else {
+                        // We've advanced past the opening and closing quotes of an empty string
+                    }
+                } else {
+                    single_quote = Some(ch);
+                }
+            }
+            '#' => return (Some(idx), None),
+            _ => {}
+        }
+    }
+    (None, triple_quote)
+}
+
 /// Finds the byte offset of the first '#' character that starts a comment.
 /// Returns None if no comment is found or if all '#' are inside strings.
-/// Handles escape sequences and single/double quotes.
+/// Handles escape sequences, single/double quotes, and triple-quoted strings.
 ///
 /// This is string-aware parsing that avoids treating '#' inside strings as comments.
 /// For example: `x = "hello # world"  # real comment` correctly identifies the second '#'.
 pub fn find_comment_start_in_line(line: &str) -> Option<usize> {
-    let mut chars = line.char_indices().peekable();
-    let mut in_string = None; // None, Some('"'), or Some('\'')
-
-    while let Some((idx, ch)) = chars.next() {
-        match (ch, in_string) {
-            ('\\', Some(_)) => {
-                chars.next();
-            } // Skip next char if escaped
-            ('"' | '\'', None) => in_string = Some(ch), // Enter string
-            (q, Some(quote)) if q == quote => in_string = None, // Exit string
-            ('#', None) => return Some(idx),            // Found comment!
-            _ => {}
-        }
-    }
-    None
+    find_comment_start(line, None).0
 }
 
 /// The name of the tool that is being suppressed.
@@ -256,16 +315,25 @@ impl Ignore {
         // If we see a comment on a non-code line, apply it to the next non-comment line.
         let mut pending = Vec::new();
         let mut line = LineNumber::default();
+        let mut in_triple_quote = None;
         for (idx, line_str) in code.lines().enumerate() {
+            let (comment_start, new_state) = find_comment_start(line_str, in_triple_quote);
+            in_triple_quote = new_state;
+            let comments = if let Some(comment_start) = comment_start {
+                &line_str[comment_start..]
+            } else {
+                ""
+            };
+            let is_comment_only_line = comment_start
+                .is_some_and(|comment_start| line_str[..comment_start].trim_start().is_empty());
             line = LineNumber::from_zero_indexed(idx as u32);
-            let mut xs = line_str.split('#');
-            let first = xs.next().unwrap_or("");
-            if !pending.is_empty() && (line_str.is_empty() || !first.trim_start().is_empty()) {
+            if !pending.is_empty() && (line_str.is_empty() || !is_comment_only_line) {
                 ignores.entry(line).or_default().append(&mut pending);
             }
-            for x in xs {
+            // We know `#` is at the beginning, so the first split is an empty string
+            for x in comments.split('#').skip(1) {
                 if let Some(supp) = Self::parse_ignore_comment(x, line) {
-                    if first.trim_start().is_empty() {
+                    if is_comment_only_line {
                         pending.push(supp);
                     } else {
                         ignores.entry(line).or_default().push(supp);
@@ -442,6 +510,50 @@ mod tests {
             "# type: ignore\n# pyright: ignore\n# bad\n\ncode",
             &[(Tool::Type, 4), (Tool::Pyright, 4)],
         );
+
+        // Ignore `# pyrefly: ignore` inside a string but not before/after
+        f("x = 1 + '# pyrefly: ignore'", &[]);
+        f("x = ''  # pyrefly: ignore", &[(Tool::Pyrefly, 1)]);
+        f("x = '''# pyrefly: ignore'''", &[]);
+        f(
+            r#"
+x = """
+x = 1  # pyrefly: ignore
+"""
+        "#,
+            &[],
+        );
+        f(
+            r#"
+import textwrap
+textwrap.dedent("""\
+x = 1  # pyrefly: ignore
+""")
+        "#,
+            &[],
+        );
+        f(
+            r#"
+x = """  # pyrefly: ignore
+"""
+        "#,
+            &[],
+        );
+        f(
+            r#"
+x = """
+# pyrefly: ignore"""
+        "#,
+            &[],
+        );
+        f(
+            r#"
+x = """
+"""  # pyrefly: ignore
+        "#,
+            &[(Tool::Pyrefly, 3)],
+        );
+        f("x = ''''''  # pyrefly: ignore", &[(Tool::Pyrefly, 1)]);
     }
 
     #[test]

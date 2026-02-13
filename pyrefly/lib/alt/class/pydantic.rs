@@ -169,7 +169,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // `RootModel` should always have a type parameter unless we're working with a broken copy
         // of Pydantic.
         let tparam = tparams.iter().next()?;
-        let root_model_type = self.heap.mk_quantified(tparam.quantified.clone());
+        let root_model_type = self.heap.mk_quantified(tparam.clone());
         Some(
             self.get_pydantic_root_model_init(cls, root_model_type, false)
                 .inner

@@ -827,7 +827,7 @@ from typing import Generic, TypeVar, Protocol, Callable
 T = TypeVar('T')
 U = TypeVar('U')
 
-class Functor(Protocol[T]):
+class Functor(Protocol[T]):  # E: Type variable `T` in class `Functor` is declared as invariant, but could be covariant based on its usage
     """A Functor protocol - common in functional programming."""
     def map(self, f: Callable[[T], U]) -> Functor[U]: ...
 
@@ -851,7 +851,7 @@ from typing import Generic, TypeVar, Protocol, Callable
 T = TypeVar('T')
 U = TypeVar('U')
 
-class TrickyProtocol(Protocol[T]):
+class TrickyProtocol(Protocol[T]):  # E: Type variable `T` in class `TrickyProtocol` is declared as invariant, but could be covariant based on its usage
     def recurse(self, f: Callable[[T], U]) -> "TrickyProtocol[U]": ...
     def check(self) -> T: ...
 

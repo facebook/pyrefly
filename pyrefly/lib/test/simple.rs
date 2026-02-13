@@ -1895,6 +1895,22 @@ assert_type(Foo[0], str)
 "#,
 );
 
+testcase!(
+    test_class_metaclass_getitem,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    def __getitem__(self, item: int) -> str:
+        return str(item)
+
+class Foo(metaclass=Meta):
+    pass
+
+assert_type(Foo[0], str)
+"#,
+);
+
 testcase!(test_panic_docstring, "\"\"\" F\n\u{85}\"\"\"",);
 
 testcase!(

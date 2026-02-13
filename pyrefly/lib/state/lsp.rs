@@ -1092,15 +1092,20 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         attr_name: &Name,
         definition: AttrDefinition,
-        docstring_range: Option<TextRange>,
         preference: FindPreference,
     ) -> Option<(TextRangeWithModule, Option<TextRange>)> {
         match definition {
-            AttrDefinition::FullyResolved(text_range_with_module_info) => {
+            AttrDefinition::FullyResolved {
+                cls,
+                range,
+                docstring_range,
+            } => {
                 // If prefer_pyi is false and the current module is a .pyi file,
                 // try to find the corresponding .py file
+                let text_range_with_module_info =
+                    TextRangeWithModule::new(cls.module().dupe(), range);
                 if !preference.prefer_pyi
-                    && text_range_with_module_info.module.path().is_interface()
+                    && cls.module_path().is_interface()
                     && let Some((exec_module, exec_range, exec_docstring)) = self
                         .search_corresponding_py_module_for_attribute(
                             handle,
@@ -1281,7 +1286,7 @@ impl<'a> Transaction<'a> {
         })
     }
 
-    fn find_definition_for_base_type(
+    pub(crate) fn find_definition_for_base_type(
         &self,
         handle: &Handle,
         preference: FindPreference,
@@ -1290,13 +1295,8 @@ impl<'a> Transaction<'a> {
     ) -> Option<FindDefinitionItemWithDocstring> {
         completions.into_iter().find_map(|x| {
             if &x.name == name {
-                let (definition, docstring_range) = self.resolve_attribute_definition(
-                    handle,
-                    &x.name,
-                    x.definition?,
-                    x.docstring_range,
-                    preference,
-                )?;
+                let (definition, docstring_range) =
+                    self.resolve_attribute_definition(handle, &x.name, x.definition, preference)?;
                 Some(FindDefinitionItemWithDocstring {
                     metadata: DefinitionMetadata::Attribute,
                     definition_range: definition.range,
@@ -1923,7 +1923,8 @@ impl<'a> Transaction<'a> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
         let errors = self.get_errors(vec![handle]).collect_errors().shown;
-        let mut code_actions = Vec::new();
+        let mut import_actions = Vec::new();
+        let mut other_actions = Vec::new();
         for error in errors {
             match error.error_kind() {
                 ErrorKind::UnknownName => {
@@ -1955,7 +1956,7 @@ impl<'a> Transaction<'a> {
                                 .last()
                                 .is_some_and(|component| component.as_str().starts_with('_'));
 
-                            code_actions.push((
+                            import_actions.push((
                                 title,
                                 module_info.dupe(),
                                 range,
@@ -1980,7 +1981,7 @@ impl<'a> Transaction<'a> {
                                     .components()
                                     .last()
                                     .is_some_and(|component| component.as_str().starts_with('_'));
-                                code_actions.push((
+                                import_actions.push((
                                     title,
                                     module_info.dupe(),
                                     range,
@@ -1992,12 +1993,25 @@ impl<'a> Transaction<'a> {
                         }
                     }
                 }
+                ErrorKind::RedundantCast => {
+                    let error_range = error.range();
+                    if let Some(action) = quick_fixes::redundant_cast::redundant_cast_code_action(
+                        &module_info,
+                        &ast,
+                        error_range,
+                    ) {
+                        let call_range = action.2;
+                        if error_range.contains_range(range) || call_range.contains_range(range) {
+                            other_actions.push(action);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
 
-        // Sort code actions: non-private first, then non-deprecated, then alphabetically
-        code_actions.sort_by(
+        // Sort import code actions: non-private first, then non-deprecated, then alphabetically
+        import_actions.sort_by(
             |(title1, _, _, _, is_deprecated1, is_private1),
              (title2, _, _, _, is_deprecated2, is_private2)| {
                 match (is_private1, is_private2) {
@@ -2014,17 +2028,45 @@ impl<'a> Transaction<'a> {
 
         // Keep only the first suggestion for each unique import text (after sorting,
         // this will be the public/non-deprecated version)
-        code_actions.dedup_by(|a, b| a.3 == b.3);
+        import_actions.dedup_by(|a, b| a.3 == b.3);
 
         // Drop the deprecated flag and return
-        Some(
-            code_actions
-                .into_iter()
-                .map(|(title, module, range, insert_text, _, _)| {
-                    (title, module, range, insert_text)
-                })
-                .collect(),
-        )
+        let mut actions: Vec<(String, Module, TextRange, String)> = import_actions
+            .into_iter()
+            .map(|(title, module, range, insert_text, _, _)| (title, module, range, insert_text))
+            .collect();
+        actions.extend(other_actions);
+        (!actions.is_empty()).then_some(actions)
+    }
+
+    pub fn redundant_cast_fix_all_edits(
+        &self,
+        handle: &Handle,
+    ) -> Option<Vec<(Module, TextRange, String)>> {
+        let module_info = self.get_module_info(handle)?;
+        let ast = self.get_ast(handle)?;
+        let errors = self.get_errors(vec![handle]).collect_errors().shown;
+        let mut edits = Vec::new();
+        for error in errors {
+            if error.error_kind() != ErrorKind::RedundantCast {
+                continue;
+            }
+            if let Some((_, module, range, replacement)) =
+                quick_fixes::redundant_cast::redundant_cast_code_action(
+                    &module_info,
+                    &ast,
+                    error.range(),
+                )
+            {
+                edits.push((module, range, replacement));
+            }
+        }
+        if edits.is_empty() {
+            None
+        } else {
+            edits.sort_by_key(|(_, range, _)| range.start());
+            Some(edits)
+        }
     }
 
     pub fn extract_function_code_actions(
@@ -2049,6 +2091,22 @@ impl<'a> Transaction<'a> {
         selection: TextRange,
     ) -> Option<Vec<LocalRefactorCodeAction>> {
         quick_fixes::extract_variable::extract_variable_code_actions(self, handle, selection)
+    }
+
+    pub fn invert_boolean_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::invert_boolean::invert_boolean_code_actions(self, handle, selection)
+    }
+
+    pub fn extract_superclass_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_superclass::extract_superclass_code_actions(self, handle, selection)
     }
 
     pub fn pull_members_up_code_actions(
@@ -2453,21 +2511,17 @@ impl<'a> Transaction<'a> {
                         name,
                         ty: _,
                         is_deprecated: _,
-                        definition: attribute_definition,
-                        docstring_range,
+                        definition,
                         is_reexport: _,
                     } in solver.completions(base_type, Some(expected_name), false)
                     {
-                        if let Some((TextRangeWithModule { module, range }, _)) =
-                            attribute_definition.and_then(|definition| {
-                                self.resolve_attribute_definition(
-                                    handle,
-                                    &name,
-                                    definition,
-                                    docstring_range,
-                                    FindPreference::default(),
-                                )
-                            })
+                        if let Some((TextRangeWithModule { module, range }, _)) = self
+                            .resolve_attribute_definition(
+                                handle,
+                                &name,
+                                definition,
+                                FindPreference::default(),
+                            )
                             && module.path() == module.path()
                             && range == definition_range
                         {
@@ -2647,47 +2701,6 @@ impl<'a> Transaction<'a> {
             }
         }
         Some(references)
-    }
-
-    /// Suggest Literal values when completing inside a `match` value pattern.
-    ///
-    /// We can't reuse the call-argument literal completion path here because
-    /// `case <value>:` isn't a call site, so we never get parameter types to
-    /// infer literals from. Instead, we look for a match value/singleton
-    /// pattern at the cursor and pull the `match` subject's type to surface
-    /// its Literal members.
-    pub(crate) fn add_match_literal_completions(
-        &self,
-        handle: &Handle,
-        covering_nodes: &[AnyNodeRef],
-        completions: &mut Vec<CompletionItem>,
-        in_string_literal: bool,
-    ) {
-        let mut is_match_value_pattern = false;
-        let mut subject = None;
-        for node in covering_nodes {
-            match node {
-                AnyNodeRef::PatternMatchValue(_) | AnyNodeRef::PatternMatchSingleton(_) => {
-                    is_match_value_pattern = true;
-                }
-                AnyNodeRef::StmtMatch(stmt_match) => {
-                    subject = Some(stmt_match.subject.as_ref());
-                }
-                _ => {}
-            }
-            if is_match_value_pattern && subject.is_some() {
-                break;
-            }
-        }
-        if !is_match_value_pattern {
-            return;
-        }
-        let Some(subject) = subject else {
-            return;
-        };
-        if let Some(subject_type) = self.get_type_trace(handle, subject.range()) {
-            Self::add_literal_completions_from_type(&subject_type, completions, in_string_literal);
-        }
     }
 
     // Kept for backwards compatibility - used by external callers who don't need the

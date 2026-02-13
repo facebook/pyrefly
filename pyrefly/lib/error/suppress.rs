@@ -13,6 +13,7 @@ use std::sync::LazyLock;
 use anyhow::anyhow;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::module::GENERATED_TOKEN;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::fs_anyhow;
@@ -132,9 +133,12 @@ fn read_and_validate_file(path: &Path) -> anyhow::Result<String> {
 
 /// Extracts error codes from an existing pyrefly ignore comment.
 /// Returns Some(Vec<String>) if the line contains a valid ignore comment, None otherwise.
+/// Uses string-aware parsing to avoid matching inside string literals.
 fn parse_ignore_comment(line: &str) -> Option<Vec<String>> {
+    let comment_start = find_comment_start_in_line(line)?;
+    let comment_part = &line[comment_start..];
     let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[([^\]]*)\]").unwrap();
-    regex.captures(line).map(|caps| {
+    regex.captures(comment_part).map(|caps| {
         caps.get(1)
             .map(|m| {
                 m.as_str()
@@ -204,9 +208,20 @@ fn merge_error_codes(existing_codes: Vec<String>, new_codes: &[String]) -> Strin
 
 /// Replaces the ignore comment in a line with the merged version.
 /// Preserves the rest of the line content.
+/// Uses string-aware parsing to only replace in the comment portion.
 fn replace_ignore_comment(line: &str, merged_comment: &str) -> String {
-    let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[[^\]]*\]").unwrap();
-    regex.replace(line, merged_comment).to_string()
+    if let Some(comment_start) = find_comment_start_in_line(line) {
+        let code_part = &line[..comment_start];
+        let comment_part = &line[comment_start..];
+        let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[[^\]]*\]").unwrap();
+        format!(
+            "{}{}",
+            code_part,
+            regex.replace(comment_part, merged_comment)
+        )
+    } else {
+        line.to_owned()
+    }
 }
 
 /// Adds error suppressions for the given errors in the given files.
@@ -351,6 +366,7 @@ pub fn suppress_errors(errors: Vec<SerializedError>) {
 /// Given a line with a pyrefly ignore comment and sets of used/unused error codes,
 /// returns the updated line. If all codes are unused, removes the entire comment.
 /// If some codes are used, keeps only the used codes in the comment.
+/// Uses string-aware parsing to only modify the comment portion of the line.
 fn update_ignore_comment_with_used_codes(
     line: &str,
     used_codes: &SmallSet<String>,
@@ -361,23 +377,28 @@ fn update_ignore_comment_with_used_codes(
         return None;
     }
 
+    let comment_start = find_comment_start_in_line(line)?;
+    let code_part = &line[..comment_start];
+    let comment_part = &line[comment_start..];
+
     // If there are no used codes, remove the entire comment
     if used_codes.is_empty() {
-        if IGNORE_COMMENT_REGEX.is_match(line) {
-            let new_string = IGNORE_COMMENT_REGEX.replace_all(line, "");
-            return Some(new_string.trim_end().to_owned());
+        if IGNORE_COMMENT_REGEX.is_match(comment_part) {
+            let new_comment = IGNORE_COMMENT_REGEX.replace_all(comment_part, "");
+            let result = format!("{}{}", code_part, new_comment);
+            return Some(result.trim_end().to_owned());
         }
         return None;
     }
 
     // Some codes are used, some are unused - rebuild the comment with only used codes
     let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[[^\]]*\]").unwrap();
-    if regex.is_match(line) {
+    if regex.is_match(comment_part) {
         let mut sorted_codes: Vec<_> = used_codes.iter().cloned().collect();
         sorted_codes.sort();
         let new_comment = format!("# pyrefly: ignore [{}]", sorted_codes.join(", "));
-        let updated = regex.replace(line, new_comment.as_str()).to_string();
-        return Some(updated);
+        let updated = regex.replace(comment_part, new_comment.as_str());
+        return Some(format!("{}{}", code_part, updated));
     }
     None
 }
@@ -429,48 +450,55 @@ pub fn remove_unused_ignores_from_serialized(unused_ignore_errors: Vec<Serialize
             let mut unused_count = 0;
 
             for (idx, line) in lines.iter().enumerate() {
-                if let Some(error) = line_errors.get(&idx)
-                    && IGNORE_COMMENT_REGEX.is_match(line)
-                {
-                    let msg = &error.message;
+                if let Some(error) = line_errors.get(&idx) {
+                    // Use string-aware comment detection instead of raw regex
+                    if let Some(comment_start) = find_comment_start_in_line(line) {
+                        let comment_part = &line[comment_start..];
+                        if IGNORE_COMMENT_REGEX.is_match(comment_part) {
+                            let msg = &error.message;
 
-                    // Determine action based on error message
-                    if msg.starts_with("Unused `# pyrefly: ignore` comment") {
-                        // Remove entire comment (blanket unused or all codes unused)
-                        let new_line = IGNORE_COMMENT_REGEX.replace_all(line, "");
-                        let new_line = new_line.trim_end();
-                        unused_count += 1;
-                        if !new_line.is_empty() {
-                            buf.push_str(new_line);
-                            buf.push_str(line_ending);
-                        }
-                        continue;
-                    } else if msg.starts_with("Unused error code(s)") {
-                        // Partially unused - extract codes from message and remove only those
-                        // Message format: "Unused error code(s) in `# pyrefly: ignore`: code1, code2"
-                        if let Some(codes_part) = msg.split(": ").last() {
-                            let unused_codes: SmallSet<String> = codes_part
-                                .split(", ")
-                                .map(|s| s.trim().to_owned())
-                                .collect();
+                            // Determine action based on error message
+                            if msg.starts_with("Unused `# pyrefly: ignore` comment") {
+                                // Remove entire comment (blanket unused or all codes unused)
+                                let code_part = &line[..comment_start];
+                                let new_comment =
+                                    IGNORE_COMMENT_REGEX.replace_all(comment_part, "");
+                                let new_line = format!("{}{}", code_part, new_comment);
+                                let new_line = new_line.trim_end();
+                                unused_count += 1;
+                                if !new_line.is_empty() {
+                                    buf.push_str(new_line);
+                                    buf.push_str(line_ending);
+                                }
+                                continue;
+                            } else if msg.starts_with("Unused error code(s)") {
+                                // Partially unused - extract codes from message and remove only those
+                                // Message format: "Unused error code(s) in `# pyrefly: ignore`: code1, code2"
+                                if let Some(codes_part) = msg.split(": ").last() {
+                                    let unused_codes: SmallSet<String> = codes_part
+                                        .split(", ")
+                                        .map(|s| s.trim().to_owned())
+                                        .collect();
 
-                            if let Some(existing_codes) = parse_ignore_comment(line) {
-                                let used_codes: SmallSet<String> = existing_codes
-                                    .into_iter()
-                                    .filter(|c| !unused_codes.contains(c))
-                                    .collect();
+                                    if let Some(existing_codes) = parse_ignore_comment(line) {
+                                        let used_codes: SmallSet<String> = existing_codes
+                                            .into_iter()
+                                            .filter(|c| !unused_codes.contains(c))
+                                            .collect();
 
-                                if let Some(updated) = update_ignore_comment_with_used_codes(
-                                    line,
-                                    &used_codes,
-                                    &unused_codes,
-                                ) {
-                                    unused_count += 1;
-                                    if !updated.trim().is_empty() {
-                                        buf.push_str(&updated);
-                                        buf.push_str(line_ending);
+                                        if let Some(updated) = update_ignore_comment_with_used_codes(
+                                            line,
+                                            &used_codes,
+                                            &unused_codes,
+                                        ) {
+                                            unused_count += 1;
+                                            if !updated.trim().is_empty() {
+                                                buf.push_str(&updated);
+                                                buf.push_str(line_ending);
+                                            }
+                                            continue;
+                                        }
                                     }
-                                    continue;
                                 }
                             }
                         }
@@ -1178,5 +1206,68 @@ def g() -> str:
             message: "Unused `# pyrefly: ignore` comment".to_owned(),
         }];
         assert_remove_ignores_from_serialized(input, errors, want, 1);
+    }
+
+    #[test]
+    fn test_remove_ignores_preserves_string_literal() {
+        // A string literal containing "# pyrefly: ignore" should not be modified.
+        // Only the real unused ignore comment on a different line should be removed.
+        let input = r##"
+x = "# pyrefly: ignore [bad-override]"
+y = 1 + 1  # pyrefly: ignore
+"##;
+        let want = r##"
+x = "# pyrefly: ignore [bad-override]"
+y = 1 + 1
+"##;
+        assert_remove_ignores(input, want, 1);
+    }
+
+    #[test]
+    fn test_remove_ignores_string_literal_same_line() {
+        // A line with both a string literal containing "# pyrefly: ignore" and a real
+        // inline unused ignore comment. Only the comment should be removed.
+        let input = r##"x = "# pyrefly: ignore [bad-override]"  # pyrefly: ignore
+"##;
+        let want = r##"x = "# pyrefly: ignore [bad-override]"
+"##;
+        let errors = vec![SerializedError {
+            path: PathBuf::from("test.py"),
+            line: 0,
+            name: "unused-ignore".to_owned(),
+            message: "Unused `# pyrefly: ignore` comment".to_owned(),
+        }];
+        assert_remove_ignores_from_serialized(input, errors, want, 1);
+    }
+
+    #[test]
+    fn test_parse_ignore_comment_ignores_string_literal() {
+        // parse_ignore_comment should not match ignore comments inside string literals
+        let line = r##"x = "# pyrefly: ignore [bad-override]""##;
+        assert_eq!(parse_ignore_comment(line), None);
+
+        // But it should still match real comments
+        let line2 = r##"x = "hello"  # pyrefly: ignore [bad-override]"##;
+        assert_eq!(
+            parse_ignore_comment(line2),
+            Some(vec!["bad-override".to_owned()])
+        );
+    }
+
+    #[test]
+    fn test_add_suppressions_ignores_string_literal() {
+        // A string literal containing "# pyrefly: ignore" should not be treated as
+        // an existing suppression. The error suppression should be added above.
+        assert_suppress_errors(
+            r##"
+x: str = 1
+y = "# pyrefly: ignore [bad-assignment]"
+"##,
+            r##"
+# pyrefly: ignore [bad-assignment]
+x: str = 1
+y = "# pyrefly: ignore [bad-assignment]"
+"##,
+        );
     }
 }

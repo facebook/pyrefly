@@ -56,7 +56,6 @@ use crate::types::typed_dict::TypedDictField;
 use crate::types::types::Forall;
 use crate::types::types::Overload;
 use crate::types::types::OverloadType;
-use crate::types::types::TParam;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
@@ -468,9 +467,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Restriction::Unrestricted,
             PreInferenceVariance::Invariant,
         );
-        let tparams = vec![TParam {
-            quantified: q.clone(),
-        }];
+        let tparams = vec![q.clone()];
         OverloadType::Forall(Forall {
             tparams: Arc::new(TParams::new(tparams)),
             body: Function {
@@ -755,7 +752,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             extra
         } else {
             values.push(extra);
-            unions_with_literals(values, self.stdlib, &|cls| self.get_enum_member_count(cls))
+            unions_with_literals(
+                values,
+                self.stdlib,
+                &|cls| self.get_enum_member_count(cls),
+                self.heap,
+            )
         }
     }
 

@@ -246,16 +246,19 @@ class MyTypedDict(TypedDict):
             ),
         ),
         PysaType::from_type(
-            &unions(vec![
-                Type::ClassType(ClassType::new(
-                    get_class("test", "A", &context),
-                    Default::default()
-                )),
-                Type::ClassType(ClassType::new(
-                    get_class("test", "B", &context),
-                    Default::default()
-                )),
-            ]),
+            &unions(
+                vec![
+                    Type::ClassType(ClassType::new(
+                        get_class("test", "A", &context),
+                        Default::default()
+                    )),
+                    Type::ClassType(ClassType::new(
+                        get_class("test", "B", &context),
+                        Default::default()
+                    )),
+                ],
+                context.answers.heap()
+            ),
             &context
         ),
     );
@@ -269,16 +272,19 @@ class MyTypedDict(TypedDict):
             ),
         ),
         PysaType::from_type(
-            &unions(vec![
-                context.answers.heap().mk_class_type(ClassType::new(
-                    get_class("test", "A", &context),
-                    Default::default()
-                )),
-                context.answers.heap().mk_callable_from(Callable::list(
-                    ParamList::new(Vec::new()),
-                    context.answers.heap().mk_none()
-                )),
-            ]),
+            &unions(
+                vec![
+                    context.answers.heap().mk_class_type(ClassType::new(
+                        get_class("test", "A", &context),
+                        Default::default()
+                    )),
+                    context.answers.heap().mk_callable_from(Callable::list(
+                        ParamList::new(Vec::new()),
+                        context.answers.heap().mk_none()
+                    )),
+                ],
+                context.answers.heap()
+            ),
             &context
         ),
     );
@@ -295,10 +301,13 @@ class MyTypedDict(TypedDict):
             ),
         ),
         PysaType::from_type(
-            &unions(vec![
-                Type::ClassType(context.stdlib.float().clone()),
-                Type::ClassType(context.stdlib.int().clone()),
-            ]),
+            &unions(
+                vec![
+                    Type::ClassType(context.stdlib.float().clone()),
+                    Type::ClassType(context.stdlib.int().clone()),
+                ],
+                context.answers.heap()
+            ),
             &context
         ),
     );
@@ -434,16 +443,19 @@ class MyTypedDict(TypedDict):
             .prepend_awaitable(),
         ),
         PysaType::from_type(
-            &Type::ClassType(context.stdlib.awaitable(unions(vec![
-                Type::ClassType(ClassType::new(
-                    get_class("test", "A", &context),
-                    Default::default()
-                )),
-                Type::ClassType(ClassType::new(
-                    get_class("test", "B", &context),
-                    Default::default()
-                )),
-            ]))),
+            &Type::ClassType(context.stdlib.awaitable(unions(
+                vec![
+                    Type::ClassType(ClassType::new(
+                        get_class("test", "A", &context),
+                        Default::default()
+                    )),
+                    Type::ClassType(ClassType::new(
+                        get_class("test", "B", &context),
+                        Default::default()
+                    )),
+                ],
+                context.answers.heap()
+            ))),
             &context
         ),
     );
@@ -491,22 +503,25 @@ class MyTypedDict(TypedDict):
             .prepend_modifier(TypeModifier::Type),
         ),
         PysaType::from_type(
-            &unions(vec![
-                context
-                    .answers
-                    .heap()
-                    .mk_type(context.answers.heap().mk_class_type(ClassType::new(
-                        get_class("test", "A", &context),
-                        Default::default(),
-                    )),),
-                context
-                    .answers
-                    .heap()
-                    .mk_type(context.answers.heap().mk_class_type(ClassType::new(
-                        get_class("test", "B", &context),
-                        Default::default(),
-                    )),),
-            ]),
+            &unions(
+                vec![
+                    context
+                        .answers
+                        .heap()
+                        .mk_type(context.answers.heap().mk_class_type(ClassType::new(
+                            get_class("test", "A", &context),
+                            Default::default(),
+                        )),),
+                    context
+                        .answers
+                        .heap()
+                        .mk_type(context.answers.heap().mk_class_type(ClassType::new(
+                            get_class("test", "B", &context),
+                            Default::default(),
+                        )),),
+                ],
+                context.answers.heap()
+            ),
             &context,
         ),
     );

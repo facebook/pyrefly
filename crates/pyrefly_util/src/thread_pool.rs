@@ -85,8 +85,16 @@ impl ThreadPool {
 
         let stack_size = Self::stack_size();
         let mut builder = rayon::ThreadPoolBuilder::new().stack_size(stack_size);
-        if let ThreadCount::NumThreads(threads) = count {
-            builder = builder.num_threads(threads.get());
+        match count {
+            ThreadCount::NumThreads(threads) => {
+                builder = builder.num_threads(threads.get());
+            }
+            ThreadCount::AllThreads => {
+                let max_threads = std::thread::available_parallelism()
+                    .map(|n| n.get().min(64))
+                    .unwrap_or(1);
+                builder = builder.num_threads(max_threads);
+            }
         }
         let pool = builder.build().expect("To be able to build a thread pool");
         // Only print the message once

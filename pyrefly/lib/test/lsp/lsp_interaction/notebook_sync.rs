@@ -434,5 +434,124 @@ fn test_notebook_did_change_delete_cell() {
         }))
         .unwrap();
 
+    // Delete cell 3 (the last cell)
+    let cell3_uri = interaction.cell_uri("notebook.ipynb", "cell3");
+
+    // Delete 100 cells and make sure Pyrefly doesn't crash
+    interaction.change_notebook(
+        "notebook.ipynb",
+        3,
+        json!({
+            "cells": {
+                "structure": {
+                    "array": {
+                        "start": 1,
+                        "deleteCount": 100,
+                        "cells": null
+                    },
+                    "didClose": [{
+                        "uri": cell3_uri,
+                    }]
+                }
+            }
+        }),
+    );
+
+    // Cell 1 should still have no errors
+    interaction
+        .diagnostic_for_cell("notebook.ipynb", "cell1")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    // Cell 2 does not exist, should still have no errors
+    interaction
+        .diagnostic_for_cell("notebook.ipynb", "cell2")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    // Cell 3 should have been deleted
+    interaction
+        .diagnostic_for_cell("notebook.ipynb", "cell3")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+#[ignore] // This currently panics, but not sure how we want to proceed
+fn test_notebook_did_change_add_cell() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    // Open notebook with same contents as test_notebook_did_open
+    interaction.open_notebook(
+        "notebook.ipynb",
+        vec!["x: int = 1", "y: str = \"foo\"", "z = y"],
+    );
+
+    // Open cells 4 and 5
+    let (cell4, cell4_doc) = interaction.create_notebook_cell("notebook.ipynb", 3, "x += 1");
+    let (cell5, cell5_doc) = interaction.create_notebook_cell("notebook.ipynb", 4, "x += 2");
+
+    interaction.change_notebook(
+        "notebook.ipynb",
+        2,
+        json!({
+            "cells": {
+                "structure": {
+                    "array": {
+                        // intentionally past the last known cell, in case Pyrefly gets out
+                        // of sync
+                        "start": 4,
+                        "deleteCount": 0,
+                        "cells": [
+                            cell4,
+                            cell5,
+                        ]
+                    },
+                    "didOpen": [
+                        cell4_doc,
+                        cell5_doc,
+                    ],
+                }
+            }
+        }),
+    );
+
+    interaction
+        .diagnostic_for_cell("notebook.ipynb", "cell1")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    interaction
+        .diagnostic_for_cell("notebook.ipynb", "cell2")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    interaction
+        .diagnostic_for_cell("notebook.ipynb", "cell3")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    interaction
+        .diagnostic_for_cell("notebook.ipynb", "cell4")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    interaction
+        .diagnostic_for_cell("notebook.ipynb", "cell5")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
     interaction.shutdown().unwrap();
 }

@@ -1788,6 +1788,32 @@ def test(x: Literal["foo", 1] | Color | bool | None, y: object, z: Literal["f", 
         assert_type(y, Literal[1, Color.RED, True])
     else:
         assert_type(y, object)
+
+def test_type_objects(x: type[object]) -> None:
+    if x in (int, float):
+        assert_type(x, type[int] | type[float])
+
+def test_type_objects_not_in(x: type[int] | type[float] | type[str]) -> None:
+    if x not in (int, float):
+        assert_type(x, type[int] | type[float] | type[str])
+    else:
+        assert_type(x, type[int] | type[float])
+
+def test_type_objects_in_union(x: type[int] | type[float] | type[str]) -> None:
+    if x in (int, float):
+        assert_type(x, type[int] | type[float])
+    else:
+        assert_type(x, type[int] | type[float] | type[str])
+
+def test_type_objects_mixed_with_literals(x: type[int] | type[float] | None, y: Literal[1] | type[int] | type[str]) -> None:
+    if x in (int, None):
+        assert_type(x, type[int] | None)
+    else:
+        assert_type(x, type[int] | type[float])
+    if y in (1, int):
+        assert_type(y, Literal[1] | type[int])
+    else:
+        assert_type(y, type[int] | type[str])
 "#,
 );
 
@@ -2659,6 +2685,20 @@ def is_str(x: object) -> TypeGuard[str]:
     return isinstance(x, str)
 
 assert_type(is_str("hello"), bool)
+    "#,
+);
+
+testcase!(
+    test_typeguard_bad_specialization_no_duplicate,
+    r#"
+from typing import TypeGuard
+
+def f[T: str](x: T) -> TypeGuard[T]:
+    return True
+
+def g(x: int | str):
+    if f(x):  # E: `int | str` is not assignable to upper bound `str` of type variable `T`
+        pass
     "#,
 );
 

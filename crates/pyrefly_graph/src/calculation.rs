@@ -79,6 +79,14 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
         }
     }
 
+    /// Non-blocking version of `get`. Returns `None` if the lock is contended.
+    pub fn try_get(&self) -> Option<Option<T>> {
+        self.0.try_lock().map(|lock| match &*lock {
+            Status::Calculated(v) => Some(v.dupe()),
+            _ => None,
+        })
+    }
+
     /// Look up the current status of the calculation as a `LookupResult`, under
     /// the assumption that the current thread will begin the calculation if
     /// the result is `Status::Calculatable`.

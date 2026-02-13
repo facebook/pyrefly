@@ -720,7 +720,7 @@ class A:
     def f(self, x: TA1):
         pass
 class B(A):
-    def f(self, x: TA2):  # E: `B.f` has type `BoundMethod[B, (self: B, x: TA2) -> None]`, which is not assignable to `BoundMethod[B, (self: B, x: TA1) -> None]`, the type of `A.f`
+    def f(self, x: TA2):  # E: `B.f` has type `(self: B, x: TA2) -> None`, which is not assignable to `(self: B, x: TA1) -> None`, the type of `A.f`
         pass
     "#,
 );
@@ -912,7 +912,7 @@ def f(d: D):
 
 // Tests for MissingOverrideDecorator (strict override enforcement)
 testcase!(
-    test_missing_override_decorator,
+    test_missing_override_decorator_method,
     TestEnv::new().enable_missing_override_decorator_error(),
     r#"
 class Base:
@@ -1000,7 +1000,7 @@ class Base:
     x: int
 
 class Derived(Base):
-    x: int  # E: Class member `Derived.x` overrides a member in a parent class but is missing an `@override` decorator
+    x: int
     "#,
 );
 
@@ -1041,5 +1041,47 @@ class Base:
 
 class Derived(Base):
     def __str__(self) -> str: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_instance_attribute,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class A:
+    def __init__(self):
+        self.a = 1
+
+class B(A):
+    def __init__(self):
+        self.a = 2  # OK - instance attribute, not a method override
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_nested_class,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+# Nested classes cannot have the @override decorator applied to them.
+class A:
+    class C: pass
+
+class B(A):
+    class C(A.C): pass  # OK - nested class, @override cannot be applied
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_classvar,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import ClassVar
+
+# ClassVars cannot have the @override decorator applied to them.
+class A:
+    x: ClassVar[int]
+
+class B(A):
+    x: ClassVar[int]  # OK - ClassVar, @override cannot be applied
     "#,
 );

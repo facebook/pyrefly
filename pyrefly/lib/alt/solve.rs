@@ -15,6 +15,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::facet::FacetKind;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_info::JoinStyle;
@@ -149,12 +150,12 @@ use crate::types::type_info::TypeInfo;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::type_var::TypeVar;
+use crate::types::type_var::Variance;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::CalleeKind;
 use crate::types::types::Forallable;
 use crate::types::types::SuperObj;
-use crate::types::types::TParam;
 use crate::types::types::TParams;
 use crate::types::types::TParamsSource;
 use crate::types::types::Type;
@@ -263,9 +264,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match maybe_parameter.ty() {
             Type::TypeVar(x) => {
                 let q = Quantified::from_type_var(x, self.uniques);
-                Arc::new(LegacyTypeParameterLookup::Parameter(TParam {
-                    quantified: q,
-                }))
+                Arc::new(LegacyTypeParameterLookup::Parameter(q))
             }
             Type::TypeVarTuple(x) => {
                 let q = Quantified::type_var_tuple(
@@ -273,9 +272,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.uniques,
                     x.default().cloned(),
                 );
-                Arc::new(LegacyTypeParameterLookup::Parameter(TParam {
-                    quantified: q,
-                }))
+                Arc::new(LegacyTypeParameterLookup::Parameter(q))
             }
             Type::ParamSpec(x) => {
                 let q = Quantified::param_spec(
@@ -283,9 +280,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.uniques,
                     x.default().cloned(),
                 );
-                Arc::new(LegacyTypeParameterLookup::Parameter(TParam {
-                    quantified: q,
-                }))
+                Arc::new(LegacyTypeParameterLookup::Parameter(q))
             }
             ty => Arc::new(LegacyTypeParameterLookup::NotParameter(ty.clone())),
         }
@@ -883,12 +878,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn tvars_to_tparams_for_type_alias_type(
         &self,
         exprs: &Vec<Expr>,
+        legacy_params: &[Idx<KeyLegacyTypeParam>],
         seen_type_vars: &mut SmallMap<TypeVar, Quantified>,
         seen_type_var_tuples: &mut SmallMap<TypeVarTuple, Quantified>,
         seen_param_specs: &mut SmallMap<ParamSpec, Quantified>,
-        tparams: &mut Vec<TParam>,
+        range: TextRange,
         errors: &ErrorCollector,
-    ) {
+    ) -> Vec<Quantified> {
+        let mut tparams = Vec::new();
         for expr in exprs {
             let ty = self.expr_infer(expr, errors);
             let ty = self.untype(ty, expr.range(), errors);
@@ -909,9 +906,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Entry::Vacant(e) => {
                             let q = Quantified::from_type_var(&ty_var, self.uniques);
                             e.insert(q.clone());
-                            tparams.push(TParam {
-                                quantified: q.clone(),
-                            });
+                            tparams.push(q.clone());
                         }
                     };
                 }
@@ -932,9 +927,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ty_var_tuple.default().cloned(),
                             );
                             e.insert(q.clone());
-                            tparams.push(TParam {
-                                quantified: q.clone(),
-                            });
+                            tparams.push(q.clone());
                         }
                     };
                 }
@@ -955,9 +948,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 param_spec.default().cloned(),
                             );
                             e.insert(q.clone());
-                            tparams.push(TParam {
-                                quantified: q.clone(),
-                            });
+                            tparams.push(q.clone());
                         }
                     };
                 }
@@ -971,6 +962,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         }
+        let mut legacy_params = self
+            .create_legacy_type_params(legacy_params)
+            .into_iter()
+            .map(|param| (param.name().clone(), param))
+            .collect::<SmallMap<_, _>>();
+        // `legacy_params` contains the tparams (with the correct `Unique` ids) actually used in
+        // the alias. If we find a tparam in `tparams` but not in `legacy_tparams`, that means it's
+        // declared and not used, which is pointless but legal.
+        let tparams =
+            tparams.into_map(|param| legacy_params.shift_remove(param.name()).unwrap_or(param));
+        // Conversely, if we find a tparam in `legacy_tparams` but not `tparams`, that means it's
+        // used and not declared, which is illegal.
+        for (_, extra_tparam) in legacy_params.iter() {
+            errors.add(
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                vec1![
+                    format!(
+                        "Type variable `{}` is out of scope for this `TypeAliasType`",
+                        extra_tparam.name()
+                    ),
+                    format!(
+                        "Type parameters must be passed as a tuple literal to the `type_params` argument",
+                    )
+                ],
+            );
+        }
+        tparams
     }
 
     fn tvars_to_tparams_for_type_alias(
@@ -979,7 +998,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         seen_type_vars: &mut SmallMap<TypeVar, Quantified>,
         seen_type_var_tuples: &mut SmallMap<TypeVarTuple, Quantified>,
         seen_param_specs: &mut SmallMap<ParamSpec, Quantified>,
-        tparams: &mut Vec<(TextRange, TParam)>,
+        tparams: &mut Vec<(TextRange, Quantified)>,
     ) {
         match ty {
             Type::Union(box Union { members: ts, .. }) => {
@@ -1056,12 +1075,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Entry::Vacant(e) => {
                         let q = Quantified::from_type_var(ty_var, self.uniques);
                         e.insert(q.clone());
-                        tparams.push((
-                            ty_var.qname().range(),
-                            TParam {
-                                quantified: q.clone(),
-                            },
-                        ));
+                        tparams.push((ty_var.qname().range(), q.clone()));
                         q
                     }
                 };
@@ -1077,12 +1091,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ty_var_tuple.default().cloned(),
                         );
                         e.insert(q.clone());
-                        tparams.push((
-                            ty_var_tuple.qname().range(),
-                            TParam {
-                                quantified: q.clone(),
-                            },
-                        ));
+                        tparams.push((ty_var_tuple.qname().range(), q.clone()));
                         q
                     }
                 };
@@ -1098,12 +1107,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             param_spec.default().cloned(),
                         );
                         e.insert(q.clone());
-                        tparams.push((
-                            param_spec.qname().range(),
-                            TParam {
-                                quantified: q.clone(),
-                            },
-                        ));
+                        tparams.push((param_spec.qname().range(), q.clone()));
                         q
                     }
                 };
@@ -1181,8 +1185,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut contains_cyclic_ref = false;
         // We only check for the name of the current alias to avoid reporting duplicate errors
         // for a cycle involving multiple aliases.
-        let is_self_ref =
-            |ty: &Type| matches!(ty, Type::TypeAlias(box TypeAliasData::Ref(r)) if r.name == *name);
+        let is_self_ref = |ty: &Type| matches!(ty, Type::UntypedAlias(ta) if ta.name() == name);
         self.map_over_union(ty, |ty| {
             contains_cyclic_ref |= is_self_ref(ty);
         });
@@ -1219,7 +1222,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut seen_type_vars = SmallMap::new();
         let mut seen_type_var_tuples = SmallMap::new();
         let mut seen_param_specs = SmallMap::new();
-        let mut tparams = Vec::new();
 
         let tvars_to_tparams_for_type_alias =
             |ty, seen_type_vars, seen_type_var_tuples, seen_param_specs| {
@@ -1238,57 +1240,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 tparams_with_ranges
             };
 
-        match params {
-            TypeAliasParams::TypeAliasType(type_params) => {
+        let tparams = match params {
+            TypeAliasParams::TypeAliasType {
+                declared_params: type_params,
+                legacy_params,
+            } => {
                 // Handle type params from `TypeAliasType(type_params=...)`.
                 self.tvars_to_tparams_for_type_alias_type(
                     type_params,
+                    legacy_params,
                     &mut seen_type_vars,
                     &mut seen_type_var_tuples,
                     &mut seen_param_specs,
-                    &mut tparams,
-                    errors,
-                );
-                let extra_tparams = tvars_to_tparams_for_type_alias(
-                    ta.as_type_mut(),
-                    &mut seen_type_vars,
-                    &mut seen_type_var_tuples,
-                    &mut seen_param_specs,
-                );
-                for (_, extra_tparam) in extra_tparams {
-                    errors.add(
                     range,
-                    ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                    vec1![
-                        format!(
-                            "Type variable `{}` is out of scope for this `TypeAliasType`",
-                            extra_tparam.name()
-                        ),
-                        format!(
-                            "Type parameters must be passed as a tuple literal to the `type_params` argument",
-                        )
-                    ],
-                );
-                }
+                    errors,
+                )
             }
             TypeAliasParams::Legacy(Some(legacy_tparams)) => {
                 // Collect type params that appear in a legacy type alias that we were able to detect
                 // syntactically in the bindings phase.
-                tparams = legacy_tparams
-                    .iter()
-                    .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
-                    .collect();
+                self.create_legacy_type_params(legacy_tparams)
             }
             TypeAliasParams::Legacy(None) => {
                 // Collect type params that appear in a legacy type alias that we needed type
                 // information to detect.
-                tparams = tvars_to_tparams_for_type_alias(
+                tvars_to_tparams_for_type_alias(
                     ta.as_type_mut(),
                     &mut seen_type_vars,
                     &mut seen_type_var_tuples,
                     &mut seen_param_specs,
                 )
-                .into_map(|(_, tp)| tp);
+                .into_map(|(_, tp)| tp)
             }
             TypeAliasParams::Scoped(scoped_tparams) => {
                 // Scoped type alias: error on undeclared type params and collect declared ones.
@@ -1306,15 +1288,68 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         format!("Type parameters used in `{name}` but not declared"),
                     );
                 }
-                tparams = self.scoped_type_params(scoped_tparams.as_ref(), errors);
+                self.scoped_type_params(scoped_tparams.as_ref(), errors)
             }
-        }
+        };
         Forallable::TypeAlias(TypeAliasData::Value(ta)).forall(self.validated_tparams(
             range,
             tparams,
             TParamsSource::TypeAlias,
             errors,
         ))
+    }
+
+    /// Create TParams for a recursive reference to a type alias. This is essentially a
+    /// slimmed-down version of `wrap_type_alias` that skips most validation (because the
+    /// validation will be done by `wrap_type_alias`).
+    pub fn create_type_alias_params_recursive(&self, tparams: &TypeAliasParams) -> Arc<TParams> {
+        let mut seen_type_vars = SmallMap::new();
+        let mut seen_type_var_tuples = SmallMap::new();
+        let mut seen_param_specs = SmallMap::new();
+        let range = TextRange::default();
+        let errors = self.error_swallower();
+        let params = match tparams {
+            TypeAliasParams::TypeAliasType {
+                declared_params: tparams,
+                legacy_params,
+            } => self.tvars_to_tparams_for_type_alias_type(
+                tparams,
+                legacy_params,
+                &mut seen_type_vars,
+                &mut seen_type_var_tuples,
+                &mut seen_param_specs,
+                range,
+                &errors,
+            ),
+            TypeAliasParams::Legacy(Some(tparams)) => self.create_legacy_type_params(tparams),
+            TypeAliasParams::Legacy(None) => Vec::new(),
+            TypeAliasParams::Scoped(tparams) => self.scoped_type_params(tparams.as_ref(), &errors),
+        };
+        self.validated_tparams(range, params, TParamsSource::TypeAlias, &errors)
+    }
+
+    fn create_legacy_type_params(&self, keys: &[Idx<KeyLegacyTypeParam>]) -> Vec<Quantified> {
+        keys.iter()
+            .filter_map(|key| {
+                if let BindingLegacyTypeParam::ParamKeyed(def_key) = self.bindings().get(*key)
+                    && matches!(self.bindings().get(*def_key), Binding::TypeAlias { .. })
+                {
+                    // In the bindings phase, we were unable to determine whether this key
+                    // pointed to a legacy type parameter, so we created a
+                    // BindingLegacyTypeParam to defer the decision until the answers
+                    // phase. We now know that this is a type alias, so we can immediately
+                    // return None to indicate that this isn't a type param. Importantly,
+                    // we skip solving the binding to avoid a cycle in a recursive alias:
+                    //     Json = <blah> | list["Json"]
+                    //                           ^^^^
+                    //                           skip solving this binding so we don't try
+                    //                           to solve for Json while solving for Json
+                    None
+                } else {
+                    self.get_idx(*key).deref().parameter().cloned()
+                }
+            })
+            .collect()
     }
 
     fn context_value_enter(
@@ -1543,7 +1578,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         x: Option<&TypeParams>,
         errors: &ErrorCollector,
-    ) -> Vec<TParam> {
+    ) -> Vec<Quantified> {
         match x {
             Some(x) => {
                 let mut params = Vec::new();
@@ -1563,7 +1598,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             binding
                         ),
                     };
-                    params.push(TParam { quantified });
+                    params.push(quantified);
                 }
                 params
             }
@@ -1574,33 +1609,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn validate_type_params(
         &self,
         range: TextRange,
-        tparams: &[TParam],
+        tparams: &[Quantified],
         source: TParamsSource,
         errors: &ErrorCollector,
     ) {
-        let mut last_tparam: Option<&TParam> = None;
+        let mut last_tparam: Option<&Quantified> = None;
         let mut seen = SmallSet::new();
         let mut typevartuple = None;
         let mut typevartuple_count = 0;
         for tparam in tparams {
             if let Some(p) = last_tparam
-                && p.quantified.default().is_some()
+                && p.default().is_some()
             {
                 // Check for missing default
-                if tparam.quantified.default().is_none() {
+                if tparam.default().is_none() {
                     self.error(
                         errors,
                         range,
                         ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                         format!(
                             "Type parameter `{}` without a default cannot follow type parameter `{}` with a default",
-                            tparam.quantified.name(),
+                            tparam.name(),
                             p.name()
                         )
                     );
                 }
             }
-            if let Some(default) = tparam.quantified.default() {
+            if let Some(default) = tparam.default() {
                 let mut out_of_scope_names = Vec::new();
                 default.collect_raw_legacy_type_variables(&mut out_of_scope_names);
                 out_of_scope_names.retain(|name| !seen.contains(name));
@@ -1611,13 +1646,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                         format!(
                             "Default of type parameter `{}` refers to out-of-scope {} {}",
-                            tparam.quantified.name(),
+                            tparam.name(),
                             pluralize(out_of_scope_names.len(), "type parameter"),
                             out_of_scope_names.map(|n| format!("`{n}`")).join(", "),
                         ),
                     );
                 }
-                if tparam.quantified.is_type_var()
+                if tparam.is_type_var()
                     && let Some(tvt) = &typevartuple
                 {
                     self.error(
@@ -1626,15 +1661,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                         format!(
                             "TypeVar `{}` with a default cannot follow TypeVarTuple `{}`",
-                            tparam.quantified.name(),
+                            tparam.name(),
                             tvt
                         ),
                     );
                 }
             }
-            seen.insert(tparam.quantified.name().clone());
-            if tparam.quantified.is_type_var_tuple() {
-                typevartuple = Some(tparam.quantified.name().clone());
+            seen.insert(tparam.name().clone());
+            if tparam.is_type_var_tuple() {
+                typevartuple = Some(tparam.name().clone());
                 typevartuple_count += 1;
             }
             last_tparam = Some(tparam);
@@ -1655,7 +1690,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn validated_tparams(
         &self,
         range: TextRange,
-        tparams: Vec<TParam>,
+        tparams: Vec<Quantified>,
         source: TParamsSource,
         errors: &ErrorCollector,
     ) -> Arc<TParams> {
@@ -2300,13 +2335,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Get type parameters and their declared variances
             let tparams = self.get_class_tparams(class);
 
-            // Only check violations for type parameters that have declared variance
-            let has_declared_variance = tparams
-                .as_vec()
-                .iter()
-                .any(|p| p.variance() != PreInferenceVariance::Undefined);
+            // Only check violations when there are covariant/contravariant
+            // TypeVars — invariant TypeVars are valid in any position.
+            let has_non_invariant_variance = tparams.as_vec().iter().any(|p| {
+                matches!(
+                    p.variance(),
+                    PreInferenceVariance::Covariant | PreInferenceVariance::Contravariant
+                )
+            });
 
-            if has_declared_variance {
+            if has_non_invariant_variance {
                 let result = self.compute_variance(class, true);
 
                 for violation in &result.violations {
@@ -2317,6 +2355,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorInfo::Kind(ErrorKind::InvalidVariance),
                         message,
                     );
+                }
+            }
+
+            // For protocols: warn when an invariant TypeVar could be declared
+            // with a narrower variance. We only check invariant TypeVars here
+            // because wrong variance on covariant/contravariant TypeVars is
+            // already caught by InvalidVariance at the usage site.
+            let metadata = self.get_metadata_for_class(class);
+            if metadata.is_protocol()
+                && tparams.as_vec().iter().any(|p| {
+                    p.kind() == QuantifiedKind::TypeVar
+                        && p.variance() == PreInferenceVariance::Invariant
+                })
+            {
+                let inferred = self.infer_variance_ignoring_declared(class);
+                for tparam in tparams.as_vec() {
+                    if tparam.kind() != QuantifiedKind::TypeVar
+                        || tparam.variance() != PreInferenceVariance::Invariant
+                    {
+                        continue;
+                    }
+                    let inferred_v = inferred.get(tparam.name());
+                    let effective_v = if inferred_v == Variance::Bivariant {
+                        Variance::Covariant
+                    } else {
+                        inferred_v
+                    };
+                    if effective_v != Variance::Invariant {
+                        self.error(
+                            errors,
+                            // TODO: ideally this would point to where the TypeVar
+                            // is bound in the class header rather than the class name.
+                            class.range(),
+                            ErrorInfo::Kind(ErrorKind::VarianceMismatch),
+                            format!(
+                                "Type variable `{}` in class `{}` is declared as invariant, but could be {} based on its usage",
+                                tparam.name(),
+                                class.name(),
+                                effective_v,
+                            ),
+                        );
+                    }
                 }
             }
         }
@@ -2470,8 +2550,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Per PEP 696: when default is a TypeVar, "T1's bound must be a subtype of T2's bound"
             Restriction::Bound(bound_ty) => {
                 let default_for_check = match default {
-                    Type::TypeVar(tv) => tv.restriction().as_type(self.stdlib),
-                    Type::Quantified(q) if q.is_type_var() => q.restriction().as_type(self.stdlib),
+                    Type::TypeVar(tv) => tv.restriction().as_type(self.stdlib, self.heap),
+                    Type::Quantified(q) if q.is_type_var() => {
+                        q.restriction().as_type(self.stdlib, self.heap)
+                    }
                     _ => default.clone(),
                 };
                 if !self.is_subset_eq(&default_for_check, bound_ty) {
@@ -3781,7 +3863,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                     );
                 }
-                p.quantified.clone().to_value()
+                p.clone().to_value()
             }
             LegacyTypeParameterLookup::NotParameter(ty) => ty.clone(),
         };
@@ -4068,7 +4150,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    fn promote_callable_legacy_typevars(&self, callable: &mut Callable) -> Vec<TParam> {
+    fn promote_callable_legacy_typevars(&self, callable: &mut Callable) -> Vec<Quantified> {
         let mut seen_type_vars = SmallMap::new();
         let mut tparams = Vec::new();
         let heap = self.heap;
@@ -4079,9 +4161,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .entry(tv.dupe())
                         .or_insert_with(|| {
                             let q = Quantified::from_type_var(tv, self.uniques);
-                            tparams.push(TParam {
-                                quantified: q.clone(),
-                            });
+                            tparams.push(q.clone());
                             q
                         })
                         .clone();
@@ -4391,7 +4471,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .get_from_export(*m, None, &KeyExport(dunder::GETATTR.clone()))
                     .arc_clone();
                 getattr_ty
-                    .callable_return_type()
+                    .callable_return_type(self.heap)
                     .unwrap_or_else(|| self.heap.mk_any_implicit())
             }
             Binding::ClassDef(x, _decorators) => match &self.get_idx(*x).0 {
@@ -4676,7 +4756,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Option<Type> {
         if let Type::Forall(forall) = ty {
-            ty = self.promote_forall(*forall, range);
+            ty = self.promote_forall(*forall, range, errors);
         };
         match self.canonicalize_all_class_types(ty, range, errors) {
             Type::Union(box Union { members: xs, .. }) if !xs.is_empty() => {
@@ -4695,7 +4775,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Type::TypeVarTuple(_)
             | Type::Args(_)
             | Type::Kwargs(_)) => Some(ty),
-            Type::Type(t) => Some(*t),
+            Type::Type(t) => {
+                // Canonicalize ClassType(Dim, [X]) to Type::Dim(X) for consistency
+                // This ensures bare Dim annotations produce the same representation as Dim[Any]
+                if let Type::ClassType(cls) = t.as_ref()
+                    && cls.has_qname("torch_shapes", "Dim")
+                    && cls.targs().len() == 1
+                {
+                    return Some(self.heap.mk_dim(cls.targs().as_slice()[0].clone()));
+                }
+                Some(*t)
+            }
             Type::None => Some(self.heap.mk_none()), // Both a value and a type
             Type::Ellipsis => Some(self.heap.mk_ellipsis()), // A bit weird because of tuples, so just promote it
             Type::Any(style) => Some(style.propagate()),
@@ -4706,13 +4796,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Some(aliased_type)
             }
+            // `as_type_alias` untypes a type alias in order to validate that it is a legal type.
+            // If we hit a recursive reference to the alias while untyping it, delay the untyping
+            // to avoid a cycle.
+            Type::TypeAlias(ta @ box TypeAliasData::Ref(_)) => Some(Type::UntypedAlias(ta)),
             t @ Type::Unpack(
                 box Type::Tuple(_) | box Type::TypeVarTuple(_) | box Type::Quantified(_),
             ) => Some(t),
-            // `as_type_alias` untypes a type alias in order to validate that it is a legal type.
-            // If we hit a recursive reference to the alias while untyping it, return the ref
-            // unchanged to avoid a cycle.
-            t @ Type::TypeAlias(box TypeAliasData::Ref(_)) => Some(t),
             Type::Unpack(box Type::Var(v)) if let Some(_guard) = self.recurse(v) => self
                 .untype_opt(
                     self.heap.mk_unpack(self.solver().force_var(v)),
@@ -4722,8 +4812,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::QuantifiedValue(q) => Some(q.to_type(self.heap)),
             Type::ArgsValue(q) => Some(self.heap.mk_args(*q)),
             Type::KwargsValue(q) => Some(self.heap.mk_kwargs(*q)),
+            // Dim and Size are already type forms
+            ty @ Type::Dim(_) => Some(ty),
+            ty @ Type::Size(_) => Some(ty),
             _ => None,
         }
+    }
+
+    pub fn untype_alias(&self, ta: &TypeAliasData) -> Type {
+        let ty = self.get_type_alias(ta).as_type();
+        // We already validated the type when creating the type alias.
+        self.untype(ty, TextRange::default(), &self.error_swallower())
     }
 
     // Approximate the result of calling `type()` on something of type T
@@ -5064,6 +5163,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                     .collect();
                 Type::ParamSpecValue(ParamList::new(elts))
+            }
+            // Special case: integer literals in type argument context with tensor shapes enabled
+            // These can be used for Dim-bounded parameters (e.g., LinearLayer[6, 9])
+            // We convert them directly to Type::Size to distinguish from Literal[6]
+            Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral { value, .. })
+                if matches!(type_form_context, TypeFormContext::TypeArgument)
+                    && self.solver().tensor_shapes =>
+            {
+                match value {
+                    ruff_python_ast::Number::Int(i) => {
+                        if let Some(n) = i.as_i64() {
+                            Type::Size(SizeExpr::Literal(n))
+                        } else {
+                            // Integer too large to fit in i64, fall back to error
+                            let inferred_ty = self.expr_infer(x, errors);
+                            self.untype(inferred_ty, x.range(), errors)
+                        }
+                    }
+                    _ => {
+                        // For non-integer numbers (float, complex), fall through to the generic path
+                        let inferred_ty = self.expr_infer(x, errors);
+                        self.untype(inferred_ty, x.range(), errors)
+                    }
+                }
             }
             _ => {
                 let inferred_ty = self.expr_infer(x, errors);

@@ -17,6 +17,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use super::extract_shared::is_member_stmt;
 use super::extract_shared::line_end_position;
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::member_name_from_stmt;
@@ -184,13 +185,6 @@ fn find_member_in_class<'a>(
         }
     }
     None
-}
-
-fn is_member_stmt(stmt: &Stmt) -> bool {
-    matches!(
-        stmt,
-        Stmt::FunctionDef(_) | Stmt::ClassDef(_) | Stmt::Assign(_) | Stmt::AnnAssign(_)
-    )
 }
 
 fn class_has_member_named(class_def: &StmtClassDef, name: &str) -> bool {

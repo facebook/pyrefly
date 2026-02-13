@@ -38,7 +38,6 @@ use crate::types::typed_dict::TypedDict;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
 use crate::types::types::TArgs;
-use crate::types::types::TParam;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
@@ -169,11 +168,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
         let targs = self.create_default_targs(
             self.get_class_tparams(cls),
-            Some(&|tparam: &TParam| {
+            Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    cls.name().as_str(),
+                    format!("class `{}`", cls.name()),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -181,9 +180,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.type_of_instance(cls, targs)
     }
 
-    pub fn promote_forall(&self, forall: Forall<Forallable>, _range: TextRange) -> Type {
-        // TODO(grievejia): We probably want to error here as well
-        let targs = self.create_default_targs(forall.tparams.dupe(), None);
+    pub fn promote_forall(
+        &self,
+        forall: Forall<Forallable>,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let targs = self.create_default_targs(
+            forall.tparams.dupe(),
+            Some(&|tparam: &Quantified| {
+                Self::add_implicit_any_error(
+                    errors,
+                    range,
+                    format!("type alias `{}`", forall.body.name()),
+                    Some(tparam.name().as_str()),
+                );
+            }),
+        );
         forall.apply_targs(targs)
     }
 
@@ -199,7 +212,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         TArgs::new(
             tparams.dupe(),
             tparams
-                .quantifieds()
+                .iter()
                 .map(|q| q.clone().to_type(self.heap))
                 .collect(),
         )
@@ -225,9 +238,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Restriction::Unrestricted,
             PreInferenceVariance::Covariant,
         );
-        let tparams = TParams::new(vec![TParam {
-            quantified: quantified.clone(),
-        }]);
+        let tparams = TParams::new(vec![quantified.clone()]);
         let tuple_ty = self.heap.mk_tuple(Tuple::Unpacked(Box::new((
             Vec::new(),
             self.heap.mk_quantified(quantified),
@@ -298,7 +309,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn create_default_targs(
         &self,
         tparams: Arc<TParams>,
-        on_fallback_to_gradual: Option<&dyn Fn(&TParam)>,
+        on_fallback_to_gradual: Option<&dyn Fn(&Quantified)>,
     ) -> TArgs {
         if tparams.is_empty() {
             TArgs::default()
@@ -315,11 +326,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // To make it 100% accurate, we actually need to hook the callback into `as_graudal_type()`. It's doable
                     // but could add a lot of complexities so let's keep it as an exercise in the future.
                     if let Some(f) = on_fallback_to_gradual
-                        && x.quantified.default().is_none()
+                        && x.default().is_none()
                     {
                         f(x);
                     }
-                    x.quantified.as_gradual_type()
+                    x.as_gradual_type()
                 })
                 .collect();
             TArgs::new(tparams, tys)
@@ -352,7 +363,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (param_idx, param) in tparams.iter().enumerate() {
             if let Some(arg) = targs.get(targ_idx) {
                 // Get next type argument
-                match param.quantified.kind() {
+                match param.kind() {
                     QuantifiedKind::TypeVarTuple => {
                         // We know that ParamSpec params must be matched by ParamSpec args, so chop off both params and args
                         // at the next ParamSpec when computing how many args the TypeVarTuple should consume.
@@ -432,7 +443,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn peek_next_paramspec_param(&self, start_idx: usize, tparams: &TParams) -> Option<usize> {
         for (i, param) in tparams.iter().enumerate().skip(start_idx) {
-            if param.quantified.is_param_spec() {
+            if param.is_param_spec() {
                 return Some(i);
             }
         }
@@ -560,7 +571,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn create_next_typevar_arg(
         &self,
-        param: &TParam,
+        param: &Quantified,
         arg: &Type,
         range: TextRange,
         validate_restriction: bool,
@@ -605,13 +616,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let arg = arg.clone();
                             arg.transform(&mut |x| {
                                 if let Type::TypeVar(tv) = x {
-                                    *x = tv.restriction().as_type(self.stdlib);
+                                    *x = tv.restriction().as_type(self.stdlib, self.heap);
                                 }
                             })
                         };
                         self.check_type(
                             &arg_for_check,
-                            &restriction.as_type(self.stdlib),
+                            &restriction.as_type(self.stdlib, self.heap),
                             range,
                             errors,
                             tcc,
@@ -625,7 +636,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn get_tparam_default(
         &self,
-        param: &TParam,
+        param: &Quantified,
         checked_targs: &[Type],
         name_to_idx: &SmallMap<&Name, usize>,
     ) -> Type {
@@ -650,7 +661,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             })
         } else {
-            param.quantified.as_gradual_type()
+            param.as_gradual_type()
         }
     }
 
@@ -669,7 +680,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let all_remaining_params_can_be_empty = tparams
             .iter()
             .skip(param_idx)
-            .all(|x| x.quantified.is_type_var_tuple() || x.default().is_some());
+            .all(|x| x.is_type_var_tuple() || x.default().is_some());
         if !all_remaining_params_can_be_empty {
             self.error(
                 errors,

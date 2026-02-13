@@ -1,0 +1,38 @@
+---
+title: Report
+
+description: Measure type coverage in your Python codebase with the Pyrefly report command.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Pyrefly Report
+
+Understanding how much of your codebase is annotated with types can help you track progress toward full type coverage. The `pyrefly report` command produces a machine-readable JSON report with information about functions, classes, and error suppressions in your code.
+
+:::warning Experimental
+This feature is experimental. The output format and behavior may change in future releases without notice.
+:::
+
+## Usage
+
+Run `pyrefly report` on a file or directory:
+
+```
+pyrefly report path/to/file.py
+pyrefly report path/to/directory/
+```
+
+The command outputs a JSON object keyed by file path. For each file, the report includes:
+
+- **Line count** — the total number of lines in the file.
+- **Functions** — every function and method, including its fully-qualified name, parameter annotations, and return annotation.
+- **Classes** — every class, along with a list of incompletely-annotated attributes (including those inherited from base classes).
+- **Suppressions** — every `# pyrefly: ignore[...]` comment, with the suppressed error codes.
+
+You can pipe the output to other tools (e.g. `jq`) or ingest it into dashboards to track annotation coverage over time.

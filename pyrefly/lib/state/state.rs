@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -69,6 +70,7 @@ use crate::alt::answers::Solutions;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::answers_solver::CalcId;
 use crate::alt::answers_solver::ThreadState;
 use crate::alt::traits::Solve;
 use crate::binding::binding::AnyExportedKey;
@@ -2128,12 +2130,6 @@ impl<'a> TransactionHandle<'a> {
         path: Option<&ModulePath>,
         dep: ModuleDep,
     ) -> FindingOrError<ArcId<ModuleDataMut>> {
-        if module == self.module_data.handle.module()
-            && path.is_none_or(|path| path == self.module_data.handle.path())
-        {
-            return FindingOrError::new_finding(self.module_data.dupe());
-        }
-
         let cached = {
             let deps_read = self.module_data.deps.read();
             if let Some(ImportResolution::Resolved(handles)) = deps_read.get(&module)
@@ -2420,6 +2416,54 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         }
         res
     }
+
+    fn commit_to_module(
+        &self,
+        calc_id: CalcId,
+        answer: Arc<dyn Any + Send + Sync>,
+        errors: Option<Arc<ErrorCollector>>,
+    ) -> bool {
+        let CalcId(ref bindings, ref any_idx) = calc_id;
+        let module = bindings.module().name();
+        let path = bindings.module().path();
+
+        // Look up the target module. Use default ModuleDep since cross-module
+        // commits don't establish new dependencies.
+        let module_data = match self
+            .get_module(module, Some(path), ModuleDep::default())
+            .finding()
+        {
+            Some(data) => data,
+            None => return false,
+        };
+
+        // Access the target module's Answers and commit the answer.
+        let lock = module_data.state.read();
+        if let Some(answers_pair) = &lock.steps.answers {
+            let answers = answers_pair.1.dupe();
+            // Get the target module's error collector for error propagation.
+            let target_load = lock.steps.load.as_ref().map(|load| load.dupe());
+            drop(lock);
+            let did_write = answers.commit_preliminary(any_idx, answer);
+            // Only extend errors if this write won the first-write-wins race.
+            if did_write && let (Some(errors), Some(target_load)) = (errors, target_load) {
+                // The errors Arc should have refcount 1 here: batch_commit_scc
+                // consumes the Scc (moved into the method), and each NodeState::Done
+                // is destructured by the for loop, so no other references remain.
+                // If this invariant is violated, something is holding an unexpected
+                // reference to the error collector, which could cause silent error
+                // loss and nondeterministic output.
+                let errors = Arc::try_unwrap(errors).expect(
+                    "cross-module batch commit: errors Arc has unexpected extra references; \
+                         the SCC should have been consumed, giving us sole ownership",
+                );
+                target_load.errors.extend(errors);
+            }
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// A checking state that will eventually commit.
@@ -2543,8 +2587,7 @@ impl State {
 
     pub fn transaction<'a>(&'a self) -> Transaction<'a> {
         // IMPORTANT: the LSP depends on default_require here being Require::Exports for good
-        // startup time performance. See the call to Server::validate_in_memory_without_committing
-        // in Server::did_open for details.
+        // startup time performance.
         self.new_transaction(Require::Exports, None)
     }
 

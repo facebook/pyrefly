@@ -157,7 +157,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if self.has_superclass(left_base, right_base)
                     || self.has_superclass(right_base, left_base)
                 {
-                    intersect(vec![left.clone(), right.clone()], fallback)
+                    intersect(vec![left.clone(), right.clone()], fallback, self.heap)
                 } else {
                     // A common subclass of these two classes cannot exist.
                     self.heap.mk_never()
@@ -396,13 +396,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 for q in quantifieds {
                     // The only time it's safe to simplify a quantified away is when the entire intersection is Never.
                     let intersection = narrow(
-                        &q.restriction().as_type(self.stdlib),
+                        &q.restriction().as_type(self.stdlib, self.heap),
                         right_unwrapped.clone(),
                     );
                     res.push(if matches!(&intersection, Type::Type(t) if t.is_never()) {
                         intersection
                     } else {
-                        intersect(vec![q.to_type(self.heap), right.clone()], right.clone())
+                        intersect(
+                            vec![q.to_type(self.heap), right.clone()],
+                            right.clone(),
+                            self.heap,
+                        )
                     })
                 }
                 if !nonquantifieds.is_empty() {
@@ -630,7 +634,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let forced_middle = self.force_for_narrowing(middle_var, range, errors);
                 let new_tuple =
                     Tuple::Unpacked(Box::new((prefix.clone(), forced_middle, suffix.clone())));
-                self.tuple_len_eq(&simplify_tuples(new_tuple), len, range, errors)
+                self.tuple_len_eq(&simplify_tuples(new_tuple, self.heap), len, range, errors)
             }
             Tuple::Unbounded(elements) => {
                 self.heap.mk_concrete_tuple(vec![(**elements).clone(); len])
@@ -652,7 +656,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let forced_middle = self.force_for_narrowing(middle_var, range, errors);
                 let new_tuple =
                     Tuple::Unpacked(Box::new((prefix.clone(), forced_middle, suffix.clone())));
-                self.tuple_len_not_eq(&simplify_tuples(new_tuple), len, range, errors)
+                self.tuple_len_not_eq(&simplify_tuples(new_tuple, self.heap), len, range, errors)
             }
             _ => self.heap.mk_tuple(tuple.clone()),
         }
@@ -813,10 +817,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let mut literal_types = Vec::new();
                     for expr in exprs {
                         let expr_ty = self.expr_infer(&expr, errors);
-                        if matches!(expr_ty, Type::Literal(_) | Type::None) {
-                            literal_types.push(expr_ty);
-                        } else {
-                            return ty.clone();
+                        match expr_ty {
+                            Type::Literal(_) | Type::None => {
+                                literal_types.push(expr_ty);
+                            }
+                            // Bare class names (e.g., `int`) infer to ClassDef.
+                            // Convert to type[...] so `x in (int, float)` can
+                            // narrow x to type[int] | type[float].
+                            Type::ClassDef(cls) => {
+                                literal_types.push(Type::type_form(self.promote_silently(&cls)));
+                            }
+                            // Already-wrapped type[X] expressions pass through.
+                            Type::Type(box Type::ClassType(_)) => {
+                                literal_types.push(expr_ty);
+                            }
+                            _ => {
+                                return ty.clone();
+                            }
                         }
                     }
                     return self.intersect(ty, &self.unions(literal_types));
@@ -858,10 +875,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let mut literal_types = Vec::new();
                     for expr in exprs {
                         let expr_ty = self.expr_infer(&expr, errors);
-                        if matches!(expr_ty, Type::Literal(_) | Type::None) {
-                            literal_types.push(expr_ty);
-                        } else {
-                            return ty.clone();
+                        match expr_ty {
+                            Type::Literal(_) | Type::None => {
+                                literal_types.push(expr_ty);
+                            }
+                            // Accept class objects so they don't trigger the
+                            // bail-out below — this allows mixed containers
+                            // like `(int, None)` to still narrow the non-class
+                            // elements. Class objects themselves are not
+                            // subtracted in the `not in` case (see comment in
+                            // distribute_over_union below).
+                            Type::ClassDef(cls) => {
+                                literal_types.push(Type::type_form(self.promote_silently(&cls)));
+                            }
+                            Type::Type(box Type::ClassType(_)) => {
+                                literal_types.push(expr_ty);
+                            }
+                            _ => {
+                                return ty.clone();
+                            }
                         }
                     }
                     return self.distribute_over_union(ty, |t| {
@@ -871,6 +903,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 (_, _) if self.literal_equal(t, right) => {
                                     result = self.heap.mk_never();
                                 }
+                                // We intentionally do NOT subtract class objects
+                                // (type[X]) here. `x not in (int, float)` does
+                                // not imply x is not type[int], because x could
+                                // be type[MyInt] (a subclass of int) which
+                                // satisfies type[int] but is not identity-equal
+                                // to `int` at runtime.
                                 (Type::ClassType(cls), Type::Literal(lit))
                                     if cls.is_builtin("bool")
                                         && let Lit::Bool(b) = &lit.value =>
@@ -998,8 +1036,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let CallTargetLookup::Ok(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
-                    let ret =
-                        self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
+                    // This error is raised elsewhere, swallow here to avoid duplicate errors
+                    let swallowed_errors = self.error_swallower();
+                    let ret = self.call_infer(
+                        *call_target,
+                        &args,
+                        &kws,
+                        range,
+                        &swallowed_errors,
+                        None,
+                        None,
+                        None,
+                    );
                     if let Type::TypeGuard(t) = ret {
                         return *t;
                     }
@@ -1011,8 +1059,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let CallTargetLookup::Ok(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
-                    let ret =
-                        self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
+                    // This error is raised elsewhere, swallow here to avoid duplicate errors
+                    let swallowed_errors = self.error_swallower();
+                    let ret = self.call_infer(
+                        *call_target,
+                        &args,
+                        &kws,
+                        range,
+                        &swallowed_errors,
+                        None,
+                        None,
+                        None,
+                    );
                     if let Type::TypeIs(t) = ret {
                         return self.distribute_over_union(&t, |right| {
                             self.intersect_with_fallback(ty, right, &|| {
@@ -1042,8 +1100,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let CallTargetLookup::Ok(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
-                    let ret =
-                        self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
+                    // This error is raised elsewhere, swallow here to avoid duplicate errors
+                    let swallowed_errors = self.error_swallower();
+                    let ret = self.call_infer(
+                        *call_target,
+                        &args,
+                        &kws,
+                        range,
+                        &swallowed_errors,
+                        None,
+                        None,
+                        None,
+                    );
                     if let Type::TypeIs(t) = ret {
                         return self.subtract(ty, &t);
                     }
