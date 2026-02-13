@@ -10,6 +10,8 @@
 //! This mirrors Pyright's behavior: the MRU list is process-local and not
 //! persisted to disk. It resets when the language server restarts.
 
+use std::collections::VecDeque;
+
 const DEFAULT_MAX_ENTRIES: usize = 128;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -20,14 +22,14 @@ struct CompletionMruEntry {
 
 #[derive(Clone, Debug)]
 pub struct CompletionMru {
-    entries: Vec<CompletionMruEntry>,
+    entries: VecDeque<CompletionMruEntry>,
     max_entries: usize,
 }
 
 impl CompletionMru {
     pub fn new(max_entries: usize) -> Self {
         Self {
-            entries: Vec::new(),
+            entries: VecDeque::new(),
             max_entries,
         }
     }
@@ -40,7 +42,7 @@ impl CompletionMru {
         if let Some(index) = self.entries.iter().position(|entry| entry == &needle) {
             self.entries.remove(index);
         }
-        self.entries.insert(0, needle);
+        self.entries.push_front(needle);
         if self.entries.len() > self.max_entries {
             self.entries.truncate(self.max_entries);
         }
