@@ -14,6 +14,7 @@ pub mod lsp;
 pub mod module_helpers;
 pub mod protocol;
 pub mod queue;
+pub mod safe_delete_file;
 pub mod server;
 pub mod stdlib;
 pub mod transaction_manager;

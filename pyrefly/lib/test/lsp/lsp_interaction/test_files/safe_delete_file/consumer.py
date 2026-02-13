@@ -1,0 +1,3 @@
+import target
+
+target.target()
