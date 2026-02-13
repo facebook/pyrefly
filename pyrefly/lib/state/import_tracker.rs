@@ -14,6 +14,8 @@ use pyrefly_python::module_name::ModuleName;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
+use ruff_python_ast::StmtImportFrom;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
 use crate::types::display::TypeDisplayContext;
@@ -26,6 +28,7 @@ use crate::types::types::Type;
 pub struct ImportTracker {
     canonical_modules: SmallSet<ModuleName>,
     alias_modules: Vec<(ModuleName, String)>,
+    imported_names: SmallMap<ModuleName, SmallMap<String, String>>,
 }
 
 impl ImportTracker {
@@ -35,6 +38,8 @@ impl ImportTracker {
         for stmt in &ast.body {
             if let Stmt::Import(stmt_import) = stmt {
                 tracker.record_import(stmt_import);
+            } else if let Stmt::ImportFrom(stmt_import_from) = stmt {
+                tracker.record_import_from(stmt_import_from);
             }
         }
         tracker
@@ -53,6 +58,30 @@ impl ImportTracker {
             } else {
                 self.canonical_modules.insert(module_name);
             }
+        }
+    }
+
+    /// Record a `from ... import ...` statement into the tracker.
+    pub fn record_import_from(&mut self, stmt_import_from: &StmtImportFrom) {
+        let Some(module) = &stmt_import_from.module else {
+            return;
+        };
+        let module_name = ModuleName::from_str(module.as_str());
+        let entry = self
+            .imported_names
+            .entry(module_name)
+            .or_insert(SmallMap::new());
+        for alias in &stmt_import_from.names {
+            let name = alias.name.as_str();
+            if name == "*" {
+                continue;
+            }
+            let alias_name = alias
+                .asname
+                .as_ref()
+                .map(|id| id.id.to_string())
+                .unwrap_or_else(|| name.to_owned());
+            entry.insert(name.to_owned(), alias_name);
         }
     }
 
@@ -118,10 +147,23 @@ impl ImportTracker {
         self.alias_for(module).is_some() || self.has_canonical(module)
     }
 
+    /// Whether the module is imported via `import module` (with or without alias).
+    pub fn has_module_import(&self, module: ModuleName) -> bool {
+        self.module_is_imported(module)
+    }
+
     /// Returns the alias for a module if it was imported as `import module as alias`.
     /// If a parent module was aliased, returns the alias with the remaining suffix.
     pub fn alias_for_module(&self, module: ModuleName) -> Option<String> {
         self.alias_for(module)
+    }
+
+    /// Returns the locally imported name for a `from module import name` statement.
+    pub fn imported_name_alias(&self, module: ModuleName, name: &str) -> Option<&str> {
+        self.imported_names
+            .get(&module)
+            .and_then(|names| names.get(name))
+            .map(|s| s.as_str())
     }
 
     fn alias_for(&self, module: ModuleName) -> Option<String> {
