@@ -536,7 +536,7 @@ pub struct Server {
     /// operations we have yet to process.
     uris_pending_close: Mutex<HashMap<String, usize>>,
     workspaces: Arc<Workspaces>,
-    completion_mru: RwLock<CompletionMru>,
+    completion_mru: Mutex<CompletionMru>,
     outgoing_request_id: AtomicI32,
     outgoing_requests: Mutex<HashMap<RequestId, Request>>,
     filewatcher_registered: AtomicBool,
@@ -1118,7 +1118,7 @@ impl Server {
         if label.is_empty() {
             return;
         }
-        self.completion_mru.write().record(label, auto_import_text);
+        self.completion_mru.lock().record(label, auto_import_text);
     }
 
     fn extract_request_params_or_send_err_response<T>(
@@ -1938,7 +1938,7 @@ impl Server {
             cancellation_handles: Mutex::new(HashMap::new()),
             uris_pending_close: Mutex::new(HashMap::new()),
             workspaces,
-            completion_mru: RwLock::new(CompletionMru::default()),
+            completion_mru: Mutex::new(CompletionMru::default()),
             outgoing_request_id: AtomicI32::new(1),
             outgoing_requests: Mutex::new(HashMap::new()),
             filewatcher_registered: AtomicBool::new(false),
@@ -3364,7 +3364,7 @@ impl Server {
                 &self.initialize_params.capabilities,
             ),
         };
-        let mru_snapshot = self.completion_mru.read().clone();
+        let mru_snapshot = self.completion_mru.lock().clone();
         let (items, is_incomplete) = transaction
             .get_module_info(&handle)
             .map(|info| {
