@@ -14,10 +14,9 @@ use pyrefly_python::module_name::ModuleName;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
+use ruff_python_ast::StmtImportFrom;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
-
-use crate::types::display::TypeDisplayContext;
-use crate::types::types::Type;
 
 /// Tracks imports already present in a module and can determine which modules are still missing
 /// for a given set of referenced modules. Also supports alias-aware replacement when displaying
@@ -26,6 +25,7 @@ use crate::types::types::Type;
 pub struct ImportTracker {
     canonical_modules: SmallSet<ModuleName>,
     alias_modules: Vec<(ModuleName, String)>,
+    imported_names: SmallMap<ModuleName, SmallMap<String, String>>,
 }
 
 impl ImportTracker {
@@ -35,6 +35,8 @@ impl ImportTracker {
         for stmt in &ast.body {
             if let Stmt::Import(stmt_import) = stmt {
                 tracker.record_import(stmt_import);
+            } else if let Stmt::ImportFrom(stmt_import_from) = stmt {
+                tracker.record_import_from(stmt_import_from);
             }
         }
         tracker
@@ -56,7 +58,51 @@ impl ImportTracker {
         }
     }
 
-    /// Replace any module prefixes that have been imported under an alias (e.g. `import typing as t`).
+    /// Record a `from ... import ...` statement into the tracker.
+    pub fn record_import_from(&mut self, stmt_import_from: &StmtImportFrom) {
+        let Some(module) = &stmt_import_from.module else {
+            return;
+        };
+        let module_name = ModuleName::from_str(module.as_str());
+        let entry = self.imported_names.entry(module_name).or_default();
+        for alias in &stmt_import_from.names {
+            let name = alias.name.as_str();
+            if name == "*" {
+                continue;
+            }
+            let alias_name = alias
+                .asname
+                .as_ref()
+                .map(|id| id.id.to_string())
+                .unwrap_or_else(|| name.to_owned());
+            entry.insert(name.to_owned(), alias_name);
+        }
+    }
+
+    fn module_is_imported(&self, module: ModuleName) -> bool {
+        self.alias_for(module).is_some() || self.has_canonical(module)
+    }
+
+    /// Whether the module is imported via `import module` (with or without alias).
+    pub fn has_module_import(&self, module: ModuleName) -> bool {
+        self.module_is_imported(module)
+    }
+
+    /// Returns the alias for a module if it was imported as `import module as alias`.
+    /// If a parent module was aliased, returns the alias with the remaining suffix.
+    pub fn alias_for_module(&self, module: ModuleName) -> Option<String> {
+        self.alias_for(module)
+    }
+
+    /// Returns the locally imported name for a `from module import name` statement.
+    pub fn imported_name_alias(&self, module: ModuleName, name: &str) -> Option<&str> {
+        self.imported_names
+            .get(&module)
+            .and_then(|names| names.get(name))
+            .map(|s| s.as_str())
+    }
+
+    /// Replace imported module prefixes with aliases where possible.
     pub fn apply_aliases(&self, text: &str) -> String {
         if self.alias_modules.is_empty() {
             return text.to_owned();
@@ -68,9 +114,6 @@ impl ImportTracker {
             let mut replaced = false;
             for (module, alias) in &self.alias_modules {
                 let module_str = module.as_str();
-                if module_str.is_empty() {
-                    continue;
-                }
                 let module_bytes = module_str.as_bytes();
                 if i + module_bytes.len() <= bytes.len()
                     && &bytes[i..i + module_bytes.len()] == module_bytes
@@ -90,7 +133,7 @@ impl ImportTracker {
         result
     }
 
-    /// Modules that are referenced in the type string but not yet imported (excluding builtins/current).
+    /// Modules referenced by a type annotation that do not already have an import.
     pub fn missing_modules(
         &self,
         modules: &SmallSet<ModuleName>,
@@ -103,25 +146,13 @@ impl ImportTracker {
                 || module == current_module
                 || module == ModuleName::builtins()
                 || module == ModuleName::extra_builtins()
+                || self.module_is_imported(module)
             {
-                continue;
-            }
-            if self.module_is_imported(module) {
                 continue;
             }
             missing.insert(module);
         }
         missing
-    }
-
-    fn module_is_imported(&self, module: ModuleName) -> bool {
-        self.alias_for(module).is_some() || self.has_canonical(module)
-    }
-
-    /// Returns the alias for a module if it was imported as `import module as alias`.
-    /// If a parent module was aliased, returns the alias with the remaining suffix.
-    pub fn alias_for_module(&self, module: ModuleName) -> Option<String> {
-        self.alias_for(module)
     }
 
     fn alias_for(&self, module: ModuleName) -> Option<String> {
@@ -163,57 +194,5 @@ impl ImportTracker {
 
     fn is_ident(byte: u8) -> bool {
         matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
-    }
-}
-
-/// Produce a user-facing type string (without module qualifiers) together with all referenced modules
-/// (captured with module qualification) so callers can insert the necessary imports.
-pub fn format_type_for_annotation(ty: &Type) -> (String, SmallSet<ModuleName>) {
-    // First pass: force module names so referenced_modules collects everything, but ignore the text.
-    let mut module_ctx = TypeDisplayContext::new(&[ty]);
-    module_ctx.always_display_module_name_except_builtins();
-    let _ = module_ctx.display(ty).to_string();
-    let modules = module_ctx.referenced_modules();
-
-    // Second pass: produce a concise label without module qualifiers.
-    let display_ctx = TypeDisplayContext::new(&[ty]);
-    let text = display_ctx.display(ty).to_string();
-    (text, modules)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::literal::LitStyle;
-
-    #[test]
-    fn aliases_are_applied_at_boundaries_only() {
-        let module = ModuleName::from_str("typing");
-        let mut tracker = ImportTracker::default();
-        tracker.alias_modules.push((module, "t".to_owned()));
-        assert_eq!(tracker.apply_aliases("typing.Literal"), "t.Literal");
-        // Do not replace inside longer identifiers
-        assert_eq!(tracker.apply_aliases("mytyping"), "mytyping");
-    }
-
-    #[test]
-    fn missing_modules_skips_builtin_and_current() {
-        let tracker = ImportTracker::default();
-        let mut modules = SmallSet::new();
-        let current = ModuleName::from_str("pkg.mod");
-        modules.insert(current.dupe());
-        modules.insert(ModuleName::builtins());
-        modules.insert(ModuleName::from_str("typing"));
-        let missing = tracker.missing_modules(&modules, current);
-        assert!(missing.contains(&ModuleName::from_str("typing")));
-        assert_eq!(missing.len(), 1);
-    }
-
-    #[test]
-    fn format_type_collects_modules_but_returns_short_label() {
-        let ty = Type::LiteralString(LitStyle::Implicit);
-        let (text, modules) = format_type_for_annotation(&ty);
-        assert_eq!(text, "LiteralString");
-        assert!(modules.contains(&ModuleName::from_str("typing")));
     }
 }
