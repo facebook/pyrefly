@@ -1702,18 +1702,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Does not instantiate type variables (they should be inferred at the call site).
     pub fn bind_dunder_init_for_callable(&self, m: &BoundMethod) -> Option<Type> {
         let mut func_type = m.func.clone().as_type();
-        Self::set_constructor_return_type(&mut func_type);
-        self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)
-    }
-
-    /// For each callable in the type, set its return type to the type of its first
-    /// parameter (i.e. `self`). Used when converting constructors to standalone callables.
-    fn set_constructor_return_type(t: &mut Type) {
-        t.visit_toplevel_callable_mut(&mut |c: &mut Callable| {
+        // For each callable, set its return type to its first param's type (i.e. `self`).
+        func_type.visit_toplevel_callable_mut(&mut |c: &mut Callable| {
             if let Some(self_type) = c.get_first_param() {
                 c.ret = self_type;
             }
         });
+        self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)
     }
 
     /// If this is an unbound callable (i.e., a callable that is not BoundMethod), strip the first parameter.
