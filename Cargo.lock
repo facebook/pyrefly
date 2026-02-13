@@ -2255,7 +2255,6 @@ name = "pyrefly_graph"
 version = "0.52.0"
 dependencies = [
  "dupe",
- "itertools 0.14.0",
  "pyrefly_util",
  "starlark_map",
 ]

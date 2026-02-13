@@ -9,7 +9,6 @@ use std::thread;
 use std::thread::ThreadId;
 
 use dupe::Dupe;
-use itertools::Either;
 use pyrefly_util::lock::Mutex;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallset;
@@ -117,29 +116,6 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
                 }
             }
             Status::Calculated(v) => ProposalResult::Calculated(v.dupe()),
-        }
-    }
-
-    /// Attempt to record a cycle we want to break. Returns:
-    /// - The recursive placeholder if there is one; it may not be the one
-    ///   we passed in, because the first thread to write a placeholder wins.
-    /// - Or, if another thread has already completed the calculation, return
-    ///   the final value.
-    pub fn record_cycle(&self, placeholder: R) -> Either<T, R> {
-        let mut lock = self.0.lock();
-        match &mut *lock {
-            Status::NotCalculated => {
-                unreachable!("Should not record a recursive result before calculating")
-            }
-            Status::Calculating(calc) => {
-                let rec = &mut calc.0;
-                if rec.is_none() {
-                    // The first thread to write a cycle placeholder wins
-                    *rec = Some(placeholder.dupe());
-                }
-                Either::Right(rec.dupe().unwrap())
-            }
-            Status::Calculated(v) => Either::Left(v.dupe()),
         }
     }
 
