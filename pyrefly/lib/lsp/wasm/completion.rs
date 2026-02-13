@@ -84,7 +84,15 @@ impl RankedCompletion {
 
 /// All completion ranking logic lives here. Assigns `sort_text` to each item
 /// based on its source classification, name prefix, compatibility, and MRU rank.
-fn assign_sort_text(ranked: &mut RankedCompletion, mru_rank: Option<usize>) {
+///
+/// `mru_rank` uses two levels of `Option`:
+/// - `None` means the MRU system is not active (e.g. wasm path). sort_text uses
+///   the compact base format (`"0"`, `"1"`, etc.).
+/// - `Some(None)` means the MRU system is active but the item was not found in
+///   the MRU list. sort_text uses the extended format with rank 9999 so it sorts
+///   after MRU-matched items.
+/// - `Some(Some(rank))` means the item was found at position `rank` in the MRU.
+fn assign_sort_text(ranked: &mut RankedCompletion, mru_rank: Option<Option<usize>>) {
     let is_deprecated = ranked
         .item
         .tags
@@ -115,12 +123,18 @@ fn assign_sort_text(ranked: &mut RankedCompletion, mru_rank: Option<usize>) {
         }
     };
 
-    if let Some(rank) = mru_rank {
-        let rank = rank.min(9999);
-        ranked.item.sort_text = Some(format!("{base}.{rank:04}.{}", ranked.item.label));
-        ranked.item.preselect = if rank == 0 { Some(true) } else { None };
-    } else {
-        ranked.item.sort_text = Some(base);
+    match mru_rank {
+        Some(Some(rank)) => {
+            let rank = rank.min(9999);
+            ranked.item.sort_text = Some(format!("{base}.{rank:04}.{}", ranked.item.label));
+            ranked.item.preselect = if rank == 0 { Some(true) } else { None };
+        }
+        Some(None) => {
+            ranked.item.sort_text = Some(format!("{base}.9999.{}", ranked.item.label));
+        }
+        None => {
+            ranked.item.sort_text = Some(base);
+        }
     }
 }
 
@@ -950,9 +964,7 @@ impl Transaction<'_> {
             Self::add_function_call_parens(&mut result, supports_snippet_completions);
         }
         for ranked in &mut result {
-            let mru_rank = mru_index
-                .as_mut()
-                .map(|index| (*index)(&ranked.item).unwrap_or(9999).min(9999));
+            let mru_rank = mru_index.as_mut().map(|index| (*index)(&ranked.item));
             assign_sort_text(ranked, mru_rank);
         }
         (result.into_iter().map(|r| r.item).collect(), is_incomplete)
