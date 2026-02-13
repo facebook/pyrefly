@@ -780,20 +780,6 @@ impl NodeState {
     }
 }
 
-impl PartialEq for NodeState {
-    fn eq(&self, other: &Self) -> bool {
-        // Compare by variant only. Done data is transient and not
-        // semantically meaningful for equality.
-        self.advancement_rank() == other.advancement_rank()
-            && match (self, other) {
-                (NodeState::HasPlaceholder(v1), NodeState::HasPlaceholder(v2)) => v1 == v2,
-                _ => true,
-            }
-    }
-}
-
-impl Eq for NodeState {}
-
 /// Represents the current SCC state prior to attempting a particular calculation.
 enum SccState {
     /// The current idx is not participating in any currently detected SCC (though it
@@ -2218,12 +2204,14 @@ mod scc_tests {
         let merged = Scc::merge_many(vec1![scc1, scc2], a.dupe());
 
         // Should take the most advanced state for each node
-        // Verify most advanced state is kept (Done has rank 3)
-        assert_eq!(
-            merged.node_state.get(&a).map(|s| s.advancement_rank()),
-            Some(3),
-        );
-        assert_eq!(merged.node_state.get(&b), Some(&NodeState::InProgress));
+        assert!(matches!(
+            merged.node_state.get(&a),
+            Some(NodeState::Done { .. })
+        ));
+        assert!(matches!(
+            merged.node_state.get(&b),
+            Some(NodeState::InProgress)
+        ));
     }
 
     #[test]
