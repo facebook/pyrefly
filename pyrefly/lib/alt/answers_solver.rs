@@ -212,11 +212,7 @@ impl CalcStack {
     /// performing all SCC state checks and mutations (like `on_scc_detected`,
     /// `on_calculation_finished`). SCC merging (`merge_sccs`) is handled
     /// inside `pre_calculate_state` when a node is found in a previous SCC.
-    fn push<T: Dupe>(
-        &self,
-        current: CalcId,
-        calculation: &Calculation<T, Var>,
-    ) -> BindingAction<T> {
+    fn push<T: Dupe>(&self, current: CalcId, calculation: &Calculation<T>) -> BindingAction<T> {
         let position = {
             let mut stack = self.stack.borrow_mut();
             let pos = stack.len();
@@ -1262,7 +1258,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         current: CalcId,
         idx: Idx<K>,
-        calculation: &Calculation<Arc<K::Answer>, Var>,
+        calculation: &Calculation<Arc<K::Answer>>,
     ) -> Arc<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -1308,13 +1304,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Non-SCC path: write directly to Calculation as before.
             // No recursive placeholder can exist in the Calculation cell because
             // placeholders are stored only in SCC-local NodeState::HasPlaceholder.
-            let (answer, did_write) = calculation.record_value(raw_answer, |_var, _answer| {
-                unreachable!(
-                    "Recursive placeholder found in Calculation cell for {}; \
-                     placeholders should only exist in SCC-local NodeState",
-                    current,
-                )
-            });
+            let (answer, did_write) = calculation.record_value(raw_answer);
             if did_write {
                 self.base_errors.extend(local_errors);
             }
@@ -1348,12 +1338,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // placeholders are stored only in SCC-local NodeState::HasPlaceholder.
         // The answer was already finalized (force_var called) during
         // calculate_and_record_answer's SCC path.
-        let (_answer, did_write) = calculation.record_value(typed_answer, |_var, _ans| {
-            unreachable!(
-                "Recursive placeholder found in Calculation cell during batch commit; \
-                 placeholders should only exist in SCC-local NodeState"
-            )
-        });
+        let (_answer, did_write) = calculation.record_value(typed_answer);
         if did_write && let Some(errors) = errors {
             // ErrorCollector::extend takes ownership. Arc::try_unwrap succeeds
             // because the Arc refcount is 1: the ErrorCollector is moved (not
@@ -1463,7 +1448,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         current: &CalcId,
         idx: Idx<K>,
-        calculation: &Calculation<Arc<K::Answer>, Var>,
+        calculation: &Calculation<Arc<K::Answer>>,
     ) -> Result<Arc<K::Answer>, Var>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -1485,7 +1470,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         current: &CalcId,
         idx: Idx<K>,
-        calculation: &Calculation<Arc<K::Answer>, Var>,
+        calculation: &Calculation<Arc<K::Answer>>,
         config: RecursionLimitConfig,
     ) -> Arc<K::Answer>
     where
@@ -1511,7 +1496,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         current: &CalcId,
         idx: Idx<K>,
-        calculation: &Calculation<Arc<K::Answer>, Var>,
+        calculation: &Calculation<Arc<K::Answer>>,
         limit: u32,
     ) -> Arc<K::Answer>
     where

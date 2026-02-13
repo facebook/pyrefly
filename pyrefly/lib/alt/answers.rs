@@ -64,7 +64,6 @@ use crate::types::equality::TypeEqCtx;
 use crate::types::heap::TypeHeap;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
-use crate::types::types::Var;
 
 /// The index stores all the references where the definition is external to the current module.
 /// This is useful for fast references computation.
@@ -120,7 +119,7 @@ pub struct Answers {
     trace: Option<Mutex<Traces>>,
 }
 
-pub type AnswerEntry<K> = IndexMap<K, Calculation<Arc<<K as Keyed>::Answer>, Var>>;
+pub type AnswerEntry<K> = IndexMap<K, Calculation<Arc<<K as Keyed>::Answer>>>;
 
 table!(
     #[derive(Debug, Default)]
@@ -693,12 +692,7 @@ impl Answers {
         if let Some(calculation) = self.table.get::<K>().get(idx) {
             // No recursive placeholder can exist in the Calculation cell because
             // placeholders are stored only in SCC-local NodeState::HasPlaceholder.
-            let (_answer, did_write) = calculation.record_value(typed_answer, |_var, _ans| {
-                unreachable!(
-                    "Recursive placeholder found in Calculation cell during cross-module \
-                     batch commit; placeholders should only exist in SCC-local NodeState"
-                )
-            });
+            let (_answer, did_write) = calculation.record_value(typed_answer);
             did_write
         } else {
             false
@@ -777,7 +771,7 @@ impl Answers {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    pub fn get_calculation<K: Solve<Ans>>(&self, idx: Idx<K>) -> &Calculation<Arc<K::Answer>, Var>
+    pub fn get_calculation<K: Solve<Ans>>(&self, idx: Idx<K>) -> &Calculation<Arc<K::Answer>>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
