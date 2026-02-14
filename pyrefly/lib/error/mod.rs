@@ -12,6 +12,7 @@ pub mod display;
 pub mod error;
 pub mod expectation;
 pub mod legacy;
+pub mod signature_diff;
 pub mod style;
 pub mod summarize;
 pub mod suppress;

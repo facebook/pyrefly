@@ -88,14 +88,21 @@ let docsSidebar = [
         ],
     },
     {
-        type: 'doc' as const,
-        id: 'error-suppressions',
-        label: 'Error Suppressions',
-    },
-    {
-        type: 'doc' as const,
-        id: 'error-kinds',
-        label: 'Error Kinds',
+        type: 'category' as const,
+        label: 'Errors',
+        collapsed: false,
+        items: [
+            {
+                type: 'doc' as const,
+                id: 'error-suppressions',
+                label: 'Error Suppressions',
+            },
+            {
+                type: 'doc' as const,
+                id: 'error-kinds',
+                label: 'Error Kinds',
+            },
+        ],
     },
     {
         type: 'doc' as const,
@@ -103,9 +110,21 @@ let docsSidebar = [
         label: 'Import Resolution',
     },
     {
-        type: 'doc' as const,
-        id: 'autotype',
-        label: 'Automating Type Annotations',
+        type: 'category' as const,
+        label: 'Tools',
+        collapsed: false,
+        items: [
+            {
+                type: 'doc' as const,
+                id: 'autotype',
+                label: 'Automating Type Annotations',
+            },
+            {
+                type: 'doc' as const,
+                id: 'report',
+                label: 'Measuring Type Coverage',
+            },
+        ],
     },
     {
         type: 'doc' as const,

@@ -67,6 +67,7 @@ use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::error::signature_diff::render_signature_diff;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
@@ -76,6 +77,8 @@ use crate::types::callable::Param;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::display::LspDisplayMode;
+use crate::types::display::TypeDisplayContext;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::literal::Lit;
 use crate::types::quantified::Quantified;
@@ -1371,6 +1374,13 @@ fn is_method(
     }
 
     false
+}
+
+/// Error information for class member override inconsistencies.
+struct OverrideError {
+    kind: ErrorKind,
+    message: String,
+    diff_lines: Vec<String>,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -3026,7 +3036,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             let error = match attr_check {
                 Err(
-                    AttrSubsetError::Covariant {
+                    box (AttrSubsetError::Covariant {
                         subset_error: SubsetError::PosParamName(child, parent),
                         ..
                     }
@@ -3037,27 +3047,56 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | AttrSubsetError::Contravariant {
                         subset_error: SubsetError::PosParamName(child, parent),
                         ..
-                    },
-                ) => Some((
-                    ErrorKind::BadParamNameOverride,
-                    format!("Got parameter name `{child}`, expected `{parent}`"),
-                )),
-                Err(error) => Some((
-                    ErrorKind::BadOverride,
-                    error.to_error_msg(cls.name(), parent.name(), field_name),
-                )),
+                    }),
+                ) => Some(OverrideError {
+                    kind: ErrorKind::BadParamNameOverride,
+                    message: format!("Got parameter name `{child}`, expected `{parent}`"),
+                    diff_lines: Vec::new(),
+                }),
+                Err(error) => {
+                    let mut diff_lines = Vec::new();
+                    if let AttrSubsetError::Covariant { got, want, .. }
+                    | AttrSubsetError::Invariant { got, want, .. }
+                    | AttrSubsetError::Contravariant { got, want, .. } = &*error
+                    {
+                        let got_sigs = got.callable_signatures();
+                        let want_sigs = want.callable_signatures();
+                        if got_sigs.len() == 1 && want_sigs.len() == 1 {
+                            let mut ctx = TypeDisplayContext::new(&[got, want]);
+                            ctx.set_lsp_display_mode(LspDisplayMode::SignatureHelp);
+                            let got_sig = ctx.display(got).to_string();
+                            let want_sig = ctx.display(want).to_string();
+
+                            if let Some(lines) = render_signature_diff(&want_sig, &got_sig) {
+                                diff_lines = lines;
+                            }
+                        }
+                    }
+
+                    Some(OverrideError {
+                        kind: ErrorKind::BadOverride,
+                        message: error.to_error_msg(cls.name(), parent.name(), field_name),
+                        diff_lines,
+                    })
+                }
                 Ok(()) => None,
             };
-            if let Some((kind, error)) = error {
-                let msg = vec1![
+            if let Some(OverrideError {
+                kind,
+                message,
+                diff_lines: extra_lines,
+            }) = error
+            {
+                let mut msg = vec1![
                     format!(
                         "Class member `{}.{}` overrides parent class `{}` in an inconsistent manner",
                         cls.name(),
                         field_name,
                         parent.name()
                     ),
-                    error,
+                    message,
                 ];
+                msg.extend(extra_lines);
                 errors.add(range, ErrorInfo::Kind(kind), msg);
             }
         }
@@ -4003,41 +4042,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         got: &ClassAttribute,
         want: &ClassAttribute,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
-    ) -> Result<(), AttrSubsetError> {
+    ) -> Result<(), Box<AttrSubsetError>> {
         match (got, want) {
             (_, ClassAttribute::NoAccess(_)) => Ok(()),
-            (ClassAttribute::NoAccess(_), _) => Err(AttrSubsetError::NoAccess),
+            (ClassAttribute::NoAccess(_), _) => Err(Box::new(AttrSubsetError::NoAccess)),
             (
                 ClassAttribute::Property(_, _, _),
                 ClassAttribute::ReadOnly(..) | ClassAttribute::ReadWrite(..),
-            ) => Err(AttrSubsetError::Property),
+            ) => Err(Box::new(AttrSubsetError::Property)),
             (
                 ClassAttribute::ReadOnly(..),
                 ClassAttribute::Property(_, Some(_), _) | ClassAttribute::ReadWrite(_),
-            ) => Err(AttrSubsetError::ReadOnly),
+            ) => Err(Box::new(AttrSubsetError::ReadOnly)),
             (
                 // TODO(stroxler): Investigate this case more: methods should be ReadOnly, but
                 // in some cases for unknown reasons they wind up being ReadWrite.
                 ClassAttribute::ReadWrite(got),
                 ClassAttribute::ReadWrite(want),
             ) if got.has_toplevel_func_metadata() && want.has_toplevel_func_metadata() => {
-                is_subset(got, want).map_err(|subset_error| AttrSubsetError::Covariant {
-                    got: got.clone(),
-                    want: want.clone(),
-                    got_is_property: false,
-                    want_is_property: false,
-                    subset_error,
+                is_subset(got, want).map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got: got.clone(),
+                        want: want.clone(),
+                        got_is_property: false,
+                        want_is_property: false,
+                        subset_error,
+                    })
                 })
             }
             (ClassAttribute::ReadWrite(got), ClassAttribute::ReadWrite(want)) => {
                 let subset_error = is_subset(got, want)
                     .map_or_else(Some, |_| is_subset(want, got).map_or_else(Some, |_| None));
                 if let Some(subset_error) = subset_error {
-                    Err(AttrSubsetError::Invariant {
+                    Err(Box::new(AttrSubsetError::Invariant {
                         got: got.clone(),
                         want: want.clone(),
                         subset_error,
-                    })
+                    }))
                 } else {
                     Ok(())
                 }
@@ -4045,12 +4086,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (
                 ClassAttribute::ReadWrite(got) | ClassAttribute::ReadOnly(got, ..),
                 ClassAttribute::ReadOnly(want, _),
-            ) => is_subset(got, want).map_err(|subset_error| AttrSubsetError::Covariant {
-                got: got.clone(),
-                want: want.clone(),
-                got_is_property: false,
-                want_is_property: false,
-                subset_error,
+            ) => is_subset(got, want).map_err(|subset_error| {
+                Box::new(AttrSubsetError::Covariant {
+                    got: got.clone(),
+                    want: want.clone(),
+                    got_is_property: false,
+                    want_is_property: false,
+                    subset_error,
+                })
             }),
             (ClassAttribute::ReadOnly(got, _), ClassAttribute::Property(want, _, _)) => {
                 is_subset(
@@ -4058,12 +4101,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &self.heap.mk_callable_ellipsis(got.clone()),
                     want,
                 )
-                .map_err(|subset_error| AttrSubsetError::Covariant {
-                    got: got.clone(),
-                    want: want.clone(),
-                    got_is_property: false,
-                    want_is_property: true,
-                    subset_error,
+                .map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got: got.clone(),
+                        want: want.clone(),
+                        got_is_property: false,
+                        want_is_property: true,
+                        subset_error,
+                    })
                 })
             }
             (ClassAttribute::ReadWrite(got), ClassAttribute::Property(want, want_setter, _)) => {
@@ -4088,11 +4133,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.heap.mk_none(),
                         ),
                     )
-                    .map_err(|subset_error| AttrSubsetError::Contravariant {
-                        want: want_setter.clone(),
-                        got: got.clone(),
-                        got_is_property: true,
-                        subset_error,
+                    .map_err(|subset_error| {
+                        Box::new(AttrSubsetError::Contravariant {
+                            want: want_setter.clone(),
+                            got: got.clone(),
+                            got_is_property: true,
+                            subset_error,
+                        })
                     })
                 } else {
                     Ok(())
@@ -4103,23 +4150,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ClassAttribute::Property(want_getter, want_setter, _),
             ) => {
                 is_subset(got_getter, want_getter).map_err(|subset_error| {
-                    AttrSubsetError::Covariant {
+                    Box::new(AttrSubsetError::Covariant {
                         got: got_getter.clone(),
                         want: want_getter.clone(),
                         got_is_property: true,
                         want_is_property: true,
                         subset_error,
-                    }
+                    })
                 })?;
                 match (got_setter, want_setter) {
                     (Some(got_setter), Some(want_setter)) => is_subset(got_setter, want_setter)
-                        .map_err(|subset_error| AttrSubsetError::Contravariant {
-                            want: want_setter.clone(),
-                            got: got_setter.clone(),
-                            got_is_property: true,
-                            subset_error,
+                        .map_err(|subset_error| {
+                            Box::new(AttrSubsetError::Contravariant {
+                                want: want_setter.clone(),
+                                got: got_setter.clone(),
+                                got_is_property: true,
+                                subset_error,
+                            })
                         }),
-                    (None, Some(_)) => Err(AttrSubsetError::ReadOnly),
+                    (None, Some(_)) => Err(Box::new(AttrSubsetError::ReadOnly)),
                     (_, None) => Ok(()),
                 }
             }
@@ -4129,16 +4178,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ) => {
                 let got_ty = self.heap.mk_class_type(got_cls.clone());
                 let want_ty = self.heap.mk_class_type(want_cls.clone());
-                is_subset(&got_ty, &want_ty).map_err(|subset_error| AttrSubsetError::Covariant {
-                    got: got_ty,
-                    want: want_ty,
-                    got_is_property: false,
-                    want_is_property: false,
-                    subset_error,
+                is_subset(&got_ty, &want_ty).map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got: got_ty,
+                        want: want_ty,
+                        got_is_property: false,
+                        want_is_property: false,
+                        subset_error,
+                    })
                 })
             }
             (ClassAttribute::Descriptor(..), _) | (_, ClassAttribute::Descriptor(..)) => {
-                Err(AttrSubsetError::Descriptor)
+                Err(Box::new(AttrSubsetError::Descriptor))
             }
         }
     }
@@ -4230,14 +4281,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Return `__call__` as a bound method if instances of `cls` have `__call__`.
     /// This is what the runtime automatically does when we try to call an instance.
     pub fn instance_as_dunder_call(&self, cls: &ClassType) -> Option<Type> {
-        self.get_instance_attribute(cls, &dunder::CALL)
-            .and_then(|attr| attr.as_instance_method())
+        let attr = self.get_instance_attribute(cls, &dunder::CALL)?;
+        self.resolve_dunder_call_attr(attr)
     }
 
     /// Return `__call__` as bound method when called on `Self`.
     pub fn self_as_dunder_call(&self, cls: &ClassType) -> Option<Type> {
-        self.get_self_attribute(cls, &dunder::CALL)
-            .and_then(|attr| attr.as_instance_method())
+        let attr = self.get_self_attribute(cls, &dunder::CALL)?;
+        self.resolve_dunder_call_attr(attr)
     }
 
     /// Return `__call__` as a bound method if instances of `type_var` have `__call__`.
@@ -4248,8 +4299,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         quantified: Quantified,
         upper_bound: &ClassType,
     ) -> Option<Type> {
-        self.get_bounded_quantified_attribute(quantified, upper_bound, &dunder::CALL)
-            .and_then(|attr| attr.as_instance_method())
+        let attr = self.get_bounded_quantified_attribute(quantified, upper_bound, &dunder::CALL)?;
+        self.resolve_dunder_call_attr(attr)
     }
 
     fn callable_params_and_flags(mut ty: Type) -> Option<(ParamList, FuncFlags)> {
@@ -4265,5 +4316,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => None,
         }?;
         Some((params, flags))
+    }
+
+    fn resolve_dunder_call_attr(&self, attr: ClassAttribute) -> Option<Type> {
+        let errors = self.error_swallower();
+        // The range is only used for error reporting, and the error swallower
+        // discards all errors, so a default range is fine here.
+        let fake_range = TextRange::default();
+        self.resolve_get_class_attr(&dunder::CALL, attr, fake_range, &errors, None)
+            .ok()
     }
 }

@@ -1,0 +1,63 @@
+# Test configuration file for pyproject.toml [tool.pyrefly] schema validation
+
+[project]
+name = "example-project"
+version = "0.1.0"
+
+[tool.pyrefly]
+# Basic project configuration
+project-includes = ["src", "tests"]
+project-excludes = ["**/node_modules", "**/__pycache__"]
+disable-project-excludes-heuristics = false
+
+# Import paths
+search-path = ["src", "lib"]
+disable-search-path-heuristics = false
+site-package-path = ["venv/lib/python3.12/site-packages"]
+
+# Python environment
+python-platform = "linux"
+python-version = "3.12.0"
+skip-interpreter-query = false
+
+# Type checking behavior
+untyped-def-behavior = "check-and-infer-return-type"
+infer-with-first-use = true
+ignore-errors-in-generated-code = false
+disable-type-errors-in-ide = false
+tensor-shapes = false
+recursion-depth-limit = 100
+recursion-overflow-handler = "break-with-placeholder"
+
+# Import handling
+replace-imports-with-any = ["sympy.*", "*.series"]
+ignore-missing-imports = ["numpy.*"]
+
+# Ignore files and directives
+use-ignore-files = true
+permissive-ignores = false
+enabled-ignores = ["type", "pyrefly"]
+
+# Baseline
+# baseline = "baseline.json"
+
+# Error configuration
+[tool.pyrefly.errors]
+bad-assignment = false
+bad-return = true
+missing-import = "warn"
+invalid-argument = "error"
+
+# SubConfig example 1: Test files
+[[tool.pyrefly.sub-config]]
+matches = "**/tests/**"
+untyped-def-behavior = "skip-and-infer-return-any"
+
+[tool.pyrefly.sub-config.errors]
+assert-type = true
+
+# SubConfig example 2: Generated code
+[[tool.pyrefly.sub-config]]
+matches = "**/*_pb2.py"
+ignore-errors-in-generated-code = true
+replace-imports-with-any = ["google.protobuf.*"]

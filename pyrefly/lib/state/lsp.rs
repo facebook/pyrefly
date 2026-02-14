@@ -56,6 +56,7 @@ use ruff_text_size::TextSize;
 use serde::Deserialize;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::ModuleInfo;
 use crate::alt::answers_solver::AnswersSolver;
@@ -68,6 +69,7 @@ use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::wasm::completion::CompletionOptions;
 use crate::state::ide::IntermediateDefinition;
+use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
@@ -997,6 +999,7 @@ impl<'a> Transaction<'a> {
                                 symbol_kind: Some(SymbolKind::Module),
                                 docstring_range,
                                 deprecation: None,
+                                is_final: false,
                                 special_export: None,
                             },
                         ));
@@ -1066,6 +1069,7 @@ impl<'a> Transaction<'a> {
                             symbol_kind: Some(SymbolKind::Module),
                             docstring_range: None,
                             deprecation: None,
+                            is_final: false,
                             special_export: None,
                         },
                     ));
@@ -1079,6 +1083,7 @@ impl<'a> Transaction<'a> {
                         symbol_kind: Some(SymbolKind::Module),
                         docstring_range,
                         deprecation: None,
+                        is_final: false,
                         special_export: None,
                     },
                 ))
@@ -1923,6 +1928,7 @@ impl<'a> Transaction<'a> {
         let ast = self.get_ast(handle)?;
         let errors = self.get_errors(vec![handle]).collect_errors().shown;
         let mut import_actions = Vec::new();
+        let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
         for error in errors {
             match error.error_kind() {
@@ -1965,15 +1971,48 @@ impl<'a> Transaction<'a> {
                             ));
                         }
 
+                        let mut aliased_modules = SmallSet::new();
+                        if let Some(module_name_str) = common_alias_target_module(unknown_name) {
+                            let module_name = ModuleName::from_str(module_name_str);
+                            if module_name != handle.module()
+                                && let Some(module_handle) =
+                                    self.import_handle(handle, module_name, None).finding()
+                            {
+                                let (position, insert_text, _) = import_regular_import_edit(
+                                    &ast,
+                                    module_handle,
+                                    Some(unknown_name),
+                                );
+                                let range = TextRange::at(position, TextSize::new(0));
+                                let title = format!("Use common alias: `{}`", insert_text.trim());
+                                let is_private_import = module_name
+                                    .components()
+                                    .last()
+                                    .is_some_and(|component| component.as_str().starts_with('_'));
+                                import_actions.push((
+                                    title,
+                                    module_info.dupe(),
+                                    range,
+                                    insert_text,
+                                    false,
+                                    is_private_import,
+                                ));
+                                aliased_modules.insert(module_name);
+                            }
+                        }
+
                         for module_name in self.search_modules_fuzzy(unknown_name) {
                             if module_name == handle.module() {
+                                continue;
+                            }
+                            if aliased_modules.contains(&module_name) {
                                 continue;
                             }
                             if let Some(module_handle) =
                                 self.import_handle(handle, module_name, None).finding()
                             {
-                                let (position, insert_text) =
-                                    import_regular_import_edit(&ast, module_handle);
+                                let (position, insert_text, _) =
+                                    import_regular_import_edit(&ast, module_handle, None);
                                 let range = TextRange::at(position, TextSize::new(0));
                                 let title = format!("Insert import: `{}`", insert_text.trim());
                                 let is_private_import = module_name
@@ -1989,6 +2028,15 @@ impl<'a> Transaction<'a> {
                                     is_private_import,
                                 ));
                             }
+                        }
+
+                        if let Some(mut actions) = quick_fixes::generate_code::generate_code_actions(
+                            &module_info,
+                            ast.as_ref(),
+                            error_range,
+                            unknown_name,
+                        ) {
+                            generate_actions.append(&mut actions);
                         }
                     }
                 }
@@ -2034,6 +2082,7 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .map(|(title, module, range, insert_text, _, _)| (title, module, range, insert_text))
             .collect();
+        actions.extend(generate_actions);
         actions.extend(other_actions);
         (!actions.is_empty()).then_some(actions)
     }
@@ -2723,6 +2772,46 @@ impl<'a> Transaction<'a> {
         import_format: ImportFormat,
         options: CompletionOptions,
     ) -> (Vec<CompletionItem>, bool) {
+        self.completion_with_incomplete_impl(
+            handle,
+            position,
+            import_format,
+            options,
+            None::<fn(&CompletionItem) -> Option<usize>>,
+        )
+    }
+
+    pub fn completion_with_incomplete_mru<F>(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        import_format: ImportFormat,
+        options: CompletionOptions,
+        mru_index: F,
+    ) -> (Vec<CompletionItem>, bool)
+    where
+        F: FnMut(&CompletionItem) -> Option<usize>,
+    {
+        self.completion_with_incomplete_impl(
+            handle,
+            position,
+            import_format,
+            options,
+            Some(mru_index),
+        )
+    }
+
+    fn completion_with_incomplete_impl<F>(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        import_format: ImportFormat,
+        options: CompletionOptions,
+        mru_index: Option<F>,
+    ) -> (Vec<CompletionItem>, bool)
+    where
+        F: FnMut(&CompletionItem) -> Option<usize>,
+    {
         // Check if position is in a disabled range (comments)
         if let Some(module) = self.get_module_info(handle) {
             let disabled_ranges = Self::comment_ranges_for_module(&module);
@@ -2731,8 +2820,13 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        let (mut results, is_incomplete) =
-            self.completion_sorted_opt_with_incomplete(handle, position, import_format, options);
+        let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
+            handle,
+            position,
+            import_format,
+            options,
+            mru_index,
+        );
         results.sort_by(|item1, item2| {
             item1
                 .sort_text

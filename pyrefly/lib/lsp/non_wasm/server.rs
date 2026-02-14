@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::min;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -39,6 +40,7 @@ use lsp_types::CodeLens;
 use lsp_types::CodeLensOptions;
 use lsp_types::CodeLensParams;
 use lsp_types::Command;
+use lsp_types::CompletionItem;
 use lsp_types::CompletionList;
 use lsp_types::CompletionOptions;
 use lsp_types::CompletionParams;
@@ -172,6 +174,7 @@ use lsp_types::request::References;
 use lsp_types::request::RegisterCapability;
 use lsp_types::request::Rename;
 use lsp_types::request::Request as _;
+use lsp_types::request::ResolveCompletionItem;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::SemanticTokensRefresh;
@@ -253,6 +256,7 @@ use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
+use crate::lsp::non_wasm::mru::CompletionMru;
 use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
@@ -538,6 +542,7 @@ pub struct Server {
     /// operations we have yet to process.
     uris_pending_close: Mutex<HashMap<String, usize>>,
     workspaces: Arc<Workspaces>,
+    completion_mru: Mutex<CompletionMru>,
     outgoing_request_id: AtomicI32,
     outgoing_requests: Mutex<HashMap<RequestId, Request>>,
     filewatcher_registered: AtomicBool,
@@ -902,6 +907,7 @@ pub fn capabilities(
         }),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some(vec![".".to_owned(), "'".to_owned(), "\"".to_owned()]),
+            resolve_provider: Some(true),
             ..Default::default()
         }),
         document_highlight_provider: Some(OneOf::Left(true)),
@@ -1104,6 +1110,24 @@ impl Server {
         }
         info!("Could not convert uri to filepath: {}", uri);
         None
+    }
+
+    fn break_completion_item_into_mru_parts(item: &CompletionItem) -> (&str, &str) {
+        let label = item.label.trim();
+        let auto_import_text = if item.additional_text_edits.is_some() {
+            item.detail.as_deref().unwrap_or("").trim()
+        } else {
+            ""
+        };
+        (label, auto_import_text)
+    }
+
+    fn record_completion_mru(&self, item: &CompletionItem) {
+        let (label, auto_import_text) = Self::break_completion_item_into_mru_parts(item);
+        if label.is_empty() {
+            return;
+        }
+        self.completion_mru.lock().record(label, auto_import_text);
     }
 
     fn extract_request_params_or_send_err_response<T>(
@@ -1320,6 +1344,7 @@ impl Server {
                 // we really don't want to implicitly cancel those.
                 const ONLY_ONCE: &[&str] = &[
                     Completion::METHOD,
+                    ResolveCompletionItem::METHOD,
                     SignatureHelpRequest::METHOD,
                     GotoDefinition::METHOD,
                     ProvideType::METHOD,
@@ -1466,6 +1491,15 @@ impl Server {
                             x.id,
                             self.completion(&transaction, params),
                         ));
+                    }
+                } else if let Some(params) = as_request::<ResolveCompletionItem>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<ResolveCompletionItem>(
+                            params, &x.id,
+                        )
+                    {
+                        self.record_completion_mru(&params);
+                        self.send_response(new_response(x.id, Ok(params)));
                     }
                 } else if let Some(params) = as_request::<DocumentHighlightRequest>(&x) {
                     if let Some(params) = self
@@ -1925,6 +1959,7 @@ impl Server {
             cancellation_handles: Mutex::new(HashMap::new()),
             uris_pending_close: Mutex::new(HashMap::new()),
             workspaces,
+            completion_mru: Mutex::new(CompletionMru::default()),
             outgoing_request_id: AtomicI32::new(1),
             outgoing_requests: Mutex::new(HashMap::new()),
             filewatcher_registered: AtomicBool::new(false),
@@ -2676,15 +2711,13 @@ impl Server {
             ));
         };
 
-        let mut version_info = self.version_info.lock();
+        let version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
         if version < *old_version {
             return Err(anyhow::anyhow!(
                 "new_version < old_version in `textDocument/didChange` notification: new_version={version:?} old_version={old_version:?} text_document.uri={uri:?}"
             ));
         }
-        version_info.insert(file_path.clone(), version);
-        // drop this to avoid deadlock
         drop(version_info);
         let mut lock = self.open_files.write();
         let Some(original) = lock.get_mut(&file_path) else {
@@ -2698,6 +2731,8 @@ impl Server {
             params.content_changes,
         )));
         drop(lock);
+        // Update version_info only after the mutation has fully succeeded.
+        self.version_info.lock().insert(file_path.clone(), version);
         if !subsequent_mutation {
             info!(
                 "File {} changed, prepare to validate open files.",
@@ -2731,13 +2766,16 @@ impl Server {
             ));
         };
 
-        let mut version_info = self.version_info.lock();
+        let version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
         if version < *old_version {
             return Err(anyhow::anyhow!(
                 "new_version < old_version in `notebookDocument/didChange` notification: new_version={version:?} old_version={old_version:?} notebook_document.uri={uri:?}"
             ));
         }
+        // Drop version_info before mutating state. We'll update it after the
+        // mutation succeeds so that version and state stay consistent on error.
+        drop(version_info);
 
         let mut lock = self.open_files.write();
         let Some(original) = lock.get_mut(&file_path) else {
@@ -2763,8 +2801,6 @@ impl Server {
         if let Some(metadata) = &params.change.metadata {
             notebook_document.metadata = Some(metadata.clone());
         }
-        version_info.insert(file_path.clone(), version);
-        drop(version_info);
         notebook_document.version = version;
         // Changes to cells
         if let Some(change) = &params.change.cells {
@@ -2783,12 +2819,24 @@ impl Server {
                 // Do not remove the cells from `open_notebook_cells`, since
                 // incoming requests could still reference them.
                 if delete_count > 0 {
-                    notebook_document.cells.drain(start..start + delete_count);
+                    let end = min(start + delete_count, notebook_document.cells.len());
+                    notebook_document.cells.drain(start..end);
                 }
                 // Insert new cells
                 if let Some(new_cells) = &structure.array.cells {
+                    let cells = &mut notebook_document.cells;
                     for (i, cell) in new_cells.iter().enumerate() {
-                        notebook_document.cells.insert(start + i, cell.clone());
+                        let next_index = start + i;
+                        if next_index == cells.len() {
+                            cells.push(cell.clone());
+                        } else if next_index > cells.len() {
+                            return Err(anyhow::anyhow!(
+                                "Attempted to update notebook document, but cells are missing. Tried to add cell at index {next_index} but only {} cells exist.",
+                                cells.len()
+                            ));
+                        } else {
+                            cells.insert(next_index, cell.clone());
+                        }
                     }
                 }
                 // Set contents for new cells
@@ -2841,6 +2889,10 @@ impl Server {
         let new_notebook = Arc::new(LspNotebook::new(ruff_notebook, notebook_document));
         *original = Arc::new(LspFile::Notebook(new_notebook));
         drop(lock);
+        // Update version_info only after the mutation has fully succeeded, so
+        // that on error the version stays at the old value and subsequent
+        // notifications operate against consistent state.
+        self.version_info.lock().insert(file_path.clone(), version);
 
         if !subsequent_mutation {
             info!(
@@ -3333,14 +3385,24 @@ impl Server {
                 &self.initialize_params.capabilities,
             ),
         };
+        let mru_snapshot = self.completion_mru.lock().clone();
         let (items, is_incomplete) = transaction
             .get_module_info(&handle)
             .map(|info| {
-                transaction.completion_with_incomplete(
+                transaction.completion_with_incomplete_mru(
                     &handle,
                     self.from_lsp_position(uri, &info, params.text_document_position.position),
                     import_format,
                     completion_options,
+                    |item| {
+                        let (label, auto_import_text) =
+                            Self::break_completion_item_into_mru_parts(item);
+                        if label.is_empty() {
+                            None
+                        } else {
+                            mru_snapshot.index_for(label, auto_import_text)
+                        }
+                    },
                 )
             })
             .unwrap_or_default();

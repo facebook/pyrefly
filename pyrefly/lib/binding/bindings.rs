@@ -983,6 +983,28 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::NameAssign { expr: value, .. } => {
                     return self.as_special_export_inner(value, visited_names, visited_keys);
                 }
+                Binding::Import(module_name, name, _) => {
+                    return self.lookup.is_special_export(*module_name, name);
+                }
+                Binding::Phi(_, branches) => {
+                    // Check all branches for a consistent special export (e.g. try/except
+                    // importing Literal from typing vs typing_extensions).
+                    let mut result = None;
+                    for branch in branches {
+                        let branch_result = self.special_export_from_binding_idx(
+                            branch.value_key,
+                            visited_names,
+                            visited_keys,
+                        );
+                        match (&result, &branch_result) {
+                            (None, _) => result = branch_result,
+                            (_, None) => {}
+                            (Some(a), Some(b)) if a == b => {}
+                            _ => return None,
+                        }
+                    }
+                    return result;
+                }
                 _ => return None,
             }
         }
@@ -1335,6 +1357,7 @@ impl<'a> BindingsBuilder<'a> {
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
         self.check_for_type_alias_redefinition(name, idx);
+        self.check_for_imported_final_reassignment(name, idx);
         let name = Hashed::new(name);
         let write_info = self
             .scopes
@@ -1371,6 +1394,20 @@ impl<'a> BindingsBuilder<'a> {
                     format!("Cannot redefine existing name `{name}` as a type alias",),
                 );
             }
+        }
+    }
+
+    fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
+        let prev_idx = self.scopes.current_flow_idx(name);
+        if let Some(prev_idx) = prev_idx
+            && let Some(Binding::Import(module, original_name, _)) = self.idx_to_binding(prev_idx)
+            && self.lookup.is_final(*module, original_name)
+        {
+            self.error(
+                self.idx_to_key(idx).range(),
+                ErrorInfo::Kind(ErrorKind::BadAssignment),
+                format!("Cannot assign to `{name}` because it is imported as final"),
+            );
         }
     }
 

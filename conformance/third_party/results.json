@@ -3,7 +3,7 @@
   "pass": 115,
   "fail": 23,
   "pass_rate": 0.83,
-  "differences": 83,
+  "differences": 77,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -126,7 +126,7 @@
     "aliases_typealiastype.py": 2,
     "annotations_forward_refs.py": 2,
     "callables_annotation.py": 2,
-    "constructors_callable.py": 8,
+    "constructors_callable.py": 4,
     "dataclasses_descriptors.py": 6,
     "dataclasses_slots.py": 2,
     "exceptions_context_managers.py": 2,
@@ -143,7 +143,7 @@
     "protocols_modules.py": 1,
     "protocols_variance.py": 2,
     "qualifiers_annotated.py": 6,
-    "qualifiers_final_annotation.py": 7,
+    "qualifiers_final_annotation.py": 5,
     "specialtypes_never.py": 1
   },
   "comment": "@generated"

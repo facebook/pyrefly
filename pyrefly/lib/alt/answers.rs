@@ -22,7 +22,6 @@ use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::uniques::UniqueFactory;
-use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -64,7 +63,6 @@ use crate::types::equality::TypeEqCtx;
 use crate::types::heap::TypeHeap;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
-use crate::types::types::Var;
 
 /// The index stores all the references where the definition is external to the current module.
 /// This is useful for fast references computation.
@@ -120,7 +118,7 @@ pub struct Answers {
     trace: Option<Mutex<Traces>>,
 }
 
-pub type AnswerEntry<K> = IndexMap<K, Calculation<Arc<<K as Keyed>::Answer>, Var>>;
+pub type AnswerEntry<K> = IndexMap<K, Calculation<Arc<<K as Keyed>::Answer>>>;
 
 table!(
     #[derive(Debug, Default)]
@@ -613,15 +611,6 @@ impl Answers {
         }
         answers_solver.validate_final_thread_state();
 
-        // Now force all types to be fully resolved.
-        fn post_solve<K: Keyed>(items: &mut SolutionsEntry<K>, solver: &Solver) {
-            for v in items.values_mut() {
-                let mut vv = (**v).clone();
-                vv.visit_mut(&mut |x| solver.deep_force_mut(x));
-                *v = Arc::new(vv);
-            }
-        }
-        table_mut_for_each!(&mut res, |items| post_solve(items, &self.solver));
         Solutions {
             module_info: bindings.module().dupe(),
             table: res,
@@ -644,6 +633,14 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
+        // Fast path: check if the answer has already been computed in the Calculation cell.
+        // This avoids constructing a VarRecurser and AnswersSolver when the value is cached.
+        if let Some(idx) = bindings.key_to_idx_hashed_opt(key)
+            && let Some(v) = self.get_idx(idx)
+        {
+            return Some(v);
+        }
+        // Slow path: need to compute the answer.
         let recurser = &VarRecurser::new();
         let solver = AnswersSolver::new(
             answers,
@@ -657,10 +654,7 @@ impl Answers {
             thread_state,
             self.heap(),
         );
-        let v = solver.get_hashed_opt(key)?;
-        let mut vv = (*v).clone();
-        vv.visit_mut(&mut |x| self.solver.deep_force_mut(x));
-        Some(Arc::new(vv))
+        solver.get_hashed_opt(key)
     }
 
     pub fn get_idx<K: Keyed>(&self, k: Idx<K>) -> Option<Arc<K::Answer>>
@@ -691,7 +685,9 @@ impl Answers {
         );
         // Get the calculation cell from the answer table
         if let Some(calculation) = self.table.get::<K>().get(idx) {
-            let (_answer, did_write) = calculation.record_value(typed_answer, |_var, ans| ans);
+            // No recursive placeholder can exist in the Calculation cell because
+            // placeholders are stored only in SCC-local NodeState::HasPlaceholder.
+            let (_answer, did_write) = calculation.record_value(typed_answer);
             did_write
         } else {
             false
@@ -770,7 +766,7 @@ impl Answers {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    pub fn get_calculation<K: Solve<Ans>>(&self, idx: Idx<K>) -> &Calculation<Arc<K::Answer>, Var>
+    pub fn get_calculation<K: Solve<Ans>>(&self, idx: Idx<K>) -> &Calculation<Arc<K::Answer>>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
