@@ -1715,6 +1715,13 @@ pub struct ReturnExplicit {
     pub is_async: bool,
     pub range: TextRange,
     pub is_unreachable: bool,
+    /// Whether the return annotation was originally `Self` (before expansion).
+    /// Used to validate explicit returns against `Self` semantics.
+    pub annotation_was_self: bool,
+    /// The class metadata key, if this function is a method. Used to check decorators (e.g., `@final`).
+    pub class_metadata_key: Option<Idx<KeyClassMetadata>>,
+    /// Function decorators, used to detect `@final` for `Self` return validation.
+    pub decorators: Box<[Idx<KeyDecorator>]>,
 }
 
 #[derive(Clone, Debug)]

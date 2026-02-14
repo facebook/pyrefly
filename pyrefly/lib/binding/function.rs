@@ -409,6 +409,10 @@ impl<'a> BindingsBuilder<'a> {
         let is_generator =
             !(yields_and_returns.yields.is_empty() && yields_and_returns.yield_froms.is_empty());
         let return_ann = return_ann_with_range.as_ref().map(|(_, key, _)| *key);
+        let annotation_was_self = return_ann_with_range
+            .as_ref()
+            .map(|(_, _, was_self)| *was_self)
+            .unwrap_or(false);
 
         // Collect the keys of explicit returns.
         let return_keys = yields_and_returns
@@ -423,6 +427,9 @@ impl<'a> BindingsBuilder<'a> {
                         is_async,
                         range: x.range,
                         is_unreachable,
+                        annotation_was_self,
+                        class_metadata_key,
+                        decorators: decorators.clone(),
                     }),
                 )
             })
@@ -464,7 +471,7 @@ impl<'a> BindingsBuilder<'a> {
                         range,
                         annotation,
                         stub_or_impl,
-                        decorators,
+                        decorators: decorators.clone(),
                         implicit_return,
                         is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
                         has_explicit_return: !return_keys.is_empty(),

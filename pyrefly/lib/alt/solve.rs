@@ -3078,7 +3078,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let tcc: &dyn Fn() -> TypeCheckContext =
                 &|| TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn);
             if let Some(box expr) = &x.expr {
-                self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
+                let ret_ty = self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors);
+                // Validate explicit returns for `Self` annotations in non-final classes.
+                if x.annotation_was_self {
+                    if let Some(ann_binding) = annot.as_ref() {
+                        let ann_ty = ann_binding.annotation.get_type().clone();
+                        self.check_self_return_type(
+                            &ret_ty,
+                            &ann_ty,
+                            expr.range(),
+                            errors,
+                            x.class_metadata_key,
+                            &x.decorators,
+                        );
+                    }
+                }
+                ret_ty
             } else if let Some(hint) = hint {
                 let none = self.heap.mk_none();
                 self.check_type(&none, &hint, x.range, errors, tcc);
@@ -4248,31 +4263,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         annotation: &Type,
         range: TextRange,
         errors: &ErrorCollector,
-        _class_metadata_key: Option<Idx<KeyClassMetadata>>,
-        decorators: &[Idx<KeyDecorator>],
+        class_metadata_key: Option<Idx<KeyClassMetadata>>,
+        _decorators: &[Idx<KeyDecorator>],
     ) {
         use crate::types::callable::FunctionKind;
 
-        // Check if the class is marked with @final
-        let is_final = decorators.iter().any(|decorator_idx| {
-            let decorator = self.get_idx(*decorator_idx);
-            matches!(
-                decorator.ty.callee_kind(),
-                Some(CalleeKind::Function(FunctionKind::Final))
-            )
-        });
+        // Check if the containing class is marked `@final`
+        let is_final = class_metadata_key
+            .map(|key| self.get_idx(key).is_final())
+            .unwrap_or(false);
 
         // If the class is @final, returning the concrete class is allowed
         if is_final {
             return;
         }
 
-        // For non-final classes: check if return type is ClassType and annotation is also ClassType
-        // (which means Self expanded to it). If they match, report an error.
-        if let (Type::ClassType(return_class), Type::ClassType(annot_class)) =
-            (return_ty, annotation)
-        {
-            if return_class.class_object() == annot_class.class_object() {
+        // For non-final classes: if annotation is `Self` and the return is the concrete class,
+        // report an error.
+        if let (Type::ClassType(return_class), Type::SelfType(want)) = (return_ty, annotation) {
+            if return_class.class_object() == want.class_object() {
                 // Returning the concrete class in a non-final method with Self return type
                 // breaks polymorphism for subclasses
                 self.error(

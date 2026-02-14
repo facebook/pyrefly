@@ -246,3 +246,18 @@ class Shape:
         return Shape()
 "#,
 );
+
+testcase!(
+    test_self_return_concrete_class_error,
+    r#"
+from typing import Self
+
+class Shape:
+    def method(self) -> Self:
+        return Shape()  # E:
+
+    @classmethod
+    def cls_method(cls) -> Self:
+        return Shape()  # E:
+"#,
+);
