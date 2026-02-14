@@ -38,6 +38,9 @@ pub(crate) fn add_pyrefly_ignore_code_action(
     let error_line = error.display_range().start.line_within_file();
     let (line_range, line_text) = line_text_and_range(module_info, error_line)?;
 
+    if pyrefly_ignore_blank(line_text) {
+        return None;
+    }
     if let Some(existing_codes) = pyrefly_ignore_codes(line_text) {
         if existing_codes.iter().any(|code| code == error_code) {
             return None;
@@ -51,6 +54,7 @@ pub(crate) fn add_pyrefly_ignore_code_action(
     if let Some(above_line) = error_line.decrement()
         && let Some((above_range, above_text)) = line_text_and_range(module_info, above_line)
         && above_text.trim_start().starts_with('#')
+        && !pyrefly_ignore_blank(above_text)
         && let Some(existing_codes) = pyrefly_ignore_codes(above_text)
     {
         if existing_codes.iter().any(|code| code == error_code) {
@@ -94,6 +98,41 @@ fn pyrefly_ignore_codes(line: &str) -> Option<Vec<String>> {
         .map(str::to_owned)
         .collect::<Vec<_>>();
     Some(codes)
+}
+
+fn pyrefly_ignore_blank(line: &str) -> bool {
+    let Some(comment_start) = find_comment_start_in_line(line) else {
+        return false;
+    };
+    let mut rest = line[comment_start..].trim_start();
+    if !rest.starts_with('#') {
+        return false;
+    }
+    rest = rest[1..].trim_start();
+    if !rest.starts_with("pyrefly") {
+        return false;
+    }
+    rest = rest["pyrefly".len()..].trim_start();
+    if !rest.starts_with(':') {
+        return false;
+    }
+    rest = rest[1..].trim_start();
+    if !rest.starts_with("ignore") {
+        return false;
+    }
+    rest = &rest["ignore".len()..];
+    let mut chars = rest.chars();
+    let Some(first) = chars.next() else {
+        return true;
+    };
+    if first.is_alphanumeric() || first == '-' || first == '_' {
+        return false;
+    }
+    if first.is_whitespace() {
+        let trimmed = rest.trim_start();
+        return !trimmed.starts_with('[');
+    }
+    first != '['
 }
 
 fn merge_pyrefly_ignore_codes(existing: Vec<String>, new_code: &str) -> Vec<String> {
