@@ -1963,6 +1963,7 @@ impl<'a> Transaction<'a> {
                     let error_range = error.range();
                     if error_range.contains_range(range) {
                         let unknown_name = module_info.code_at(error_range);
+                        let mut aliased_modules = SmallSet::new();
                         for (handle_to_import_from, export) in
                             self.search_exports_exact(unknown_name)
                         {
@@ -1998,13 +1999,17 @@ impl<'a> Transaction<'a> {
                             ));
                         }
 
-                        for module_name in self.search_modules_fuzzy(unknown_name) {
-                            if module_name == handle.module() {
-                                continue;
-                            }
-                            if let Some((_submodule_name, position, insert_text, _)) = self
-                                .submodule_autoimport_edit(handle, &ast, module_name, import_format)
+                        if let Some(module_name_str) = common_alias_target_module(unknown_name) {
+                            let module_name = ModuleName::from_str(module_name_str);
+                            if module_name != handle.module()
+                                && let Some(module_handle) =
+                                    self.import_handle(handle, module_name, None).finding()
                             {
+                                let (position, insert_text, _) = import_regular_import_edit(
+                                    &ast,
+                                    module_handle,
+                                    Some(unknown_name),
+                                );
                                 let range = TextRange::at(position, TextSize::new(0));
                                 let title = format!("Use common alias: `{}`", insert_text.trim());
                                 let is_private_import = module_name
@@ -2020,6 +2025,30 @@ impl<'a> Transaction<'a> {
                                     is_private_import,
                                 ));
                                 aliased_modules.insert(module_name);
+                            }
+                        }
+
+                        for module_name in self.search_modules_fuzzy(unknown_name) {
+                            if module_name == handle.module() {
+                                continue;
+                            }
+                            if let Some((_submodule_name, position, insert_text, _)) = self
+                                .submodule_autoimport_edit(handle, &ast, module_name, import_format)
+                            {
+                                let range = TextRange::at(position, TextSize::new(0));
+                                let title = format!("Insert import: `{}`", insert_text.trim());
+                                let is_private_import = module_name
+                                    .components()
+                                    .last()
+                                    .is_some_and(|component| component.as_str().starts_with('_'));
+                                import_actions.push((
+                                    title,
+                                    module_info.dupe(),
+                                    range,
+                                    insert_text,
+                                    false,
+                                    is_private_import,
+                                ));
                             }
                         }
 
