@@ -243,7 +243,6 @@ tupleSelf = tuple[Self] # E: `Self` must appear within a class
 );
 
 testcase!(
-    bug = "Should error when Self is used at invalid locations",
     test_self_inside_class,
     r#"
 from typing import Self
@@ -252,7 +251,10 @@ class A[T]: pass
 class B(A[Self]): pass # E: `Self` must appear within a class
 class C:
     @staticmethod
-    def foo(x: Self) -> Self: ...
+    def foo() -> Self: ... # E: `Self` cannot be used in a static method
+
+    @staticmethod
+    def bar(x: Self) -> None: ... # E: `Self` cannot be used in a static method
     "#,
 );
 

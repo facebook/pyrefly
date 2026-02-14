@@ -6405,6 +6405,28 @@
       "severity": "error",
       "stop_column": 34,
       "stop_line": 106
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`Self` cannot be used in a static method",
+      "description": "`Self` cannot be used in a static method",
+      "line": 111,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 13,
+      "stop_line": 111
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`Self` cannot be used in a static method",
+      "description": "`Self` cannot be used in a static method",
+      "line": 116,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 25,
+      "stop_line": 116
     }
   ],
   "generics_syntax_compatibility.py": [

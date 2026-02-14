@@ -571,6 +571,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
+        if def.metadata.flags.is_staticmethod && stmt.name.as_str() != dunder::NEW {
+            // For static methods, the use of `Self` is not allowed.
+            let mut signature_contains_self = false;
+            if let Type::SelfType(_) = &ret {
+                signature_contains_self = true;
+            }
+            for param in &def.params {
+                if let Type::SelfType(_) = param.as_type() {
+                    signature_contains_self = true;
+                    break;
+                }
+            }
+            if signature_contains_self {
+                self.error(
+                    errors,
+                    stmt.name.range,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    "`Self` cannot be used in a static method".to_owned(),
+                );
+            }
+        }
+
         let callable = if let Some(q) = &def.paramspec {
             Callable::concatenate(
                 def.params
