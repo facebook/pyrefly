@@ -210,30 +210,8 @@ pub fn render_signature_diff(expected: &str, found: &str) -> Option<Vec<String>>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::test::util::TestEnv;
     use crate::test::util::init_test;
-
-    /// Unit test for the render_signature_diff function: verifies the
-    /// annotated diff output when parameters and return types differ.
-    #[test]
-    fn test_render_signature_diff() {
-        let expected_sig = "def foo(self: B, a: int, b: int, c: int) -> Unknown: ...";
-        let found_sig = "def foo(self: B) -> None: ...";
-        let lines = render_signature_diff(expected_sig, found_sig)
-            .expect("render_signature_diff should produce output for differing signatures");
-        let output = lines.join("\n  ");
-        let expected = r#"Signature mismatch:
-  expected: def foo(self: B, a: int, b: int, c: int) -> Unknown: ...
-                           ^^^^^^^^^^^^^^^^^^^^^^^^     ^^^^^^^ return type
-                           |
-                           parameters
-  found:    def foo(self: B) -> None: ...
-                          ^     ^^^^ return type
-                          |
-                          parameters"#;
-        assert_eq!(output, expected);
-    }
 
     /// Integration test verifying the full error message produced by the
     /// override checker includes the signature diff annotation.
