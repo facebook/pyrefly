@@ -23,7 +23,6 @@ fn test_inlay_hint_default_config() {
             ..Default::default()
         })
         .unwrap();
-
     interaction.client.did_open("inlay_hint_test.py");
 
     interaction
@@ -48,11 +47,15 @@ fn test_inlay_hint_default_config() {
                     (" -> ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -73,11 +76,15 @@ fn test_inlay_hint_default_config() {
                     (": ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -96,6 +103,8 @@ fn test_inlay_hint_default_config() {
                 hint2,
                 &[
                     (" -> ", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("0", false),
@@ -215,11 +224,15 @@ fn test_inlay_hint_disable_variables() {
                     (" -> ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -238,6 +251,8 @@ fn test_inlay_hint_disable_variables() {
                 hint1,
                 &[
                     (" -> ", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("0", false),
@@ -282,21 +297,25 @@ fn test_inlay_hint_disable_returns() {
                 return false;
             }
 
-            let hint = &hints[0];
-            if hint.position.line != 11 || hint.position.character != 6 {
+            let hint0 = &hints[0];
+            if hint0.position.line != 11 || hint0.position.character != 6 {
                 return false;
             }
             check_inlay_hint_label_values(
-                hint,
+                hint0,
                 &[
                     (": ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -397,11 +416,15 @@ fn test_inlay_hint_tuple_type_has_location() {
                     (" -> ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -419,11 +442,15 @@ fn test_inlay_hint_tuple_type_has_location() {
                     (": ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -669,7 +696,15 @@ fn test_inlay_hint_never_has_location() {
             if hint.position.line != 6 || hint.position.character != 19 {
                 return false;
             }
-            check_inlay_hint_label_values(hint, &[(" -> ", false), ("Never", true)])
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (" -> ", false),
+                    ("typing", false),
+                    (".", false),
+                    ("Never", true),
+                ],
+            )
         })
         .unwrap();
 
