@@ -941,7 +941,6 @@ impl<'a> BindingsBuilder<'a> {
         self.lambda_yield_keys
             .push((range, yield_keys, yield_from_keys));
     }
-
     pub fn record_used_imports_from_dunder_all_names<T>(&mut self, dunder_all_names: T)
     where
         T: Iterator<Item = &'a Name>,
