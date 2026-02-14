@@ -60,8 +60,8 @@ use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Exported;
-use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::LambdaParamId;
@@ -2230,7 +2230,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self.thread_state.stack
     }
 
-
     pub fn django_reverse_relations_index(&self) -> Arc<DjangoReverseRelationIndex> {
         if let Some(index) = self.thread_state.django_reverse_relations.borrow().clone() {
             return index;
@@ -2262,9 +2261,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         index
     }
 
-    fn cycles(&self) -> &Cycles {
-        &self.thread_state.cycles
-    }
     /// Access the thread-local state for trace recording.
     pub(crate) fn trace_state(&self) -> &ThreadState {
         self.thread_state

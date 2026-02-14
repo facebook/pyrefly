@@ -253,10 +253,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Get RelatedManager class from django stubs
     fn get_related_manager_type(&self, target_model_type: Type) -> Option<Type> {
         let django_related_module = ModuleName::django_models_fields_related_descriptors();
-        let django_related_module_exports = self.exports.get(django_related_module).finding()?;
-        if !django_related_module_exports
-            .exports(self.exports)
-            .contains_key(&RELATED_MANAGER)
+        if !self
+            .exports
+            .export_exists(django_related_module, &RELATED_MANAGER)
         {
             return None;
         }
@@ -652,10 +651,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
 
             let expr = match &binding.definition {
-                ClassFieldDefinition::AssignedInBody {
-                    value: ExprOrBinding::Expr(expr),
-                    ..
-                } => expr,
+                ClassFieldDefinition::AssignedInBody { value, .. } => match value.as_ref() {
+                    ExprOrBinding::Expr(expr) => expr,
+                    _ => continue,
+                },
                 _ => continue,
             };
             let Some(call_expr) = expr.as_call_expr() else {
