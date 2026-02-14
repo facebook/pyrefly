@@ -463,6 +463,7 @@ impl<'a> Transaction<'a> {
                 handle.sys_info(),
                 definition_kind,
                 TextRangeWithModule::new(module_info, id.range()),
+                true,
             ) {
                 return references;
             }
