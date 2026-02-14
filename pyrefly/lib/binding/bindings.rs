@@ -983,6 +983,28 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::NameAssign { expr: value, .. } => {
                     return self.as_special_export_inner(value, visited_names, visited_keys);
                 }
+                Binding::Import(module_name, name, _) => {
+                    return self.lookup.is_special_export(*module_name, name);
+                }
+                Binding::Phi(_, branches) => {
+                    // Check all branches for a consistent special export (e.g. try/except
+                    // importing Literal from typing vs typing_extensions).
+                    let mut result = None;
+                    for branch in branches {
+                        let branch_result = self.special_export_from_binding_idx(
+                            branch.value_key,
+                            visited_names,
+                            visited_keys,
+                        );
+                        match (&result, &branch_result) {
+                            (None, _) => result = branch_result,
+                            (_, None) => {}
+                            (Some(a), Some(b)) if a == b => {}
+                            _ => return None,
+                        }
+                    }
+                    return result;
+                }
                 _ => return None,
             }
         }
