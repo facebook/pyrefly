@@ -127,7 +127,6 @@
   "generics_self_usage.py": [
     "Line 82: Expected 1 errors",
     "Line 86: Expected 1 errors",
-    "Line 121: Expected 1 errors",
     "Line 125: Expected 1 errors"
   ],
   "generics_syntax_compatibility.py": [],

@@ -6427,6 +6427,17 @@
       "severity": "error",
       "stop_column": 25,
       "stop_line": 116
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`Self` cannot be used in a metaclass",
+      "description": "`Self` cannot be used in a metaclass",
+      "line": 121,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 16,
+      "stop_line": 121
     }
   ],
   "generics_syntax_compatibility.py": [

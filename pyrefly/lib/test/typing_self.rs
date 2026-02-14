@@ -258,12 +258,12 @@ class C:
 );
 
 testcase!(
-    bug = "Should error if Self appears in metaclass",
     test_self_inside_metaclass,
     r#"
 from typing import Self
 
 class C(type):
-    def foo(cls) -> Self: ...
+    def foo(cls) -> Self: ... # E: `Self` cannot be used in a metaclass
+    def __new__(cls, x: Self) -> Self: ... # E: `Self` cannot be used in a metaclass
     "#,
 );
