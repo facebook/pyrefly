@@ -67,6 +67,7 @@ use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::error::signature_diff::render_signature_diff;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
@@ -76,6 +77,8 @@ use crate::types::callable::Param;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::display::LspDisplayMode;
+use crate::types::display::TypeDisplayContext;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::literal::Lit;
 use crate::types::quantified::Quantified;
@@ -3041,15 +3044,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ) => Some((
                     ErrorKind::BadParamNameOverride,
                     format!("Got parameter name `{child}`, expected `{parent}`"),
+                    Vec::new(),
                 )),
-                Err(error) => Some((
-                    ErrorKind::BadOverride,
-                    error.to_error_msg(cls.name(), parent.name(), field_name),
-                )),
+                Err(error) => {
+                    let mut diff_lines = Vec::new();
+                    if let AttrSubsetError::Covariant { got, want, .. }
+                    | AttrSubsetError::Invariant { got, want, .. }
+                    | AttrSubsetError::Contravariant { got, want, .. } = &*error
+                    {
+                        let got_sigs = got.callable_signatures();
+                        let want_sigs = want.callable_signatures();
+                        if got_sigs.len() == 1 && want_sigs.len() == 1 {
+                            let mut got_ctx = TypeDisplayContext::new(&[got]);
+                            got_ctx.set_lsp_display_mode(LspDisplayMode::SignatureHelp);
+                            let got_sig = got_ctx.display(got).to_string();
+
+                            let mut want_ctx = TypeDisplayContext::new(&[want]);
+                            want_ctx.set_lsp_display_mode(LspDisplayMode::SignatureHelp);
+                            let want_sig = want_ctx.display(want).to_string();
+
+                            if let Some(lines) = render_signature_diff(&want_sig, &got_sig) {
+                                diff_lines = lines;
+                            }
+                        }
+                    }
+
+                    Some((
+                        ErrorKind::BadOverride,
+                        error.to_error_msg(cls.name(), parent.name(), field_name),
+                        diff_lines,
+                    ))
+                }
                 Ok(()) => None,
             };
-            if let Some((kind, error)) = error {
-                let msg = vec1![
+            if let Some((kind, error, extra_lines)) = error {
+                let mut msg = vec1![
                     format!(
                         "Class member `{}.{}` overrides parent class `{}` in an inconsistent manner",
                         cls.name(),
@@ -3058,6 +3087,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                     error,
                 ];
+                for line in extra_lines {
+                    msg.push(line);
+                }
                 errors.add(range, ErrorInfo::Kind(kind), msg);
             }
         }
