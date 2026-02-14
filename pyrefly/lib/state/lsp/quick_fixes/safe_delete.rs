@@ -101,6 +101,7 @@ fn is_supported_symbol_kind(kind: SymbolKind) -> bool {
             | SymbolKind::Variable
             | SymbolKind::Constant
             | SymbolKind::TypeAlias
+            | SymbolKind::Attribute
     )
 }
 
