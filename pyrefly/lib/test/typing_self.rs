@@ -258,7 +258,7 @@ class C:
 );
 
 testcase!(
-    bug = "Self in a metaclass refers to the metaclass, not the class it creates; we should validate this",
+    bug = "Should error if Self appears in metaclass",
     test_self_inside_metaclass,
     r#"
 from typing import Self
