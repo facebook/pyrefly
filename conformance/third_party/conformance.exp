@@ -3061,7 +3061,7 @@
       "code": -2,
       "column": 13,
       "concise_description": "`ProtoAImpl` is not assignable to `ProtoA`",
-      "description": "`ProtoAImpl` is not assignable to `ProtoA`\n  Protocol `ProtoA` requires attribute `z`",
+      "description": "`ProtoAImpl` is not assignable to `ProtoA`\n  `ProtoAImpl.x` is not a ClassVar, but `ProtoA.x` is",
       "line": 140,
       "name": "bad-assignment",
       "severity": "error",
@@ -8984,6 +8984,39 @@
       "severity": "error",
       "stop_column": 25,
       "stop_line": 74
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "`type[ConcreteC1]` is not assignable to `ProtoC1`",
+      "description": "`type[ConcreteC1]` is not assignable to `ProtoC1`\n  `type[ConcreteC1].attr1` is not a ClassVar, but `ProtoC1.attr1` is",
+      "line": 104,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 104
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "`type[ConcreteC2]` is not assignable to `ProtoC1`",
+      "description": "`type[ConcreteC2]` is not assignable to `ProtoC1`\n  `type[ConcreteC2].attr1` is not a ClassVar, but `ProtoC1.attr1` is",
+      "line": 106,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 106
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "`type[ConcreteC3]` is not assignable to `ProtoC1`",
+      "description": "`type[ConcreteC3]` is not assignable to `ProtoC1`\n  `type[ConcreteC3].attr1` is not a ClassVar, but `ProtoC1.attr1` is",
+      "line": 108,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 108
     }
   ],
   "protocols_definition.py": [
@@ -9035,12 +9068,34 @@
       "code": -2,
       "column": 22,
       "concise_description": "`Concrete2_Bad2` is not assignable to `Template2`",
-      "description": "`Concrete2_Bad2` is not assignable to `Template2`\n  `Concrete2_Bad2.val1` has type `Sequence[float]`, which is not assignable to `Sequence[int]`, the type of `Template2.val1`",
+      "description": "`Concrete2_Bad2` is not assignable to `Template2`\n  `Concrete2_Bad2.val1` is not a ClassVar, but `Template2.val1` is",
       "line": 115,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 38,
       "stop_line": 115
+    },
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "`Concrete2_Bad3` is not assignable to `Template2`",
+      "description": "`Concrete2_Bad3` is not assignable to `Template2`\n  `Concrete2_Bad3.val1` is not a ClassVar, but `Template2.val1` is",
+      "line": 116,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 38,
+      "stop_line": 116
+    },
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "`Concrete2_Bad4` is not assignable to `Template2`",
+      "description": "`Concrete2_Bad4` is not assignable to `Template2`\n  `Concrete2_Bad4.val1` is not a ClassVar, but `Template2.val1` is",
+      "line": 117,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 38,
+      "stop_line": 117
     },
     {
       "code": -2,
@@ -9057,7 +9112,7 @@
       "code": -2,
       "column": 22,
       "concise_description": "`Concrete3_Bad2` is not assignable to `Template3`",
-      "description": "`Concrete3_Bad2` is not assignable to `Template3`\n  `Concrete3_Bad2.val1` is read-only, but `Template3.val1` is read-write",
+      "description": "`Concrete3_Bad2` is not assignable to `Template3`\n  `Concrete3_Bad2.val1` is a ClassVar, but `Template3.val1` is not",
       "line": 157,
       "name": "bad-assignment",
       "severity": "error",

@@ -91,6 +91,10 @@ pub enum AttrSubsetError {
     Getattr,
     // either `got` or `want` is a module fallback
     ModuleFallback,
+    // `got` and `want` differ on whether they are ClassVar
+    ClassVarMismatch {
+        got_is_classvar: bool,
+    },
     // `got` is not a subtype of `want`
     // applies to methods, read-only attributes, and property getters
     Covariant {
@@ -152,6 +156,17 @@ impl AttrSubsetError {
                 format!(
                     "`{child_class}.{attr_name}` or `{parent_class}.{attr_name}` are module fallbacks, which cannot be checked for override compatibility"
                 )
+            }
+            AttrSubsetError::ClassVarMismatch { got_is_classvar } => {
+                if *got_is_classvar {
+                    format!(
+                        "`{child_class}.{attr_name}` is a ClassVar, but `{parent_class}.{attr_name}` is not"
+                    )
+                } else {
+                    format!(
+                        "`{child_class}.{attr_name}` is not a ClassVar, but `{parent_class}.{attr_name}` is"
+                    )
+                }
             }
             AttrSubsetError::Covariant {
                 got,

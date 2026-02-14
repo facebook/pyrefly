@@ -445,6 +445,23 @@ impl ClassField {
         }
     }
 
+    /// Like `new_synthesized`, but marks the field as a ClassVar.
+    pub fn new_synthesized_classvar(ty: Type) -> Self {
+        ClassField(
+            ClassFieldInner::ClassAttribute {
+                ty,
+                annotation: None,
+                initialization: ClassFieldInitialization::ClassBody(None),
+                read_only_reason: None,
+                is_classvar: true,
+                is_staticmethod: false,
+                is_foreign_key: false,
+                has_choices: false,
+            },
+            IsInherited::Maybe,
+        )
+    }
+
     pub fn recursive(heap: &TypeHeap) -> Self {
         Self(
             ClassFieldInner::ClassAttribute {
@@ -4043,6 +4060,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         want: &ClassAttribute,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> Result<(), Box<AttrSubsetError>> {
+        let got_is_classvar = matches!(got, ClassAttribute::ReadOnly(_, ReadOnlyReason::ClassVar));
+        let want_is_classvar =
+            matches!(want, ClassAttribute::ReadOnly(_, ReadOnlyReason::ClassVar));
+        if got_is_classvar != want_is_classvar {
+            return Err(Box::new(AttrSubsetError::ClassVarMismatch {
+                got_is_classvar,
+            }));
+        }
         match (got, want) {
             (_, ClassAttribute::NoAccess(_)) => Ok(()),
             (ClassAttribute::NoAccess(_), _) => Err(Box::new(AttrSubsetError::NoAccess)),
