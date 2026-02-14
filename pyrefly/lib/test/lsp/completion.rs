@@ -1564,8 +1564,8 @@ Completion Results:
 
 /// When an argument is provided that narrows down the overload,
 /// only params from compatible overloads are shown. Here `1` (int)
-/// is compatible with `x: int` but not `y: bool`, so only the
-/// second overload's params appear.
+/// is compatible with `x: int` (second overload) but not `y: bool`
+/// (first overload), so only the second overload's params appear.
 #[test]
 fn kwargs_completion_overload_correct() {
     let code = r#"

@@ -146,14 +146,6 @@ impl Transaction<'_> {
         res: &mut Option<(TextRange, TextRange, ActiveArgument, Vec<TextRange>)>,
     ) -> bool {
         let kwarg_start_idx = call.arguments.args.len();
-        // Collect ranges of positional args already fully provided (before the cursor).
-        let provided_arg_ranges: Vec<TextRange> = call
-            .arguments
-            .args
-            .iter()
-            .filter(|arg| arg.range().end() <= find)
-            .map(|arg| arg.range())
-            .collect();
         visit_keyword_arguments_until_match(call, |j, kw| {
             if kw.range.contains_inclusive(find) {
                 Self::visit_finding_signature_range(&kw.value, find, res);
@@ -164,11 +156,19 @@ impl Transaction<'_> {
                     Some(identifier) => ActiveArgument::Keyword(identifier.id.clone()),
                     None => ActiveArgument::Positional(kwarg_start_idx + j),
                 };
+                // Collect ranges of positional args already fully provided (before the cursor).
+                let provided_arg_ranges: Vec<TextRange> = call
+                    .arguments
+                    .args
+                    .iter()
+                    .filter(|arg| arg.range().end() <= find)
+                    .map(|arg| arg.range())
+                    .collect();
                 *res = Some((
                     call.func.range(),
                     call.arguments.range,
                     active_argument,
-                    provided_arg_ranges.clone(),
+                    provided_arg_ranges,
                 ));
                 true
             } else {
@@ -197,14 +197,8 @@ impl Transaction<'_> {
 
     /// Finds the callable(s) (multiple if overloads exist) at position in document.
     /// Returns (callables, chosen_overload_index, active_argument, callee_range, provided_arg_ranges).
-    /// `chosen_overload_index` is `Some` when a specific overload was matched
-    /// (e.g. a resolved call or a closest match among candidates), and `None`
-    /// when overloads were expanded from a type without call-site analysis.
-    ///
-    /// The returned `provided_arg_ranges` contains source ranges of positional
-    /// arguments already fully provided before the cursor. Callers (e.g.
-    /// completions) can pass these to `filter_compatible_overloads` to narrow
-    /// the list down to overloads whose parameters match the provided args.
+    /// `chosen_overload_index` is `Some` when a specific overload was matched,
+    /// `None` when overloads were expanded from a type without call-site analysis.
     pub(crate) fn get_callables_from_call(
         &self,
         handle: &Handle,

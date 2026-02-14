@@ -247,6 +247,51 @@ impl Transaction<'_> {
         }
     }
 
+    /// Like `add_literal_completions_from_type`, but deduplicates using a shared `seen` set.
+    /// This is used when collecting literal completions across multiple overloads.
+    fn add_literal_completions_from_type_dedup(
+        param_type: &Type,
+        completions: &mut Vec<RankedCompletion>,
+        in_string_literal: bool,
+        seen: &mut SmallSet<(String, Option<String>)>,
+    ) {
+        match param_type {
+            Type::Literal(lit) => {
+                let label = lit.value.to_string_escaped(true);
+                let detail = format!("{param_type}");
+                if seen.insert((label.clone(), Some(detail.clone()))) {
+                    let insert_text = if in_string_literal {
+                        if let Lit::Str(s) = &lit.value {
+                            s.to_string()
+                        } else {
+                            label.clone()
+                        }
+                    } else {
+                        label.clone()
+                    };
+                    completions.push(RankedCompletion::new(CompletionItem {
+                        label,
+                        kind: Some(CompletionItemKind::VALUE),
+                        detail: Some(detail),
+                        insert_text: Some(insert_text),
+                        ..Default::default()
+                    }));
+                }
+            }
+            Type::Union(box Union { members, .. }) => {
+                for member in members {
+                    Self::add_literal_completions_from_type_dedup(
+                        member,
+                        completions,
+                        in_string_literal,
+                        seen,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Adds completions for magic methods (dunder methods like `__init__`, `__str__`, etc.).
     pub(crate) fn add_magic_method_completions(
         identifier: &Identifier,
@@ -562,32 +607,19 @@ impl Transaction<'_> {
         {
             let callables =
                 self.filter_compatible_overloads(handle, callables, &provided_arg_ranges);
-            let len_before = completions.len();
+            let mut seen = SmallSet::new();
             for callable in callables {
                 if let Some(params) =
                     Self::normalize_singleton_function_type_into_params(callable.clone())
                     && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
                     && let Some(param) = params.get(arg_index)
                 {
-                    Self::add_literal_completions_from_type(
+                    Self::add_literal_completions_from_type_dedup(
                         param.as_type(),
                         completions,
                         in_string_literal,
+                        &mut seen,
                     );
-                }
-            }
-            // Deduplicate literal completions added across overloads.
-            let mut seen = SmallSet::new();
-            let mut i = len_before;
-            while i < completions.len() {
-                let key = (
-                    completions[i].item.label.clone(),
-                    completions[i].item.detail.clone(),
-                );
-                if seen.insert(key) {
-                    i += 1;
-                } else {
-                    completions.remove(i);
                 }
             }
         }
