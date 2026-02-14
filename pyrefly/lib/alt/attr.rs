@@ -13,6 +13,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::literal::LitEnum;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::tuple::Tuple;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forall;
 use pyrefly_types::types::Forallable;
@@ -899,9 +900,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .add_to(errors, range, attr_name, todo_ctx);
             return None;
         };
-        let (lookup_found, lookup_not_found, lookup_error) = self
+        let (mut lookup_found, mut lookup_not_found, lookup_error) = self
             .lookup_attr_from_base(attr_base.clone(), attr_name)
             .decompose();
+        let slot_violations = self.apply_slots_restriction_for_write(attr_name, &mut lookup_found);
+        if !slot_violations.is_empty() {
+            should_narrow = false;
+            lookup_not_found.extend(slot_violations);
+        }
         for e in lookup_error {
             e.add_to(errors, range, attr_name, todo_ctx);
             should_narrow = false;
@@ -1028,9 +1034,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .add_to(errors, range, attr_name, todo_ctx);
             return;
         };
-        let (lookup_found, lookup_not_found, lookup_error) = self
+        let (mut lookup_found, mut lookup_not_found, lookup_error) = self
             .lookup_attr_from_base(attr_base.clone(), attr_name)
             .decompose();
+        let slot_violations = self.apply_slots_restriction_for_write(attr_name, &mut lookup_found);
+        lookup_not_found.extend(slot_violations);
         for not_found in lookup_not_found {
             self.check_delattr(
                 attr_base.clone(),
@@ -1067,6 +1075,98 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         }
+    }
+
+    fn apply_slots_restriction_for_write(
+        &self,
+        attr_name: &Name,
+        lookup_found: &mut Vec<(Attribute, AttributeBase1)>,
+    ) -> Vec<NotFoundOn> {
+        if lookup_found.is_empty() {
+            return Vec::new();
+        }
+        let mut kept = Vec::with_capacity(lookup_found.len());
+        let mut violations = Vec::new();
+        for (attr, base) in lookup_found.drain(..) {
+            let Some(class) = self.class_for_slots_restriction(&base) else {
+                kept.push((attr, base));
+                continue;
+            };
+            let Some(slots) = self.slots_for_class(&class) else {
+                kept.push((attr, base));
+                continue;
+            };
+            if slots.contains(attr_name) {
+                kept.push((attr, base));
+            } else {
+                violations.push(NotFoundOn::ClassInstance(
+                    class.class_object().dupe(),
+                    base.clone(),
+                ));
+            }
+        }
+        *lookup_found = kept;
+        violations
+    }
+
+    fn class_for_slots_restriction(&self, base: &AttributeBase1) -> Option<ClassType> {
+        match base {
+            AttributeBase1::ClassInstance(cls)
+            | AttributeBase1::SelfType(cls)
+            | AttributeBase1::Quantified(_, cls)
+            | AttributeBase1::SuperInstance(cls, _) => Some(cls.clone()),
+            AttributeBase1::EnumLiteral(lit) => Some(lit.class.clone()),
+            _ => None,
+        }
+    }
+
+    fn slots_for_class(&self, cls: &ClassType) -> Option<SmallSet<Name>> {
+        let mro = self.get_mro_for_class(cls.class_object());
+        let mut slots = SmallSet::new();
+        let dict_name = Name::new_static("__dict__");
+        let classes = std::iter::once(cls.class_object().dupe()).chain(
+            mro.ancestors_no_object()
+                .iter()
+                .map(|c| c.class_object().dupe()),
+        );
+        for class in classes {
+            let Some(field) = self.get_field_from_current_class_only(&class, &dunder::SLOTS) else {
+                return None;
+            };
+            let Some(names) = self.extract_slot_names_from_type(&field.ty()) else {
+                return None;
+            };
+            if names.contains(&dict_name) {
+                return None;
+            }
+            slots.extend(names);
+        }
+        Some(slots)
+    }
+
+    fn extract_slot_names_from_type(&self, ty: &Type) -> Option<SmallSet<Name>> {
+        let mut slots = SmallSet::new();
+        match ty {
+            Type::Tuple(Tuple::Concrete(elts)) => {
+                for elt in elts {
+                    let Type::Literal(lit) = elt else {
+                        return None;
+                    };
+                    let Lit::Str(name) = &lit.value else {
+                        return None;
+                    };
+                    slots.insert(Name::new(name.as_str()));
+                }
+            }
+            Type::Literal(lit) => {
+                let Lit::Str(name) = &lit.value else {
+                    return None;
+                };
+                slots.insert(Name::new(name.as_str()));
+            }
+            _ => return None,
+        }
+        Some(slots)
     }
 
     /// Predicate for whether a specific attribute name matches a protocol during structural
