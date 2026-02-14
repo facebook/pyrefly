@@ -587,30 +587,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        // `Self` is not allowed in metaclasses, since the meaning of `Self` is ambiguous:
-        // it could refer to the metaclass instance (a class) or the class itself.
-        if let Some(cls) = &def.defining_cls {
-            let metadata = self.get_metadata_for_class(cls);
-            if metadata.is_metaclass() {
-                // Skip the implicit self/cls first parameter, which naturally has SelfType.
-                let explicit_params_contain_self = def
-                    .params
-                    .iter()
-                    .skip(if has_implicit_self_or_cls_param { 1 } else { 0 })
-                    .any(|p| contains_self_type(p.as_type()));
-                let signature_contains_self =
-                    contains_self_type(&ret) || explicit_params_contain_self;
-                if signature_contains_self {
-                    self.error(
-                        errors,
-                        stmt.name.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
-                        "`Self` cannot be used in a metaclass".to_owned(),
-                    );
-                }
-            }
-        }
-
         let callable = if let Some(q) = &def.paramspec {
             Callable::concatenate(
                 def.params

@@ -266,8 +266,9 @@ testcase!(
 from typing import Self
 
 class C(type):
+    x: Self  # E: `Self` cannot be used in a metaclass
     def foo(cls) -> Self: ... # E: `Self` cannot be used in a metaclass
-    def __new__(cls, x: Self) -> Self: ... # E: `Self` cannot be used in a metaclass
+    def __new__(cls, x: Self) -> Self: ... # E: `Self` cannot be used in a metaclass  # E: `Self` cannot be used in a metaclass
     def __mul__(cls, count: int) -> list[Self]: ... # E: `Self` cannot be used in a metaclass
     "#,
 );

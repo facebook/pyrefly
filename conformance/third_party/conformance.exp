@@ -6430,24 +6430,24 @@
     },
     {
       "code": -2,
-      "column": 9,
+      "column": 37,
       "concise_description": "`Self` cannot be used in a metaclass",
       "description": "`Self` cannot be used in a metaclass",
       "line": 121,
       "name": "invalid-annotation",
       "severity": "error",
-      "stop_column": 16,
+      "stop_column": 41,
       "stop_line": 121
     },
     {
       "code": -2,
-      "column": 9,
+      "column": 42,
       "concise_description": "`Self` cannot be used in a metaclass",
       "description": "`Self` cannot be used in a metaclass",
       "line": 125,
       "name": "invalid-annotation",
       "severity": "error",
-      "stop_column": 16,
+      "stop_column": 46,
       "stop_line": 125
     }
   ],
