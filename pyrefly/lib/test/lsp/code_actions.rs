@@ -813,6 +813,61 @@ my_export
 }
 
 #[test]
+fn quickfix_add_pyrefly_ignore_code() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", "x: int = \"hello\"\n#         ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+1 | x: int = "hello"
+              ^
+Code Actions Results:
+# Title: Add `# pyrefly: ignore [bad-assignment]`
+
+## Before:
+x: int = "hello"
+#         ^
+## After:
+x: int = "hello"  # pyrefly: ignore [bad-assignment]
+#         ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn quickfix_merge_pyrefly_ignore_codes() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "x: int = \"hello\"  # pyrefly: ignore [bad-return]\n#         ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+1 | x: int = "hello"  # pyrefly: ignore [bad-return]
+              ^
+Code Actions Results:
+# Title: Add `# pyrefly: ignore [bad-assignment]`
+
+## Before:
+x: int = "hello"  # pyrefly: ignore [bad-return]
+#         ^
+## After:
+x: int = "hello"  # pyrefly: ignore [bad-assignment, bad-return]
+#         ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
 fn insertion_test_existing_imports() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[
