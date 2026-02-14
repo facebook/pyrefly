@@ -1378,7 +1378,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else if let AttributeBase1::ClassObject(class) = &**protocol_base
                     && self
                         .get_class_member(class.class_object(), attr_name)
-                        .is_some_and(|field| field.is_instance_variable_default())
+                        .is_some_and(|field| field.is_non_classvar_data_attribute())
                 {
                     // Non-ClassVar class body attributes are instance variable defaults.
                     // They should not satisfy protocol requirements when checking class objects,
