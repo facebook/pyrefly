@@ -88,7 +88,7 @@ pub(crate) fn safe_delete_code_actions(
     Some(vec![LocalRefactorCodeAction {
         title: format!("Safe delete `{}`", title_name),
         edits: vec![(module_info.dupe(), removal_range, replacement)],
-        kind: CodeActionKind::REFACTOR_REWRITE,
+        kind: CodeActionKind::new("refactor.delete"),
     }])
 }
 
