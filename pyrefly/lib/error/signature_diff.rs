@@ -11,6 +11,13 @@ use ruff_annotate_snippets::Level as SnippetLevel;
 use ruff_annotate_snippets::Renderer as SnippetRenderer;
 use ruff_annotate_snippets::Snippet as SnippetBlock;
 
+/// Parse byte ranges for parameters and return type from a signature string
+/// produced by `TypeDisplayContext` with `SignatureHelp` mode.
+///
+/// Expects format like `def foo(self: T, a: int) -> None: ...`.
+/// Returns `(params_range, return_type_range)` as byte ranges, or `None`
+/// if the format doesn't match. Callers should fall back gracefully on `None`
+/// since the display format could change or contain edge cases we don't handle.
 fn signature_parts(sig: &str) -> Option<(Range<usize>, Range<usize>)> {
     let open = sig.find('(')?;
 
@@ -49,6 +56,16 @@ fn signature_parts(sig: &str) -> Option<(Range<usize>, Range<usize>)> {
     Some((params, ret_start..ret_end))
 }
 
+/// Find the byte ranges where two strings differ, using longest common
+/// prefix and suffix. Returns `None` if the strings are equal.
+///
+/// The returned ranges highlight the "differing middle" of each string.
+/// When one string is a strict prefix/suffix of the other, a minimal
+/// single-byte range is returned to ensure there's always something to annotate.
+///
+/// Note: operates on raw bytes, which is correct for ASCII type names but
+/// could produce ranges that split multi-byte UTF-8 characters for non-ASCII
+/// identifiers.
 fn diff_ranges(expected: &str, found: &str) -> Option<(Range<usize>, Range<usize>)> {
     if expected == found {
         return None;
@@ -87,6 +104,16 @@ fn diff_ranges(expected: &str, found: &str) -> Option<(Range<usize>, Range<usize
     Some((expected_span, found_span))
 }
 
+/// Render a visual diff between two function signatures, highlighting where
+/// the parameters and/or return types differ.
+///
+/// Uses `ruff_annotate_snippets` to produce caret-underline annotations, then
+/// strips the line-number gutter from the rendered output. Returns `None` if
+/// signature parsing fails or if there are no differences to annotate.
+///
+/// The gutter-stripping logic depends on the current output format of
+/// `SnippetRenderer::plain()`. If that format changes upstream, this
+/// post-processing may need to be updated.
 pub fn render_signature_diff(expected: &str, found: &str) -> Option<Vec<String>> {
     let (expected_params, expected_ret) = signature_parts(expected)?;
     let (found_params, found_ret) = signature_parts(found)?;
