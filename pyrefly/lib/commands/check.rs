@@ -434,13 +434,6 @@ impl OutputFormat {
     }
 }
 
-fn should_emit_github_errors() -> bool {
-    matches!(
-        std::env::var("GITHUB_ACTIONS"),
-        Ok(value) if value.eq_ignore_ascii_case("true")
-    )
-}
-
 fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
     let normalized = severity_to_str(severity);
     match normalized.as_str() {
@@ -924,9 +917,6 @@ impl CheckArgs {
             self.output
                 .output_format
                 .write_errors_to_console(relative_to.as_path(), &shown_errors)?;
-        }
-        if should_emit_github_errors() && self.output.output_format != OutputFormat::Github {
-            OutputFormat::Github.write_errors_to_console(relative_to.as_path(), &shown_errors)?;
         }
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {

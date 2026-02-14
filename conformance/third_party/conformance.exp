@@ -680,6 +680,28 @@
     },
     {
       "code": -2,
+      "column": 30,
+      "concise_description": "`list[list[float] | str | GenericTypeAlias1[str]]` is not assignable to `list[str | GenericTypeAlias1[str]]`",
+      "description": "`list[list[float] | str | GenericTypeAlias1[str]]` is not assignable to `list[str | GenericTypeAlias1[str]]`",
+      "line": 63,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 43,
+      "stop_line": 63
+    },
+    {
+      "code": -2,
+      "column": 35,
+      "concise_description": "`list[int | list[int | list[int | list[float] | str | GenericTypeAlias2[str, int]] | str | GenericTypeAlias2[str, int]] | str | GenericTypeAlias2[str, int]]` is not assignable to `list[int | str | GenericTypeAlias2[str, int]]`",
+      "description": "`list[int | list[int | list[int | list[float] | str | GenericTypeAlias2[str, int]] | str | GenericTypeAlias2[str, int]] | str | GenericTypeAlias2[str, int]]` is not assignable to `list[int | str | GenericTypeAlias2[str, int]]`",
+      "line": 69,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 64,
+      "stop_line": 69
+    },
+    {
+      "code": -2,
       "column": 29,
       "concise_description": "Found cyclic self-reference in `RecursiveUnion`",
       "description": "Found cyclic self-reference in `RecursiveUnion`",
@@ -925,8 +947,8 @@
     {
       "code": -2,
       "column": 6,
-      "concise_description": "Cannot redefine existing name `BadTypeAlias14` as a type alias",
-      "description": "Cannot redefine existing name `BadTypeAlias14` as a type alias",
+      "concise_description": "Cannot redefine existing type alias `BadTypeAlias14`",
+      "description": "Cannot redefine existing type alias `BadTypeAlias14`",
       "line": 52,
       "name": "redefinition",
       "severity": "error",
@@ -998,6 +1020,17 @@
       "severity": "error",
       "stop_column": 47,
       "stop_line": 82
+    },
+    {
+      "code": -2,
+      "column": 31,
+      "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias4`",
+      "description": "Found cyclic self-reference in `RecursiveTypeAlias4`",
+      "line": 84,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 59,
+      "stop_line": 84
     },
     {
       "code": -2,
@@ -1077,6 +1110,17 @@
       "severity": "error",
       "stop_column": 50,
       "stop_line": 46
+    },
+    {
+      "code": -2,
+      "column": 40,
+      "concise_description": "Found cyclic self-reference in `BadAlias5`",
+      "description": "Found cyclic self-reference in `BadAlias5`",
+      "line": 47,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 60,
+      "stop_line": 47
     },
     {
       "code": -2,
@@ -3264,6 +3308,61 @@
       "severity": "error",
       "stop_column": 10,
       "stop_line": 59
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Expected 0 positional arguments, got 1",
+      "description": "Expected 0 positional arguments, got 1",
+      "line": 64,
+      "name": "bad-argument-count",
+      "severity": "error",
+      "stop_column": 10,
+      "stop_line": 64
+    },
+    {
+      "code": -2,
+      "column": 8,
+      "concise_description": "Missing argument `x` in function `Meta1.__call__`",
+      "description": "Missing argument `x` in function `Meta1.__call__`",
+      "line": 72,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 10,
+      "stop_line": 72
+    },
+    {
+      "code": -2,
+      "column": 8,
+      "concise_description": "Missing argument `y` in function `Meta1.__call__`",
+      "description": "Missing argument `y` in function `Meta1.__call__`",
+      "line": 72,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 10,
+      "stop_line": 72
+    },
+    {
+      "code": -2,
+      "column": 8,
+      "concise_description": "Missing argument `y` in function `Class2.__new__`",
+      "description": "Missing argument `y` in function `Class2.__new__`",
+      "line": 81,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 81
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "Argument `Literal[2]` is not assignable to parameter `y` with type `str` in function `Class2.__new__`",
+      "description": "Argument `Literal[2]` is not assignable to parameter `y` with type `str` in function `Class2.__new__`",
+      "line": 82,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 13,
+      "stop_line": 82
     }
   ],
   "constructors_callable.py": [
@@ -3335,25 +3434,58 @@
     },
     {
       "code": -2,
-      "column": 23,
-      "concise_description": "Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`",
-      "description": "Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`",
-      "line": 62,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 29,
-      "stop_line": 62
-    },
-    {
-      "code": -2,
       "column": 12,
-      "concise_description": "revealed type: (*args: Unknown, **kwargs: Unknown) -> Class3",
-      "description": "revealed type: (*args: Unknown, **kwargs: Unknown) -> Class3",
+      "concise_description": "revealed type: (x: int) -> Class3",
+      "description": "revealed type: (x: int) -> Class3",
       "line": 63,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 16,
       "stop_line": 63
+    },
+    {
+      "code": -2,
+      "column": 3,
+      "concise_description": "Missing argument `x`",
+      "description": "Missing argument `x`",
+      "line": 65,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 5,
+      "stop_line": 65
+    },
+    {
+      "code": -2,
+      "column": 3,
+      "concise_description": "Missing argument `x`",
+      "description": "Missing argument `x`",
+      "line": 66,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 8,
+      "stop_line": 66
+    },
+    {
+      "code": -2,
+      "column": 4,
+      "concise_description": "Unexpected keyword argument `y`",
+      "description": "Unexpected keyword argument `y`",
+      "line": 66,
+      "name": "unexpected-keyword",
+      "severity": "error",
+      "stop_column": 5,
+      "stop_line": 66
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected 1 positional argument, got 2",
+      "description": "Expected 1 positional argument, got 2",
+      "line": 67,
+      "name": "bad-argument-count",
+      "severity": "error",
+      "stop_column": 8,
+      "stop_line": 67
     },
     {
       "code": -2,
@@ -5223,6 +5355,17 @@
       "severity": "error",
       "stop_column": 29,
       "stop_line": 68
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Class `BadChild` has inconsistent type arguments for base class `Grandparent`: `Grandparent[T1, T2]` and `Grandparent[T2, T1]`",
+      "description": "Class `BadChild` has inconsistent type arguments for base class `Grandparent`: `Grandparent[T1, T2]` and `Grandparent[T2, T1]`",
+      "line": 98,
+      "name": "invalid-inheritance",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 98
     }
   ],
   "generics_basic.py": [
@@ -9522,6 +9665,39 @@
   "protocols_variance.py": [
     {
       "code": -2,
+      "column": 7,
+      "concise_description": "Type variable `T1` in class `AnotherBox` is declared as invariant, but could be covariant based on its usage",
+      "description": "Type variable `T1` in class `AnotherBox` is declared as invariant, but could be covariant based on its usage",
+      "line": 21,
+      "name": "variance-mismatch",
+      "severity": "warn",
+      "stop_column": 17,
+      "stop_line": 21
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Type variable `T3` in class `Protocol2` is declared as invariant, but could be contravariant based on its usage",
+      "description": "Type variable `T3` in class `Protocol2` is declared as invariant, but could be contravariant based on its usage",
+      "line": 40,
+      "name": "variance-mismatch",
+      "severity": "warn",
+      "stop_column": 16,
+      "stop_line": 40
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Type variable `T1` in class `Protocol4` is declared as invariant, but could be contravariant based on its usage",
+      "description": "Type variable `T1` in class `Protocol4` is declared as invariant, but could be contravariant based on its usage",
+      "line": 56,
+      "name": "variance-mismatch",
+      "severity": "warn",
+      "stop_column": 16,
+      "stop_line": 56
+    },
+    {
+      "code": -2,
       "column": 9,
       "concise_description": "Type variable `T1_co` is Covariant but is used in contravariant position",
       "description": "Type variable `T1_co` is Covariant but is used in contravariant position",
@@ -9533,6 +9709,17 @@
     },
     {
       "code": -2,
+      "column": 7,
+      "concise_description": "Type variable `T1` in class `Protocol6` is declared as invariant, but could be covariant based on its usage",
+      "description": "Type variable `T1` in class `Protocol6` is declared as invariant, but could be covariant based on its usage",
+      "line": 66,
+      "name": "variance-mismatch",
+      "severity": "warn",
+      "stop_column": 16,
+      "stop_line": 66
+    },
+    {
+      "code": -2,
       "column": 9,
       "concise_description": "Type variable `T1_contra` is Contravariant but is used in covariant position",
       "description": "Type variable `T1_contra` is Contravariant but is used in covariant position",
@@ -9541,6 +9728,17 @@
       "severity": "error",
       "stop_column": 11,
       "stop_line": 72
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Type variable `T1` in class `Protocol12` is declared as invariant, but could be covariant based on its usage",
+      "description": "Type variable `T1` in class `Protocol12` is declared as invariant, but could be covariant based on its usage",
+      "line": 104,
+      "name": "variance-mismatch",
+      "severity": "warn",
+      "stop_column": 17,
+      "stop_line": 104
     }
   ],
   "qualifiers_annotated.py": [
@@ -10018,6 +10216,28 @@
       "severity": "error",
       "stop_column": 11,
       "stop_line": 155
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Cannot assign to `TEN` because it is imported as final",
+      "description": "Cannot assign to `TEN` because it is imported as final",
+      "line": 166,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 4,
+      "stop_line": 166
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Cannot assign to `PI` because it is imported as final",
+      "description": "Cannot assign to `PI` because it is imported as final",
+      "line": 170,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 3,
+      "stop_line": 170
     }
   ],
   "qualifiers_final_decorator.py": [

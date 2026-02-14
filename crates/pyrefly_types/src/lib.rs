@@ -25,6 +25,7 @@ pub mod alias;
 pub mod annotation;
 pub mod callable;
 pub mod class;
+pub mod dimension;
 pub mod display;
 pub mod equality;
 pub mod facet;

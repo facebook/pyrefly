@@ -100,7 +100,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect();
 
                 if transformed != union.to_vec() {
-                    Some(unions(transformed))
+                    Some(unions(transformed, self.heap))
                 } else {
                     None
                 }

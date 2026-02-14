@@ -80,7 +80,7 @@
         "key": {
           "callee": {
             "id": 0,
-            "key": "os.path.exists"
+            "key": "genericpath.exists"
           },
           "caller": {
             "id": 0,
@@ -1552,7 +1552,7 @@
           ],
           "target": {
             "id": 0,
-            "key": "os.path.exists"
+            "key": "genericpath.exists"
           }
         }
       },
@@ -1785,7 +1785,7 @@
               },
               "target": {
                 "id": 0,
-                "key": "os.path.exists"
+                "key": "genericpath.exists"
               }
             },
             {

@@ -1,0 +1,7 @@
+search_path = [
+    "fixtures",
+]
+
+python_version = "3.12"
+
+tensor-shapes = true

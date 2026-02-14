@@ -157,7 +157,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if self.has_superclass(left_base, right_base)
                     || self.has_superclass(right_base, left_base)
                 {
-                    intersect(vec![left.clone(), right.clone()], fallback)
+                    intersect(vec![left.clone(), right.clone()], fallback, self.heap)
                 } else {
                     // A common subclass of these two classes cannot exist.
                     self.heap.mk_never()
@@ -396,13 +396,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 for q in quantifieds {
                     // The only time it's safe to simplify a quantified away is when the entire intersection is Never.
                     let intersection = narrow(
-                        &q.restriction().as_type(self.stdlib),
+                        &q.restriction().as_type(self.stdlib, self.heap),
                         right_unwrapped.clone(),
                     );
                     res.push(if matches!(&intersection, Type::Type(t) if t.is_never()) {
                         intersection
                     } else {
-                        intersect(vec![q.to_type(self.heap), right.clone()], right.clone())
+                        intersect(
+                            vec![q.to_type(self.heap), right.clone()],
+                            right.clone(),
+                            self.heap,
+                        )
                     })
                 }
                 if !nonquantifieds.is_empty() {
@@ -630,7 +634,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let forced_middle = self.force_for_narrowing(middle_var, range, errors);
                 let new_tuple =
                     Tuple::Unpacked(Box::new((prefix.clone(), forced_middle, suffix.clone())));
-                self.tuple_len_eq(&simplify_tuples(new_tuple), len, range, errors)
+                self.tuple_len_eq(&simplify_tuples(new_tuple, self.heap), len, range, errors)
             }
             Tuple::Unbounded(elements) => {
                 self.heap.mk_concrete_tuple(vec![(**elements).clone(); len])
@@ -652,7 +656,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let forced_middle = self.force_for_narrowing(middle_var, range, errors);
                 let new_tuple =
                     Tuple::Unpacked(Box::new((prefix.clone(), forced_middle, suffix.clone())));
-                self.tuple_len_not_eq(&simplify_tuples(new_tuple), len, range, errors)
+                self.tuple_len_not_eq(&simplify_tuples(new_tuple, self.heap), len, range, errors)
             }
             _ => self.heap.mk_tuple(tuple.clone()),
         }

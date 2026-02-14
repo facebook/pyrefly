@@ -26,7 +26,6 @@ use crate::lsp::non_wasm::server::ProcessEvent;
 use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
-use crate::lsp::non_wasm::server::dispatch_lsp_events;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 
 /// TSP server that delegates to LSP server infrastructure while handling only TSP requests
@@ -149,7 +148,7 @@ pub fn tsp_loop(
         scope.spawn(|| server.inner.run_recheck_queue(telemetry));
 
         scope.spawn(|| {
-            dispatch_lsp_events(&server.inner);
+            server.inner.dispatch_lsp_events();
         });
 
         let mut ide_transaction_manager = TransactionManager::default();

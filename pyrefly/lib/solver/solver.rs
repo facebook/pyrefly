@@ -12,13 +12,17 @@ use std::cell::RefMut;
 use std::fmt;
 use std::fmt::Display;
 use std::mem;
+use std::sync::Arc;
 
+use pyrefly_types::dimension::ShapeError;
+use pyrefly_types::dimension::simplify;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_alias::TypeAliasRef;
+use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -102,7 +106,7 @@ enum Variable {
     /// we encounter the name of the same alias. Unlike most other variables, AliasRecursive
     /// represents a known, fixed type and exists so that we can reference the type before we've
     /// finished computing it.
-    AliasRecursive(TypeAliasRef),
+    AliasRecursive(TypeAliasRef, Arc<TParams>),
     /// A variable that used to decompose a type, e.g. getting T from Awaitable[T]
     Unwrap,
     /// A variable used for a parameter type (either a function or lambda parameter).
@@ -157,7 +161,7 @@ impl Display for Variable {
                 }
             }
             Variable::LoopRecursive(t, _) => write!(f, "LoopRecursive(prior={t}, _)"),
-            Variable::AliasRecursive(r) => write!(f, "AliasRecursive({})", r.name),
+            Variable::AliasRecursive(r, _) => write!(f, "AliasRecursive({})", r.name),
             Variable::Recursive => write!(f, "Recursive"),
             Variable::Parameter => write!(f, "Parameter"),
             Variable::Unwrap => write!(f, "Unwrap"),
@@ -392,8 +396,8 @@ impl Solver {
                 *variable = Variable::Answer(self.heap.mk_any_implicit());
                 None
             }
-            Variable::AliasRecursive(r) => {
-                *variable = Variable::Answer(Self::finish_alias_recursive(r));
+            Variable::AliasRecursive(r, tparams) => {
+                *variable = Variable::Answer(Self::finish_alias_recursive(r, tparams));
                 None
             }
             Variable::Parameter => {
@@ -456,13 +460,17 @@ impl Solver {
         }
     }
 
+    pub fn expand_dimension(&self, dim_ty: &mut Type) {
+        self.expand_with_limit(dim_ty, TYPE_LIMIT, &VarRecurser::new());
+    }
+
     /// Given a `Var`, ensures that the solver has an answer for it (or inserts Any if not already),
     /// and returns that answer. Note that if the `Var` is already bound to something that contains a
     /// `Var` (including itself), then we will return the answer.
     pub fn force_var(&self, v: Var) -> Type {
         let lock = self.variables.lock();
         let mut e = lock.get_mut(v);
-        match &mut *e {
+        let result = match &mut *e {
             Variable::Answer(t) => t.clone(),
             Variable::LoopRecursive(prior_type, bound) => {
                 *bound = LoopBound::Prior;
@@ -472,13 +480,30 @@ impl Solver {
                 let ty = match &mut *e {
                     Variable::Quantified(q) => q.as_gradual_type(),
                     Variable::PartialQuantified(q) => q.as_gradual_type(),
-                    Variable::AliasRecursive(r) => Self::finish_alias_recursive(r),
+                    Variable::AliasRecursive(r, tparams) => {
+                        Self::finish_alias_recursive(r, tparams)
+                    }
                     _ => self.heap.mk_any_implicit(),
                 };
                 *e = Variable::Answer(ty.clone());
                 ty
             }
-        }
+        };
+        // Simplify dimension expressions after forcing
+        // This ensures Tensor[(10 * 20)] becomes Tensor[200]
+        self.simplify_forced_type(result)
+    }
+
+    /// Simplify dimension expressions in a forced type
+    fn simplify_forced_type(&self, mut ty: Type) -> Type {
+        // Use transform_mut to visit every Type node and simplify dimensions
+        ty.transform_mut(&mut |t| {
+            let simplified = simplify(t.clone());
+            if &simplified != t {
+                *t = simplified;
+            }
+        });
+        ty
     }
 
     fn deep_force_mut_with_limit(&self, t: &mut Type, limit: usize, recurser: &VarRecurser) {
@@ -495,6 +520,12 @@ impl Solver {
             }
         } else {
             t.recurse_mut(&mut |t| self.deep_force_mut_with_limit(t, limit - 1, recurser));
+            // After forcing all Vars recursively, simplify dimension expressions
+            // This handles cases like Tensor[(10 * 20)] after Vars are forced to 10 and 20
+            let simplified = simplify(t.clone());
+            if &simplified != t {
+                *t = simplified;
+            }
         }
     }
 
@@ -513,7 +544,7 @@ impl Solver {
                 display_name: original_name,
             }) = x
             {
-                let mut merged = unions(mem::take(xs));
+                let mut merged = unions(mem::take(xs), &self.heap);
                 // Preserve union display names during simplification
                 if let Type::Union(box Union { display_name, .. }) = &mut merged {
                     *display_name = original_name.clone();
@@ -521,10 +552,12 @@ impl Solver {
                 *x = merged;
             }
             if let Type::Intersect(y) = x {
-                *x = intersect(mem::take(&mut y.0), y.1.clone());
+                *x = intersect(mem::take(&mut y.0), y.1.clone(), &self.heap);
             }
             if let Type::Tuple(tuple) = x {
-                *x = self.heap.mk_tuple(simplify_tuples(mem::take(tuple)));
+                *x = self
+                    .heap
+                    .mk_tuple(simplify_tuples(mem::take(tuple), &self.heap));
             }
             // When a param spec is resolved, collapse any Concatenate and Callable types that use it
             if let Type::Concatenate(ts, box Type::ParamSpecValue(paramlist)) = x {
@@ -716,7 +749,7 @@ impl Solver {
             return (QuantifiedHandle::empty(), t);
         }
 
-        let qs = params.iter().map(|p| &p.quantified).collect::<Vec<_>>();
+        let qs = params.iter().collect::<Vec<_>>();
         let vs = self.fresh_quantified_vars(&qs, uniques);
         let ts = vs.0.map(|v| v.to_type(&self.heap));
         let t = t.subst(&qs.into_iter().zip(&ts).collect());
@@ -744,7 +777,7 @@ impl Solver {
         // Collect tparams that appear in the first parameter.
         let mut qs = Vec::new();
         self_param.for_each_quantified(&mut |q| {
-            if tparams.iter().any(|tparam| tparam.quantified == *q) {
+            if tparams.iter().any(|tparam| *tparam == *q) {
                 qs.push(q);
             }
         });
@@ -832,12 +865,12 @@ impl Solver {
         let mut lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Quantified(q) = t
-                && **q == param.quantified
+                && **q == *param
             {
                 let v = Var::new(uniques);
                 vs.push(v);
                 *t = v.to_type(&self.heap);
-                lock.insert_fresh(v, Variable::Quantified(param.quantified.clone()));
+                lock.insert_fresh(v, Variable::Quantified(param.clone()));
             }
         });
         QuantifiedHandle(vs)
@@ -856,9 +889,9 @@ impl Solver {
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Var(v) = t
                 && let Variable::Quantified(q) = &*lock.get(*v)
-                && *q == param.quantified
+                && *q == *param
             {
-                *t = param.quantified.clone().to_type(&self.heap);
+                *t = param.clone().to_type(&self.heap);
             }
         })
     }
@@ -873,7 +906,7 @@ impl Solver {
         let mut new_targs: Vec<Option<Type>> = Vec::with_capacity(targs.len());
         targs.iter_paired().enumerate().for_each(|(i, (param, t))| {
             let new_targ = if let Type::Quantified(q) = t
-                && **q == param.quantified
+                && **q == *param
             {
                 if let Some(default) = param.default() {
                     // Note that TypeVars are stored in Type::TypeVar form, and have not yet been
@@ -896,7 +929,7 @@ impl Solver {
                                     .unwrap_or_else(|| &targs.as_slice()[*i])
                                     .clone()
                             } else {
-                                param.quantified.as_gradual_type()
+                                param.as_gradual_type()
                             }
                         }
                     });
@@ -925,8 +958,8 @@ impl Solver {
             })
     }
 
-    fn finish_alias_recursive(r: &TypeAliasRef) -> Type {
-        Type::TypeAlias(Box::new(TypeAliasData::Ref(r.clone())))
+    fn finish_alias_recursive(r: &TypeAliasRef, tparams: &Arc<TParams>) -> Type {
+        Forallable::TypeAlias(TypeAliasData::Ref(r.clone())).forall(tparams.clone())
     }
 
     /// Generate a fresh variable used to tie recursive bindings.
@@ -945,11 +978,16 @@ impl Solver {
         v
     }
 
-    pub fn fresh_alias_recursive(&self, uniques: &UniqueFactory, r: TypeAliasRef) -> Var {
+    pub fn fresh_alias_recursive(
+        &self,
+        uniques: &UniqueFactory,
+        r: TypeAliasRef,
+        tparams: Arc<TParams>,
+    ) -> Var {
         let v = Var::new(uniques);
         self.variables
             .lock()
-            .insert_fresh(v, Variable::AliasRecursive(r));
+            .insert_fresh(v, Variable::AliasRecursive(r, tparams));
         v
     }
 
@@ -1025,9 +1063,12 @@ impl Solver {
             })
             .collect::<Vec<_>>();
         branches.extend(modules.into_values().map(Type::Module));
-        unions_with_literals(branches, type_order.stdlib(), &|cls| {
-            type_order.get_enum_member_count(cls)
-        })
+        unions_with_literals(
+            branches,
+            type_order.stdlib(),
+            &|cls| type_order.get_enum_member_count(cls),
+            &self.heap,
+        )
     }
 
     /// Record a variable that is used recursively.
@@ -1118,7 +1159,7 @@ impl Solver {
                 expand(ty, &lock, &VarRecurser::new(), &self.heap, &mut res);
                 // Then remove any reference to self, before unioning it back together
                 res.retain(|x| x != &Type::Var(var));
-                let ty = unions(res);
+                let ty = unions(res, &self.heap);
                 match bounds_to_check {
                     Some(bounds) => {
                         lock.update(var, Variable::Answer(ty.clone()));
@@ -1349,6 +1390,8 @@ pub enum SubsetError {
     TypeOfProtocolNeedsConcreteClass(Name),
     /// A `type` cannot accept special forms like `Callable`
     TypeCannotAcceptSpecialForms(SpecialForm),
+    /// Tensor shape or dimension error
+    TensorShape(ShapeError),
     // TODO(rechen): replace this with specific reasons
     Other,
 }
@@ -1383,6 +1426,7 @@ impl SubsetError {
                 "`type` cannot accept special form `{}` as an argument",
                 form
             )),
+            SubsetError::TensorShape(err) => Some(err.to_string()),
             SubsetError::Other => None,
         }
     }
@@ -1536,8 +1580,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             }
                             (true, true) => {
                                 // Both have restrictions, need to compare bounds
-                                let b1 = r1.as_type(self.type_order.stdlib());
-                                let b2 = r2.as_type(self.type_order.stdlib());
+                                let b1 = r1.as_type(self.type_order.stdlib(), &self.solver.heap);
+                                let b2 = r2.as_type(self.type_order.stdlib(), &self.solver.heap);
                                 drop(variables);
 
                                 let b1_subtype_of_b2 = self.is_subset_eq(&b1, &b2).is_ok();
@@ -1586,7 +1630,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Variable::Parameter => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
                     )),
-                    Variable::AliasRecursive(_) => Err(SubsetError::internal_error(
+                    Variable::AliasRecursive(_, _) => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::AliasRecursive` to ever appear in is_subset_eq",
                     )),
                     Variable::Answer(t1) => {
@@ -1597,7 +1641,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                     Variable::Quantified(q) | Variable::PartialQuantified(q) => {
                         let name = q.name.clone();
-                        let bound = q.restriction().as_type(self.type_order.stdlib());
+                        let bound = q
+                            .restriction()
+                            .as_type(self.type_order.stdlib(), &self.solver.heap);
                         drop(v1_ref);
                         variables.update(*v1, Variable::Answer(t2.clone()));
                         drop(variables);
@@ -1682,7 +1728,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Variable::Parameter => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
                     )),
-                    Variable::AliasRecursive(_) => Err(SubsetError::internal_error(
+                    Variable::AliasRecursive(_, _) => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::AliasRecursive` to ever appear in is_subset_eq",
                     )),
                     Variable::Answer(t2) => {
@@ -1696,7 +1742,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             .clone()
                             .promote_implicit_literals(self.type_order.stdlib());
                         let name = q.name.clone();
-                        let bound = q.restriction().as_type(self.type_order.stdlib());
+                        let bound = q
+                            .restriction()
+                            .as_type(self.type_order.stdlib(), &self.solver.heap);
                         drop(v2_ref);
                         variables.update(*v2, Variable::Answer(t1_p.clone()));
                         drop(variables);
