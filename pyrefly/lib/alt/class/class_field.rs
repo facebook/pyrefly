@@ -3062,13 +3062,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let got_sigs = got.callable_signatures();
                         let want_sigs = want.callable_signatures();
                         if got_sigs.len() == 1 && want_sigs.len() == 1 {
-                            let mut got_ctx = TypeDisplayContext::new(&[got]);
-                            got_ctx.set_lsp_display_mode(LspDisplayMode::SignatureHelp);
-                            let got_sig = got_ctx.display(got).to_string();
-
-                            let mut want_ctx = TypeDisplayContext::new(&[want]);
-                            want_ctx.set_lsp_display_mode(LspDisplayMode::SignatureHelp);
-                            let want_sig = want_ctx.display(want).to_string();
+                            let mut ctx = TypeDisplayContext::new(&[got, want]);
+                            ctx.set_lsp_display_mode(LspDisplayMode::SignatureHelp);
+                            let got_sig = ctx.display(got).to_string();
+                            let want_sig = ctx.display(want).to_string();
 
                             if let Some(lines) = render_signature_diff(&want_sig, &got_sig) {
                                 diff_lines = lines;
@@ -3099,9 +3096,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                     message,
                 ];
-                for line in extra_lines {
-                    msg.push(line);
-                }
+                msg.extend(extra_lines);
                 errors.add(range, ErrorInfo::Kind(kind), msg);
             }
         }
