@@ -868,6 +868,38 @@ x: int = "hello"  # pyrefly: ignore [bad-assignment, bad-return]
 }
 
 #[test]
+fn quickfix_merge_pyrefly_ignore_codes_comment_line_above() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "    # pyrefly: ignore [bad-return]\n    x: int = \"hello\"\n#         ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+1 |     # pyrefly: ignore [bad-return]
+2 |     x: int = "hello"
+              ^
+Code Actions Results:
+# Title: Add `# pyrefly: ignore [bad-assignment]`
+
+## Before:
+    # pyrefly: ignore [bad-return]
+    x: int = "hello"
+#         ^
+## After:
+    # pyrefly: ignore [bad-assignment, bad-return]
+    x: int = "hello"
+#         ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
 fn insertion_test_existing_imports() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[
