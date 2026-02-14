@@ -1732,6 +1732,13 @@ pub enum ReturnTypeKind {
         implicit_return: Idx<Key>,
         is_generator: bool,
         has_explicit_return: bool,
+        /// Whether the annotation was originally `Self` (before expansion to a concrete class).
+        /// Used to validate that methods with `Self` return type don't return the concrete class
+        /// in non-final classes, as this breaks polymorphism for subclasses.
+        annotation_was_self: bool,
+        /// The class metadata key (containing class for this method, if this is a method).
+        /// Used to check for `@final` decorator when validating `Self` returns.
+        class_metadata_key: Option<Idx<KeyClassMetadata>>,
     },
     /// We have an explicit return annotation, and we should blindly trust it without any validation
     ShouldTrustAnnotation {

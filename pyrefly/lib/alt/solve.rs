@@ -94,6 +94,8 @@ use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyClassMetadata;
+use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
@@ -2897,6 +2899,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 implicit_return,
                 is_generator,
                 has_explicit_return,
+                annotation_was_self,
+                class_metadata_key,
             } => {
                 // TODO: A return type annotation like `Final` is invalid in this context.
                 // It will result in an implicit Any type, which is reasonable, but we should
@@ -2922,6 +2926,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         *has_explicit_return,
                         *range,
                         errors,
+                        *annotation_was_self,
+                        *class_metadata_key,
+                        decorators,
                     );
                 }
                 self.return_type_from_annotation(ty, x.is_async, *is_generator)
@@ -4182,6 +4189,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         has_explicit_returns: bool,
         range: TextRange,
         errors: &ErrorCollector,
+        annotation_was_self: bool,
+        class_metadata_key: Option<Idx<KeyClassMetadata>>,
+        decorators: &[Idx<KeyDecorator>],
     ) {
         if is_async && is_generator {
             if self.decompose_async_generator(annotation).is_none() {
@@ -4213,6 +4223,68 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     has_explicit_returns,
                 ))
             });
+
+            // Validate Self return type semantics: methods with Self return type should not
+            // return the concrete class in non-final classes (unless Self expands to that class).
+            // In non-final classes, returning the concrete class breaks polymorphism for subclasses.
+            if annotation_was_self {
+                self.check_self_return_type(
+                    implicit_return.ty(),
+                    annotation,
+                    range,
+                    errors,
+                    class_metadata_key,
+                    decorators,
+                );
+            }
+        }
+    }
+
+    /// Check that returns with Self type annotations don't return the concrete class
+    /// (unless the containing method's class is marked @final).
+    fn check_self_return_type(
+        &self,
+        return_ty: &Type,
+        annotation: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+        _class_metadata_key: Option<Idx<KeyClassMetadata>>,
+        decorators: &[Idx<KeyDecorator>],
+    ) {
+        use crate::types::callable::FunctionKind;
+
+        // Check if the class is marked with @final
+        let is_final = decorators.iter().any(|decorator_idx| {
+            let decorator = self.get_idx(*decorator_idx);
+            matches!(
+                decorator.ty.callee_kind(),
+                Some(CalleeKind::Function(FunctionKind::Final))
+            )
+        });
+
+        // If the class is @final, returning the concrete class is allowed
+        if is_final {
+            return;
+        }
+
+        // For non-final classes: check if return type is ClassType and annotation is also ClassType
+        // (which means Self expanded to it). If they match, report an error.
+        if let (Type::ClassType(return_class), Type::ClassType(annot_class)) =
+            (return_ty, annotation)
+        {
+            if return_class.class_object() == annot_class.class_object() {
+                // Returning the concrete class in a non-final method with Self return type
+                // breaks polymorphism for subclasses
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadReturn),
+                    "Method with `Self` return type cannot return the concrete class; \
+                     this breaks polymorphism in subclasses. Mark the class as `@final` \
+                     if you want to restrict to the concrete type."
+                        .to_owned(),
+                );
+            }
         }
     }
 

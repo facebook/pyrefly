@@ -1445,18 +1445,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             {
                 self.is_subset_eq(&got, want)
             }
-            (Type::ClassType(got), Type::SelfType(want)) => {
-                // ClassType(got) <: SelfType(want) means:
-                // got must be the same class as want or a subclass of want.
-                // Reject if got is a superclass of want.
-                // has_superclass(got, want) = "is want a superclass of got?"
-                // We allow if this is true (same or subclass).
-                ok_or(
-                    self.type_order
-                        .has_superclass(got.class_object(), want.class_object()),
-                    SubsetError::Other,
-                )
-            }
+            (Type::ClassType(got), Type::SelfType(want)) => ok_or(
+                self.type_order
+                    .has_superclass(got.class_object(), want.class_object()),
+                SubsetError::Other,
+            ),
             (Type::Type(box Type::ClassType(got)), Type::SelfType(want)) => ok_or(
                 self.type_order.has_metaclass(got.class_object(), want),
                 SubsetError::Other,
