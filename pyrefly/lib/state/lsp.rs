@@ -2031,6 +2031,8 @@ impl<'a> Transaction<'a> {
                         }
 
                         if let Some(mut actions) = quick_fixes::generate_code::generate_code_actions(
+                            self,
+                            handle,
                             &module_info,
                             ast.as_ref(),
                             error_range,
