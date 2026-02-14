@@ -332,10 +332,11 @@ impl Transaction<'_> {
         position: TextSize,
         completions: &mut Vec<RankedCompletion>,
     ) {
-        if let Some((callables, _, _, _)) = self.get_callables_from_call(handle, position) {
-            // Show params from all overloads. Ideally we would filter to only
-            // compatible overloads based on arguments provided so far, but that
-            // would require re-evaluating type compatibility here.
+        if let Some((callables, _, _, _, provided_arg_ranges)) =
+            self.get_callables_from_call(handle, position)
+        {
+            let callables =
+                self.filter_compatible_overloads(handle, callables, &provided_arg_ranges);
             let mut seen = SmallSet::new();
             for callable in callables {
                 if let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
@@ -437,9 +438,9 @@ impl Transaction<'_> {
     }
 
     fn expected_call_argument_type(&self, handle: &Handle, position: TextSize) -> Option<Type> {
-        let (callables, chosen_overload_index, active_argument, _) =
+        let (callables, chosen_overload_index, active_argument, _, _) =
             self.get_callables_from_call(handle, position)?;
-        let callable = callables.get(chosen_overload_index)?.clone();
+        let callable = callables.get(chosen_overload_index?)?.clone();
         let params = Self::normalize_singleton_function_type_into_params(callable)?;
         let arg_index = Self::active_parameter_index(&params, &active_argument)?;
         let param = params.get(arg_index)?;
@@ -556,11 +557,12 @@ impl Transaction<'_> {
         completions: &mut Vec<RankedCompletion>,
         in_string_literal: bool,
     ) {
-        if let Some((callables, _, active_argument, _)) =
+        if let Some((callables, _, active_argument, _, provided_arg_ranges)) =
             self.get_callables_from_call(handle, position)
         {
-            // Show literal completions from all overloads. Ideally we would filter
-            // to only compatible overloads, but that requires type compatibility checks.
+            let callables =
+                self.filter_compatible_overloads(handle, callables, &provided_arg_ranges);
+            let len_before = completions.len();
             for callable in callables {
                 if let Some(params) =
                     Self::normalize_singleton_function_type_into_params(callable.clone())
@@ -572,6 +574,20 @@ impl Transaction<'_> {
                         completions,
                         in_string_literal,
                     );
+                }
+            }
+            // Deduplicate literal completions added across overloads.
+            let mut seen = SmallSet::new();
+            let mut i = len_before;
+            while i < completions.len() {
+                let key = (
+                    completions[i].item.label.clone(),
+                    completions[i].item.detail.clone(),
+                );
+                if seen.insert(key) {
+                    i += 1;
+                } else {
+                    completions.remove(i);
                 }
             }
         }

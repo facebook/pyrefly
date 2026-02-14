@@ -290,6 +290,9 @@ dim.get("")
         report.contains(
             r#"
 Completion Results:
+- (Value) 'x': Literal['x'] inserting `x`
+- (Value) 'y': Literal['y'] inserting `y`
+- (Value) 'z': Literal['z'] inserting `z`
 - (Field) x: int
 - (Field) y: int
 - (Field) z: int
@@ -322,6 +325,8 @@ dim.get(key="")
             r#"
 Completion Results:
 - (Value) 'x': Literal['x'] inserting `x`
+- (Value) 'y': Literal['y'] inserting `y`
+- (Value) 'z': Literal['z'] inserting `z`
 - (Field) x: int
 - (Field) y: int
 - (Field) z: int
@@ -1557,9 +1562,10 @@ Completion Results:
     );
 }
 
-/// When an argument is provided that could narrow down the overload,
-/// we still show params from all overloads. Ideally we would filter
-/// to only compatible overloads, but that requires type checking.
+/// When an argument is provided that narrows down the overload,
+/// only params from compatible overloads are shown. Here `1` (int)
+/// is compatible with `x: int` but not `y: bool`, so only the
+/// second overload's params appear.
 #[test]
 fn kwargs_completion_overload_correct() {
     let code = r#"
@@ -1582,9 +1588,7 @@ foo(1,
            ^
 Completion Results:
 - (Variable) x=: int
-- (Variable) y=: bool
 - (Variable) y=: str
-- (Variable) z=: bool
 "#
         .trim(),
         report.trim(),
