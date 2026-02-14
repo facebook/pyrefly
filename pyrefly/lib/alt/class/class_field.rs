@@ -1376,6 +1376,13 @@ fn is_method(
     false
 }
 
+/// Error information for class member override inconsistencies.
+struct OverrideError {
+    kind: ErrorKind,
+    message: String,
+    diff_lines: Vec<String>,
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn calculate_class_field(
         &self,
@@ -3041,11 +3048,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         subset_error: SubsetError::PosParamName(child, parent),
                         ..
                     }),
-                ) => Some((
-                    ErrorKind::BadParamNameOverride,
-                    format!("Got parameter name `{child}`, expected `{parent}`"),
-                    Vec::new(),
-                )),
+                ) => Some(OverrideError {
+                    kind: ErrorKind::BadParamNameOverride,
+                    message: format!("Got parameter name `{child}`, expected `{parent}`"),
+                    diff_lines: Vec::new(),
+                }),
                 Err(error) => {
                     let mut diff_lines = Vec::new();
                     if let AttrSubsetError::Covariant { got, want, .. }
@@ -3069,15 +3076,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
 
-                    Some((
-                        ErrorKind::BadOverride,
-                        error.to_error_msg(cls.name(), parent.name(), field_name),
+                    Some(OverrideError {
+                        kind: ErrorKind::BadOverride,
+                        message: error.to_error_msg(cls.name(), parent.name(), field_name),
                         diff_lines,
-                    ))
+                    })
                 }
                 Ok(()) => None,
             };
-            if let Some((kind, error, extra_lines)) = error {
+            if let Some(OverrideError {
+                kind,
+                message,
+                diff_lines: extra_lines,
+            }) = error
+            {
                 let mut msg = vec1![
                     format!(
                         "Class member `{}.{}` overrides parent class `{}` in an inconsistent manner",
@@ -3085,7 +3097,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         field_name,
                         parent.name()
                     ),
-                    error,
+                    message,
                 ];
                 for line in extra_lines {
                     msg.push(line);
