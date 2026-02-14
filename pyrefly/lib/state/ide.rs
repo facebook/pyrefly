@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::LazyLock;
+
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::finder::ConfigFinder;
@@ -20,6 +22,9 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::Hashed;
+use starlark_map::small_map::SmallMap;
+use starlark_map::smallmap;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingClass;
@@ -51,7 +56,7 @@ pub fn key_to_intermediate_definition(
 /// Otherwise, follow the use-def chain in bindings, and return non-None if we could reach a definition.
 fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<&'a Key> {
     let mut gas = KEY_TO_DEFINITION_INITIAL_GAS;
-    let mut current_idx = bindings.key_to_idx(key);
+    let mut current_idx = bindings.key_to_idx_hashed_opt(Hashed::new(key))?;
     let base_key_of_assign_target = |expr: &Expr| {
         if let Some((id, _)) = identifier_and_chain_for_expr(expr) {
             Some(Key::BoundName(ShortIdentifier::new(&id)))
@@ -169,6 +174,7 @@ fn create_intermediate_definition_from(
                     symbol_kind: Some(symbol_kind),
                     docstring_range: func.docstring_range,
                     deprecation: None,
+                    is_final: false,
                     special_export: None,
                 }));
             }
@@ -180,6 +186,7 @@ fn create_intermediate_definition_from(
                             symbol_kind: Some(SymbolKind::Class),
                             docstring_range: None,
                             deprecation: None,
+                            is_final: false,
                             special_export: None,
                         }))
                     }
@@ -192,6 +199,7 @@ fn create_intermediate_definition_from(
                         symbol_kind: Some(SymbolKind::Class),
                         docstring_range: *docstring_range,
                         deprecation: None,
+                        is_final: false,
                         special_export: None,
                     })),
                 };
@@ -202,6 +210,7 @@ fn create_intermediate_definition_from(
                     symbol_kind: current_binding.symbol_kind(),
                     docstring_range: None,
                     deprecation: None,
+                    is_final: false,
                     special_export: None,
                 }));
             }
@@ -233,19 +242,52 @@ pub fn insert_import_edit(
     )
 }
 
-/// Insert `import <>` import at the top of the file
+/// Common alias -> module mappings used for auto-imports.
+/// These are modeled after Pylance's built-in aliases.
+static COMMON_MODULE_ALIASES: LazyLock<SmallMap<&'static str, &'static str>> =
+    LazyLock::new(|| {
+        smallmap! {
+            "np" => "numpy",
+            "pd" => "pandas",
+            "tf" => "tensorflow",
+            "mpl" => "matplotlib",
+            "plt" => "matplotlib.pyplot",
+            "m" => "math",
+            "sp" => "scipy",
+            "spio" => "scipy.io",
+            "pn" => "panel",
+            "hv" => "holoviews",
+        }
+    });
+
+pub fn common_alias_target_module(alias: &str) -> Option<&'static str> {
+    COMMON_MODULE_ALIASES.get(alias).copied()
+}
+
+/// Insert `import <module>` (optionally with an alias) at the top of the file.
+/// Returns (position, import text, completion label).
 pub fn import_regular_import_edit(
     ast: &ModModule,
     handle_to_import_from: Handle,
-) -> (TextSize, String) {
+    alias: Option<&str>,
+) -> (TextSize, String, String) {
     let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
         first_stmt.range().start()
     } else {
         ast.range.end()
     };
     let module_name_to_import = handle_to_import_from.module();
-    let insert_text = format!("import {}\n", module_name_to_import.as_str());
-    (position, insert_text)
+    let (import_text, completion_label) = match alias {
+        Some(alias) => (
+            format!("import {} as {}\n", module_name_to_import.as_str(), alias),
+            alias.to_owned(),
+        ),
+        None => (
+            format!("import {}\n", module_name_to_import.as_str()),
+            module_name_to_import.as_str().to_owned(),
+        ),
+    };
+    (position, import_text, completion_label)
 }
 
 pub fn insert_import_edit_with_forced_import_format(

@@ -61,6 +61,7 @@ pub struct ClassMetadata {
     /// that were passed to the `dataclass_transform` call.
     dataclass_transform_metadata: Option<DataclassTransformMetadata>,
     pydantic_model_kind: Option<PydanticModelKind>,
+    is_attrs_class: bool,
     django_model_metadata: Option<DjangoModelMetadata>,
     is_marshmallow_schema: bool,
 }
@@ -98,6 +99,7 @@ impl ClassMetadata {
         total_ordering_metadata: Option<TotalOrderingMetadata>,
         dataclass_transform_metadata: Option<DataclassTransformMetadata>,
         pydantic_model_kind: Option<PydanticModelKind>,
+        is_attrs_class: bool,
         django_model_metadata: Option<DjangoModelMetadata>,
         is_marshmallow_schema: bool,
     ) -> ClassMetadata {
@@ -120,6 +122,7 @@ impl ClassMetadata {
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
+            is_attrs_class,
             django_model_metadata,
             is_marshmallow_schema,
         }
@@ -145,6 +148,7 @@ impl ClassMetadata {
             total_ordering_metadata: None,
             dataclass_transform_metadata: None,
             pydantic_model_kind: None,
+            is_attrs_class: false,
             django_model_metadata: None,
             is_marshmallow_schema: false,
         }
@@ -174,7 +178,8 @@ impl ClassMetadata {
         self.typed_dict_metadata.is_some()
     }
 
-    pub fn is_pydantic_base_model(&self) -> bool {
+    /// Returns true if this class is a pydantic model (BaseModel, RootModel, or BaseSettings).
+    pub fn is_pydantic_model(&self) -> bool {
         self.pydantic_model_kind.is_some()
     }
 
@@ -184,6 +189,10 @@ impl ClassMetadata {
 
     pub fn is_marshmallow_schema(&self) -> bool {
         self.is_marshmallow_schema
+    }
+
+    pub fn is_attrs_class(&self) -> bool {
+        self.is_attrs_class
     }
 
     pub fn pydantic_model_kind(&self) -> Option<PydanticModelKind> {
@@ -468,6 +477,10 @@ pub struct DjangoModelMetadata {
     /// The name of the field that has primary_key=True, if any.
     /// If None, the model uses the default auto-generated `id` field.
     pub custom_primary_key_field: Option<Name>,
+    /// Names of ForeignKey fields
+    pub foreign_key_fields: Vec<Name>,
+    /// Names of fields with choices=...
+    pub fields_with_choices: Vec<Name>,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
@@ -647,6 +660,7 @@ impl Linearization {
             Err(_) => return Linearization::empty(),
         };
         let mut ancestor_chains = Vec::new();
+        let mut seen_ancestors: SmallMap<Class, ClassType> = SmallMap::new();
         for (base, mro) in bases_with_mro {
             match &*mro {
                 ClassMro::Resolved(ancestors) => {
@@ -655,6 +669,44 @@ impl Linearization {
                         .map(|ancestor| ancestor.substitute_with(&base.substitution()))
                         .rev()
                         .collect::<Vec<_>>();
+                    let mut check_conflicting_targs = |ctype: &ClassType| -> bool {
+                        if let Some(prev) = seen_ancestors.get(ctype.class_object())
+                            && (prev.targs().len() != ctype.targs().len()
+                                || prev
+                                    .targs()
+                                    .as_slice()
+                                    .iter()
+                                    .zip(ctype.targs().as_slice())
+                                    .any(|(ta, tb)| ta != tb && !ta.is_any() && !tb.is_any()))
+                        {
+                            let ctx = ClassDisplayContext::new(&[cls, ctype.class_object()]);
+                            // TODO: Extend this error message to say where in the class bases the mismatch comes from
+                            // we will need to wire additional information for this.
+                            errors.add(
+                                cls.range(),
+                                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                                vec1![format!(
+                                    "Class `{}` has inconsistent type arguments for base class `{}`: `{}` and `{}`",
+                                    ctx.display(cls),
+                                    ctx.display(ctype.class_object()),
+                                    Type::ClassType(prev.clone()),
+                                    Type::ClassType(ctype.clone()),
+                                )],
+                            );
+                            true
+                        } else {
+                            seen_ancestors.insert(ctype.class_object().dupe(), ctype.clone());
+                            false
+                        }
+                    };
+
+                    for ancestor in ancestors_through_base.iter() {
+                        if check_conflicting_targs(ancestor) {
+                            break;
+                        }
+                    }
+                    check_conflicting_targs(base);
+
                     ancestor_chains.push(AncestorChain::from_base_and_ancestors(
                         base.clone(),
                         ancestors_through_base,

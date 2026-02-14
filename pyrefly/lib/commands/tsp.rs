@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::io::Write;
+
 use clap::Parser;
 use lsp_types::InitializeParams;
 use pyrefly_util::telemetry::Telemetry;
@@ -39,6 +41,7 @@ pub fn run_tsp(
     if let Some(initialize_params) = initialize_tsp_connection(&connection, args.indexing_mode)? {
         // Create an LSP server instance for the TSP server to use.
         let lsp_queue = LspQueue::new();
+        let surface = telemetry.surface();
         let lsp_server = crate::lsp::non_wasm::server::Server::new(
             connection,
             lsp_queue,
@@ -46,6 +49,8 @@ pub fn run_tsp(
             args.indexing_mode,
             args.workspace_indexing_limit,
             false,
+            surface,
+            None, // No path remapping for TSP
         );
 
         // Reuse the existing lsp_loop but with TSP initialization
@@ -71,7 +76,7 @@ fn initialize_tsp_connection(
 
 impl TspArgs {
     pub fn run(self, telemetry: &impl Telemetry) -> anyhow::Result<CommandExitStatus> {
-        // Note that  we must have our logging only write out to stderr.
+        // Note that we must have our logging only write out to stderr.
         eprintln!("starting TSP server");
 
         // Create the transport. Includes the stdio (stdin and stdout) versions but this could
@@ -81,7 +86,10 @@ impl TspArgs {
         run_tsp(connection, self, telemetry)?;
         io_threads.join()?;
         // We have shut down gracefully.
-        eprintln!("shutting down TSP server");
+        // Use writeln! instead of eprintln! to avoid panicking if stderr is closed.
+        // This can happen, for example, when stderr is connected to an LSP client which
+        // closes the connection before Pyrefly language server exits.
+        let _ = writeln!(std::io::stderr(), "shutting down TSP server");
         Ok(CommandExitStatus::Success)
     }
 }

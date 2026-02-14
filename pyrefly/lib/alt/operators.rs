@@ -6,10 +6,14 @@
  */
 
 use pyrefly_graph::index::Idx;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
+use pyrefly_types::dimension::SizeExpr;
+use pyrefly_types::dimension::simplify;
 use pyrefly_types::literal::LitStyle;
+use pyrefly_types::literal::Literal;
+use pyrefly_types::quantified::QuantifiedKind;
 use ruff_python_ast::CmpOp;
-use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprUnaryOp;
@@ -68,6 +72,80 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
+    fn try_symint_binop(&self, op: Operator, lhs: &Type, rhs: &Type) -> Option<Type> {
+        // Only handle if tensor shapes feature is enabled
+        if !self.solver().tensor_shapes {
+            return None;
+        }
+
+        // Only handle arithmetic operations that make sense for dimensions
+        if !matches!(
+            op,
+            Operator::Add | Operator::Sub | Operator::Mult | Operator::FloorDiv
+        ) {
+            return None;
+        }
+
+        // Check if at least one operand is a symbolic dimension type
+        let is_dim_operand = |ty: &Type| match ty {
+            Type::Dim(_) | Type::Size(_) => true,
+            Type::QuantifiedValue(q) => {
+                matches!(q.kind, QuantifiedKind::TypeVar)
+            }
+            _ => false,
+        };
+        if !is_dim_operand(lhs) && !is_dim_operand(rhs) {
+            return None;
+        }
+
+        // Extract the dimension type from Dim, Literal, or Quantified
+        let to_dim_type = |ty: &Type| -> Option<Type> {
+            match ty {
+                Type::Dim(inner_ty) => {
+                    // Dim wraps a dimension type (could be SizeExpr, Quantified, etc.)
+                    Some((**inner_ty).clone())
+                }
+                Type::Literal(box Literal {
+                    value: Lit::Int(n), ..
+                }) => {
+                    // Convert literal to SizeExpr
+                    n.as_i64()
+                        .map(|val| self.heap.mk_size(SizeExpr::Literal(val)))
+                }
+                Type::QuantifiedValue(q)
+                    if matches!(q.kind, pyrefly_types::quantified::QuantifiedKind::TypeVar) =>
+                {
+                    // TypeVar Quantified can be used in dimension arithmetic
+                    Some(Type::Quantified(q.clone()))
+                }
+                Type::Size(_) => {
+                    // SizeExpr is already a dimension type - pass through
+                    Some(ty.clone())
+                }
+                _ => None,
+            }
+        };
+
+        let (l_type, r_type) = (to_dim_type(lhs)?, to_dim_type(rhs)?);
+
+        // Perform the operation on the dimension types
+        let result_ty = match op {
+            Operator::Add => simplify(self.heap.mk_size(SizeExpr::add(l_type, r_type))),
+            Operator::Sub => simplify(self.heap.mk_size(SizeExpr::sub(l_type, r_type))),
+            Operator::Mult => simplify(self.heap.mk_size(SizeExpr::mul(l_type, r_type))),
+            Operator::FloorDiv => simplify(self.heap.mk_size(SizeExpr::floor_div(l_type, r_type))),
+            _ => unreachable!(),
+        };
+
+        // If either operand is Dim, return Dim-wrapped result
+        // Otherwise (e.g., Dim-bounded type parameters), return unwrapped dimension type
+        if matches!(lhs, Type::Dim(_)) || matches!(rhs, Type::Dim(_)) {
+            Some(self.heap.mk_dim(result_ty))
+        } else {
+            Some(result_ty)
+        }
+    }
+
     fn try_binop_calls(
         &self,
         calls: &[(&Name, &Type, &Type)],
@@ -84,7 +162,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 Some(&context),
                 "Expr::binop_infer",
-                true,
+                // Magic method lookup for operators should ignore __getattr__/__getattribute__.
+                false,
             );
             let Some(method_type_dunder) = method_type_dunder else {
                 continue;
@@ -131,37 +210,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (Tuple::Concrete(l), Tuple::Concrete(r)) => {
                 let mut elements = l.clone();
                 elements.extend(r.clone());
-                Type::concrete_tuple(elements)
+                self.heap.mk_concrete_tuple(elements)
             }
-            (Tuple::Unbounded(l), Tuple::Unbounded(r)) => {
-                Type::unbounded_tuple(self.union((**l).clone(), (**r).clone()))
-            }
+            (Tuple::Unbounded(l), Tuple::Unbounded(r)) => self
+                .heap
+                .mk_unbounded_tuple(self.union((**l).clone(), (**r).clone())),
             (Tuple::Concrete(l), r @ Tuple::Unbounded(_)) => {
-                Type::unpacked_tuple(l.clone(), Type::Tuple(r.clone()), Vec::new())
+                self.heap
+                    .mk_unpacked_tuple(l.clone(), self.heap.mk_tuple(r.clone()), Vec::new())
             }
             (l @ Tuple::Unbounded(_), Tuple::Concrete(r)) => {
-                Type::unpacked_tuple(Vec::new(), Type::Tuple(l.clone()), r.clone())
+                self.heap
+                    .mk_unpacked_tuple(Vec::new(), self.heap.mk_tuple(l.clone()), r.clone())
             }
             (Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)), Tuple::Concrete(r)) => {
                 let mut new_suffix = l_suffix.clone();
                 new_suffix.extend(r.clone());
-                Type::unpacked_tuple(l_prefix.clone(), l_middle.clone(), new_suffix)
+                self.heap
+                    .mk_unpacked_tuple(l_prefix.clone(), l_middle.clone(), new_suffix)
             }
             (Tuple::Concrete(l), Tuple::Unpacked(box (r_prefix, r_middle, r_suffix))) => {
                 let mut new_prefix = l.clone();
                 new_prefix.extend(r_prefix.clone());
-                Type::unpacked_tuple(new_prefix, r_middle.clone(), r_suffix.clone())
+                self.heap
+                    .mk_unpacked_tuple(new_prefix, r_middle.clone(), r_suffix.clone())
             }
             (Tuple::Unbounded(l), Tuple::Unpacked(box (r_prefix, r_middle, r_suffix))) => {
                 let mut middle = r_prefix.clone();
                 middle.push((**l).clone());
                 middle.push(
                     self.unwrap_iterable(r_middle)
-                        .unwrap_or(Type::any_implicit()),
+                        .unwrap_or_else(|| self.heap.mk_any_implicit()),
                 );
-                Type::unpacked_tuple(
+                self.heap.mk_unpacked_tuple(
                     Vec::new(),
-                    Type::unbounded_tuple(self.unions(middle)),
+                    self.heap.mk_unbounded_tuple(self.unions(middle)),
                     r_suffix.clone(),
                 )
             }
@@ -170,11 +253,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 middle.push((**r).clone());
                 middle.push(
                     self.unwrap_iterable(l_middle)
-                        .unwrap_or(Type::any_implicit()),
+                        .unwrap_or_else(|| self.heap.mk_any_implicit()),
                 );
-                Type::unpacked_tuple(
+                self.heap.mk_unpacked_tuple(
                     l_prefix.clone(),
-                    Type::unbounded_tuple(self.unions(middle)),
+                    self.heap.mk_unbounded_tuple(self.unions(middle)),
                     Vec::new(),
                 )
             }
@@ -186,15 +269,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 middle.extend(r_prefix.clone());
                 middle.push(
                     self.unwrap_iterable(l_middle)
-                        .unwrap_or(Type::any_implicit()),
+                        .unwrap_or_else(|| self.heap.mk_any_implicit()),
                 );
                 middle.push(
                     self.unwrap_iterable(r_middle)
-                        .unwrap_or(Type::any_implicit()),
+                        .unwrap_or_else(|| self.heap.mk_any_implicit()),
                 );
-                Type::unpacked_tuple(
+                self.heap.mk_unpacked_tuple(
                     l_prefix.clone(),
-                    Type::unbounded_tuple(self.unions(middle)),
+                    self.heap.mk_unbounded_tuple(self.unions(middle)),
                     r_suffix.clone(),
                 )
             }
@@ -224,17 +307,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ];
             self.try_binop_calls(&calls_to_try, range, errors, &context)
         };
-        // If the expression is of the form [X] * Y where Y is a number, pass down the contextual
-        // type hint when evaluating [X]
         let lhs;
         let rhs;
-        if matches!(&*x.left, Expr::List(_)) && x.op == Operator::Mult {
+        if Ast::is_list_literal_or_comprehension(&x.left) && x.op == Operator::Mult {
+            // If the expression is of the form [X] * Y where Y is a number, pass down the contextual
+            // type hint when evaluating [X]
             rhs = self.expr_infer(&x.right, errors);
-            if self.is_subset_eq(&rhs, &self.stdlib.int().clone().to_type()) {
+            if self.is_subset_eq(&rhs, &self.heap.mk_class_type(self.stdlib.int().clone())) {
                 lhs = self.expr_infer_with_hint(&x.left, hint, errors);
             } else {
                 lhs = self.expr_infer(&x.left, errors);
             }
+        } else if x.op == Operator::Add
+            && Ast::is_list_literal_or_comprehension(&x.left)
+            && Ast::is_list_literal_or_comprehension(&x.right)
+        {
+            // If both operands are list literals, pass the contextual hint down
+            lhs = self.expr_infer_with_hint(&x.left, hint, errors);
+            rhs = self.expr_infer_with_hint(&x.right, hint, errors);
         } else {
             lhs = self.expr_infer(&x.left, errors);
             rhs = self.expr_infer(&x.right, errors);
@@ -246,7 +336,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
             && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
         {
-            return Type::type_form(self.union(l, r));
+            return self.heap.mk_type_form(self.union(l, r));
         }
 
         self.distribute_over_union(&lhs, |lhs| {
@@ -263,17 +353,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
                     && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
                 {
-                    Type::type_form(self.union(l, r))
+                    self.heap.mk_type_form(self.union(l, r))
                 } else if x.op == Operator::Add
                     && ((matches!(lhs, Type::LiteralString(_)) && rhs.is_literal_string())
                         || (matches!(rhs, Type::LiteralString(_)) && lhs.is_literal_string()))
                 {
-                    Type::LiteralString(LitStyle::Implicit)
+                    self.heap.mk_literal_string(LitStyle::Implicit)
                 } else if x.op == Operator::Add
                     && let Type::Tuple(l) = lhs
                     && let Type::Tuple(r) = rhs
                 {
                     self.tuple_concat(l, r)
+                } else if let Some(result) = self.try_symint_binop(x.op, lhs, rhs) {
+                    result
                 } else {
                     binop_call(x.op, lhs, rhs, x.range)
                 }
@@ -314,12 +406,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && base.is_literal_string()
                     && rhs.is_literal_string()
                 {
-                    Type::LiteralString(LitStyle::Implicit)
+                    self.heap.mk_literal_string(LitStyle::Implicit)
                 } else if x.op == Operator::Add
                     && let Type::Tuple(ref l) = base
                     && let Type::Tuple(r) = rhs
                 {
                     self.tuple_concat(l, r)
+                } else if let Some(result) = self.try_symint_binop(x.op, lhs, rhs) {
+                    result
                 } else {
                     binop_call(x.op, lhs, rhs, x.range)
                 }
@@ -327,15 +421,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         });
         // If we're assigning to something with an annotation, make sure the produced value is assignable to it
         if let Some(ann) = ann.map(|k| self.get_idx(k)) {
-            if ann.annotation.is_final() {
-                self.error(
-                    errors,
-                    x.range(),
-                    ErrorInfo::Kind(ErrorKind::BadAssignment),
-                    format!("Cannot assign to {} because it is marked final", ann.target),
-                );
-            }
-            if let Some(ann_ty) = ann.ty(self.stdlib) {
+            self.check_final_reassignment(&ann, x.range(), errors);
+            if let Some(ann_ty) = ann.ty(self.heap, self.stdlib) {
                 return self.check_and_return_type(result, &ann_ty, x.range(), errors, tcc);
             }
         }
@@ -373,7 +460,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     match op {
                         CmpOp::Is | CmpOp::IsNot => {
                             // These comparisons never error.
-                            self.stdlib.bool().clone().to_type()
+                            self.heap.mk_class_type(self.stdlib.bool().clone())
                         }
                         CmpOp::In | CmpOp::NotIn => {
                             // See https://docs.python.org/3/reference/expressions.html#membership-test-operations.
@@ -388,7 +475,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 errors,
                                 Some(&context),
                             ) {
-                                // Comparison method called.
                                 ret
                             } else {
                                 let iteration_errors = self.error_collector();
@@ -410,7 +496,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     // Iterating `y` failed.
                                     errors.extend(iteration_errors);
                                 }
-                                self.stdlib.bool().clone().to_type()
+                                self.heap.mk_class_type(self.stdlib.bool().clone())
                             }
                         }
                         _ => {
@@ -422,7 +508,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let ret =
                                 self.try_binop_calls(&calls_to_try, x.range, errors, &context);
                             if ret.is_error() {
-                                self.stdlib.bool().clone().to_type()
+                                self.heap.mk_class_type(self.stdlib.bool().clone())
                             } else {
                                 ret
                             }
@@ -450,7 +536,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::Literal(lit) if let Lit::Enum(lit_enum) = &lit.value => self
                     .call_method_or_error(
-                        &lit_enum.class.clone().to_type(),
+                        &self.heap.mk_class_type(lit_enum.class.clone()),
                         method,
                         x.range,
                         &[],
@@ -469,6 +555,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         self.distribute_over_union(&t, |t| match x.op {
             UnaryOp::USub => {
+                // Special handling for Dim: model -N as Sub(0, N)
+                if let Type::Dim(inner_ty) = t {
+                    let zero = self.heap.mk_size(SizeExpr::Literal(0));
+                    let result_ty =
+                        simplify(self.heap.mk_size(SizeExpr::sub(zero, (**inner_ty).clone())));
+                    return self.heap.mk_dim(result_ty);
+                }
                 let f = |lit: &Lit| lit.negate();
                 unop(t, &f, &dunder::NEG)
             }
@@ -479,7 +572,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             UnaryOp::Not => {
                 self.check_dunder_bool_is_callable(t, x.range, errors);
                 match t.as_bool() {
-                    None => self.stdlib.bool().clone().to_type(),
+                    None => self.heap.mk_class_type(self.stdlib.bool().clone()),
                     Some(b) => Lit::Bool(!b).to_implicit_type(),
                 }
             }

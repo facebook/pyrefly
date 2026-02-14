@@ -214,7 +214,7 @@ def nested():
     config["user"][""]
 #                  ^
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();
@@ -230,7 +230,7 @@ def nested():
     config["user"][""]
 #           ^
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();
@@ -1236,17 +1236,9 @@ Completion Results:
 - (Function) isinstance
 - (Class) DivisionImpossible: from decimal import DivisionImpossible
 
-- (Class) FirstHeaderLineIsContinuationDefect: from email.errors import FirstHeaderLineIsContinuationDefect
-
-- (Class) MissingHeaderBodySeparatorDefect: from email.errors import MissingHeaderBodySeparatorDefect
-
 - (Function) disjoint_base: from typing_extensions import disjoint_base
 
-- (Function) distributions: from importlib.metadata import distributions
-
 - (Function) fix_missing_locations: from ast import fix_missing_locations
-
-- (Function) packages_distributions: from importlib.metadata import packages_distributions
 
 - (Function) timerfd_settime_ns: from os import timerfd_settime_ns
 
@@ -1380,6 +1372,31 @@ foo('
 Completion Results:
 - (Value) 'bar': Literal['bar'] inserting `bar`
 - (Value) 'foo': Literal['foo'] inserting `foo`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_match_value() {
+    let code = r#"
+from typing import Literal
+x: Literal['a', 'b'] = 'a'
+match x:
+    case ':
+#         ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 |     case ':
+              ^
+Completion Results:
+- (Value) 'a': Literal['a'] inserting `a`
+- (Value) 'b': Literal['b'] inserting `b`
 "#
         .trim(),
         report.trim(),
@@ -1794,15 +1811,165 @@ T = Literal
 2 | T = Literal
             ^
 Completion Results:
-- (Variable) AnyOrLiteralStr: from _typeshed import AnyOrLiteralStr
-
 - (Variable) Literal: from typing import Literal
 
 - (Variable) Literal: from typing_extensions import Literal
 
 - (Variable) LiteralString: from typing import LiteralString
 
+- (Variable) AnyOrLiteralStr: from _typeshed import AnyOrLiteralStr
+
 - (Variable) StrOrLiteralStr: from _typeshed import StrOrLiteralStr
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn autoimport_common_alias_for_module() {
+    let code = r#"
+T = spio
+#       ^
+"#;
+    let files = [("main", code), ("scipy.io", "data = 1\n")];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true);
+    let autoimport = completions
+        .iter()
+        .find(|item| item.label == "spio")
+        .expect("expected spio to be in completions");
+    assert!(
+        autoimport
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.contains("import scipy.io as spio")),
+        "expected alias import detail for spio, got {:?}",
+        autoimport.detail
+    );
+    assert_eq!(autoimport.insert_text.as_deref(), Some("spio"));
+    let label_details = autoimport
+        .label_details
+        .as_ref()
+        .expect("auto import completion should include label details");
+    assert_eq!(
+        label_details.detail.as_deref(),
+        Some(" (import scipy.io as spio)")
+    );
+    assert_eq!(label_details.description.as_deref(), Some("scipy.io"));
+    assert!(
+        !completions.iter().any(|item| item.label == "scipy.io"),
+        "expected alias completion to suppress non-aliased scipy.io module suggestion"
+    );
+}
+
+#[test]
+fn autoimport_common_alias_bypasses_min_char_threshold() {
+    let code = r#"
+T = np
+#     ^
+"#;
+    let files = [("main", code), ("numpy", "data = 1\n")];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true);
+    let autoimport = completions
+        .iter()
+        .find(|item| item.label == "np")
+        .expect("expected np to be in completions");
+    assert!(
+        autoimport
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.contains("import numpy as np")),
+        "expected alias import detail for np, got {:?}",
+        autoimport.detail
+    );
+    assert_eq!(autoimport.insert_text.as_deref(), Some("np"));
+    let label_details = autoimport
+        .label_details
+        .as_ref()
+        .expect("auto import completion should include label details");
+    assert_eq!(
+        label_details.detail.as_deref(),
+        Some(" (import numpy as np)")
+    );
+    assert_eq!(label_details.description.as_deref(), Some("numpy"));
+}
+
+#[test]
+fn autoimport_prefers_public_reexport_for_dotted_private_module() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("_foo_bar", "Thing = 1\n"),
+            ("foo.bar", "from _foo_bar import Thing\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from foo.bar import Thing
+
+- (Variable) Thing: from _foo_bar import Thing
+
+
+
+# _foo_bar.py
+
+# foo.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn autoimport_prefers_shorter_module() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("a.b", "Thing = 1\n"),
+            ("a.b.c", "Thing = 2\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from a.b import Thing
+
+- (Variable) Thing: from a.b.c import Thing
+
+
+
+# a.b.py
+
+# a.b.c.py
 "#
         .trim(),
         report.trim(),
@@ -1816,7 +1983,7 @@ T = foooooo
 #       ^
 "#;
     let files = [("main", code), ("bar", "foooooo = 1")];
-    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
 
@@ -2508,7 +2675,7 @@ import sys
 x = sys.version
 #       ^
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let positions = extract_cursors_for_test(code);
     let txn = state.transaction();
@@ -2526,6 +2693,87 @@ x = sys.version
     assert!(
         !normal_completions.is_empty(),
         "Expected completions in normal code but got none"
+    );
+}
+
+#[test]
+fn completion_sorts_incompatible_call_argument_last() {
+    let code = r#"
+class Base:
+    pass
+
+class Derived(Base):
+    pass
+
+class Other:
+    pass
+
+def needs_base(x: Base) -> None:
+    pass
+
+val_exact = Base()
+val_compatible = Derived()
+val_incompatible = Other()
+val = val_exact
+
+needs_base(val)
+#           ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true);
+
+    let exact_index = completions
+        .iter()
+        .position(|item| item.label == "val_exact");
+    let compatible_index = completions
+        .iter()
+        .position(|item| item.label == "val_compatible");
+    let incompatible_index = completions
+        .iter()
+        .position(|item| item.label == "val_incompatible");
+
+    let exact = exact_index.and_then(|idx| completions.get(idx));
+    let compatible = compatible_index.and_then(|idx| completions.get(idx));
+    let incompatible = incompatible_index.and_then(|idx| completions.get(idx));
+
+    assert!(
+        exact.is_some() && compatible.is_some() && incompatible.is_some(),
+        "Expected completions for exact_val, compatible_val, and incompatible_val."
+    );
+
+    let exact_sort = exact
+        .and_then(|item| item.sort_text.as_deref())
+        .unwrap_or("");
+    let compatible_sort = compatible
+        .and_then(|item| item.sort_text.as_deref())
+        .unwrap_or("");
+    let incompatible_sort = incompatible
+        .and_then(|item| item.sort_text.as_deref())
+        .unwrap_or("");
+
+    assert!(
+        !exact_sort.ends_with('z'),
+        "Exact type should not be demoted (sort_text={exact_sort:?})."
+    );
+    assert!(
+        !compatible_sort.ends_with('z'),
+        "Compatible type should not be demoted (sort_text={compatible_sort:?})."
+    );
+    assert!(
+        incompatible_sort.ends_with('z'),
+        "Incompatible type should be demoted (sort_text={incompatible_sort:?})."
+    );
+
+    assert!(
+        exact_index.unwrap() < incompatible_index.unwrap(),
+        "Exact type should sort ahead of incompatible type."
+    );
+    assert!(
+        compatible_index.unwrap() < incompatible_index.unwrap(),
+        "Compatible type should sort ahead of incompatible type."
     );
 }
 
@@ -2561,7 +2809,7 @@ class Constraint:
         self.pointwise_read_writes.
 #                                  ^
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), false);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();

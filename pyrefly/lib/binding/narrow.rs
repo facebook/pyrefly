@@ -41,6 +41,7 @@ use vec1::Vec1;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::expr::Usage;
 use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
@@ -51,14 +52,26 @@ use crate::types::types::Type;
 assert_words!(AtomicNarrowOp, 11);
 assert_words!(NarrowOp, 13);
 
+/// Indicates where an isinstance-style narrow operation originated from.
+/// This determines whether validation needs to happen during narrowing.
+#[derive(Clone, Copy, Debug)]
+pub enum NarrowSource {
+    /// From an isinstance() call - validation already happened in special_calls.rs.
+    Call,
+    /// From a match pattern - needs validation during narrowing.
+    Pattern,
+}
+
 #[derive(Clone, Debug)]
 pub enum AtomicNarrowOp {
     Is(Expr),
     IsNot(Expr),
     Eq(Expr),
     NotEq(Expr),
-    IsInstance(Expr),
-    IsNotInstance(Expr),
+    /// The source indicates whether this came from an isinstance() call (already validated)
+    /// or a match pattern (needs validation during narrowing).
+    IsInstance(Expr, NarrowSource),
+    IsNotInstance(Expr, NarrowSource),
     IsSubclass(Expr),
     IsNotSubclass(Expr),
     HasAttr(Name),
@@ -90,6 +103,9 @@ pub enum AtomicNarrowOp {
     IsSequence,
     /// Negation of IsSequence - confirms the subject is NOT a sequence type
     IsNotSequence,
+    /// Used to narrow to mapping types (types that extend typing.Mapping)
+    IsMapping,
+    IsNotMapping,
     /// (func, args) for a function call that may narrow the type of its first argument.
     Call(Box<Expr>, Arguments),
     NotCall(Box<Expr>, Arguments),
@@ -118,9 +134,24 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
             AtomicNarrowOp::IsNot(expr) => write!(f, "IsNot({})", expr.display_with(ctx)),
             AtomicNarrowOp::Eq(expr) => write!(f, "Eq({})", expr.display_with(ctx)),
             AtomicNarrowOp::NotEq(expr) => write!(f, "NotEq({})", expr.display_with(ctx)),
-            AtomicNarrowOp::IsInstance(expr) => write!(f, "IsInstance({})", expr.display_with(ctx)),
-            AtomicNarrowOp::IsNotInstance(expr) => {
-                write!(f, "IsNotInstance({})", expr.display_with(ctx))
+            AtomicNarrowOp::IsInstance(expr, source) => {
+                let source_str = match source {
+                    NarrowSource::Call => "Call",
+                    NarrowSource::Pattern => "Pattern",
+                };
+                write!(f, "IsInstance({}, {})", expr.display_with(ctx), source_str)
+            }
+            AtomicNarrowOp::IsNotInstance(expr, source) => {
+                let source_str = match source {
+                    NarrowSource::Call => "Call",
+                    NarrowSource::Pattern => "Pattern",
+                };
+                write!(
+                    f,
+                    "IsNotInstance({}, {})",
+                    expr.display_with(ctx),
+                    source_str
+                )
             }
             AtomicNarrowOp::IsSubclass(expr) => write!(f, "IsSubclass({})", expr.display_with(ctx)),
             AtomicNarrowOp::IsNotSubclass(expr) => {
@@ -170,6 +201,8 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
             AtomicNarrowOp::LenLte(expr) => write!(f, "LenLte({})", expr.display_with(ctx)),
             AtomicNarrowOp::IsSequence => write!(f, "IsSequence"),
             AtomicNarrowOp::IsNotSequence => write!(f, "IsNotSequence"),
+            AtomicNarrowOp::IsMapping => write!(f, "IsMapping"),
+            AtomicNarrowOp::IsNotMapping => write!(f, "IsNotMapping"),
             AtomicNarrowOp::Call(expr, arguments) => write!(
                 f,
                 "Call({}, {})",
@@ -219,8 +252,8 @@ impl AtomicNarrowOp {
         match self {
             Self::Is(v) => Self::IsNot(v.clone()),
             Self::IsNot(v) => Self::Is(v.clone()),
-            Self::IsInstance(v) => Self::IsNotInstance(v.clone()),
-            Self::IsNotInstance(v) => Self::IsInstance(v.clone()),
+            Self::IsInstance(v, source) => Self::IsNotInstance(v.clone(), *source),
+            Self::IsNotInstance(v, source) => Self::IsInstance(v.clone(), *source),
             Self::IsSubclass(v) => Self::IsNotSubclass(v.clone()),
             Self::IsNotSubclass(v) => Self::IsSubclass(v.clone()),
             Self::HasAttr(attr) => Self::NotHasAttr(attr.clone()),
@@ -241,6 +274,8 @@ impl AtomicNarrowOp {
             Self::LenNotEq(v) => Self::LenEq(v.clone()),
             Self::IsSequence => Self::IsNotSequence,
             Self::IsNotSequence => Self::IsSequence,
+            Self::IsMapping => Self::IsNotMapping,
+            Self::IsNotMapping => Self::IsMapping,
             Self::TypeGuard(ty, args) => Self::NotTypeGuard(ty.clone(), args.clone()),
             Self::NotTypeGuard(ty, args) => Self::TypeGuard(ty.clone(), args.clone()),
             Self::TypeIs(ty, args) => Self::NotTypeIs(ty.clone(), args.clone()),
@@ -846,7 +881,9 @@ impl NarrowOps {
         builder: &'a BindingsBuilder,
         name: &Name,
     ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
-        let name_read_info = builder.scopes.look_up_name_for_read(Hashed::new(name));
+        let name_read_info = builder
+            .scopes
+            .look_up_name_for_read(Hashed::new(name), &Usage::Narrowing(None));
         match name_read_info {
             NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx),
             _ => None,

@@ -193,3 +193,39 @@ class C:
         assert_type(self(), Self)
 "#,
 );
+
+testcase!(
+    bug = "conformance: Should error when returning concrete class instead of Self",
+    test_self_return_concrete_class,
+    r#"
+from typing import Self
+
+class Shape:
+    def method(self) -> Self:
+        return Shape()  # should error: returns Shape, not Self
+
+    @classmethod
+    def cls_method(cls) -> Self:
+        return Shape()  # should error: returns Shape, not Self
+"#,
+);
+
+testcase!(
+    test_self_in_class_body_expression,
+    r#"
+from typing import Self, assert_type
+
+class SomeClass:
+    # Self in inferred class variable type
+    cache = dict[int, Self]()
+
+    def get_instance(self) -> Self:
+        x = self.cache[0]
+        if x:
+            return x
+        raise RuntimeError()
+
+assert_type(SomeClass().cache, dict[int, SomeClass])
+assert_type(SomeClass().get_instance(), SomeClass)
+"#,
+);

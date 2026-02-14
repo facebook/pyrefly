@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_derive"
-version = "0.48.1"
+version = "0.52.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -14,6 +14,6 @@ doctest = false
 proc-macro = true
 
 [dependencies]
-proc-macro2 = { version = "1.0.70", features = ["span-locations"] }
-quote = "1.0.29"
+proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
+quote = "1.0.44"
 syn = { version = "2.0.110", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }

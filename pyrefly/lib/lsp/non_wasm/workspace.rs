@@ -177,6 +177,9 @@ struct PyreflyClientConfig {
     analysis: Option<LspAnalysisConfig>,
     #[serde(default)]
     disabled_language_services: Option<DisabledLanguageServices>,
+    // This is a global config that's read separately
+    #[allow(dead_code)]
+    stream_diagnostics: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -255,6 +258,7 @@ pub struct LspAnalysisConfig {
     #[allow(dead_code)]
     pub diagnostic_mode: Option<DiagnosticMode>,
     pub import_format: Option<ImportFormat>,
+    pub complete_function_parens: Option<bool>,
     pub inlay_hints: Option<InlayHintConfig>,
     // TODO: this is not a pylance setting. it should be in pyrefly settings
     #[serde(default)]

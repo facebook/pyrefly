@@ -255,7 +255,7 @@ class C[T = int]:
     def meth(self, /) -> Self:
         return self
     attr: T
-reveal_type(C.meth)  # E: [T](self: C[T], /) -> C[T]
+reveal_type(C.meth)  # E: [T = int](self: C[T], /) -> C[T]
 assert_type(C.attr, int)  # E: assert_type(Any, int) failed  # E: Generic attribute `attr` of class `C` is not visible on the class
  "#,
 );
@@ -523,7 +523,7 @@ testcase!(
     test_add_with_constraints,
     r#"
 def add[T: (int, str)](x: T, y: T) -> T:
-    return x + y # E: `+` is not supported # E: `+` is not supported # E: `int | Unknown` is not assignable to declared return type `T`
+    return x + y # E: `+` is not supported between `T` and `T` # E: `+` is not supported between `T` and `T`
     "#,
 );
 
@@ -966,4 +966,113 @@ def go() -> None:
     # The bounds str and int are incompatible, so hint matching fails and error is reported
     apply_both_bounded("a", bounded_str("ok"))  # E: `str` is not assignable to upper bound `int` of type variable `U`
     "#,
+);
+
+testcase!(
+    bug = "Asserted type is wrong",
+    test_typevar_default_is_typevar_in_function,
+    r#"
+from typing import assert_type
+def f[T1, T2 = T1](x: T1, y: T2 | None = None) -> tuple[T1, T2]: ...
+assert_type(f(1), tuple[int, int])  # E: assert_type(tuple[int, Any], tuple[int, int])
+    "#,
+);
+
+// Issue #2179: display typevar bounds, constraints, and defaults in foralls
+testcase!(
+    test_reveal_typevar_bounds_in_forall,
+    r#"
+from typing import reveal_type
+
+def f[T: str](x: T) -> T: ...
+def g[T: int](x: T) -> T: ...
+reveal_type(f)  # E: revealed type: [T: str](x: T) -> T
+reveal_type(g)  # E: revealed type: [T: int](x: T) -> T
+"#,
+);
+
+testcase!(
+    test_reveal_typevar_constraints_in_forall,
+    r#"
+from typing import reveal_type
+
+def f[T: (str, int)](x: T) -> T: ...
+reveal_type(f)  # E: revealed type: [T: (str, int)](x: T) -> T
+"#,
+);
+
+testcase!(
+    test_reveal_typevar_default_in_forall,
+    r#"
+from typing import reveal_type
+
+def f[T = int](x: T) -> T: ...
+reveal_type(f)  # E: revealed type: [T = int](x: T) -> T
+"#,
+);
+
+testcase!(
+    test_reveal_typevar_bound_with_default_in_forall,
+    r#"
+from typing import reveal_type
+
+def f[T: str = str](x: T) -> T: ...
+reveal_type(f)  # E: revealed type: [T: str = str](x: T) -> T
+"#,
+);
+
+testcase!(
+    test_reveal_multiple_typevars_with_bounds_in_forall,
+    r#"
+from typing import reveal_type
+
+def f[T: str, U: int](x: T, y: U) -> tuple[T, U]: ...
+reveal_type(f)  # E: revealed type: [T: str, U: int](x: T, y: U) -> tuple[T, U]
+"#,
+);
+
+testcase!(
+    test_reveal_mixed_typevars_in_forall,
+    r#"
+from typing import reveal_type
+
+def f[T, U: int, V = str](x: T, y: U, z: V) -> tuple[T, U, V]: ...
+reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tuple[T, U, V]
+"#,
+);
+
+testcase!(
+    bug = "conformance: Should error on unbound TypeVars in various scopes",
+    test_typevar_scoping_restrictions,
+    r#"
+from typing import TypeVar, Generic, TypeAlias
+from collections.abc import Iterable
+
+T = TypeVar("T")
+S = TypeVar("S")
+
+# Unbound TypeVar S used in generic function body
+def fun_3(x: T) -> list[T]:
+    y: list[T] = []  # OK
+    z: list[S] = []  # should error: S not in scope
+    return y
+
+# Unbound TypeVar S in class body (not in method)
+class Bar(Generic[T]):
+    an_attr: list[S] = []  # should error: S not in scope
+
+# Nested class using outer class's TypeVar
+class Outer(Generic[T]):
+    class Bad(Iterable[T]):  # should error: T from outer not in scope
+        ...
+    class AlsoBad:
+        x: list[T]  # should error: T from outer not in scope
+
+    alias: TypeAlias = list[T]  # should error: T not allowed in TypeAlias here
+
+# Unbound TypeVars at global scope
+global_var1: T  # should error
+global_var2: list[T] = []  # should error
+list[T]()  # should error
+"#,
 );

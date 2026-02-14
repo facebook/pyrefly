@@ -57,6 +57,13 @@ async fn run() -> anyhow::Result<ExitCode> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    // Enable stack overflow backtraces for debugging.
+    // This is unsafe and only intended for debug builds.
+    #[cfg(not(windows))]
+    #[cfg(feature = "debug-stack-overflow")]
+    unsafe {
+        backtrace_on_stack_overflow::enable();
+    }
     exit_on_panic();
     let res = run().await;
     match res {

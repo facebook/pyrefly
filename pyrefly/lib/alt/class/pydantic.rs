@@ -16,6 +16,7 @@ use pyrefly_types::annotation::Annotation;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::callable::Function;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
@@ -37,6 +38,7 @@ use crate::alt::solve::TypeFormContext;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::DataclassMetadata;
+use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::pydantic::PydanticConfig;
 use crate::alt::types::pydantic::PydanticModelKind;
 use crate::alt::types::pydantic::PydanticModelKind::RootModel;
@@ -142,14 +144,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else if has_strict {
                 (Required::Required, root_model_type)
             } else {
-                (Required::Required, Type::any_explicit())
+                (Required::Required, self.heap.mk_any_explicit())
             };
         let root_param = Param::Pos(ROOT, root_model_type, root_requiredness);
         let params = vec![self.class_self_param(cls, false), root_param];
-        let ty = Type::Function(Box::new(Function {
-            signature: Callable::list(ParamList::new(params), Type::None),
+        let ty = self.heap.mk_function(Function {
+            signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
             metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
-        }));
+        });
         ClassSynthesizedField::new(ty)
     }
 
@@ -167,7 +169,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // `RootModel` should always have a type parameter unless we're working with a broken copy
         // of Pydantic.
         let tparam = tparams.iter().next()?;
-        let root_model_type = Type::Quantified(Box::new(tparam.quantified.clone()));
+        let root_model_type = self.heap.mk_quantified(tparam.clone());
         Some(
             self.get_pydantic_root_model_init(cls, root_model_type, false)
                 .inner
@@ -214,7 +216,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassType(cls) => {
                 if cls.has_qname(ModuleName::pydantic_root_model().as_str(), "RootModel") {
                     let targs = cls.targs().as_slice();
-                    let root_type = targs.last().cloned().unwrap_or_else(Type::any_implicit);
+                    let root_type = targs
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| self.heap.mk_any_implicit());
                     if let Some(nested_root_type) = self.extract_root_model_inner_type(&root_type) {
                         return Some(self.union(root_type.clone(), nested_root_type));
                     }
@@ -245,9 +250,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         pydantic_config_dict: &PydanticConfigDict,
         keywords: &[(Name, Annotation)],
+        decorators: &[(Arc<Decorator>, TextRange)],
         errors: &ErrorCollector,
         range: TextRange,
     ) -> Option<PydanticConfig> {
+        // Check if this class is decorated with @pydantic.dataclasses.dataclass
+        // Handle both @dataclass and @dataclass(...) forms
+        let is_pydantic_dataclass_metadata = |meta: &FuncMetadata| {
+            matches!(&meta.kind, FunctionKind::Def(id)
+                if id.module.name() == ModuleName::pydantic_dataclasses()
+                    && id.name.as_str() == "dataclass")
+        };
+        let is_pydantic_dataclass = decorators.iter().any(|(decorator, _)| {
+            decorator
+                .ty
+                .visit_toplevel_func_metadata(&is_pydantic_dataclass_metadata)
+                || matches!(&decorator.ty, Type::KwCall(call)
+                    if is_pydantic_dataclass_metadata(&call.func_metadata))
+        });
+
         let has_pydantic_base_model_base_class =
             bases_with_metadata.iter().any(|(base_class_object, _)| {
                 base_class_object.has_toplevel_qname(ModuleName::pydantic().as_str(), "BaseModel")
@@ -259,12 +280,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .has_toplevel_qname(ModuleName::pydantic_settings().as_str(), "BaseSettings")
             });
 
-        let is_pydantic_base_model = has_pydantic_base_model_base_class
+        let is_pydantic_model = has_pydantic_base_model_base_class
             || bases_with_metadata
                 .iter()
-                .any(|(_, metadata)| metadata.is_pydantic_base_model());
+                .any(|(_, metadata)| metadata.is_pydantic_model());
 
-        if !is_pydantic_base_model {
+        // If not a pydantic model, check if it's a pydantic dataclass
+        if !is_pydantic_model {
+            // Handle pydantic dataclass (not a pydantic model).
+            // For pydantic dataclasses, frozen/extra/strict come from decorator args via dataclass_transform,
+            // not from this config. We only track the model kind here for lax mode support.
+            // TODO: We should think about whether this is the best design. Specifically:
+            // - Should we populate all the defaults for pydantic dataclasses here and then
+            // add a condition that prevents dataclass code from overriding pydantic dataclasses?
+            // - Should there be two PydanticConfig variants, one for DataClasses and one for the remaining variants?
+            // - Finally, should we add decorator plumbing here so we can detect keywords directly instead of through
+            // the dataclass plumbing, which also has to then have extra checks to avoid overriding pydantic dataclasses with its own defaults?
+            if is_pydantic_dataclass {
+                return Some(PydanticConfig {
+                    frozen: None,
+                    validation_flags: PydanticValidationFlags::default(),
+                    extra: None,
+                    strict: None,
+                    pydantic_model_kind: PydanticModelKind::DataClass,
+                });
+            }
             return None;
         }
 
@@ -338,24 +378,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     "allow" | "ignore" => true,
                     "forbid" => false,
                     _ => {
-                        self.error(
-                    errors,
-                    range,
-                    ErrorInfo::Kind(ErrorKind::InvalidLiteral),
-                    "Invalid value for `extra`. Expected one of 'allow', 'ignore', or 'forbid'"
-                        .to_owned(),
-                );
+                        self.invalid_extra_value_error(errors, range);
                         true
                     }
                 },
                 _ => {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::InvalidLiteral),
-                        "Invalid value for `extra`. Expected one of 'allow', 'ignore', or 'forbid'"
-                            .to_owned(),
-                    );
+                    self.invalid_extra_value_error(errors, range);
                     true
                 }
             },
@@ -391,12 +419,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
 
         Some(PydanticConfig {
-            frozen,
+            frozen: Some(frozen),
             validation_flags,
-            extra,
-            strict,
+            extra: Some(extra),
+            strict: Some(strict),
             pydantic_model_kind,
         })
+    }
+
+    fn invalid_extra_value_error(&self, errors: &ErrorCollector, range: TextRange) {
+        self.error(
+            errors,
+            range,
+            ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+            "Invalid value for `extra`. Expected one of 'allow', 'ignore', or 'forbid'".to_owned(),
+        );
     }
 
     fn get_bool_config_value(
@@ -443,15 +480,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let Some(val) = bound_val else { continue };
             if !self.is_subset_eq(val, field_ty) {
                 self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::BadArgumentType),
-                        format!(
-                            "Pydantic `{label}` value is of type `{}` but the field is annotated with `{}`",
-                            self.for_display(val.clone()),
-                            self.for_display(field_ty.clone())
-                        ),
-                    );
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    format!(
+                        "Pydantic `{label}` value has type `{}`, which is not assignable to field type `{}`",
+                        self.for_display(val.clone()),
+                        self.for_display(field_ty.clone())
+                    ),
+                );
             }
         }
         self.check_pydantic_range_default(field_name, keywords, range, errors);
@@ -521,7 +558,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         metadata: &ClassMetadata,
     ) -> Option<DataclassFieldKeywords> {
         let dm = metadata.dataclass_metadata()?;
-        if !metadata.is_pydantic_base_model() {
+        if !metadata.is_pydantic_model() {
             return None;
         }
         if let BindingAnnotation::AnnotateExpr(_, annotation_expr, _) = self.bindings().get(annot) {
@@ -595,7 +632,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> SmallMap<PydanticParamKey, PydanticParamConstraint> {
         let mut constraints = SmallMap::new();
         let mut position = 0;
-        for (field_name, _field, keywords) in self.iter_fields(cls, dataclass, true) {
+        let kw_only_by_class = self.compute_kw_only_fields_by_class(cls);
+        for (field_name, _field, keywords) in
+            self.iter_fields(cls, dataclass, true, &kw_only_by_class)
+        {
             if !keywords.init {
                 continue;
             }

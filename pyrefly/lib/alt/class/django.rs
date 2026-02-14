@@ -126,7 +126,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect();
 
                 if transformed != union.to_vec() {
-                    Some(unions(transformed))
+                    Some(unions(transformed, self.heap))
                 } else {
                     None
                 }
@@ -177,7 +177,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && let Some(call_expr) = e.as_call_expr()
             && self.is_django_field_nullable(call_expr)
         {
-            Some(self.union(maybe_narrowed_type, Type::None))
+            Some(self.union(maybe_narrowed_type, self.heap.mk_none()))
         } else {
             Some(maybe_narrowed_type)
         }
@@ -215,15 +215,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Get ManyRelatedManager class from django stubs
     fn get_manager_type(&self, target_model_type: Type) -> Option<Type> {
         let django_related_module = ModuleName::django_models_fields_related_descriptors();
-        let django_related_module_exports = self.exports.get(django_related_module).finding()?;
-        let manager_class_type = if django_related_module_exports
-            .exports(self.exports)
-            .contains_key(&MANYRELATEDMANAGER)
+        if !self
+            .exports
+            .export_exists(django_related_module, &MANYRELATEDMANAGER)
         {
-            self.get_from_export(django_related_module, None, &KeyExport(MANYRELATEDMANAGER))
-        } else {
             return None;
-        };
+        }
+        let manager_class_type =
+            self.get_from_export(django_related_module, None, &KeyExport(MANYRELATEDMANAGER));
 
         // Extract the Class from ClassDef
         let manager_class = match manager_class_type.as_ref() {
@@ -297,13 +296,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let class_name = Name::new(value.to_str());
                     let module_name = class.module_name();
 
-                    if self
-                        .exports
-                        .get(module_name)
-                        .finding()?
-                        .exports(self.exports)
-                        .contains_key(&class_name)
-                    {
+                    if self.exports.export_exists(module_name, &class_name) {
                         let model_type =
                             self.get_from_export(module_name, None, &KeyExport(class_name));
                         Some(self.class_def_to_instance_type(&model_type))
@@ -378,7 +371,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         if label_types.is_empty() || label_types.len() < enum_members.len() {
             // Members without a custom label type have default label type str.
-            label_types.push(self.stdlib.str().clone().to_type());
+            label_types.push(self.heap.mk_class_type(self.stdlib.str().clone()));
         }
 
         // Also include the type of __empty__ field if it exists, since it contributes to label types
@@ -408,11 +401,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )
                 .ok()
             })
-            .unwrap_or_else(Type::any_implicit);
+            .unwrap_or_else(|| self.heap.mk_any_implicit());
 
         // if value is optional, make the type optional
         let values_type = if has_empty {
-            self.union(base_value_type.clone(), Type::None)
+            self.union(base_value_type.clone(), self.heap.mk_none())
         } else {
             base_value_type
         };
@@ -420,14 +413,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut fields = SmallMap::new();
 
         let field_specs = [
-            (LABELS, self.stdlib.list(label_type.clone()).to_type()),
+            (
+                LABELS,
+                self.heap
+                    .mk_class_type(self.stdlib.list(label_type.clone())),
+            ),
             (LABEL, self.property(cls, LABEL, label_type.clone())),
-            (VALUES, self.stdlib.list(values_type.clone()).to_type()),
+            (
+                VALUES,
+                self.heap
+                    .mk_class_type(self.stdlib.list(values_type.clone())),
+            ),
             (
                 CHOICES,
-                self.stdlib
-                    .list(Type::concrete_tuple(vec![values_type, label_type]))
-                    .to_type(),
+                self.heap.mk_class_type(
+                    self.stdlib
+                        .list(self.heap.mk_concrete_tuple(vec![values_type, label_type])),
+                ),
             ),
         ];
 
@@ -443,14 +445,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), name);
         metadata.flags.property_metadata = Some(PropertyMetadata {
             role: PropertyRole::Getter,
-            getter: Type::any_error(),
+            getter: self.heap.mk_any_error(),
             setter: None,
             has_deleter: false,
         });
-        Type::Function(Box::new(Function {
+        self.heap.mk_function(Function {
             signature,
             metadata,
-        }))
+        })
     }
 
     /// Get the primary key field type for a Django model.
@@ -463,7 +465,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .django_model_metadata()
             .and_then(|dm| dm.custom_primary_key_field.as_ref())
         {
-            let instance_type = self.as_class_type_unchecked(model).to_type();
+            let instance_type = self.heap.mk_class_type(self.as_class_type_unchecked(model));
             let pk_type = self.attr_infer_for_type(
                 &instance_type,
                 pk_field_name,
@@ -520,7 +522,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for element in elements {
             let inner_tuple = element.as_tuple_expr()?;
             let string_lit = inner_tuple.elts.first()?.as_string_literal_expr()?;
-            choice_literals.push(Lit::from_string_literal(string_lit).to_implicit_type());
+            choice_literals.push(Lit::from_string_literal(string_lit)?.to_implicit_type());
         }
 
         if choice_literals.is_empty() {
@@ -534,11 +536,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// The method takes self and returns str.
     fn get_display_method(&self, cls: &Class, method_name: &Name) -> ClassSynthesizedField {
         let params = vec![self.class_self_param(cls, false)];
-        let ret = self.stdlib.str().clone().to_type();
-        ClassSynthesizedField::new(Type::Function(Box::new(Function {
+        let ret = self.heap.mk_class_type(self.stdlib.str().clone());
+        ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), ret),
             metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), method_name.clone()),
-        })))
+        }))
     }
 
     /// Returns the primary key type of the related model.
@@ -566,7 +568,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Get the pk type from the related model and make it nullable if needed
         let (pk_type, _) = self.get_pk_field_type(related_cls.class_object())?;
         if is_foreign_key_nullable {
-            Some(self.union(pk_type, Type::None))
+            Some(self.union(pk_type, self.heap.mk_none()))
         } else {
             Some(pk_type)
         }
@@ -577,9 +579,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
     ) -> Option<ClassSynthesizedFields> {
         let metadata = self.get_metadata_for_class(cls);
-        if !metadata.is_django_model() {
-            return None;
-        }
+        let django_metadata = metadata.django_model_metadata()?;
 
         let mut fields = SmallMap::new();
 
@@ -591,23 +591,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             fields.insert(PK, ClassSynthesizedField::new(pk_type));
         }
 
-        // Synthesize `<field_name>_id` fields for ForeignKey fields
-        // and `get_<field_name>_display()` methods for fields with choices
-        for field_name in cls.fields() {
-            let Some(class_field) = self.get_field_from_current_class_only(cls, field_name) else {
-                continue;
-            };
-            if let Some(fk_id_type) = self.get_foreign_key_id_type(&class_field) {
+        // Synthesize `<field_name>_id` fields for ForeignKey fields.
+        // We use field names cached in metadata (detected during binding phase)
+        // to avoid triggering type resolution during synthesis, which can cause cycles.
+        for field_name in &django_metadata.foreign_key_fields {
+            if let Some(class_field) = self.get_field_from_current_class_only(cls, field_name)
+                && let Some(fk_id_type) = self.get_foreign_key_id_type(&class_field)
+            {
                 let id_field_name = Name::new(format!("{}_id", field_name));
                 fields.insert(id_field_name, ClassSynthesizedField::new(fk_id_type));
             }
-            if class_field.has_choices() {
-                let method_name = Name::new(format!("get_{}_display", field_name));
-                fields.insert(
-                    method_name.clone(),
-                    self.get_display_method(cls, &method_name),
-                );
-            }
+        }
+
+        // Synthesize `get_<field_name>_display()` methods for fields with choices.
+        // Same caching strategy as FK fields above.
+        for field_name in &django_metadata.fields_with_choices {
+            let method_name = Name::new(format!("get_{}_display", field_name));
+            fields.insert(
+                method_name.clone(),
+                self.get_display_method(cls, &method_name),
+            );
         }
 
         if let Some(reverse_fields) = self.get_django_reverse_relationship_synthesized_fields(cls) {

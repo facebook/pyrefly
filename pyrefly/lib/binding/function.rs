@@ -40,6 +40,8 @@ use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
+use crate::binding::binding::ExhaustivenessKind;
+use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
@@ -66,7 +68,7 @@ use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
 use crate::export::special::SpecialExport;
-use crate::types::types::Type;
+use crate::types::types::AnyStyle;
 
 struct Decorators {
     has_no_type_check: bool,
@@ -168,7 +170,7 @@ impl<'a> SelfAttrNames<'a> {
                 (
                     n,
                     InstanceAttribute(
-                        super::binding::ExprOrBinding::Binding(Binding::Type(Type::any_implicit())),
+                        super::binding::ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
                         None,
                         r,
                         MethodSelfKind::Instance,
@@ -352,8 +354,13 @@ impl<'a> BindingsBuilder<'a> {
     /// to a panic).
     fn implicit_return(&mut self, body: &[Stmt], func_name: &Identifier) -> Idx<Key> {
         let last_exprs = function_last_expressions(body, self.sys_info).map(|x| {
-            x.into_map(|(last, x)| (last, self.last_statement_idx_for_implicit_return(last, x)))
-                .into_boxed_slice()
+            x.into_map(|(last, x)| {
+                (
+                    last.clone(),
+                    self.last_statement_idx_for_implicit_return(last, x),
+                )
+            })
+            .into_boxed_slice()
         });
         self.insert_binding(
             Key::ReturnImplicit(ShortIdentifier::new(func_name)),
@@ -439,10 +446,11 @@ impl<'a> BindingsBuilder<'a> {
                         has_explicit_return: !return_keys.is_empty(),
                     }
                 }
-                (Some((_, annotation)), None) => {
+                (Some((range, annotation)), None) => {
                     // We have an explicit return annotation and we just want to trust it.
                     ReturnTypeKind::ShouldTrustAnnotation {
                         annotation,
+                        range,
                         is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
                     }
                 }
@@ -478,7 +486,7 @@ impl<'a> BindingsBuilder<'a> {
             Key::ReturnType(ShortIdentifier::new(func_name)),
             // TODO(grievejia): traverse the function body and calculate the `is_generator` flag, then
             // use ReturnTypeKind::ShouldReturnAny to get more precision here.
-            Binding::Type(Type::any_implicit()),
+            Binding::Any(AnyStyle::Implicit),
         );
     }
 
@@ -532,17 +540,16 @@ impl<'a> BindingsBuilder<'a> {
         class_key: Option<Idx<KeyClass>>,
         metadata_key: Option<Idx<KeyClassMetadata>>,
     ) -> (FunctionStubOrImpl, Option<SelfAssignments>) {
-        let stub_or_impl = if (body.first().is_some_and(is_docstring)
-            && decorators.is_abstract_method)
-            || is_ellipse(&body)
-            || (body.first().is_some_and(is_docstring) && decorators.is_overload)
+        // If the first statement in the body is a docstring, remove it
+        let body_no_docstring = if let Some(s) = body.first()
+            && is_docstring(s)
         {
-            FunctionStubOrImpl::Stub
+            &body.as_slice()[1..]
         } else {
-            FunctionStubOrImpl::Impl
+            body.as_slice()
         };
-
-        let body_is_trivial = match body.as_slice() {
+        let body_is_trivial = match body_no_docstring {
+            [] => true,
             [Stmt::Pass(_)] => true,
             // raise NotImplementedError(...)
             [
@@ -558,14 +565,28 @@ impl<'a> BindingsBuilder<'a> {
                     ..
                 }),
             ] if self.as_special_export(val) == Some(SpecialExport::NotImplemented) => true,
+            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => true,
             _ => false,
+        };
+        let body_is_ellipse = match body_no_docstring {
+            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => true,
+            _ => false,
+        };
+        let stub_or_impl = if (self.scopes.is_in_protocol_class()
+            || decorators.is_abstract_method
+            || decorators.is_overload
+            || body_is_ellipse)
+            && body_is_trivial
+        {
+            FunctionStubOrImpl::Stub
+        } else {
+            FunctionStubOrImpl::Impl
         };
         let should_report_unused_parameters = stub_or_impl == FunctionStubOrImpl::Impl
             && !body_is_trivial
             && !decorators.is_overload
             && !decorators.is_override
-            && !decorators.is_abstract_method
-            && !is_ellipse(&body);
+            && !decorators.is_abstract_method;
         let method_self_kind = if class_key.is_some()
             && (decorators.is_classmethod
                 || func_name.id == dunder::INIT_SUBCLASS
@@ -739,7 +760,7 @@ impl<'a> BindingsBuilder<'a> {
         let undecorated_idx = self.insert_binding_idx(
             undecorated_idx,
             BindingUndecoratedFunction {
-                def: x,
+                def: FunctionDefData::new(x),
                 stub_or_impl,
                 class_key,
                 decorators: decorators.decorators,
@@ -831,8 +852,14 @@ fn function_last_expressions<'a>(
                     f(sys_info, body, res)?;
                 }
                 if last_test.is_some() {
-                    // The final `if` can fall through, so the `if` itself might be the last statement.
-                    return None;
+                    // The if/elif chain has no else clause, so it's not syntactically exhaustive.
+                    // But it might be type-exhaustive. Add a LastStmt::Exhaustive entry so we can check
+                    // at solve time. We use the test expression as a placeholder; the actual
+                    // exhaustiveness check uses the if range to find the Exhaustive binding.
+                    res.push((
+                        LastStmt::Exhaustive(ExhaustivenessKind::IfElif, x.range),
+                        &x.test,
+                    ));
                 }
             }
             Stmt::Try(x) => {
@@ -859,16 +886,23 @@ fn function_last_expressions<'a>(
                 }
             }
             Stmt::Match(x) => {
-                let mut exhaustive = false;
+                let mut syntactically_exhaustive = false;
                 for case in x.cases.iter() {
                     f(sys_info, &case.body, res)?;
                     if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
-                        exhaustive = true;
+                        syntactically_exhaustive = true;
                         break;
                     }
                 }
-                if !exhaustive {
-                    return None;
+                if !syntactically_exhaustive {
+                    // The match is not syntactically exhaustive, but might be type-exhaustive.
+                    // Add a LastStmt::Exhaustive entry so we can check at solve time.
+                    // We use the subject expression as a placeholder; the actual exhaustiveness
+                    // check uses the match range to find the Exhaustive binding.
+                    res.push((
+                        LastStmt::Exhaustive(ExhaustivenessKind::Match, x.range),
+                        x.subject.as_ref(),
+                    ));
                 }
             }
             _ => return None,
@@ -884,13 +918,6 @@ fn function_last_expressions<'a>(
 fn is_docstring(x: &Stmt) -> bool {
     match x {
         Stmt::Expr(StmtExpr { value, .. }) => value.is_string_literal_expr(),
-        _ => false,
-    }
-}
-
-fn is_ellipse(x: &[Stmt]) -> bool {
-    match x.iter().find(|x| !is_docstring(x)) {
-        Some(Stmt::Expr(StmtExpr { value, .. })) => value.is_ellipsis_literal_expr(),
         _ => false,
     }
 }

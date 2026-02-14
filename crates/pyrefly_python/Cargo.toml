@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_python"
-version = "0.48.1"
+version = "0.52.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -12,8 +12,8 @@ license = "MIT"
 anyhow = "1.0.98"
 clap = { version = "4.5.42", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 dupe = "0.9.1"
-enum-iterator = "2.1"
-equivalent = "1.0"
+enum-iterator = "2.3.0"
+equivalent = "1.0.2"
 itertools = "0.14.0"
 lsp-types = { git = "https://github.com/astral-sh/lsp-types", rev = "3512a9f33eadc5402cfab1b8f7340824c8ca1439" }
 parse-display = "0.8.2"
@@ -27,8 +27,8 @@ ruff_text_size = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568a
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 starlark_map = "0.13.0"
 static_interner = "0.1.1"
-thiserror = "2.0.12"
+thiserror = "2.0.18"
 
 [dev-dependencies]
 serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
-toml = { version = "0.9.8", features = ["preserve_order"] }
+toml = { version = "0.9.11", features = ["preserve_order"] }

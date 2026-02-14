@@ -7,6 +7,8 @@
 
 use std::sync::Arc;
 
+use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::type_alias::TypeAlias;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 
@@ -45,8 +47,10 @@ use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BindingTParams;
+use crate::binding::binding::BindingTypeAlias;
 use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::BindingVariance;
+use crate::binding::binding::BindingVarianceCheck;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::EmptyAnswer;
@@ -67,8 +71,10 @@ use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTParams;
+use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::KeyVariance;
+use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
@@ -88,6 +94,7 @@ pub trait Solve<Ans: LookupAnswer>: Keyed {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &Self::Value,
+        range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<Self::Answer>;
 
@@ -99,7 +106,7 @@ pub trait Solve<Ans: LookupAnswer>: Keyed {
 
     /// We hit a recursive case, so promote the recursive value into an answer that needs to be
     /// sufficient for now.
-    fn promote_recursive(x: Var) -> Self::Answer;
+    fn promote_recursive(heap: &TypeHeap, x: Var) -> Self::Answer;
 
     /// We solved a binding, but during its execution we gave some people back a recursive value.
     /// Record that recursive value along with the answer.
@@ -118,16 +125,17 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &Binding,
+        range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<TypeInfo> {
-        answers.solve_binding(binding, errors)
+        answers.solve_binding(binding, range, errors)
     }
 
     fn create_recursive(answers: &AnswersSolver<Ans>, binding: &Self::Value) -> Var {
         answers.create_recursive(binding)
     }
 
-    fn promote_recursive(x: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, x: Var) -> Self::Answer {
         TypeInfo::of_ty(Type::Var(x))
     }
 
@@ -149,13 +157,29 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExpect {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingExpect,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<EmptyAnswer> {
         answers.solve_expectation(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         EmptyAnswer
+    }
+}
+
+impl<Ans: LookupAnswer> Solve<Ans> for KeyTypeAlias {
+    fn solve(
+        answers: &AnswersSolver<Ans>,
+        binding: &BindingTypeAlias,
+        _range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Arc<TypeAlias> {
+        answers.solve_type_alias(binding, errors)
+    }
+
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
+        TypeAlias::unknown(Name::new("recursive"))
     }
 }
 
@@ -163,12 +187,13 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyConsistentOverrideCheck {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingConsistentOverrideCheck,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<EmptyAnswer> {
         answers.solve_consistent_override_check(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         EmptyAnswer
     }
 }
@@ -177,16 +202,21 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingExport,
+        range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<Type> {
-        Arc::new(answers.solve_binding(&binding.0, errors).arc_clone_ty())
+        Arc::new(
+            answers
+                .solve_binding(&binding.0, range, errors)
+                .arc_clone_ty(),
+        )
     }
 
     fn create_recursive(answers: &AnswersSolver<Ans>, binding: &Self::Value) -> Var {
         answers.create_recursive(&binding.0)
     }
 
-    fn promote_recursive(x: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, x: Var) -> Self::Answer {
         Type::Var(x)
     }
 
@@ -205,14 +235,15 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyDecorator {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingDecorator,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<Decorator> {
         answers.solve_decorator(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(heap: &TypeHeap, _: Var) -> Self::Answer {
         Decorator {
-            ty: Type::any_implicit(),
+            ty: heap.mk_any_implicit(),
             deprecation: None,
         }
     }
@@ -222,15 +253,16 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyDecoratedFunction {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingDecoratedFunction,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<Type> {
         answers.solve_decorated_function(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(heap: &TypeHeap, _: Var) -> Self::Answer {
         // TODO(samgoldman) I'm not sure this really makes sense. These bindings should never
         // be recursive, but this definition is required.
-        Type::any_implicit()
+        heap.mk_any_implicit()
     }
 }
 
@@ -238,12 +270,13 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyUndecoratedFunction {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingUndecoratedFunction,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<UndecoratedFunction> {
         answers.solve_undecorated_function(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         // This shouldn't happen
         UndecoratedFunction::recursive()
     }
@@ -253,12 +286,13 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClass {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingClass,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<NoneIfRecursive<Class>> {
         answers.solve_class(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         NoneIfRecursive(None)
     }
 }
@@ -267,12 +301,13 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyTParams {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingTParams,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<TParams> {
         answers.solve_tparams(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         TParams::default()
     }
 }
@@ -281,12 +316,13 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassBaseType {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingClassBaseType,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<ClassBases> {
         answers.solve_class_base_type(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         ClassBases::default()
     }
 }
@@ -295,15 +331,16 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassField {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingClassField,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<ClassField> {
         answers.solve_class_field(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(heap: &TypeHeap, _: Var) -> Self::Answer {
         // TODO(stroxler) Revisit the recursive handling, which needs changes in the plumbing
         // to work correctly; what we have here is a fallback to permissive gradual typing.
-        ClassField::recursive()
+        ClassField::recursive(heap)
     }
 }
 
@@ -311,12 +348,13 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassSynthesizedFields {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingClassSynthesizedFields,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<ClassSynthesizedFields> {
         answers.solve_class_synthesized_fields(errors, binding)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         ClassSynthesizedFields::default()
     }
 }
@@ -339,13 +377,29 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyVariance {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingVariance,
-        _errors: &ErrorCollector,
+        _range: TextRange,
+        errors: &ErrorCollector,
     ) -> Arc<VarianceMap> {
-        answers.solve_variance_binding(binding)
+        answers.solve_variance_binding(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         VarianceMap::default()
+    }
+}
+
+impl<Ans: LookupAnswer> Solve<Ans> for KeyVarianceCheck {
+    fn solve(
+        answers: &AnswersSolver<Ans>,
+        binding: &BindingVarianceCheck,
+        _range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Arc<EmptyAnswer> {
+        answers.solve_variance_check(binding, errors)
+    }
+
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
+        EmptyAnswer
     }
 }
 
@@ -353,12 +407,13 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyAnnotation {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingAnnotation,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<AnnotationWithTarget> {
         answers.solve_annotation(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         AnnotationWithTarget {
             target: AnnotationTarget::Assign(Name::default(), AnnAssignHasValue::Yes),
             annotation: Annotation::default(),
@@ -370,12 +425,13 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassMetadata {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingClassMetadata,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<ClassMetadata> {
         answers.solve_class_metadata(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         ClassMetadata::recursive()
     }
 }
@@ -384,12 +440,13 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassMro {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingClassMro,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<ClassMro> {
         answers.solve_class_mro(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         ClassMro::recursive()
     }
 }
@@ -398,6 +455,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyAbstractClassCheck {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingAbstractClassCheck,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<AbstractClassMembers> {
         if let Some(cls) = &answers.get_idx(binding.class_idx).0 {
@@ -407,7 +465,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyAbstractClassCheck {
         }
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         AbstractClassMembers::recursive()
     }
 }
@@ -416,13 +474,14 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyLegacyTypeParam {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingLegacyTypeParam,
+        _range: TextRange,
         _errors: &ErrorCollector,
     ) -> Arc<LegacyTypeParameterLookup> {
         answers.solve_legacy_tparam(binding)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
-        LegacyTypeParameterLookup::NotParameter(Type::any_implicit())
+    fn promote_recursive(heap: &TypeHeap, _: Var) -> Self::Answer {
+        LegacyTypeParameterLookup::NotParameter(heap.mk_any_implicit())
     }
 }
 
@@ -430,14 +489,15 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyYield {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingYield,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<YieldResult> {
         answers.solve_yield(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(heap: &TypeHeap, _: Var) -> Self::Answer {
         // In practice, we should never have recursive bindings with yield.
-        YieldResult::recursive()
+        YieldResult::recursive(heap)
     }
 }
 
@@ -445,13 +505,14 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyYieldFrom {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingYieldFrom,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<YieldFromResult> {
         answers.solve_yield_from(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(heap: &TypeHeap, _: Var) -> Self::Answer {
         // In practice, we should never have recursive bindings with yield from.
-        YieldFromResult::recursive()
+        YieldFromResult::recursive(heap)
     }
 }

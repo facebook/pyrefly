@@ -16,6 +16,7 @@ documentation = "https://pyrefly.org/en/docs/"
 [project]
 name = "pyrefly"
 description = "A fast type checker and language server for Python with powerful IDE features"
+dynamic = ["version"]
 readme = "README.md"
 requires-python = ">=3.8"
 keywords = ["typechecker", "typechecking"]

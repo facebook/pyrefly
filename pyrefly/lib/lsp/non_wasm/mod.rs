@@ -7,15 +7,18 @@
 
 mod build_system;
 pub mod call_hierarchy;
+pub mod convert_module_package;
 pub mod document_symbols;
 pub mod folding_ranges;
 pub mod lsp;
 pub mod module_helpers;
+mod mru;
 pub mod protocol;
 pub mod queue;
 pub mod server;
 pub mod stdlib;
 pub mod transaction_manager;
+pub mod type_hierarchy;
 pub mod unsaved_file_tracker;
 pub mod will_rename_files;
 pub mod workspace;

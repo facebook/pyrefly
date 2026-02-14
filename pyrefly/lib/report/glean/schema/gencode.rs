@@ -16,6 +16,7 @@ use serde_json::Value;
 use serde_repr::*;
 
 use crate::report::glean::schema::*;
+use crate::report::glean::facts::GleanPredicate;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct GenCodeSignature {
@@ -24,16 +25,19 @@ pub struct GenCodeSignature {
 }
 
 impl GenCodeSignature {
-    pub fn GLEAN_name() -> String {
-        String::from("gencode.GenCodeSignature.1")
-    }
-
     pub fn new(key: String) -> Self {
         GenCodeSignature {
             id: 0,
             key: Box::new(key),
         }
     }
+}
+
+impl GleanPredicate for GenCodeSignature {
+    fn GLEAN_name() -> String {
+        String::from("gencode.GenCodeSignature.1")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -43,16 +47,19 @@ pub struct GenCodeCommand {
 }
 
 impl GenCodeCommand {
-    pub fn GLEAN_name() -> String {
-        String::from("gencode.GenCodeCommand.1")
-    }
-
     pub fn new(key: String) -> Self {
         GenCodeCommand {
             id: 0,
             key: Box::new(key),
         }
     }
+}
+
+impl GleanPredicate for GenCodeCommand {
+    fn GLEAN_name() -> String {
+        String::from("gencode.GenCodeCommand.1")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -62,16 +69,19 @@ pub struct GenCodeClass {
 }
 
 impl GenCodeClass {
-    pub fn GLEAN_name() -> String {
-        String::from("gencode.GenCodeClass.1")
-    }
-
     pub fn new(key: String) -> Self {
         GenCodeClass {
             id: 0,
             key: Box::new(key),
         }
     }
+}
+
+impl GleanPredicate for GenCodeClass {
+    fn GLEAN_name() -> String {
+        String::from("gencode.GenCodeClass.1")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -81,10 +91,6 @@ pub struct GenCodeBySource {
 }
 
 impl GenCodeBySource {
-    pub fn GLEAN_name() -> String {
-        String::from("gencode.GenCodeBySource.1")
-    }
-
     pub fn new(source: src::File, gencode: src::File) -> Self {
         GenCodeBySource {
             id: 0,
@@ -96,6 +102,13 @@ impl GenCodeBySource {
     }
 }
 
+impl GleanPredicate for GenCodeBySource {
+    fn GLEAN_name() -> String {
+        String::from("gencode.GenCodeBySource.1")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct GenCode {
     pub id: u64,
@@ -103,10 +116,6 @@ pub struct GenCode {
 }
 
 impl GenCode {
-    pub fn GLEAN_name() -> String {
-        String::from("gencode.GenCode.1")
-    }
-
     pub fn new(file: src::File, variant: GenCodeVariant, source: Option<src::File>, command: Option<GenCodeCommand>, class_: Option<GenCodeClass>, signature: Option<GenCodeSignature>) -> Self {
         GenCode {
             id: 0,
@@ -120,6 +129,13 @@ impl GenCode {
             }),
         }
     }
+}
+
+impl GleanPredicate for GenCode {
+    fn GLEAN_name() -> String {
+        String::from("gencode.GenCode.1")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize_repr, Eq, Hash, PartialEq, Serialize_repr)]

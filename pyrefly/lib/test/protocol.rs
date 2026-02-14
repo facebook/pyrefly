@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -382,10 +383,10 @@ class P(Protocol):
     x: int
     def __init__(self, x: int, z: str):
         self.x = x  # ok
-        self.z = z  # E: Instance or class variables within a Protocol class must be explicitly declared within the class body
+        self.z = z  # E: Protocol variables must be explicitly declared in the class body
     def f(self, x: int, y: str):
         self.x = x  # ok
-        self.y = y  # E: Instance or class variables within a Protocol class must be explicitly declared within the class body
+        self.y = y  # E: Protocol variables must be explicitly declared in the class body
     "#,
 );
 
@@ -767,6 +768,24 @@ issubclass(Impl, GenericProtocol)  # E: Runtime checkable protocol `GenericProto
 );
 
 testcase!(
+    test_runtime_checkable_protocol_bound_violation,
+    r#"
+from typing import Protocol, runtime_checkable, TypeVar
+
+T = TypeVar('T', bound=str)
+@runtime_checkable
+class GenericProtocol(Protocol[T]):
+    def get(self, x: T) -> T: ...
+
+class IntImpl:
+    def get(self, x: int) -> int:
+        return x
+
+isinstance(IntImpl(), GenericProtocol)  # E: `int` is not assignable to upper bound `str` of type variable `T`
+    "#,
+);
+
+testcase!(
     test_protocol_with_uninit_classvar,
     r#"
 from typing import Protocol, ClassVar, final
@@ -808,7 +827,7 @@ from typing import Generic, TypeVar, Protocol, Callable
 T = TypeVar('T')
 U = TypeVar('U')
 
-class Functor(Protocol[T]):
+class Functor(Protocol[T]):  # E: Type variable `T` in class `Functor` is declared as invariant, but could be covariant based on its usage
     """A Functor protocol - common in functional programming."""
     def map(self, f: Callable[[T], U]) -> Functor[U]: ...
 
@@ -832,7 +851,7 @@ from typing import Generic, TypeVar, Protocol, Callable
 T = TypeVar('T')
 U = TypeVar('U')
 
-class TrickyProtocol(Protocol[T]):
+class TrickyProtocol(Protocol[T]):  # E: Type variable `T` in class `TrickyProtocol` is declared as invariant, but could be covariant based on its usage
     def recurse(self, f: Callable[[T], U]) -> "TrickyProtocol[U]": ...
     def check(self) -> T: ...
 
@@ -845,5 +864,105 @@ def test():
     # Invalid because p.recurse(lambda i: str(i)).check() returns int, but
     # it should return `str` if we fully implemented the protocol
     p: TrickyProtocol[int] = t  # E:
+"#,
+);
+
+testcase!(
+    bug = "conformance: Should error on ClassVar protocol assignments with class objects",
+    test_protocols_class_objects_conformance,
+    r#"
+from typing import ClassVar, Protocol
+
+class ProtoC1(Protocol):
+    attr1: ClassVar[int]
+
+class ProtoC2(Protocol):
+    attr1: int
+
+class ConcreteC1:
+    attr1: ClassVar[int] = 1
+
+class ConcreteC2:
+    attr1: int = 1
+
+class CMeta(type):
+    attr1: int
+    def __init__(self, attr1: int) -> None:
+        self.attr1 = attr1
+
+class ConcreteC3(metaclass=CMeta): ...
+
+pc1: ProtoC1 = ConcreteC1  # should error
+pc3: ProtoC1 = ConcreteC2  # should error
+pc4: ProtoC2 = ConcreteC2  # should error
+pc5: ProtoC1 = ConcreteC3  # should error
+"#,
+);
+
+testcase!(
+    bug = "conformance: Protocol with self-assigned var should not require that var from implementations",
+    test_protocols_definition_conformance,
+    r#"
+from typing import ClassVar, Protocol, Sequence
+
+class Template(Protocol):
+    name: str
+    value: int = 0
+    def method(self) -> None:
+        self.temp: list[int] = []  # E: Protocol variables must be explicitly declared in the class body
+
+class Concrete:
+    def __init__(self, name: str, value: int) -> None:
+        self.name = name
+        self.value = value
+    def method(self) -> None:
+        return
+
+# Bug: pyrefly makes 'temp' a required attribute even though the self.temp error was raised
+var: Template = Concrete("value", 42)  # E: `Concrete` is not assignable to `Template`
+
+class Template2(Protocol):
+    val1: ClassVar[Sequence[int]]
+
+class Concrete2_Bad3:
+    val1: list[int] = [2]
+
+class Concrete2_Bad4:
+    val1: Sequence[int] = [2]
+
+v2_bad3: Template2 = Concrete2_Bad3()  # should error: instance attr vs ClassVar
+v2_bad4: Template2 = Concrete2_Bad4()  # should error: instance attr vs ClassVar
+"#,
+);
+
+fn env_protocols_modules() -> TestEnv {
+    TestEnv::one(
+        "_protocols_modules1",
+        r#"
+"""
+Support file for protocols_modules.py test.
+"""
+
+timeout = 100
+one_flag = True
+other_flag = False
+"#,
+    )
+}
+
+testcase!(
+    bug = "conformance: Module with Literal[100] should be accepted for protocol expecting int",
+    test_protocols_modules_conformance,
+    env_protocols_modules(),
+    r#"
+import _protocols_modules1
+from typing import Protocol
+
+class Options1(Protocol):
+    timeout: int
+    one_flag: bool
+    other_flag: bool
+
+op1: Options1 = _protocols_modules1  # E: `Module[_protocols_modules1]` is not assignable to `Options1`
 "#,
 );

@@ -467,3 +467,25 @@ class C(B):
         pass
 "#,
 );
+
+testcase!(
+    test_abstract_method_simple_assignment,
+    r#"
+from abc import ABC, abstractmethod
+
+def concrete_impl(self: "Base") -> int:
+    return 42
+
+class Base(ABC):
+    @abstractmethod
+    def method(self) -> int:
+        pass
+
+class Child(Base):
+    # This assignment should implement the abstract method
+    method = concrete_impl
+
+# This should work - abstract method is implemented via assignment
+x = Child()
+"#,
+);

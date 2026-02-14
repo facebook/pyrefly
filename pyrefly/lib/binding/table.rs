@@ -26,6 +26,7 @@ macro_rules! table {
         pub struct $name {
             $($vis)* types: $t<$crate::binding::binding::Key>,
             $($vis)* expectations: $t<$crate::binding::binding::KeyExpect>,
+            $($vis)* type_aliases: $t<$crate::binding::binding::KeyTypeAlias>,
             $($vis)* consistent_override_checks: $t<$crate::binding::binding::KeyConsistentOverrideCheck>,
             $($vis)* exports: $t<$crate::binding::binding::KeyExport>,
             $($vis)* decorators: $t<$crate::binding::binding::KeyDecorator>,
@@ -37,6 +38,7 @@ macro_rules! table {
             $($vis)* class_fields: $t<$crate::binding::binding::KeyClassField>,
             $($vis)* class_synthesized_fields: $t<$crate::binding::binding::KeyClassSynthesizedFields>,
             $($vis)* variance: $t<$crate::binding::binding::KeyVariance>,
+            $($vis)* variance_checks: $t<$crate::binding::binding::KeyVarianceCheck>,
             $($vis)* annotations: $t<$crate::binding::binding::KeyAnnotation>,
             $($vis)* class_metadata: $t<$crate::binding::binding::KeyClassMetadata>,
             $($vis)* django_relations: $t<$crate::binding::binding::KeyDjangoRelations>,
@@ -57,6 +59,12 @@ macro_rules! table {
             type Value = $t<$crate::binding::binding::KeyExpect>;
             fn get(&self) -> &Self::Value { &self.expectations }
             fn get_mut(&mut self) -> &mut Self::Value { &mut self.expectations }
+        }
+
+        impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyTypeAlias> for $name {
+            type Value = $t<$crate::binding::binding::KeyTypeAlias>;
+            fn get(&self) -> &Self::Value { &self.type_aliases }
+            fn get_mut(&mut self) -> &mut Self::Value { &mut self.type_aliases }
         }
 
         impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyConsistentOverrideCheck> for $name {
@@ -123,6 +131,12 @@ macro_rules! table {
             type Value = $t<$crate::binding::binding::KeyVariance>;
             fn get(&self) -> &Self::Value { &self.variance }
             fn get_mut(&mut self) -> &mut Self::Value { &mut self.variance }
+        }
+
+        impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyVarianceCheck> for $name {
+            type Value = $t<$crate::binding::binding::KeyVarianceCheck>;
+            fn get(&self) -> &Self::Value { &self.variance_checks }
+            fn get_mut(&mut self) -> &mut Self::Value { &mut self.variance_checks }
         }
 
         impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyAnnotation> for $name {
@@ -198,6 +212,7 @@ macro_rules! table_for_each(
     ($e:expr, $f:expr) => {
         $f(&($e).types);
         $f(&($e).expectations);
+        $f(&($e).type_aliases);
         $f(&($e).consistent_override_checks);
         $f(&($e).exports);
         $f(&($e).decorators);
@@ -209,6 +224,7 @@ macro_rules! table_for_each(
         $f(&($e).class_fields);
         $f(&($e).class_synthesized_fields);
         $f(&($e).variance);
+        $f(&($e).variance_checks);
         $f(&($e).annotations);
         $f(&($e).class_metadata);
         $f(&($e).django_relations);
@@ -225,6 +241,7 @@ macro_rules! table_mut_for_each(
     ($e:expr, $f:expr) => {
         $f(&mut ($e).types);
         $f(&mut ($e).expectations);
+        $f(&mut ($e).type_aliases);
         $f(&mut ($e).consistent_override_checks);
         $f(&mut ($e).exports);
         $f(&mut ($e).decorators);
@@ -236,6 +253,7 @@ macro_rules! table_mut_for_each(
         $f(&mut ($e).class_fields);
         $f(&mut ($e).class_synthesized_fields);
         $f(&mut ($e).variance);
+        $f(&mut ($e).variance_checks);
         $f(&mut ($e).annotations);
         $f(&mut ($e).class_metadata);
         $f(&mut ($e).django_relations);
@@ -252,6 +270,7 @@ macro_rules! table_try_for_each(
     ($e:expr, $f:expr) => {
         $f(&($e).types)?;
         $f(&($e).expectations)?;
+        $f(&($e).type_aliases)?;
         $f(&($e).consistent_override_checks)?;
         $f(&($e).exports)?;
         $f(&($e).decorators)?;
@@ -263,6 +282,7 @@ macro_rules! table_try_for_each(
         $f(&($e).class_fields)?;
         $f(&($e).class_synthesized_fields)?;
         $f(&($e).variance)?;
+        $f(&($e).variance_checks)?;
         $f(&($e).annotations)?;
         $f(&($e).class_metadata)?;
         $f(&($e).django_relations)?;

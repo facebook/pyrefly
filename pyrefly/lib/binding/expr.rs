@@ -7,6 +7,7 @@
 
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Arguments;
@@ -16,15 +17,19 @@ use ruff_python_ast::Comprehension;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
+use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprBoolOp;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprLambda;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNoneLiteral;
+use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprYield;
 use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Operator;
+use ruff_python_ast::StringLiteral;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -52,12 +57,13 @@ use crate::binding::bindings::LegacyTParamId;
 use crate::binding::bindings::NameLookupResult;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::narrow::NarrowSource;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::types::callable::unexpected_keyword;
-use crate::types::types::Type;
+use crate::types::types::AnyStyle;
 
 /// Match on an expression by name. Should be used only for special names that we essentially treat like keywords,
 /// like reveal_type.
@@ -159,7 +165,7 @@ impl TestAssertion {
             {
                 Some(NarrowOps::from_single_narrow_op(
                     arg0,
-                    AtomicNarrowOp::IsInstance(arg1.clone()),
+                    AtomicNarrowOp::IsInstance(arg1.clone(), NarrowSource::Call),
                     arg0.range(),
                 ))
             }
@@ -169,7 +175,7 @@ impl TestAssertion {
             {
                 Some(NarrowOps::from_single_narrow_op(
                     arg0,
-                    AtomicNarrowOp::IsNotInstance(arg1.clone()),
+                    AtomicNarrowOp::IsNotInstance(arg1.clone(), NarrowSource::Call),
                     arg0.range(),
                 ))
             }
@@ -317,7 +323,7 @@ impl<'a> BindingsBuilder<'a> {
             // We still need to produce a `Key` here just to be safe, because other
             // code may rely on all `Identifier`s having `Usage` keys and we could panic
             // in an IDE setting if we don't ensure this is the case.
-            return self.insert_binding_overwrite(key, Binding::Type(Type::any_error()));
+            return self.insert_binding_overwrite(key, Binding::Any(AnyStyle::Error));
         }
         let used_in_static_type = matches!(usage, Usage::StaticTypeInformation);
         let lookup_result =
@@ -333,15 +339,28 @@ impl<'a> BindingsBuilder<'a> {
             } => {
                 // Uninitialized local errors are only reported when we are neither in a stub
                 // nor a static type context.
-                if !used_in_static_type
-                    && !self.module_info.path().is_interface()
-                    && let Some(error_message) = is_initialized.as_error_message(&name.id)
-                {
-                    self.error(
-                        name.range,
-                        ErrorInfo::Kind(ErrorKind::UnboundName),
-                        error_message,
-                    );
+                if !used_in_static_type && !self.module_info.path().is_interface() {
+                    if let Some(termination_keys) = is_initialized
+                        .deferred_termination_keys()
+                        .map(|s| s.to_vec())
+                    {
+                        // Defer the uninitialized check to solve time.
+                        // At solve time, we'll check if all termination keys have Never type.
+                        self.insert_binding(
+                            KeyExpect::UninitializedCheck(name.range),
+                            BindingExpect::UninitializedCheck {
+                                name: name.id.clone(),
+                                range: name.range,
+                                termination_keys,
+                            },
+                        );
+                    } else if let Some(error_message) = is_initialized.as_error_message(&name.id) {
+                        self.error(
+                            name.range,
+                            ErrorInfo::Kind(ErrorKind::UnboundName),
+                            error_message,
+                        );
+                    }
                 }
 
                 // For static type context, create binding immediately since it
@@ -366,7 +385,7 @@ impl<'a> BindingsBuilder<'a> {
                             name
                         ),
                     );
-                    self.insert_binding(key, Binding::Type(Type::any_error()))
+                    self.insert_binding(key, Binding::Any(AnyStyle::Error))
                 } else if self.scopes.in_class_body()
                     && let Some((cls, _)) = self.scopes.current_class_and_metadata_keys()
                 {
@@ -381,7 +400,7 @@ impl<'a> BindingsBuilder<'a> {
                         msg.push(format!("Did you mean `{suggestion}`?"));
                     }
                     self.error_multiline(name.range, ErrorInfo::Kind(ErrorKind::UnknownName), msg);
-                    self.insert_binding(key, Binding::Type(Type::any_error()))
+                    self.insert_binding(key, Binding::Any(AnyStyle::Error))
                 }
             }
         }
@@ -523,6 +542,10 @@ impl<'a> BindingsBuilder<'a> {
     /// Execute through the expr, ensuring every name has a binding.
     pub fn ensure_expr(&mut self, x: &mut Expr, usage: &mut Usage) {
         self.with_semantic_checker(|semantic, context| semantic.visit_expr(x, context));
+
+        // Track uses of `typing.Self` in class bodies so they can be properly bound
+        // to the current class during the solving phase.
+        self.track_potential_typing_self(x);
 
         match x {
             Expr::Attribute(attr) => {
@@ -820,7 +843,7 @@ impl<'a> BindingsBuilder<'a> {
             class_idx: self.scopes.current_method_context(),
         };
         self.insert_binding(
-            KeyExpect(attr.attr.range()),
+            KeyExpect::PrivateAttributeAccess(attr.attr.range()),
             BindingExpect::PrivateAttributeAccess(expect),
         );
     }
@@ -850,6 +873,16 @@ impl<'a> BindingsBuilder<'a> {
         self.track_potential_typing_self(x);
         // We do not treat static types as usage for the purpose of first-usage-based type inference.
         let static_type_usage = &mut Usage::StaticTypeInformation;
+        fn as_forward_ref<'b>(
+            literal: &'b ExprStringLiteral,
+            in_string_literal: bool,
+        ) -> Option<&'b StringLiteral> {
+            if in_string_literal {
+                None
+            } else {
+                literal.as_single_part_string()
+            }
+        }
         match x {
             Expr::Name(x) => {
                 let name = Ast::expr_name_identifier(x.clone());
@@ -879,7 +912,7 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_type_impl(&mut *slice, tparams_builder, in_string_literal);
             }
             Expr::StringLiteral(literal)
-                if !in_string_literal && let Some(literal) = literal.as_single_part_string() =>
+                if let Some(literal) = as_forward_ref(literal, in_string_literal) =>
             {
                 match Ast::parse_type_literal(literal) {
                     Ok(expr) => {
@@ -928,6 +961,42 @@ impl<'a> BindingsBuilder<'a> {
                     static_type_usage,
                     tparams_builder,
                 );
+            }
+            Expr::BinOp(ExprBinOp {
+                left,
+                op: Operator::BitOr,
+                right,
+                range,
+                ..
+            }) => {
+                // Check if either side is a string literal BEFORE recursing,
+                // since ensure_type_impl will parse and replace them.
+                let left_is_forward_ref = matches!(&**left, Expr::StringLiteral(s) if as_forward_ref(s, in_string_literal).is_some());
+                let right_is_forward_ref = matches!(&**right, Expr::StringLiteral(s) if as_forward_ref(s, in_string_literal).is_some());
+
+                // Recurse into children to handle string literal parsing
+                self.ensure_type_impl(left, tparams_builder, in_string_literal);
+                self.ensure_type_impl(right, tparams_builder, in_string_literal);
+
+                // Only create the check if we're in an executable file, at least one side
+                // is a forward ref, and we're not in Python 3.14+ or with future annotations
+                // (which make annotations lazy and avoid the runtime error)
+                if self.module_info.path().style() == ModuleStyle::Executable
+                    && (left_is_forward_ref || right_is_forward_ref)
+                    && !self.sys_info.version().at_least(3, 14)
+                    && !self.scopes.has_future_annotations()
+                {
+                    self.insert_binding(
+                        KeyExpect::ForwardRefUnion(*range),
+                        BindingExpect::ForwardRefUnion {
+                            left: Box::new((**left).clone()),
+                            right: Box::new((**right).clone()),
+                            left_is_forward_ref,
+                            right_is_forward_ref,
+                            range: *range,
+                        },
+                    );
+                }
             }
             _ => {
                 x.recurse_mut(&mut |x| self.ensure_type_impl(x, tparams_builder, in_string_literal))

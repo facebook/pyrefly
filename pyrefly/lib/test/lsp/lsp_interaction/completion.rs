@@ -5,12 +5,17 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cell::RefCell;
+
 use itertools::Itertools;
+use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionResponse;
+use lsp_types::InsertTextFormat;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::request::Completion;
+use lsp_types::request::ResolveCompletionItem;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -57,6 +62,128 @@ fn test_completion_basic() {
 }
 
 #[test]
+fn test_completion_function_parens_snippet() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("basic"));
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "analysis": {
+                    "completeFunctionParens": true
+                }
+            }]))),
+            capabilities: Some(json!({
+                "textDocument": {
+                    "completion": {
+                        "completionItem": {
+                            "snippetSupport": true
+                        }
+                    }
+                }
+            })),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 0}
+                },
+                "text": "def spam(x: int) -> None:\n    pass\n\nsp\n"
+            }],
+        }));
+
+    interaction
+        .client
+        .completion("foo.py", 3, 2)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| {
+                item.label == "spam"
+                    && item.insert_text.as_deref() == Some("spam($0)")
+                    && item.insert_text_format == Some(InsertTextFormat::SNIPPET)
+            })
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_function_parens_disabled() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("basic"));
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "analysis": {
+                    "completeFunctionParens": false
+                }
+            }]))),
+            capabilities: Some(json!({
+                "textDocument": {
+                    "completion": {
+                        "completionItem": {
+                            "snippetSupport": true
+                        }
+                    }
+                }
+            })),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 0}
+                },
+                "text": "def spam(x: int) -> None:\n    pass\n\nsp\n"
+            }],
+        }));
+
+    interaction
+        .client
+        .completion("foo.py", 3, 2)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| {
+                item.label == "spam"
+                    && item.insert_text.is_none()
+                    && item.insert_text_format != Some(InsertTextFormat::SNIPPET)
+            })
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_completion_sorted_in_sorttext_order() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
@@ -95,6 +222,95 @@ fn test_completion_sorted_in_sorttext_order() {
                 .is_sorted_by_key(|x| (&x.sort_text, &x.label))
         })
         .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_mru_ranked() {
+    let root = get_test_files_root();
+    let workspace_root = root.path().join("basic");
+    let foo_path = workspace_root.join("foo.py");
+    let foo_uri = Url::from_file_path(&foo_path).unwrap().to_string();
+
+    let insert_text = "\nclass Alchemy:\n    pass\nclass Alpha:\n    pass\n\nAl";
+
+    // Select Alpha to populate MRU.
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(workspace_root.clone());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": foo_uri.clone(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 10, "character": 0},
+                    "end": {"line": 10, "character": 0}
+                },
+                "text": insert_text
+            }],
+        }));
+
+    let captured = RefCell::new(None);
+    interaction
+        .client
+        .completion("foo.py", 16, 2)
+        .expect_completion_response_with(|list| {
+            *captured.borrow_mut() = Some(list.clone());
+            true
+        })
+        .unwrap();
+    let list = captured.into_inner().expect("expected completion list");
+    let alpha_idx = list
+        .items
+        .iter()
+        .position(|item| item.label == "Alpha")
+        .expect("expected Alpha completion");
+    let alchemy_idx = list
+        .items
+        .iter()
+        .position(|item| item.label == "Alchemy")
+        .expect("expected Alchemy completion");
+    assert!(alchemy_idx < alpha_idx, "expected default sort order");
+    let alpha_item: CompletionItem = list.items[alpha_idx].clone();
+
+    interaction
+        .client
+        .send_request::<ResolveCompletionItem>(json!(alpha_item))
+        .expect_response_with(|resolved| resolved.label == "Alpha")
+        .unwrap();
+
+    let captured = RefCell::new(None);
+    interaction
+        .client
+        .completion("foo.py", 16, 2)
+        .expect_completion_response_with(|list| {
+            *captured.borrow_mut() = Some(list.clone());
+            true
+        })
+        .unwrap();
+    let list = captured.into_inner().expect("expected completion list");
+    let alpha_idx = list
+        .items
+        .iter()
+        .position(|item| item.label == "Alpha")
+        .expect("expected Alpha completion");
+    let alchemy_idx = list
+        .items
+        .iter()
+        .position(|item| item.label == "Alchemy")
+        .expect("expected Alchemy completion");
+    assert!(alpha_idx < alchemy_idx, "expected MRU sort order");
+    assert_eq!(list.items[alpha_idx].preselect, Some(true));
 
     interaction.shutdown().unwrap();
 }
@@ -374,7 +590,7 @@ fn test_module_completion() {
                 "label": "bar",
                 "detail": "bar",
                 "kind": 9,
-                "sortText": "0"
+                "sortText": "0.9999.bar"
             }],
         }))
         .unwrap();
@@ -501,14 +717,12 @@ fn test_stdlib_class_completion() {
         .unwrap();
 
     interaction.client.did_open("foo.py");
-    interaction.client.did_change("foo.py", "FirstHeader");
+    interaction.client.did_change("foo.py", "Proto");
     interaction
         .client
-        .completion("foo.py", 0, 11)
+        .completion("foo.py", 0, 5)
         .expect_completion_response_with(|list| {
-            list.items
-                .iter()
-                .any(|item| item.label == "FirstHeaderLineIsContinuationDefect")
+            list.items.iter().any(|item| item.label == "Protocol")
         })
         .unwrap();
 
@@ -750,6 +964,51 @@ fn test_completion_autoimport_shown_when_local_no_longer_matches() {
                 .iter()
                 .any(|item| item.label == "UsersController");
             has_users_manager && !has_users_controller
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_deep_submodule_chain_reexport_completion() {
+    // Test completion on submodule attributes in `a.b.c.` after `import a.b.c`
+    // This tests that submodules are properly available for completion when using
+    // explicit re-exports (`from . import x as x` pattern).
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("deep_submodule_chain_reexport"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("main.py");
+
+    // Test completion on `a.b.` - should show `c` as a module
+    interaction
+        .client
+        .did_change("main.py", "import a.b.c\n\na.b.");
+    interaction
+        .client
+        .completion("main.py", 2, 4)
+        .expect_completion_response_with(|list| {
+            list.items
+                .iter()
+                .any(|item| item.label == "c" && item.kind == Some(CompletionItemKind::MODULE))
+        })
+        .unwrap();
+
+    // Test completion on `a.b.c.` - should show `D` as a class
+    interaction
+        .client
+        .did_change("main.py", "import a.b.c\n\na.b.c.");
+    interaction
+        .client
+        .completion("main.py", 2, 6)
+        .expect_completion_response_with(|list| {
+            list.items
+                .iter()
+                .any(|item| item.label == "D" && item.kind == Some(CompletionItemKind::CLASS))
         })
         .unwrap();
 

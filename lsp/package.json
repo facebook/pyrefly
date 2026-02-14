@@ -206,6 +206,27 @@
                     "default": true,
                     "description": "Controls whether hover tooltips include 'Go to definition' and 'Go to type definition' navigation links.",
                     "scope": "resource"
+                },
+                "python.analysis.completeFunctionParens": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Automatically insert parentheses when completing a function or method.",
+                    "scope": "resource"
+                },
+                "python.pyrefly.syncNotebooks": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "If true, Pyrefly will sync notebook documents with the language server. Set to false to disable notebook support."
+                },
+                "python.pyrefly.streamDiagnostics": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes. This is a global setting that applies to all workspaces."
+                },
+                "pyrefly.commentFoldingRanges": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Controls whether comment section folding ranges are included in the editor. When true, comments following the pattern '# Section Name ----' (with 4+ trailing dashes) create collapsible regions, similar to R's code section convention."
                 }
             }
         }
