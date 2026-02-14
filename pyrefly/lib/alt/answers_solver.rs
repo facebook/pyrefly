@@ -64,8 +64,8 @@ use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::Exported;
-use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::LambdaParamId;
@@ -1927,7 +1927,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn stack(&self) -> &CalcStack {
         &self.thread_state.stack
     }
-
 
     pub fn django_reverse_relations_index(&self) -> Arc<DjangoReverseRelationIndex> {
         if let Some(index) = self.thread_state.django_reverse_relations.borrow().clone() {

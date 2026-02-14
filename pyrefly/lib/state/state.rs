@@ -192,6 +192,7 @@ pub struct ModuleChanges(pub ModuleDeps);
 // metadata of this name" and funnel into the same `ModuleDeps` slot.
 // They're kept distinct so the demand tree can label each lookup
 // precisely; the shared funneling lives in `ModuleDeps::add_dep`.
+#[derive(Debug, Clone)]
 pub enum ModuleDep {
     /// Depend on the existence of a module.
     Exists,
@@ -201,6 +202,7 @@ pub enum ModuleDep {
     Key(AnyExportedKey),
     /// `LookupExport::export_exists` — depends on whether a name is
     /// exported, not on its type.
+    #[allow(unused)]
     NameExists(Name),
     /// Depend on metadata (deprecation, docstring, etc.) of an exported
     /// name. The metadata-flavored `LookupExport` variants below all
@@ -243,7 +245,7 @@ impl ModuleChanges {
             AnyExportedKey::KeyExport(k) => {
                 self.0.names.entry(k.0).or_default();
             }
-            // Classes and type aliases don't distinguish between existence and change.
+            // Classes, type aliases, and django relations don't distinguish between existence and change.
             _ => self.add_key(key),
         }
     }
@@ -266,6 +268,9 @@ impl ModuleChanges {
     /// more impactful than a type/metadata-only change.
     pub fn overlaps(&self, other: &ModuleChanges) -> bool {
         if self.0.wildcard || other.0.wildcard {
+            return true;
+        }
+        if self.0.django_relations && other.0.django_relations {
             return true;
         }
         for (name, self_dep) in &self.0.names {
@@ -304,6 +309,9 @@ impl ModuleDeps {
             }
             AnyExportedKey::KeyTypeAlias(k) => {
                 self.type_aliases.insert(k.0);
+            }
+            AnyExportedKey::KeyDjangoRelations(_) => {
+                self.django_relations = true;
             }
             AnyExportedKey::KeyTParams(KeyTParams(c))
             | AnyExportedKey::KeyClassBaseType(KeyClassBaseType(c))
@@ -366,6 +374,7 @@ impl ModuleDeps {
         self.classes.extend(other.classes);
         self.type_aliases.extend(other.type_aliases);
         self.wildcard |= other.wildcard;
+        self.django_relations |= other.django_relations;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -373,6 +382,7 @@ impl ModuleDeps {
             && !self.wildcard
             && self.classes.is_empty()
             && self.type_aliases.is_empty()
+            && !self.django_relations
     }
 
     /// Check if these dependencies are affected by the given change.
@@ -403,6 +413,9 @@ impl ModuleDeps {
                     return true;
                 }
             }
+        }
+        if self.django_relations && changed.0.django_relations {
+            return true;
         }
         if self.classes.iter().any(|c| changed.0.classes.contains(c)) {
             return true;
@@ -435,6 +448,14 @@ impl ModuleDep {
             ModuleDep::EveryExportUntracked => "get_every_export_untracked",
             ModuleDep::Class(_) => "class",
         }
+    }
+}
+
+impl AnyExportedKey {
+    /// Convert this exported key to a `ModuleDep`.
+    /// The dependency is tracked at the exported-key level and normalized by `ModuleDeps::add_key`.
+    pub fn to_module_dep(&self) -> ModuleDep {
+        ModuleDep::Key(self.clone())
     }
 }
 
