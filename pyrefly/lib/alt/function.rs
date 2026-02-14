@@ -1546,10 +1546,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 },
             );
             // Only validate overload defaults when the implementation provides an explicit default.
-            if let (Params::List(overload_params), Params::List(impl_params)) = (
-                &overload_func.signature.params,
-                &impl_func.signature.params,
-            ) {
+            if let (Params::List(overload_params), Params::List(impl_params)) =
+                (&overload_func.signature.params, &impl_func.signature.params)
+            {
                 for overload_param in overload_params.items() {
                     let (overload_name, overload_ty, overload_required) = match overload_param {
                         Param::PosOnly(Some(name), ty, required)
@@ -1573,17 +1572,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let Some(impl_default) = impl_default else {
                         continue;
                     };
-                    self.check_type(
-                        impl_default,
-                        overload_ty,
-                        *range,
-                        errors,
-                        &|| {
-                            TypeCheckContext::of_kind(TypeCheckKind::OverloadDefault(
-                                overload_name.clone(),
-                            ))
-                        },
-                    );
+                    self.check_type(impl_default, overload_ty, *range, errors, &|| {
+                        TypeCheckContext::of_kind(TypeCheckKind::OverloadDefault(
+                            overload_name.clone(),
+                        ))
+                    });
                 }
             }
             self.check_type(
