@@ -28,6 +28,16 @@ def compare[T: int](x: T, y: T) -> bool:
 );
 
 testcase!(
+    test_incompatible_equality_comparison,
+    r#"
+def compare(x: int, y: str, z: int | str) -> None:
+    x == y  # E: Comparison `==` between incompatible types `int` and `str`
+    x != y  # E: Comparison `!=` between incompatible types `int` and `str`
+    z == y
+"#,
+);
+
+testcase!(
     test_negative_literals,
     r#"
 from typing import Literal

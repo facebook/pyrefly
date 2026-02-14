@@ -151,6 +151,8 @@ pub enum ErrorKind {
     /// do not recognize as always executing (we recognize constructors and some test setup
     /// methods).
     ImplicitlyDefinedAttribute,
+    /// Equality or inequality comparison between incompatible types.
+    IncompatibleComparison,
     /// An inconsistency between inherited fields or methods from multiple base classes.
     InconsistentInheritance,
     /// An inconsistency between the signature of a function overload and the implementation.
