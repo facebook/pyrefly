@@ -1545,6 +1545,47 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))
                 },
             );
+            // Only validate overload defaults when the implementation provides an explicit default.
+            if let (Params::List(overload_params), Params::List(impl_params)) = (
+                &overload_func.signature.params,
+                &impl_func.signature.params,
+            ) {
+                for overload_param in overload_params.items() {
+                    let (overload_name, overload_ty, overload_required) = match overload_param {
+                        Param::PosOnly(Some(name), ty, required)
+                        | Param::Pos(name, ty, required)
+                        | Param::KwOnly(name, ty, required) => (name, ty, required),
+                        _ => continue,
+                    };
+                    if !matches!(overload_required, Required::Optional(_)) {
+                        continue;
+                    }
+                    let impl_default = impl_params.items().iter().find_map(|param| match param {
+                        Param::PosOnly(_, _, Required::Optional(Some(default)))
+                        | Param::Pos(_, _, Required::Optional(Some(default)))
+                        | Param::KwOnly(_, _, Required::Optional(Some(default)))
+                            if param.name() == Some(overload_name) =>
+                        {
+                            Some(default)
+                        }
+                        _ => None,
+                    });
+                    let Some(impl_default) = impl_default else {
+                        continue;
+                    };
+                    self.check_type(
+                        impl_default,
+                        overload_ty,
+                        *range,
+                        errors,
+                        &|| {
+                            TypeCheckContext::of_kind(TypeCheckKind::OverloadDefault(
+                                overload_name.clone(),
+                            ))
+                        },
+                    );
+                }
+            }
             self.check_type(
                 &overload_func.signature.ret,
                 &impl_func.signature.ret,

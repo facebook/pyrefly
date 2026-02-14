@@ -179,6 +179,8 @@ pub enum TypeCheckKind {
     OverloadReturn,
     /// Consistency check for overload input signature, as (overload_signature, implementation_signature)
     OverloadInput(Callable, Callable),
+    /// Consistency check for overload defaults, as (parameter name).
+    OverloadDefault(Name),
     /// Check that the type a TypeVar is specialized with is compatible with its type restriction.
     TypeVarSpecialization(Name),
     /// An `x in y` check
@@ -225,6 +227,7 @@ impl TypeCheckKind {
             Self::PostInit => ErrorKind::BadFunctionDefinition,
             Self::OverloadReturn => ErrorKind::InconsistentOverload,
             Self::OverloadInput(..) => ErrorKind::InconsistentOverload,
+            Self::OverloadDefault(..) => ErrorKind::InconsistentOverload,
             Self::TypeVarSpecialization(..) => ErrorKind::BadSpecialization,
             Self::Container => ErrorKind::UnsupportedOperation,
         }
