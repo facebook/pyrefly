@@ -395,7 +395,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )
         }) {
             Some(ProtocolMetadata {
-                members: cls.fields().cloned().collect(),
+                members: cls.class_body_fields().cloned().collect(),
                 is_runtime_checkable: false,
             })
         } else {

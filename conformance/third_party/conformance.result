@@ -174,9 +174,7 @@
   "overloads_definitions.py": [],
   "overloads_evaluation.py": [],
   "protocols_class_objects.py": [],
-  "protocols_definition.py": [
-    "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`\\n  Protocol `Template` requires attribute `temp`']"
-  ],
+  "protocols_definition.py": [],
   "protocols_explicit.py": [],
   "protocols_generic.py": [],
   "protocols_merging.py": [],

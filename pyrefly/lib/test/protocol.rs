@@ -899,7 +899,6 @@ pc5: ProtoC1 = ConcreteC3  # E: `type[ConcreteC3]` is not assignable to `ProtoC1
 );
 
 testcase!(
-    bug = "conformance: Protocol with self-assigned var should not require that var from implementations (line 922)",
     test_protocols_definition_conformance,
     r#"
 from typing import ClassVar, Protocol, Sequence
@@ -917,8 +916,7 @@ class Concrete:
     def method(self) -> None:
         return
 
-# Bug: pyrefly makes 'temp' a required attribute even though the self.temp error was raised
-var: Template = Concrete("value", 42)  # E: `Concrete` is not assignable to `Template`
+var: Template = Concrete("value", 42)
 
 class Template2(Protocol):
     val1: ClassVar[Sequence[int]]
