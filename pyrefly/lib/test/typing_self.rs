@@ -254,6 +254,9 @@ class C:
 
     @staticmethod
     def bar(x: Self) -> None: ... # E: `Self` cannot be used in a static method
+
+    @staticmethod
+    def baz() -> list[Self]: ... # E: `Self` cannot be used in a static method
     "#,
 );
 
