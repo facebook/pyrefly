@@ -1556,7 +1556,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         | Param::KwOnly(name, ty, required) => (name, ty, required),
                         _ => continue,
                     };
-                    if !matches!(overload_required, Required::Optional(_)) {
+                    if !matches!(overload_required, Required::Optional(None)) {
                         continue;
                     }
                     let impl_default = impl_params.items().iter().find_map(|param| match param {
