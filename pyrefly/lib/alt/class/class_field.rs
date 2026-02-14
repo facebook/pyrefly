@@ -906,6 +906,20 @@ impl ClassField {
         }
     }
 
+    /// Returns true if this field is a non-ClassVar data attribute defined in the class body.
+    /// Such fields are instance variable defaults and should not count as proper class-level
+    /// attributes when checking a class object against a protocol.
+    pub fn is_instance_variable_default(&self) -> bool {
+        matches!(
+            &self.0,
+            ClassFieldInner::ClassAttribute {
+                is_classvar: false,
+                is_staticmethod: false,
+                ..
+            }
+        )
+    }
+
     pub fn is_uninit_class_var(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { .. } => false,
@@ -3467,11 +3481,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub(in crate::alt::class) fn get_class_member(
-        &self,
-        cls: &Class,
-        name: &Name,
-    ) -> Option<Arc<ClassField>> {
+    pub(crate) fn get_class_member(&self, cls: &Class, name: &Name) -> Option<Arc<ClassField>> {
         self.get_class_member_with_defining_class(cls, name)
             .map(|member| member.value)
     }

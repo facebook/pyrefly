@@ -868,7 +868,6 @@ def test():
 );
 
 testcase!(
-    bug = "conformance: Should error when assigning class object to non-ClassVar protocol",
     test_protocols_class_objects_conformance,
     r#"
 from typing import ClassVar, Protocol
@@ -894,7 +893,7 @@ class ConcreteC3(metaclass=CMeta): ...
 
 pc1: ProtoC1 = ConcreteC1  # E: `type[ConcreteC1]` is not assignable to `ProtoC1`
 pc3: ProtoC1 = ConcreteC2  # E: `type[ConcreteC2]` is not assignable to `ProtoC1`
-pc4: ProtoC2 = ConcreteC2  # should error
+pc4: ProtoC2 = ConcreteC2  # E: `type[ConcreteC2]` is not assignable to `ProtoC2`
 pc5: ProtoC1 = ConcreteC3  # E: `type[ConcreteC3]` is not assignable to `ProtoC1`
 "#,
 );

@@ -1375,6 +1375,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // against a protocol, we prefer methods on the metaclass over methods on the
                     // class object. See test::enums::test_iterate for why we need to do this.
                     acc.found_class_attribute(attr, base)
+                } else if let AttributeBase1::ClassObject(class) = &**protocol_base
+                    && self
+                        .get_class_member(class.class_object(), attr_name)
+                        .is_some_and(|field| field.is_instance_variable_default())
+                {
+                    // Non-ClassVar class body attributes are instance variable defaults.
+                    // They should not satisfy protocol requirements when checking class objects,
+                    // because the protocol expects a proper attribute on the object, not just
+                    // a default value for instance creation.
+                    acc.not_found(NotFoundOn::ClassObject(class.class_object().dupe(), base))
                 } else {
                     self.lookup_attr_from_attribute_base1((**protocol_base).clone(), attr_name, acc)
                 }

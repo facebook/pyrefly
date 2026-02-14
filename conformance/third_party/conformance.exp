@@ -9000,12 +9000,23 @@
       "code": -2,
       "column": 16,
       "concise_description": "`type[ConcreteC2]` is not assignable to `ProtoC1`",
-      "description": "`type[ConcreteC2]` is not assignable to `ProtoC1`\n  `type[ConcreteC2].attr1` is not a ClassVar, but `ProtoC1.attr1` is",
+      "description": "`type[ConcreteC2]` is not assignable to `ProtoC1`\n  `type[ConcreteC2].attr1` or `ProtoC1.attr1` uses `__getattr__`, which cannot be checked for override compatibility",
       "line": 106,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 26,
       "stop_line": 106
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "`type[ConcreteC2]` is not assignable to `ProtoC2`",
+      "description": "`type[ConcreteC2]` is not assignable to `ProtoC2`\n  `type[ConcreteC2].attr1` or `ProtoC2.attr1` uses `__getattr__`, which cannot be checked for override compatibility",
+      "line": 107,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 107
     },
     {
       "code": -2,
