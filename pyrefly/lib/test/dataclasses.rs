@@ -1729,7 +1729,6 @@ assert_type(dc2.y, str)  # E: assert_type(Desc2[str], str) failed
 );
 
 testcase!(
-    bug = "conformance: Dataclass with slots=True should error when setting undeclared attributes",
     test_dataclass_slots_undeclared_attr_conformance,
     r#"
 from dataclasses import dataclass
@@ -1741,7 +1740,7 @@ class DC2:
     def __init__(self):
         self.x = 3
         # should error: y is not in slots
-        self.y = 3
+        self.y = 3  # E: Object of class `DC2` has no attribute `y`
 
 @dataclass(slots=False)
 class DC3:
@@ -1751,6 +1750,6 @@ class DC3:
     def __init__(self):
         self.x = 3
         # should error: y is not in slots
-        self.y = 3
+        self.y = 3  # E: Object of class `DC3` has no attribute `y`
 "#,
 );
