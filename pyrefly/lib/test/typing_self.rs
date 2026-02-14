@@ -231,7 +231,6 @@ assert_type(SomeClass().get_instance(), SomeClass)
 );
 
 testcase!(
-    bug = "Should error when Self is used at invalid locations",
     test_self_outside_class,
     r#"
 from typing import Self
@@ -259,7 +258,7 @@ class C:
 );
 
 testcase!(
-    bug = "Should error when Self is used at invalid locations",
+    bug = "Self in a metaclass refers to the metaclass, not the class it creates; we should validate this",
     test_self_inside_metaclass,
     r#"
 from typing import Self

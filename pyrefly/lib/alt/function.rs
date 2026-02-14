@@ -573,16 +573,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         if def.metadata.flags.is_staticmethod && stmt.name.as_str() != dunder::NEW {
             // For static methods, the use of `Self` is not allowed.
-            let mut signature_contains_self = false;
-            if let Type::SelfType(_) = &ret {
-                signature_contains_self = true;
-            }
-            for param in &def.params {
-                if let Type::SelfType(_) = param.as_type() {
-                    signature_contains_self = true;
-                    break;
-                }
-            }
+            let signature_contains_self = matches!(&ret, Type::SelfType(_))
+                || def
+                    .params
+                    .iter()
+                    .any(|p| matches!(p.as_type(), Type::SelfType(_)));
             if signature_contains_self {
                 self.error(
                     errors,
