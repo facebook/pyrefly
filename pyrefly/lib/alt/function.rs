@@ -571,13 +571,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
+        let contains_self_type = |ty: &Type| ty.any(|t| matches!(t, Type::SelfType(_)));
+
         if def.metadata.flags.is_staticmethod && stmt.name.as_str() != dunder::NEW {
             // For static methods, the use of `Self` is not allowed.
-            let signature_contains_self = matches!(&ret, Type::SelfType(_))
-                || def
-                    .params
-                    .iter()
-                    .any(|p| matches!(p.as_type(), Type::SelfType(_)));
+            let signature_contains_self = contains_self_type(&ret)
+                || def.params.iter().any(|p| contains_self_type(p.as_type()));
             if signature_contains_self {
                 self.error(
                     errors,
@@ -598,9 +597,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .params
                     .iter()
                     .skip(if has_implicit_self_or_cls_param { 1 } else { 0 })
-                    .any(|p| matches!(p.as_type(), Type::SelfType(_)));
+                    .any(|p| contains_self_type(p.as_type()));
                 let signature_contains_self =
-                    matches!(&ret, Type::SelfType(_)) || explicit_params_contain_self;
+                    contains_self_type(&ret) || explicit_params_contain_self;
                 if signature_contains_self {
                     self.error(
                         errors,
