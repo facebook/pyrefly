@@ -116,10 +116,8 @@ assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 15);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
-assert_words!(BindingClassMetadata, 11);
-assert_words!(BindingDjangoRelations, 2);
-assert_words!(BindingClassMetadata, 11);
 assert_words!(BindingClassMetadata, 9);
+assert_words!(BindingDjangoRelations, 2);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_words!(BindingClassField, 21);
@@ -219,6 +217,9 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyClassMetadata(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMetadata>(*idx)
             }
+            AnyIdx::KeyDjangoRelations(idx) => {
+                $self.$method::<$crate::binding::binding::KeyDjangoRelations>(*idx)
+            }
             AnyIdx::KeyClassMro(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMro>(*idx)
             }
@@ -285,6 +286,9 @@ macro_rules! dispatch_anyidx {
             }
             AnyIdx::KeyClassMetadata(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMetadata>(*idx, $($args),+)
+            }
+            AnyIdx::KeyDjangoRelations(idx) => {
+                $self.$method::<$crate::binding::binding::KeyDjangoRelations>(*idx, $($args),+)
             }
             AnyIdx::KeyClassMro(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMro>(*idx, $($args),+)
@@ -372,11 +376,14 @@ pub enum ChangedExport {
     Metadata(Name),
     /// A changed type alias
     TypeAliasIndex(TypeAliasIndex),
+    /// Django reverse relations changed for the module.
+    DjangoRelations,
 }
 
 impl AnyExportedKey {
     /// Convert this key to the corresponding `ChangedExport`.
-    /// `KeyExport` maps to `ChangedExport::Name`, all other keys map to `ChangedExport::ClassDefIndex`.
+    /// `KeyExport` maps to `ChangedExport::Name`, class-related keys map to
+    /// `ChangedExport::ClassDefIndex`, and other exported keys use their own variants.
     pub fn to_changed_export(&self) -> ChangedExport {
         match self {
             AnyExportedKey::KeyExport(k) => ChangedExport::Name(k.0.clone()),
@@ -386,6 +393,7 @@ impl AnyExportedKey {
             AnyExportedKey::KeyClassSynthesizedFields(k) => ChangedExport::ClassDefIndex(k.0),
             AnyExportedKey::KeyVariance(k) => ChangedExport::ClassDefIndex(k.0),
             AnyExportedKey::KeyClassMetadata(k) => ChangedExport::ClassDefIndex(k.0),
+            AnyExportedKey::KeyDjangoRelations(_) => ChangedExport::DjangoRelations,
             AnyExportedKey::KeyClassMro(k) => ChangedExport::ClassDefIndex(k.0),
             AnyExportedKey::KeyAbstractClassCheck(k) => ChangedExport::ClassDefIndex(k.0),
             AnyExportedKey::KeyTypeAlias(k) => ChangedExport::TypeAliasIndex(k.0),
@@ -607,17 +615,6 @@ impl Exported for KeyClassMetadata {
         AnyExportedKey::KeyClassMetadata(self.clone())
     }
 }
-impl Exported for KeyClassMetadata {}
-impl Keyed for KeyDjangoRelations {
-    const EXPORTED: bool = true;
-    type Value = BindingDjangoRelations;
-    type Answer = DjangoReverseRelationIndex;
-    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
-        AnyIdx::KeyDjangoRelations(idx)
-    }
-}
-impl Exported for KeyDjangoRelations {}
-impl Exported for KeyClassMetadata {}
 impl Keyed for KeyDjangoRelations {
     const EXPORTED: bool = true;
     type Value = BindingDjangoRelations;

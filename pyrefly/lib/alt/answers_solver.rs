@@ -1218,10 +1218,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         index
     }
 
-    fn cycles(&self) -> &Cycles {
-        &self.thread_state.cycles
-    fn cycles(&self) -> &Cycles {
-        &self.thread_state.cycles
     fn recursion_limit_config(&self) -> Option<RecursionLimitConfig> {
         self.thread_state.recursion_limit_config
     }

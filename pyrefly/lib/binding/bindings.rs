@@ -779,6 +779,7 @@ impl<'a> BindingsBuilder<'a> {
 
     pub fn record_django_relation_field(&mut self, field: Idx<KeyClassField>) {
         self.django_relation_fields.push(field);
+    }
     pub fn record_used_imports_from_dunder_all_names<T>(&mut self, dunder_all_names: T)
     where
         T: Iterator<Item = &'a Name>,

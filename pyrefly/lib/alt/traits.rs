@@ -363,12 +363,13 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyDjangoRelations {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingDjangoRelations,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<DjangoReverseRelationIndex> {
         answers.solve_django_reverse_relations(binding, errors)
     }
 
-    fn promote_recursive(_: Var) -> Self::Answer {
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         DjangoReverseRelationIndex::default()
     }
 }
