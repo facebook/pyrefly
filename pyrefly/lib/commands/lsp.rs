@@ -9,13 +9,13 @@ use std::io::Write;
 
 use clap::Parser;
 use clap::ValueEnum;
-use lsp_types::InitializeParams;
 use lsp_types::ServerInfo;
 use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::util::CommandExitStatus;
 use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::server::Connection;
+use crate::lsp::non_wasm::server::InitializeInfo;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::server::initialize_finish;
 use crate::lsp::non_wasm::server::initialize_start;
@@ -68,12 +68,12 @@ pub fn run_lsp(
     path_remapper: Option<PathRemapper>,
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
-    if let Some(initialize_params) =
+    if let Some(initialize_info) =
         initialize_connection(&connection, args.indexing_mode, server_info)?
     {
         lsp_loop(
             connection,
-            initialize_params,
+            initialize_info,
             args.indexing_mode,
             args.workspace_indexing_limit,
             args.build_system_blocking,
@@ -88,15 +88,15 @@ fn initialize_connection(
     connection: &Connection,
     indexing_mode: IndexingMode,
     server_info: Option<ServerInfo>,
-) -> anyhow::Result<Option<InitializeParams>> {
-    let Some((id, initialize_params)) = initialize_start(connection)? else {
+) -> anyhow::Result<Option<InitializeInfo>> {
+    let Some((id, initialize_info)) = initialize_start(connection)? else {
         return Ok(None);
     };
-    let capabilities = capabilities(indexing_mode, &initialize_params);
+    let capabilities = capabilities(indexing_mode, &initialize_info.params);
     if !initialize_finish(connection, id, capabilities, server_info)? {
         return Ok(None);
     }
-    Ok(Some(initialize_params))
+    Ok(Some(initialize_info))
 }
 
 impl LspArgs {
