@@ -290,6 +290,9 @@ dim.get("")
         report.contains(
             r#"
 Completion Results:
+- (Value) 'x': Literal['x'] inserting `x`
+- (Value) 'y': Literal['y'] inserting `y`
+- (Value) 'z': Literal['z'] inserting `z`
 - (Field) x: int
 - (Field) y: int
 - (Field) z: int
@@ -322,6 +325,8 @@ dim.get(key="")
             r#"
 Completion Results:
 - (Value) 'x': Literal['x'] inserting `x`
+- (Value) 'y': Literal['y'] inserting `y`
+- (Value) 'z': Literal['z'] inserting `z`
 - (Field) x: int
 - (Field) y: int
 - (Field) z: int
@@ -1550,12 +1555,17 @@ foo(
         ^
 Completion Results:
 - (Variable) x=: int
+- (Variable) y=: bool
 "#
         .trim(),
         report.trim(),
     );
 }
 
+/// When an argument is provided that narrows down the overload,
+/// only params from compatible overloads are shown. Here `1` (int)
+/// is compatible with `x: int` (second overload) but not `y: bool`
+/// (first overload), so only the second overload's params appear.
 #[test]
 fn kwargs_completion_overload_correct() {
     let code = r#"
@@ -1579,6 +1589,67 @@ foo(1,
 Completion Results:
 - (Variable) x=: int
 - (Variable) y=: str
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+/// When overloads share the same first arg and differ on later args,
+/// show params from all overloads (here both overloads accept `x: int`,
+/// so `y=` and `z=` should both appear).
+#[test]
+fn kwargs_completion_overload_shared_first_arg() {
+    let code = r#"
+from typing import overload
+@overload
+def foo(x: int, y: str): ...
+@overload
+def foo(x: int, z: bool): ...
+def foo(x, **kwargs): ...
+foo(1, 
+#      ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+8 | foo(1, 
+           ^
+Completion Results:
+- (Variable) x=: int
+- (Variable) y=: str
+- (Variable) z=: bool
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn kwargs_completion_overload_same_name_different_types() {
+    let code = r#"
+from typing import Any, overload
+@overload
+def foo(x: int) -> int: ...
+@overload
+def foo(x: str) -> str: ...
+def foo(x: Any) -> Any:
+    return x
+foo(
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+9 | foo(
+        ^
+Completion Results:
+- (Variable) x=: int
+- (Variable) x=: str
 "#
         .trim(),
         report.trim(),

@@ -247,6 +247,51 @@ impl Transaction<'_> {
         }
     }
 
+    /// Like `add_literal_completions_from_type`, but deduplicates using a shared `seen` set.
+    /// This is used when collecting literal completions across multiple overloads.
+    fn add_literal_completions_from_type_dedup(
+        param_type: &Type,
+        completions: &mut Vec<RankedCompletion>,
+        in_string_literal: bool,
+        seen: &mut SmallSet<(String, Option<String>)>,
+    ) {
+        match param_type {
+            Type::Literal(lit) => {
+                let label = lit.value.to_string_escaped(true);
+                let detail = format!("{param_type}");
+                if seen.insert((label.clone(), Some(detail.clone()))) {
+                    let insert_text = if in_string_literal {
+                        if let Lit::Str(s) = &lit.value {
+                            s.to_string()
+                        } else {
+                            label.clone()
+                        }
+                    } else {
+                        label.clone()
+                    };
+                    completions.push(RankedCompletion::new(CompletionItem {
+                        label,
+                        kind: Some(CompletionItemKind::VALUE),
+                        detail: Some(detail),
+                        insert_text: Some(insert_text),
+                        ..Default::default()
+                    }));
+                }
+            }
+            Type::Union(box Union { members, .. }) => {
+                for member in members {
+                    Self::add_literal_completions_from_type_dedup(
+                        member,
+                        completions,
+                        in_string_literal,
+                        seen,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Adds completions for magic methods (dunder methods like `__init__`, `__str__`, etc.).
     pub(crate) fn add_magic_method_completions(
         identifier: &Identifier,
@@ -332,27 +377,39 @@ impl Transaction<'_> {
         position: TextSize,
         completions: &mut Vec<RankedCompletion>,
     ) {
-        if let Some((callables, overload_idx, _, _)) =
+        if let Some((callables, _, _, _, provided_arg_ranges)) =
             self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(overload_idx).cloned()
-            && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
         {
-            for param in params {
-                match param {
-                    Param::Pos(name, ty, _)
-                    | Param::PosOnly(Some(name), ty, _)
-                    | Param::KwOnly(name, ty, _)
-                    | Param::VarArg(Some(name), ty) => {
-                        if name.as_str() != "self" {
-                            completions.push(RankedCompletion::new(CompletionItem {
-                                label: format!("{}=", name.as_str()),
-                                detail: Some(ty.to_string()),
-                                kind: Some(CompletionItemKind::VARIABLE),
-                                ..Default::default()
-                            }));
+            let callables =
+                self.filter_compatible_overloads(handle, callables, &provided_arg_ranges);
+            let mut seen = SmallSet::new();
+            for callable in callables {
+                if let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
+                {
+                    for param in params {
+                        match param {
+                            Param::Pos(name, ty, _)
+                            | Param::PosOnly(Some(name), ty, _)
+                            | Param::KwOnly(name, ty, _)
+                            | Param::VarArg(Some(name), ty) => {
+                                let label = format!("{}=", name.as_str());
+                                let detail = ty.to_string();
+                                if name.as_str() != "self"
+                                    && seen.insert((label.clone(), detail.clone()))
+                                {
+                                    completions.push(RankedCompletion::new(CompletionItem {
+                                        label,
+                                        detail: Some(detail),
+                                        kind: Some(CompletionItemKind::VARIABLE),
+                                        ..Default::default()
+                                    }));
+                                }
+                            }
+                            Param::VarArg(None, _)
+                            | Param::Kwargs(_, _)
+                            | Param::PosOnly(None, _, _) => {}
                         }
                     }
-                    Param::VarArg(None, _) | Param::Kwargs(_, _) | Param::PosOnly(None, _, _) => {}
                 }
             }
         }
@@ -426,9 +483,9 @@ impl Transaction<'_> {
     }
 
     fn expected_call_argument_type(&self, handle: &Handle, position: TextSize) -> Option<Type> {
-        let (callables, chosen_overload_index, active_argument, _) =
+        let (callables, chosen_overload_index, active_argument, _, _) =
             self.get_callables_from_call(handle, position)?;
-        let callable = callables.get(chosen_overload_index)?.clone();
+        let callable = callables.get(chosen_overload_index?)?.clone();
         let params = Self::normalize_singleton_function_type_into_params(callable)?;
         let arg_index = Self::active_parameter_index(&params, &active_argument)?;
         let param = params.get(arg_index)?;
@@ -545,19 +602,26 @@ impl Transaction<'_> {
         completions: &mut Vec<RankedCompletion>,
         in_string_literal: bool,
     ) {
-        if let Some((callables, chosen_overload_index, active_argument, _)) =
+        if let Some((callables, _, active_argument, _, provided_arg_ranges)) =
             self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(chosen_overload_index)
-            && let Some(params) =
-                Self::normalize_singleton_function_type_into_params(callable.clone())
-            && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
-            && let Some(param) = params.get(arg_index)
         {
-            Self::add_literal_completions_from_type(
-                param.as_type(),
-                completions,
-                in_string_literal,
-            );
+            let callables =
+                self.filter_compatible_overloads(handle, callables, &provided_arg_ranges);
+            let mut seen = SmallSet::new();
+            for callable in callables {
+                if let Some(params) =
+                    Self::normalize_singleton_function_type_into_params(callable.clone())
+                    && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
+                    && let Some(param) = params.get(arg_index)
+                {
+                    Self::add_literal_completions_from_type_dedup(
+                        param.as_type(),
+                        completions,
+                        in_string_literal,
+                        &mut seen,
+                    );
+                }
+            }
         }
     }
 

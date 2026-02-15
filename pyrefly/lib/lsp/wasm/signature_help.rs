@@ -76,7 +76,7 @@ impl Transaction<'_> {
     fn visit_finding_signature_range(
         x: &Expr,
         find: TextSize,
-        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
+        res: &mut Option<(TextRange, TextRange, ActiveArgument, Vec<TextRange>)>,
     ) {
         if let Expr::Call(call) = x
             && call.arguments.range.contains_inclusive(find)
@@ -88,10 +88,19 @@ impl Transaction<'_> {
                 return;
             }
             if res.is_none() {
+                // Collect ranges of positional args already fully provided (before the cursor).
+                let provided_arg_ranges: Vec<TextRange> = call
+                    .arguments
+                    .args
+                    .iter()
+                    .filter(|arg| arg.range().end() <= find)
+                    .map(|arg| arg.range())
+                    .collect();
                 *res = Some((
                     call.func.range(),
                     call.arguments.range,
                     ActiveArgument::Next(call.arguments.len()),
+                    provided_arg_ranges,
                 ));
             }
         } else {
@@ -102,7 +111,7 @@ impl Transaction<'_> {
     fn visit_positional_signature_args(
         call: &ExprCall,
         find: TextSize,
-        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
+        res: &mut Option<(TextRange, TextRange, ActiveArgument, Vec<TextRange>)>,
     ) -> bool {
         for (i, arg) in call.arguments.args.as_ref().iter().enumerate() {
             if arg.range().contains_inclusive(find) {
@@ -110,10 +119,20 @@ impl Transaction<'_> {
                 if res.is_some() {
                     return true;
                 }
+                // Collect ranges of positional args already fully provided (before this one).
+                let provided_arg_ranges: Vec<TextRange> = call
+                    .arguments
+                    .args
+                    .iter()
+                    .take(i)
+                    .filter(|a| a.range().end() <= find)
+                    .map(|a| a.range())
+                    .collect();
                 *res = Some((
                     call.func.range(),
                     call.arguments.range,
                     ActiveArgument::Positional(i),
+                    provided_arg_ranges,
                 ));
                 return true;
             }
@@ -124,7 +143,7 @@ impl Transaction<'_> {
     fn visit_keyword_signature_args(
         call: &ExprCall,
         find: TextSize,
-        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
+        res: &mut Option<(TextRange, TextRange, ActiveArgument, Vec<TextRange>)>,
     ) -> bool {
         let kwarg_start_idx = call.arguments.args.len();
         visit_keyword_arguments_until_match(call, |j, kw| {
@@ -137,7 +156,20 @@ impl Transaction<'_> {
                     Some(identifier) => ActiveArgument::Keyword(identifier.id.clone()),
                     None => ActiveArgument::Positional(kwarg_start_idx + j),
                 };
-                *res = Some((call.func.range(), call.arguments.range, active_argument));
+                // Collect ranges of positional args already fully provided (before the cursor).
+                let provided_arg_ranges: Vec<TextRange> = call
+                    .arguments
+                    .args
+                    .iter()
+                    .filter(|arg| arg.range().end() <= find)
+                    .map(|arg| arg.range())
+                    .collect();
+                *res = Some((
+                    call.func.range(),
+                    call.arguments.range,
+                    active_argument,
+                    provided_arg_ranges,
+                ));
                 true
             } else {
                 false
@@ -163,16 +195,25 @@ impl Transaction<'_> {
             .or(Some(0))
     }
 
-    /// Finds the callable(s) (multiple if overloads exist) at position in document, returning them, chosen overload index, and arg index
+    /// Finds the callable(s) (multiple if overloads exist) at position in document.
+    /// Returns (callables, chosen_overload_index, active_argument, callee_range, provided_arg_ranges).
+    /// `chosen_overload_index` is `Some` when a specific overload was matched,
+    /// `None` when overloads were expanded from a type without call-site analysis.
     pub(crate) fn get_callables_from_call(
         &self,
         handle: &Handle,
         position: TextSize,
-    ) -> Option<(Vec<Type>, usize, ActiveArgument, TextRange)> {
+    ) -> Option<(
+        Vec<Type>,
+        Option<usize>,
+        ActiveArgument,
+        TextRange,
+        Vec<TextRange>,
+    )> {
         let mod_module = self.get_ast(handle)?;
         let mut res = None;
         mod_module.visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut res));
-        let (callee_range, call_args_range, mut active_argument) = res?;
+        let (callee_range, call_args_range, mut active_argument, provided_arg_ranges) = res?;
         // When the cursor is in the argument list but not inside any argument yet,
         // estimate the would-be positional index by counting commas up to the cursor.
         // This keeps signature help useful even before the user starts typing the next arg.
@@ -189,9 +230,10 @@ impl Transaction<'_> {
             let callables = overloads.into_map(|callable| Type::Callable(Box::new(callable)));
             Some((
                 callables,
-                chosen_overload_index.unwrap_or_default(),
+                chosen_overload_index,
                 active_argument,
                 callee_range,
+                provided_arg_ranges,
             ))
         } else {
             answers.get_type_trace(callee_range).map(|t| {
@@ -204,11 +246,79 @@ impl Transaction<'_> {
                         .into_iter()
                         .map(|s| s.as_type())
                         .collect();
-                    (callables, 0, active_argument, callee_range)
+                    (
+                        callables,
+                        None,
+                        active_argument,
+                        callee_range,
+                        provided_arg_ranges,
+                    )
                 } else {
-                    (vec![coerced], 0, active_argument, callee_range)
+                    (
+                        vec![coerced],
+                        Some(0),
+                        active_argument,
+                        callee_range,
+                        provided_arg_ranges,
+                    )
                 }
             })
+        }
+    }
+
+    /// Filters a list of overloaded callables to only those whose positional
+    /// parameters are compatible with the types of already-provided arguments.
+    /// Falls back to returning all callables if none are compatible or if
+    /// no arguments have been provided yet.
+    pub(crate) fn filter_compatible_overloads(
+        &self,
+        handle: &Handle,
+        callables: Vec<Type>,
+        provided_arg_ranges: &[TextRange],
+    ) -> Vec<Type> {
+        if provided_arg_ranges.is_empty() || callables.len() <= 1 {
+            return callables;
+        }
+        let answers = match self.get_answers(handle) {
+            Some(a) => a,
+            None => return callables,
+        };
+        let arg_types: Vec<Option<Type>> = provided_arg_ranges
+            .iter()
+            .map(|range| answers.get_type_trace(*range))
+            .collect();
+        if arg_types.iter().all(|t| t.is_none()) {
+            return callables;
+        }
+
+        let compatible: Vec<Type> = callables
+            .iter()
+            .filter(|callable| {
+                let Some(params) =
+                    Self::normalize_singleton_function_type_into_params((*callable).clone())
+                else {
+                    return true; // Can't analyze — keep it
+                };
+                arg_types.iter().enumerate().all(|(i, arg_type)| {
+                    let Some(arg_type) = arg_type else {
+                        return true;
+                    };
+                    let Some(param) = params.get(i) else {
+                        return false; // More args than params
+                    };
+                    self.ad_hoc_solve(handle, |solver| {
+                        solver.is_subset_eq(arg_type, param.as_type())
+                    })
+                    .unwrap_or(true)
+                })
+            })
+            .cloned()
+            .collect();
+
+        if compatible.is_empty() {
+            callables
+        } else {
+            compatible
         }
     }
 
@@ -365,7 +475,7 @@ impl Transaction<'_> {
         position: TextSize,
     ) -> Option<SignatureHelp> {
         self.get_callables_from_call(handle, position).map(
-            |(callables, chosen_overload_index, active_argument, callee_range)| {
+            |(callables, chosen_overload_index, active_argument, callee_range, _)| {
                 let parameter_docs = self.parameter_documentation_for_callee(handle, callee_range);
                 let function_docstring = self.function_docstring_for_callee(handle, callee_range);
 
@@ -386,12 +496,13 @@ impl Transaction<'_> {
                         )
                     })
                     .collect_vec();
+                let chosen = chosen_overload_index.unwrap_or_default();
                 let active_parameter = signatures
-                    .get(chosen_overload_index)
+                    .get(chosen)
                     .and_then(|info| info.active_parameter);
                 SignatureHelp {
                     signatures,
-                    active_signature: Some(chosen_overload_index as u32),
+                    active_signature: Some(chosen as u32),
                     active_parameter,
                 }
             },

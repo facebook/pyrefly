@@ -393,7 +393,7 @@ fn keyword_argument_documentation(
     if !matches!(identifier.context, IdentifierContext::KeywordArgument(_)) {
         return None;
     }
-    let (_, _, _, callee_range) = transaction.get_callables_from_call(handle, position)?;
+    let (_, _, _, callee_range, _) = transaction.get_callables_from_call(handle, position)?;
     let docs = parameter_documentation_for_callee(transaction, handle, callee_range)?;
     let name = identifier.identifier.id.to_string();
     docs.get(name.as_str()).cloned().map(|doc| (name, doc))
@@ -527,7 +527,7 @@ pub fn get_hover(
     // Check both: hovering in arguments area OR hovering over the callee itself
     let callee_range_opt = transaction
         .get_callables_from_call(handle, position)
-        .map(|(_, _, _, range)| range)
+        .map(|(_, _, _, range, _)| range)
         .or_else(find_callee_range_at_position);
 
     if let Some(callee_range) = callee_range_opt {
