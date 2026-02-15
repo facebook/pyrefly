@@ -3515,6 +3515,9 @@ impl Server {
         if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
+        if let Some(refactors) = transaction.use_function_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
         if let Some(refactors) = transaction.extract_superclass_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
