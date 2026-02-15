@@ -255,6 +255,64 @@ fn test_references_cross_file_no_config() {
 }
 
 #[test]
+fn test_include_declaration_respects_false() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("basic");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let bar = root_path.join("bar.py");
+    let foo = root_path.join("foo.py");
+    let foo_relative = root_path.join("foo_relative.py");
+
+    interaction.client.did_open("bar.py");
+
+    interaction
+        .client
+        .references("bar.py", 10, 1, false)
+        .expect_response(json!([
+            {
+                "range": {"start":{"line":6,"character":16},"end":{"character":19,"line":6}},
+                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+            },
+            {
+                "range":{"end":{"character":3,"line":8},"start":{"character":0,"line":8}},
+                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+            },
+            {
+                "range":{"end":{"character":7,"line":9},"start":{"character":4,"line":9}},
+                "uri": Url::from_file_path(foo.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":6,"character":17},"end":{"character":20,"line":6}},
+                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+            },
+            {
+                "range":{"end":{"character":3,"line":8},"start":{"character":0,"line":8}},
+                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+            },
+            {
+                "range":{"end":{"character":7,"line":9},"start":{"character":4,"line":9}},
+                "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
+                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+            },
+        ]))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_references_cross_file_no_config_nested() {
     let root = get_test_files_root();
     let root_path = root.path().join("nested_test").to_path_buf();
