@@ -2518,6 +2518,12 @@ impl ScopeTrace {
         let mut exportables = SmallMap::new();
         let scope = self.toplevel_scope();
         for (name, static_info) in scope.stat.0.iter_hashed() {
+            // Definitions with empty names are not actually accessible and should not be considered
+            // as exported. They are likely syntax errors, which are handled elsewhere.
+            if name.as_str() == "" {
+                continue;
+            }
+
             let exportable = match scope.flow.get_value_hashed(name) {
                 Some(FlowValue { idx: key, .. }) => {
                     if let Some(ann) = static_info.annotation() {
