@@ -147,6 +147,76 @@ def f2(x: E | int):
 );
 
 testcase!(
+    test_is_final_literal_sentinel,
+    r#"
+from typing import Final, Literal, assert_type
+
+S: Final[bool] = True
+def f(x: bool):
+    if x is S:
+        assert_type(x, Literal[True])
+    else:
+        assert_type(x, Literal[False])
+    if x is not S:
+        assert_type(x, Literal[False])
+    "#,
+);
+
+testcase!(
+    test_is_final_object_sentinel,
+    r#"
+from typing import Final
+
+class Sentinel:
+    pass
+
+S: Final[object] = Sentinel()
+
+def takes_s(x: Sentinel) -> None: ...
+
+def f(x: Sentinel | int):
+    if x is S:
+        takes_s(x)
+    "#,
+);
+
+testcase!(
+    test_ellipsis_is,
+    r#"
+from typing import reveal_type
+from types import EllipsisType
+
+def f(x: int | EllipsisType):
+    if x is ...:
+        reveal_type(x)  # E: Ellipsis
+    else:
+        reveal_type(x)  # E: int
+    if x is not ...:
+        reveal_type(x)  # E: int
+    else:
+        reveal_type(x)  # E: Ellipsis
+    "#,
+);
+
+testcase!(
+    test_ellipsis_eq,
+    r#"
+from typing import reveal_type
+from types import EllipsisType
+
+def f(x: int | EllipsisType):
+    if x == ...:
+        reveal_type(x)  # E: Ellipsis
+    else:
+        reveal_type(x)  # E: int
+    if x != ...:
+        reveal_type(x)  # E: int
+    else:
+        reveal_type(x)  # E: Ellipsis
+    "#,
+);
+
+testcase!(
     test_tri_enum,
     r#"
 from typing import assert_type, Literal
