@@ -166,7 +166,7 @@ impl TypeCheckKind {
                 ctx.display(want),
             ),
             Self::OverloadDefault(param) => format!(
-                "Default `{}` is not assignable to overload parameter `{}` with type `{}`",
+                "Default `{}` from implementation is not assignable to overload parameter `{}` with type `{}`",
                 ctx.display(got),
                 param,
                 ctx.display(want),

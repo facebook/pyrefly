@@ -1501,6 +1501,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             sig.ret = self.heap.mk_any_implicit();
             sig
         };
+        let mut overload_default_candidates: SmallMap<Name, Vec<(TextRange, Type, Type)>> =
+            SmallMap::new();
+        let mut overload_default_matches: SmallSet<Name> = SmallSet::new();
         for (range, overload) in overloads.iter() {
             let (overload_tparams, original_overload_func) = match overload {
                 OverloadType::Function(func) => (None, func),
@@ -1545,38 +1548,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))
                 },
             );
-            // Only validate overload defaults when the implementation provides an explicit default.
+            // Only validate overload defaults when the overload uses an unspecified default
+            // and the implementation provides an explicit default.
             if let (Params::List(overload_params), Params::List(impl_params)) =
                 (&overload_func.signature.params, &impl_func.signature.params)
             {
-                for overload_param in overload_params.items() {
-                    let (overload_name, overload_ty, overload_required) = match overload_param {
-                        Param::PosOnly(Some(name), ty, required)
-                        | Param::Pos(name, ty, required)
-                        | Param::KwOnly(name, ty, required) => (name, ty, required),
-                        _ => continue,
-                    };
-                    if !matches!(overload_required, Required::Optional(None)) {
-                        continue;
-                    }
-                    let impl_default = impl_params.items().iter().find_map(|param| match param {
-                        Param::PosOnly(_, _, Required::Optional(Some(default)))
-                        | Param::Pos(_, _, Required::Optional(Some(default)))
-                        | Param::KwOnly(_, _, Required::Optional(Some(default)))
-                            if param.name() == Some(overload_name) =>
-                        {
-                            Some(default)
+                let mut impl_defaults: SmallMap<Name, Type> = SmallMap::new();
+                for param in impl_params.items() {
+                    match param {
+                        Param::PosOnly(Some(name), _, Required::Optional(Some(default))) => {
+                            impl_defaults.insert(name.clone(), default.clone());
                         }
-                        _ => None,
-                    });
-                    let Some(impl_default) = impl_default else {
-                        continue;
-                    };
-                    self.check_type(impl_default, overload_ty, *range, errors, &|| {
-                        TypeCheckContext::of_kind(TypeCheckKind::OverloadDefault(
-                            overload_name.clone(),
-                        ))
-                    });
+                        Param::Pos(name, _, Required::Optional(Some(default)))
+                        | Param::KwOnly(name, _, Required::Optional(Some(default))) => {
+                            impl_defaults.insert(name.clone(), default.clone());
+                        }
+                        _ => {}
+                    }
+                }
+                if !impl_defaults.is_empty() {
+                    for overload_param in overload_params.items() {
+                        let (overload_name, overload_ty, overload_required) = match overload_param {
+                            Param::PosOnly(Some(name), ty, required)
+                            | Param::Pos(name, ty, required)
+                            | Param::KwOnly(name, ty, required) => (name, ty, required),
+                            _ => continue,
+                        };
+                        if !matches!(overload_required, Required::Optional(None)) {
+                            continue;
+                        }
+                        let Some(impl_default) = impl_defaults.get(overload_name) else {
+                            continue;
+                        };
+                        if self
+                            .is_subset_eq_with_reason(impl_default, overload_ty)
+                            .is_ok()
+                        {
+                            overload_default_matches.insert(overload_name.clone());
+                        }
+                        overload_default_candidates
+                            .entry(overload_name.clone())
+                            .or_default()
+                            .push((*range, overload_ty.clone(), impl_default.clone()));
+                    }
                 }
             }
             self.check_type(
@@ -1603,6 +1617,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ErrorInfo::Kind(ErrorKind::InconsistentOverload),
                     msg,
                 );
+            }
+        }
+        for (name, candidates) in overload_default_candidates.iter() {
+            if overload_default_matches.contains(name) {
+                continue;
+            }
+            for (range, overload_ty, impl_default) in candidates {
+                self.check_type(impl_default, overload_ty, *range, errors, &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::OverloadDefault(name.clone()))
+                });
             }
         }
     }
