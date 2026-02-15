@@ -14,7 +14,6 @@ use pyrefly_types::callable::ArgCounts;
 use pyrefly_types::callable::Param;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::TArgs;
-use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
@@ -36,11 +35,12 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
+use crate::overload_expansion::OVERLOAD_PARAM_EXPANSION_GAS;
+use crate::overload_expansion::expand_type_for_overload;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::Params;
-use crate::types::literal::Lit;
 use crate::types::types::Type;
 
 struct CalledOverload {
@@ -61,7 +61,7 @@ struct ArgsExpander<'a> {
 }
 
 impl<'a> ArgsExpander<'a> {
-    const GAS: usize = 100;
+    const GAS: usize = OVERLOAD_PARAM_EXPANSION_GAS;
 
     fn new(posargs: Vec<CallArg<'a>>, keywords: Vec<CallKeyword<'a>>) -> Self {
         Self {
@@ -149,55 +149,10 @@ impl<'a> ArgsExpander<'a> {
 
     /// Expands a type according to https://typing.python.org/en/latest/spec/overload.html#argument-type-expansion.
     fn expand_type<Ans: LookupAnswer>(ty: Type, solver: &AnswersSolver<Ans>) -> Vec<Type> {
-        match ty {
-            Type::Union(box Union { members: ts, .. }) => ts,
-            Type::ClassType(cls) if cls.is_builtin("bool") => {
-                vec![
-                    Lit::Bool(true).to_implicit_type(),
-                    Lit::Bool(false).to_implicit_type(),
-                ]
-            }
-            Type::ClassType(cls) if solver.get_metadata_for_class(cls.class_object()).is_enum() => {
-                solver
-                    .get_enum_members(cls.class_object())
-                    .into_iter()
-                    .map(Lit::to_implicit_type)
-                    .collect()
-            }
-            Type::Type(box Type::Union(box Union { members: ts, .. })) => {
-                ts.into_map(|t| solver.heap.mk_type_form(t))
-            }
-            Type::Tuple(Tuple::Concrete(elements)) => {
-                let mut count: usize = 1;
-                let mut changed = false;
-                let mut element_expansions = Vec::new();
-                for e in elements {
-                    let element_expansion = Self::expand_type(e.clone(), solver);
-                    if element_expansion.is_empty() {
-                        element_expansions.push(vec![e].into_iter());
-                    } else {
-                        let len = element_expansion.len();
-                        count = count.saturating_mul(len);
-                        if count > Self::GAS {
-                            return Vec::new();
-                        }
-                        changed = true;
-                        element_expansions.push(element_expansion.into_iter());
-                    }
-                }
-                // Enforce a hard-coded limit on the number of expansions for perf reasons.
-                if count <= Self::GAS && changed {
-                    element_expansions
-                        .into_iter()
-                        .multi_cartesian_product()
-                        .map(|x| solver.heap.mk_concrete_tuple(x))
-                        .collect()
-                } else {
-                    Vec::new()
-                }
-            }
-            _ => Vec::new(),
-        }
+        let enum_members = |cls| solver.get_enum_members(&cls).into_iter().collect();
+        let make_type_form = |t| solver.heap.mk_type_form(t);
+        let make_tuple = |elements| solver.heap.mk_concrete_tuple(elements);
+        expand_type_for_overload(ty, &enum_members, &make_type_form, &make_tuple, Self::GAS)
     }
 }
 

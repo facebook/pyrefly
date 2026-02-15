@@ -31,10 +31,13 @@ use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
+use crate::overload_expansion::OVERLOAD_PARAM_EXPANSION_GAS;
+use crate::overload_expansion::expand_type_for_overload;
 use crate::solver::solver::OpenTypedDictSubsetError;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypedDictSubsetError;
+use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
@@ -48,6 +51,7 @@ use crate::types::type_var::Restriction;
 use crate::types::type_var::Variance;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
+use crate::types::types::OverloadType;
 use crate::types::types::Type;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -92,6 +96,104 @@ fn any<T>(
         }
     }
     Err(err.unwrap_or(SubsetError::Other))
+}
+
+#[derive(Clone)]
+enum ParamTemplate {
+    PosOnly(Option<Name>, Required),
+    Pos(Name, Required),
+    KwOnly(Name, Required),
+    VarArg(Option<Name>),
+    Kwargs(Option<Name>),
+}
+
+impl ParamTemplate {
+    fn from_param(param: &Param) -> Self {
+        match param {
+            Param::PosOnly(name, _, required) => {
+                ParamTemplate::PosOnly(name.clone(), required.clone())
+            }
+            Param::Pos(name, _, required) => ParamTemplate::Pos(name.clone(), required.clone()),
+            Param::KwOnly(name, _, required) => {
+                ParamTemplate::KwOnly(name.clone(), required.clone())
+            }
+            Param::VarArg(name, _) => ParamTemplate::VarArg(name.clone()),
+            Param::Kwargs(name, _) => ParamTemplate::Kwargs(name.clone()),
+        }
+    }
+
+    fn with_type(&self, ty: Type) -> Param {
+        match self {
+            ParamTemplate::PosOnly(name, required) => {
+                Param::PosOnly(name.clone(), ty, required.clone())
+            }
+            ParamTemplate::Pos(name, required) => Param::Pos(name.clone(), ty, required.clone()),
+            ParamTemplate::KwOnly(name, required) => {
+                Param::KwOnly(name.clone(), ty, required.clone())
+            }
+            ParamTemplate::VarArg(name) => Param::VarArg(name.clone(), ty),
+            ParamTemplate::Kwargs(name) => Param::Kwargs(name.clone(), ty),
+        }
+    }
+}
+
+fn expand_param_list_for_overload<Ans: LookupAnswer>(
+    params: &ParamList,
+    type_order: TypeOrder<Ans>,
+) -> Option<Vec<ParamList>> {
+    let mut templates = Vec::with_capacity(params.len());
+    let mut expansions = Vec::with_capacity(params.len());
+    let mut count: usize = 1;
+    let mut changed = false;
+    let enum_members = |cls| {
+        type_order
+            .get_enum_members(&cls)
+            .into_iter()
+            .collect::<Vec<_>>()
+    };
+    let make_type_form = |t| Type::Type(Box::new(t));
+    let make_tuple = |elements| Type::Tuple(Tuple::Concrete(elements));
+
+    for param in params.items() {
+        templates.push(ParamTemplate::from_param(param));
+        let expanded = expand_type_for_overload(
+            param.as_type().clone(),
+            &enum_members,
+            &make_type_form,
+            &make_tuple,
+            OVERLOAD_PARAM_EXPANSION_GAS,
+        );
+        if expanded.is_empty() {
+            expansions.push(vec![param.as_type().clone()]);
+        } else {
+            changed = true;
+            count = count.saturating_mul(expanded.len());
+            if count > OVERLOAD_PARAM_EXPANSION_GAS {
+                return None;
+            }
+            expansions.push(expanded);
+        }
+    }
+
+    if !changed {
+        return None;
+    }
+
+    Some(
+        expansions
+            .into_iter()
+            .map(|tys| tys.into_iter())
+            .multi_cartesian_product()
+            .map(|tys| {
+                let params = templates
+                    .iter()
+                    .zip(tys)
+                    .map(|(template, ty)| template.with_type(ty))
+                    .collect();
+                ParamList::new(params)
+            })
+            .collect(),
+    )
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
@@ -1201,9 +1303,75 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             {
                 Ok(())
             }
-            (Type::Overload(overload), u) => any(overload.signatures.iter(), |l| {
-                self.is_subset_eq(&l.as_type(), u)
-            }),
+            (Type::Overload(overload), u) => {
+                let direct = any(overload.signatures.iter(), |l| {
+                    self.is_subset_eq(&l.as_type(), u)
+                });
+                if direct.is_ok() {
+                    return direct;
+                }
+
+                let sigs = u.callable_signatures();
+                let sig = match sigs.as_slice() {
+                    [sig] => *sig,
+                    _ => return direct,
+                };
+                let Params::List(params) = &sig.params else {
+                    return direct;
+                };
+                if sig.ret.may_contain_quantified_var()
+                    || params
+                        .items()
+                        .iter()
+                        .any(|param| param.as_type().may_contain_quantified_var())
+                {
+                    return direct;
+                }
+
+                let mut overload_sigs = Vec::with_capacity(overload.signatures.len());
+                let mut overload_returns = Vec::with_capacity(overload.signatures.len());
+                for sig in overload.signatures.iter() {
+                    let OverloadType::Function(func) = sig else {
+                        return direct;
+                    };
+                    if func.signature.ret.may_contain_quantified_var() {
+                        return direct;
+                    }
+                    if let Params::List(params) = &func.signature.params {
+                        if params
+                            .items()
+                            .iter()
+                            .any(|param| param.as_type().may_contain_quantified_var())
+                        {
+                            return direct;
+                        }
+                    }
+                    overload_sigs.push(&func.signature);
+                    overload_returns.push(func.signature.ret.clone());
+                }
+
+                let Some(expanded_params) = expand_param_list_for_overload(params, self.type_order)
+                else {
+                    return direct;
+                };
+
+                if self
+                    .is_subset_eq(&unions(overload_returns, &self.solver.heap), &sig.ret)
+                    .is_err()
+                {
+                    return direct;
+                }
+
+                let all_expansions_match = expanded_params.iter().all(|expanded| {
+                    let expanded = Params::List(expanded.clone());
+                    overload_sigs.iter().any(|overload_sig| {
+                        self.is_subset_params(&overload_sig.params, &expanded)
+                            .is_ok()
+                    })
+                });
+
+                if all_expansions_match { Ok(()) } else { direct }
+            }
             (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))
                 if let Some(l_no_self) =
                     self.type_order.bind_boundmethod(method, &mut |got, want| {

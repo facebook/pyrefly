@@ -36,6 +36,7 @@ mod error;
 mod export;
 mod lsp;
 mod module;
+mod overload_expansion;
 pub mod playground;
 pub mod query;
 mod report;
