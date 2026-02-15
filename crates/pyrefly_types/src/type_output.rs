@@ -5,9 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::fmt;
 
 use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::qname::QName;
 
 use crate::display::TypeDisplayContext;
@@ -28,6 +30,12 @@ pub trait TypeOutput {
     fn write_targs(&mut self, targs: &TArgs) -> fmt::Result;
     fn write_type(&mut self, ty: &Type) -> fmt::Result;
     fn write_builtin(&mut self, name: &str, qname: Option<&QName>) -> fmt::Result;
+    fn write_symbol(
+        &mut self,
+        module: ModuleName,
+        name: Cow<'_, str>,
+        display_module: bool,
+    ) -> fmt::Result;
 }
 
 /// Implementation of `TypeOutput` that writes formatted types to plain text.
@@ -73,6 +81,22 @@ impl<'a, 'b, 'f> TypeOutput for DisplayOutput<'a, 'b, 'f> {
     fn write_builtin(&mut self, name: &str, _qname: Option<&QName>) -> fmt::Result {
         self.formatter.write_str(name)
     }
+
+    fn write_symbol(
+        &mut self,
+        module: ModuleName,
+        name: Cow<'_, str>,
+        display_module: bool,
+    ) -> fmt::Result {
+        if display_module {
+            write!(self.formatter, "{}.{}", module, name)
+        } else {
+            match name {
+                Cow::Borrowed(s) => self.formatter.write_str(s),
+                Cow::Owned(s) => self.formatter.write_str(&s),
+            }
+        }
+    }
 }
 
 /// This struct is used to collect the type to be displayed as a vector. Each element
@@ -81,8 +105,21 @@ impl<'a, 'b, 'f> TypeOutput for DisplayOutput<'a, 'b, 'f> {
 /// each of these will be concatenated to create the final type.
 /// The second element of the vector is an optional location. For any part that do have
 /// a location this will be included. For separators like '|', '[', etc. this will be None.
+#[derive(Clone, Debug)]
+pub struct TypeSymbolReference {
+    pub module: ModuleName,
+    pub name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TypeLabelPart {
+    pub text: String,
+    pub location: Option<TextRangeWithModule>,
+    pub symbol: Option<TypeSymbolReference>,
+}
+
 pub struct OutputWithLocations<'a> {
-    parts: Vec<(String, Option<TextRangeWithModule>)>,
+    parts: Vec<TypeLabelPart>,
     context: &'a TypeDisplayContext<'a>,
 }
 
@@ -94,14 +131,18 @@ impl<'a> OutputWithLocations<'a> {
         }
     }
 
-    pub fn parts(&self) -> &[(String, Option<TextRangeWithModule>)] {
+    pub fn parts(&self) -> &[TypeLabelPart] {
         &self.parts
     }
 }
 
 impl TypeOutput for OutputWithLocations<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        self.parts.push((s.to_owned(), None));
+        self.parts.push(TypeLabelPart {
+            text: s.to_owned(),
+            location: None,
+            symbol: None,
+        });
         Ok(())
     }
 
@@ -109,13 +150,21 @@ impl TypeOutput for OutputWithLocations<'_> {
         use std::fmt::Write;
         let mut s = String::new();
         s.write_fmt(args)?;
-        self.parts.push((s, None));
+        self.parts.push(TypeLabelPart {
+            text: s,
+            location: None,
+            symbol: None,
+        });
         Ok(())
     }
 
     fn write_qname(&mut self, qname: &QName) -> fmt::Result {
         let location = TextRangeWithModule::new(qname.module().clone(), qname.range());
-        self.parts.push((qname.id().to_string(), Some(location)));
+        self.parts.push(TypeLabelPart {
+            text: qname.id().to_string(),
+            location: Some(location),
+            symbol: None,
+        });
         Ok(())
     }
 
@@ -133,7 +182,11 @@ impl TypeOutput for OutputWithLocations<'_> {
             }
             _ => None,
         };
-        self.parts.push((formatted, location));
+        self.parts.push(TypeLabelPart {
+            text: formatted,
+            location,
+            symbol: None,
+        });
         Ok(())
     }
 
@@ -163,12 +216,44 @@ impl TypeOutput for OutputWithLocations<'_> {
         match qname {
             Some(q) => {
                 let location = TextRangeWithModule::new(q.module().clone(), q.range());
-                self.parts.push((name.to_owned(), Some(location)));
+                self.parts.push(TypeLabelPart {
+                    text: name.to_owned(),
+                    location: Some(location),
+                    symbol: None,
+                });
             }
             None => {
-                self.parts.push((name.to_owned(), None));
+                self.parts.push(TypeLabelPart {
+                    text: name.to_owned(),
+                    location: None,
+                    symbol: None,
+                });
             }
         }
+        Ok(())
+    }
+    fn write_symbol(
+        &mut self,
+        module: ModuleName,
+        name: Cow<'_, str>,
+        display_module: bool,
+    ) -> fmt::Result {
+        let text = if display_module {
+            format!("{}.{}", module, name)
+        } else {
+            match &name {
+                Cow::Borrowed(s) => (*s).to_owned(),
+                Cow::Owned(s) => s.clone(),
+            }
+        };
+        self.parts.push(TypeLabelPart {
+            text,
+            location: None,
+            symbol: Some(TypeSymbolReference {
+                module,
+                name: name.into_owned(),
+            }),
+        });
         Ok(())
     }
 }
@@ -228,17 +313,17 @@ mod tests {
 
         output.write_str("hello").unwrap();
         assert_eq!(output.parts().len(), 1);
-        assert_eq!(output.parts()[0].0, "hello");
-        assert!(output.parts()[0].1.is_none());
+        assert_eq!(output.parts()[0].text, "hello");
+        assert!(output.parts()[0].location.is_none());
 
         output.write_str(" world").unwrap();
         assert_eq!(output.parts().len(), 2);
-        assert_eq!(output.parts()[1].0, " world");
-        assert!(output.parts()[1].1.is_none());
+        assert_eq!(output.parts()[1].text, " world");
+        assert!(output.parts()[1].location.is_none());
 
         let parts = output.parts();
-        assert_eq!(parts[0].0, "hello");
-        assert_eq!(parts[1].0, " world");
+        assert_eq!(parts[0].text, "hello");
+        assert_eq!(parts[1].text, " world");
     }
 
     #[test]
@@ -261,11 +346,11 @@ mod tests {
         output.write_qname(&qname).unwrap();
 
         assert_eq!(output.parts().len(), 1);
-        let (name_str, location) = &output.parts()[0];
-        assert_eq!(name_str, "MyClass");
+        let part = &output.parts()[0];
+        assert_eq!(part.text, "MyClass");
 
-        assert!(location.is_some());
-        let loc = location.as_ref().unwrap();
+        assert!(part.location.is_some());
+        let loc = part.location.as_ref().unwrap();
         assert_eq!(
             loc.range,
             TextRange::new(TextSize::new(4), TextSize::new(11))
@@ -283,8 +368,8 @@ mod tests {
         output.write_lit(&str_lit).unwrap();
 
         assert_eq!(output.parts().len(), 1);
-        assert_eq!(output.parts()[0].0, "'hello'");
-        assert!(output.parts()[0].1.is_none());
+        assert_eq!(output.parts()[0].text, "'hello'");
+        assert!(output.parts()[0].location.is_none());
     }
 
     #[test]
@@ -304,13 +389,13 @@ mod tests {
         output.write_lit(&enum_lit).unwrap();
 
         assert_eq!(output.parts().len(), 1);
-        let (formatted, location) = &output.parts()[0];
+        let part = &output.parts()[0];
 
-        assert_eq!(formatted, "Color.RED");
+        assert_eq!(part.text, "Color.RED");
 
         // Verify the location was captured from the enum's class qname
-        assert!(location.is_some());
-        let loc = location.as_ref().unwrap();
+        assert!(part.location.is_some());
+        let loc = part.location.as_ref().unwrap();
         assert_eq!(loc.range, TextRange::empty(TextSize::new(10)));
         assert_eq!(loc.module.name(), ModuleName::from_str("colors"));
     }
@@ -361,26 +446,26 @@ mod tests {
         // Now that write_type is implemented, it actually writes the types
         // Should have: "[", "None", ", ", "LiteralString", ", ", "Any", "]"
         assert_eq!(output.parts().len(), 7);
-        assert_eq!(output.parts()[0].0, "[");
-        assert!(output.parts()[0].1.is_none());
+        assert_eq!(output.parts()[0].text, "[");
+        assert!(output.parts()[0].location.is_none());
 
-        assert_eq!(output.parts()[1].0, "None");
-        assert!(output.parts()[1].1.is_none());
+        assert_eq!(output.parts()[1].text, "None");
+        assert!(output.parts()[1].location.is_none());
 
-        assert_eq!(output.parts()[2].0, ", ");
-        assert!(output.parts()[2].1.is_none());
+        assert_eq!(output.parts()[2].text, ", ");
+        assert!(output.parts()[2].location.is_none());
 
-        assert_eq!(output.parts()[3].0, "LiteralString");
-        assert!(output.parts()[3].1.is_none());
+        assert_eq!(output.parts()[3].text, "LiteralString");
+        assert!(output.parts()[3].location.is_none());
 
-        assert_eq!(output.parts()[4].0, ", ");
-        assert!(output.parts()[4].1.is_none());
+        assert_eq!(output.parts()[4].text, ", ");
+        assert!(output.parts()[4].location.is_none());
 
-        assert_eq!(output.parts()[5].0, "Any");
-        assert!(output.parts()[5].1.is_none());
+        assert_eq!(output.parts()[5].text, "Any");
+        assert!(output.parts()[5].location.is_none());
 
-        assert_eq!(output.parts()[6].0, "]");
-        assert!(output.parts()[6].1.is_none());
+        assert_eq!(output.parts()[6].text, "]");
+        assert!(output.parts()[6].location.is_none());
     }
 
     #[test]
@@ -391,15 +476,15 @@ mod tests {
         // Test simple types that don't have locations
         output.write_type(&Type::None).unwrap();
         assert_eq!(output.parts().len(), 1);
-        assert_eq!(output.parts()[0].0, "None");
-        assert!(output.parts()[0].1.is_none());
+        assert_eq!(output.parts()[0].text, "None");
+        assert!(output.parts()[0].location.is_none());
 
         output
             .write_type(&Type::LiteralString(LitStyle::Implicit))
             .unwrap();
         assert_eq!(output.parts().len(), 2);
-        assert_eq!(output.parts()[1].0, "LiteralString");
-        assert!(output.parts()[1].1.is_none());
+        assert_eq!(output.parts()[1].text, "LiteralString");
+        assert!(output.parts()[1].location.is_none());
     }
 
     #[test]
@@ -419,13 +504,13 @@ mod tests {
         assert!(!output.parts().is_empty());
 
         // Find the int and str parts and verify they have locations
-        let int_part = output.parts().iter().find(|p| p.0 == "int");
+        let int_part = output.parts().iter().find(|p| p.text == "int");
         assert!(int_part.is_some());
-        assert!(int_part.unwrap().1.is_some());
+        assert!(int_part.unwrap().location.is_some());
 
-        let str_part = output.parts().iter().find(|p| p.0 == "str");
+        let str_part = output.parts().iter().find(|p| p.text == "str");
         assert!(str_part.is_some());
-        assert!(str_part.unwrap().1.is_some());
+        assert!(str_part.unwrap().location.is_some());
     }
 
     #[test]
@@ -444,7 +529,11 @@ mod tests {
         ctx.fmt_helper_generic(&union_type, false, &mut output)
             .unwrap();
 
-        let parts_str: String = output.parts().iter().map(|(s, _)| s.as_str()).collect();
+        let parts_str: String = output
+            .parts()
+            .iter()
+            .map(|part| part.text.as_str())
+            .collect();
         assert_eq!(parts_str, "int | str | None");
 
         // New behavior: Union types are split into separate parts
@@ -453,20 +542,26 @@ mod tests {
         assert_eq!(parts.len(), 5, "Union should be split into 5 parts");
 
         // Verify each part
-        assert_eq!(parts[0].0, "int");
-        assert!(parts[0].1.is_some(), "int should have location");
+        assert_eq!(parts[0].text, "int");
+        assert!(parts[0].location.is_some(), "int should have location");
 
-        assert_eq!(parts[1].0, " | ");
-        assert!(parts[1].1.is_none(), "separator should not have location");
+        assert_eq!(parts[1].text, " | ");
+        assert!(
+            parts[1].location.is_none(),
+            "separator should not have location"
+        );
 
-        assert_eq!(parts[2].0, "str");
-        assert!(parts[2].1.is_some(), "str should have location");
+        assert_eq!(parts[2].text, "str");
+        assert!(parts[2].location.is_some(), "str should have location");
 
-        assert_eq!(parts[3].0, " | ");
-        assert!(parts[3].1.is_none(), "separator should not have location");
+        assert_eq!(parts[3].text, " | ");
+        assert!(
+            parts[3].location.is_none(),
+            "separator should not have location"
+        );
 
-        assert_eq!(parts[4].0, "None");
-        assert!(parts[4].1.is_none(), "None should not have location");
+        assert_eq!(parts[4].text, "None");
+        assert!(parts[4].location.is_none(), "None should not have location");
     }
 
     #[test]
@@ -491,7 +586,11 @@ mod tests {
             .unwrap();
 
         // Check the concatenated result
-        let parts_str: String = output.parts().iter().map(|(s, _)| s.as_str()).collect();
+        let parts_str: String = output
+            .parts()
+            .iter()
+            .map(|part| part.text.as_str())
+            .collect();
         assert_eq!(parts_str, "int & str");
 
         // New behavior: Intersection types are split into separate parts
@@ -500,14 +599,17 @@ mod tests {
         assert_eq!(parts.len(), 3, "Intersection should be split into 3 parts");
 
         // Verify each part
-        assert_eq!(parts[0].0, "int");
-        assert!(parts[0].1.is_some(), "int should have location");
+        assert_eq!(parts[0].text, "int");
+        assert!(parts[0].location.is_some(), "int should have location");
 
-        assert_eq!(parts[1].0, " & ");
-        assert!(parts[1].1.is_none(), "separator should not have location");
+        assert_eq!(parts[1].text, " & ");
+        assert!(
+            parts[1].location.is_none(),
+            "separator should not have location"
+        );
 
-        assert_eq!(parts[2].0, "str");
-        assert!(parts[2].1.is_some(), "str should have location");
+        assert_eq!(parts[2].text, "str");
+        assert!(parts[2].location.is_some(), "str should have location");
     }
 
     #[test]
@@ -527,7 +629,11 @@ mod tests {
         ctx.fmt_helper_generic(&tuple_type, false, &mut output)
             .unwrap();
 
-        let parts_str: String = output.parts().iter().map(|(s, _)| s.as_str()).collect();
+        let parts_str: String = output
+            .parts()
+            .iter()
+            .map(|part| part.text.as_str())
+            .collect();
         assert_eq!(parts_str, "tuple[int]");
 
         // Without stdlib: The "tuple" part is NOT clickable
@@ -536,19 +642,66 @@ mod tests {
         assert_eq!(parts.len(), 4, "Should have 4 parts");
 
         // Verify each part
-        assert_eq!(parts[0].0, "tuple");
+        assert_eq!(parts[0].text, "tuple");
         assert!(
-            parts[0].1.is_none(),
+            parts[0].location.is_none(),
             "tuple should not have location without stdlib"
         );
 
-        assert_eq!(parts[1].0, "[");
-        assert!(parts[1].1.is_none(), "[ should not have location");
+        assert_eq!(parts[1].text, "[");
+        assert!(parts[1].location.is_none(), "[ should not have location");
 
-        assert_eq!(parts[2].0, "int");
-        assert!(parts[2].1.is_some(), "int should have location (clickable)");
+        assert_eq!(parts[2].text, "int");
+        assert!(
+            parts[2].location.is_some(),
+            "int should have location (clickable)"
+        );
 
-        assert_eq!(parts[3].0, "]");
-        assert!(parts[3].1.is_none(), "] should not have location");
+        assert_eq!(parts[3].text, "]");
+        assert!(parts[3].location.is_none(), "] should not have location");
+    }
+
+    #[test]
+    fn test_output_with_locations_literal_base_not_clickable() {
+        // TODO(jvansch): When implementing clickable support for the base type in special forms like Literal[1],
+        // update this test to verify that "Literal" has a location and is clickable.
+        // Expected future behavior: [("Literal", Some(location)), ("[", None), ("1", None), ("]", None)]
+
+        // Create Literal[1] type
+        let literal_type = Lit::Int(crate::lit_int::LitInt::new(1)).to_implicit_type();
+
+        let ctx = TypeDisplayContext::new(&[&literal_type]);
+        let mut output = OutputWithLocations::new(&ctx);
+
+        ctx.fmt_helper_generic(&literal_type, false, &mut output)
+            .unwrap();
+
+        let parts_str: String = output
+            .parts()
+            .iter()
+            .map(|part| part.text.as_str())
+            .collect();
+        assert_eq!(parts_str, "Literal[1]");
+
+        // Current behavior: The "Literal" part is NOT clickable
+        // Expected parts: [("Literal", None), ("[", None), ("1", None), ("]", None)]
+        let parts = output.parts();
+        assert_eq!(parts.len(), 4, "Should have 4 parts");
+
+        // Verify each part
+        assert_eq!(parts[0].text, "Literal");
+        assert!(
+            parts[0].location.is_none(),
+            "Literal should not have location (not clickable)"
+        );
+
+        assert_eq!(parts[1].text, "[");
+        assert!(parts[1].location.is_none(), "[ should not have location");
+
+        assert_eq!(parts[2].text, "1");
+        assert!(parts[2].location.is_none(), "1 should not have location");
+
+        assert_eq!(parts[3].text, "]");
+        assert!(parts[3].location.is_none(), "] should not have location");
     }
 }
