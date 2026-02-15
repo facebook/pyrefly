@@ -41,6 +41,7 @@ pub mod read_only;
 pub mod simplify;
 pub mod special_form;
 pub mod stdlib;
+pub mod tensor;
 pub mod tuple;
 pub mod type_alias;
 pub mod type_info;

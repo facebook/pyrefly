@@ -360,11 +360,22 @@ impl<'a> TypeDisplayContext<'a> {
             }
             // Display Dim[Unknown] as just "Dim" for cleaner output
             Type::ClassType(class_type)
-                if class_type.qname().id().as_str() == "Dim"
+                if class_type.has_qname("torch_shapes", "Dim")
                     && class_type.targs().as_slice().len() == 1
                     && matches!(
                         class_type.targs().as_slice()[0],
                         Type::Any(AnyStyle::Implicit | AnyStyle::Error)
+                    ) =>
+            {
+                output.write_qname(class_type.qname())
+            }
+            // Display Tensor[*tuple[Unknown, ...]] as just "Tensor"
+            Type::ClassType(class_type)
+                if class_type.has_qname("torch", "Tensor")
+                    && class_type.targs().as_slice().len() == 1
+                    && matches!(
+                        &class_type.targs().as_slice()[0],
+                        Type::Tuple(Tuple::Unbounded(box Type::Any(_)))
                     ) =>
             {
                 output.write_qname(class_type.qname())
@@ -405,6 +416,7 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
+            Type::Tensor(tensor) => output.write_str(&format!("{}", tensor)),
             Type::Size(dim) => {
                 // Display dimension value directly without Literal wrapper
                 output.write_str(&format!("{}", dim))

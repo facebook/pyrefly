@@ -10,9 +10,13 @@ use std::iter;
 use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::LitEnum;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::tensor::TensorShape;
+use pyrefly_types::tensor::TensorType;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forall;
 use pyrefly_types::types::Forallable;
@@ -55,6 +59,7 @@ use crate::types::module::ModuleType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::read_only::ReadOnlyReason;
+use crate::types::tuple::Tuple;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
@@ -461,6 +466,22 @@ enum AttributeBase1 {
     /// Bound methods prefer exposing builtin `types.MethodType` attributes but fall back to the
     /// underlying function's attributes when the builtin ones are missing.
     BoundMethod(BoundMethodType),
+    /// Tensor instance with shape information preserved for method resolution.
+    ///
+    /// This variant exists to handle `Type::Tensor` specially during attribute lookup.
+    /// Unlike `ClassInstance`, which only tracks the class type, `TensorInstance` preserves
+    /// the full `TensorType` including shape information.
+    ///
+    /// **Why this is needed:**
+    /// Tensor methods often use `Self` in their return type (e.g., `def reshape(self, ...) -> Self`).
+    /// When we look up such a method on `Tensor[N, M]`, we need to substitute `Self` with the
+    /// full tensor type so the result type is `Tensor[...]` with proper shape tracking, not
+    /// just the base class.
+    ///
+    /// **Invariant:** The `TensorType::base_class` is always a valid class type from which
+    /// attributes are looked up. The shape information in the tensor type is preserved through
+    /// the substitution of `Self` in attribute types.
+    TensorInstance(TensorType),
 }
 
 impl AttributeBase1 {
@@ -952,6 +973,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // the class to special-case dataclass converters.
                     let instance_class = match &found_on {
                         AttributeBase1::ClassInstance(cls) => Some(cls),
+                        AttributeBase1::TensorInstance(tensor) => Some(&tensor.base_class),
                         _ => None,
                     };
                     let class_base = match &found_on {
@@ -1276,6 +1298,50 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     base,
                 )),
             },
+            AttributeBase1::TensorInstance(tensor) => {
+                // Special handling for .shape property - return tuple of dimensions.
+                // Converts SizeExpr::Literal to Literal[n] and other dim types to Dim[...].
+                // For Unpacked shapes (including shapeless), this naturally produces an
+                // Unpacked tuple, e.g. Tensor[B, *Ts] → tuple[Dim[B], *Ts].
+                if attr_name.as_str() == "shape" {
+                    let dim_to_type = |dim: &Type| -> Type {
+                        match dim {
+                            Type::Size(SizeExpr::Literal(n)) => {
+                                Lit::Int(LitInt::new(*n)).to_implicit_type()
+                            }
+                            _ => self.heap.mk_dim(dim.clone()),
+                        }
+                    };
+                    let tuple_type = match &tensor.shape {
+                        TensorShape::Concrete(dims) => {
+                            Type::concrete_tuple(dims.iter().map(dim_to_type).collect())
+                        }
+                        TensorShape::Unpacked(box (prefix, middle, suffix)) => {
+                            Type::Tuple(Tuple::Unpacked(Box::new((
+                                prefix.iter().map(dim_to_type).collect(),
+                                middle.clone(),
+                                suffix.iter().map(dim_to_type).collect(),
+                            ))))
+                        }
+                    };
+                    acc.found_type(tuple_type, base);
+                    return;
+                }
+
+                // For all other attributes, delegate to get_tensor_attribute which
+                // handles Self-type substitution via InstanceKind::Tensor.
+                let metadata = self.get_metadata_for_class(tensor.base_class.class_object());
+                match self.get_tensor_attribute(tensor, attr_name) {
+                    Some(attr) => acc.found_class_attribute(attr, base),
+                    None if metadata.has_base_any() => {
+                        acc.found_type(Type::Any(AnyStyle::Implicit), base)
+                    }
+                    None => acc.not_found(NotFoundOn::ClassInstance(
+                        tensor.base_class.class_object().dupe(),
+                        base,
+                    )),
+                }
+            }
             AttributeBase1::ClassInstance(class) => {
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let attr_lookup_result =
@@ -1606,6 +1672,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 acc.not_found(NotFoundOn::ClassInstance(cls.class_object().clone(), base))
             }
+            AttributeBase1::TensorInstance(tensor)
+                if (*dunder_name == dunder::SETATTR
+                    || *dunder_name == dunder::DELATTR
+                    || *dunder_name == dunder::GETATTRIBUTE)
+                    && self.field_is_inherited_from(
+                        tensor.base_class.class_object(),
+                        dunder_name,
+                        (ModuleName::builtins().as_str(), "object"),
+                    ) =>
+            {
+                acc.not_found(NotFoundOn::ClassInstance(
+                    tensor.base_class.class_object().clone(),
+                    base,
+                ))
+            }
             AttributeBase1::LiteralString
                 if *dunder_name == dunder::SETATTR
                     || *dunder_name == dunder::DELATTR
@@ -1783,6 +1864,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
                     self.stdlib.typed_dict_fallback().clone(),
                 )))
+            }
+            Type::Tensor(tensor) => {
+                // Use TensorInstance to preserve shape information through attribute lookup
+                acc.push(AttributeBase1::TensorInstance((*tensor).clone()))
+            }
+            Type::Size(_) => {
+                // Dimension values behave like int for attribute access
+                acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
+            }
+            Type::Dim(_) => {
+                // Symbolic integers behave like int for attribute access
+                acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
             }
             Type::Tuple(tuple) => {
                 acc.push(AttributeBase1::ClassInstance(self.erase_tuple_type(tuple)))
@@ -2108,14 +2201,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ElementOfTypeVarTuple(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.object().clone()))
             }
-            Type::Size(_) => {
-                // Dimension values behave like int for attribute access
-                acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
-            }
-            Type::Dim(_) => {
-                // Symbolic integers behave like int for attribute access
-                acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
-            }
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
             | Type::Type(_)
@@ -2433,6 +2518,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | AttributeBase1::EnumLiteral(LitEnum { class, .. })
             | AttributeBase1::Quantified(_, class) => {
                 self.completions_class_type(class, expected_attribute_name, res)
+            }
+            AttributeBase1::TensorInstance(tensor) => {
+                self.completions_class_type(&tensor.base_class, expected_attribute_name, res)
             }
             AttributeBase1::LiteralString => {
                 self.completions_class_type(self.stdlib.str(), expected_attribute_name, res)
