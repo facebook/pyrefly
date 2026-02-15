@@ -9,6 +9,7 @@
 
 mod basic;
 mod call_hierarchy;
+mod code_lens;
 mod completion;
 mod configuration;
 mod convert_module_package;
