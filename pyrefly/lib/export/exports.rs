@@ -403,6 +403,14 @@ impl Exports {
         };
         self.0.exports.calculate(f).unwrap_or_default()
     }
+
+    pub fn is_explicit_reexport(&self, name: &Name) -> bool {
+        self.0
+            .definitions
+            .definitions
+            .get(name)
+            .is_some_and(|definition| matches!(definition.style, DefinitionStyle::ImportAsEq(_)))
+    }
 }
 
 #[cfg(test)]
