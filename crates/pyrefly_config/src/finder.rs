@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::iter;
 use std::mem;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -32,36 +33,58 @@ use crate::config::ConfigFile;
 use crate::config::ConfigSource;
 use crate::error_kind::Severity;
 
+#[derive(Clone)]
 pub struct ConfigError {
     severity: Severity,
-    msg: anyhow::Error,
+    msg: String,
+    file_path: Option<PathBuf>,
+    /// Optional span (line, column) information, 1-indexed
+    span: Option<(usize, usize)>,
 }
 
 impl ConfigError {
-    pub fn error(msg: anyhow::Error) -> Self {
+    pub fn error(msg: anyhow::Error, file_path: Option<PathBuf>) -> Self {
         Self {
             severity: Severity::Error,
-            msg,
+            msg: format!("{:#}", msg),
+            file_path,
+            span: None,
         }
     }
 
-    pub fn warn(msg: anyhow::Error) -> Self {
+    pub fn warn(msg: anyhow::Error, file_path: Option<PathBuf>) -> Self {
         Self {
             severity: Severity::Warn,
-            msg,
+            msg: format!("{:#}", msg),
+            file_path,
+            span: None,
+        }
+    }
+
+    /// Create an error with span information (line, column), 1-indexed
+    pub fn error_with_span(
+        msg: anyhow::Error,
+        file_path: Option<PathBuf>,
+        span: (usize, usize),
+    ) -> Self {
+        Self {
+            severity: Severity::Error,
+            msg: format!("{:#}", msg),
+            file_path,
+            span: Some(span),
         }
     }
 
     pub fn print(&self) {
         match self.severity {
             Severity::Error => {
-                error!("{:#}", self.msg);
+                error!("{}", self.msg);
             }
             Severity::Warn => {
-                warn!("{:#}", self.msg);
+                warn!("{}", self.msg);
             }
             Severity::Info => {
-                info!("{:#}", self.msg);
+                info!("{}", self.msg);
             }
             Severity::Ignore => {}
         }
@@ -70,7 +93,9 @@ impl ConfigError {
     pub fn context(self, context: String) -> Self {
         ConfigError {
             severity: self.severity,
-            msg: self.msg.context(context),
+            msg: format!("{}: {}", context, self.msg),
+            file_path: self.file_path,
+            span: self.span,
         }
     }
 
@@ -79,7 +104,16 @@ impl ConfigError {
     }
 
     pub fn get_message(&self) -> String {
-        self.msg.to_string()
+        self.msg.clone()
+    }
+
+    pub fn file_path(&self) -> Option<&Path> {
+        self.file_path.as_deref()
+    }
+
+    /// Get the span (line, column) if available, 1-indexed
+    pub fn span(&self) -> Option<(usize, usize)> {
+        self.span
     }
 }
 
@@ -234,7 +268,7 @@ impl ConfigFinder {
             Ok(Some(x)) => return x,
             Ok(None) => {}
             Err(e) => {
-                self.errors.lock().push(ConfigError::error(e));
+                self.errors.lock().push(ConfigError::error(e, None));
             }
         }
 
