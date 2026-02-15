@@ -347,6 +347,18 @@ assert_type(foo(lambda x: str(x))(1), str)
 "#,
 );
 
+testcase!(
+    test_context_lambda_body_infers_tparam,
+    r#"
+from typing import Callable, assert_type
+
+def build_list[T](capacity: int, callback: Callable[[list[T]], None]) -> list[T]: ...
+
+xs = build_list(10, lambda l: l.append(""))
+assert_type(xs, list[str])
+"#,
+);
+
 // This case is tricky. The call to `f` uses `g` to determine the paramspec `P`
 // We then use `P` to contextually type the lambda. Importantly, the lambda's params
 // need to match, including stuff like parameter name.
