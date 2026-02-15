@@ -340,10 +340,75 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(HintRef::new(hint, Some(hint_errors))),
                     errors,
                 );
-                self.check_and_return_type_info(got, hint, x.range(), hint_errors, tcc)
+                let range = self
+                    .dict_literal_error_range(x, hint)
+                    .unwrap_or_else(|| x.range());
+                self.check_and_return_type_info(got, hint, range, hint_errors, tcc)
             }
             _ => self.expr_infer_type_info_with_hint(x, None, errors),
         }
+    }
+
+    fn dict_literal_error_range(&self, x: &Expr, hint: &Type) -> Option<TextRange> {
+        let Expr::Dict(dict) = x else {
+            return None;
+        };
+        let (key_hint, value_hint) = self.decompose_dict(HintRef::new(hint, None));
+        if key_hint.is_none() && value_hint.is_none() {
+            return None;
+        }
+        let items = Ast::flatten_dict_items(&dict.items);
+        let swallower = self.error_swallower();
+        for item in items {
+            match &item.key {
+                Some(key) => {
+                    if let Some(key_hint) = &key_hint {
+                        let key_ty = self.expr_infer_with_hint_promote(
+                            key,
+                            Some(key_hint.as_ref()),
+                            &swallower,
+                        );
+                        if !key_ty.is_error() && !self.is_subset_eq(&key_ty, key_hint.ty()) {
+                            return Some(key.range());
+                        }
+                    }
+                    if let Some(value_hint) = &value_hint {
+                        let value_ty = self.expr_infer_with_hint_promote(
+                            &item.value,
+                            Some(value_hint.as_ref()),
+                            &swallower,
+                        );
+                        if !value_ty.is_error() && !self.is_subset_eq(&value_ty, value_hint.ty()) {
+                            return Some(item.value.range());
+                        }
+                    }
+                }
+                None => {
+                    let unpacked_ty = self.expr_infer(&item.value, &swallower);
+                    if unpacked_ty.is_error() {
+                        continue;
+                    }
+                    match self.unwrap_mapping(&unpacked_ty) {
+                        Some((key_ty, value_ty)) => {
+                            if let Some(key_hint) = &key_hint {
+                                if !self.is_subset_eq(&key_ty, key_hint.ty()) {
+                                    return Some(item.value.range());
+                                }
+                            }
+                            if let Some(value_hint) = &value_hint {
+                                if !self.is_subset_eq(&value_ty, value_hint.ty()) {
+                                    return Some(item.value.range());
+                                }
+                            }
+                        }
+                        None => {
+                            return Some(item.value.range());
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// This function should not be used directly: we want every expression to record a type trace,
