@@ -351,7 +351,13 @@ fn format_code_snippet(module: &Module, range: TextRange) -> Option<String> {
     const MAX_LEN: usize = 80;
     let mut truncated = cleaned;
     if truncated.len() > MAX_LEN {
-        truncated.truncate(MAX_LEN.saturating_sub(3));
+        let max_chars = MAX_LEN.saturating_sub(3);
+        let end_byte = truncated
+            .char_indices()
+            .nth(max_chars)
+            .map(|(idx, _)| idx)
+            .unwrap_or_else(|| truncated.len());
+        truncated.truncate(end_byte);
         truncated.push_str("...");
     }
     Some(truncated)
