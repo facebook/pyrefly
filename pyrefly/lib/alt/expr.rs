@@ -85,6 +85,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
+use crate::error::context::TypeCheckKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
@@ -365,75 +366,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(HintRefOld::new(hint, Some(hint_errors))),
                     errors,
                 );
-                let range = self
-                    .dict_literal_error_range(x, hint)
-                    .unwrap_or_else(|| x.range());
-                self.check_and_return_type_info(got, hint, range, hint_errors, tcc)
+                self.check_and_return_type_info(got, hint, x.range(), hint_errors, tcc)
             }
             _ => self.expr_infer_type_info_with_hint(x, None, errors),
         }
-    }
-
-    fn dict_literal_error_range(&self, x: &Expr, hint: &Type) -> Option<TextRange> {
-        let Expr::Dict(dict) = x else {
-            return None;
-        };
-        let (key_hint, value_hint) = self.decompose_dict(HintRef::new(hint, None));
-        if key_hint.is_none() && value_hint.is_none() {
-            return None;
-        }
-        let items = Ast::flatten_dict_items(&dict.items);
-        let swallower = self.error_swallower();
-        for item in items {
-            match &item.key {
-                Some(key) => {
-                    if let Some(key_hint) = &key_hint {
-                        let key_ty = self.expr_infer_with_hint_promote(
-                            key,
-                            Some(key_hint.as_ref()),
-                            &swallower,
-                        );
-                        if !key_ty.is_error() && !self.is_subset_eq(&key_ty, key_hint.ty()) {
-                            return Some(key.range());
-                        }
-                    }
-                    if let Some(value_hint) = &value_hint {
-                        let value_ty = self.expr_infer_with_hint_promote(
-                            &item.value,
-                            Some(value_hint.as_ref()),
-                            &swallower,
-                        );
-                        if !value_ty.is_error() && !self.is_subset_eq(&value_ty, value_hint.ty()) {
-                            return Some(item.value.range());
-                        }
-                    }
-                }
-                None => {
-                    let unpacked_ty = self.expr_infer(&item.value, &swallower);
-                    if unpacked_ty.is_error() {
-                        continue;
-                    }
-                    match self.unwrap_mapping(&unpacked_ty) {
-                        Some((key_ty, value_ty)) => {
-                            if let Some(key_hint) = &key_hint {
-                                if !self.is_subset_eq(&key_ty, key_hint.ty()) {
-                                    return Some(item.value.range());
-                                }
-                            }
-                            if let Some(value_hint) = &value_hint {
-                                if !self.is_subset_eq(&value_ty, value_hint.ty()) {
-                                    return Some(item.value.range());
-                                }
-                            }
-                        }
-                        None => {
-                            return Some(item.value.range());
-                        }
-                    }
-                }
-            }
-        }
-        None
     }
 
     /// This function should not be used directly: we want every expression to record a type trace,
@@ -1073,6 +1009,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 });
             let mut key_tys = Vec::new();
             let mut value_tys = Vec::new();
+            let mut has_type_mismatch = false;
             items.iter().for_each(|x| match &x.key {
                 Some(key) => {
                     let key_t = self.expr_infer_with_hint_promote(
@@ -1085,6 +1022,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         hint.and_then(|hint| hint.with_ty_opt(value_hint.as_ref())),
                         errors,
                     );
+                    if let Some(hint) = hint
+                        && let Some(check_errors) = hint.errors()
+                    {
+                        let tcc: &dyn Fn() -> TypeCheckContext =
+                            &|| TypeCheckContext::of_kind(TypeCheckKind::AnnAssign);
+                        if let Some(key_hint) = &key_hint
+                            && !self.check_type(
+                                &key_t,
+                                key_hint.ty(),
+                                key.range(),
+                                check_errors,
+                                tcc,
+                            )
+                        {
+                            has_type_mismatch = true;
+                        }
+                        if let Some(value_hint) = &value_hint
+                            && !self.check_type(
+                                &value_t,
+                                value_hint.ty(),
+                                x.value.range(),
+                                check_errors,
+                                tcc,
+                            )
+                        {
+                            has_type_mismatch = true;
+                        }
+                    }
                     if !key_t.is_error() {
                         key_tys.push(key_t);
                     }
@@ -1131,6 +1096,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else if let Some((key_t, value_t)) = self.unwrap_mapping(&ty) {
                         // Non-anonymous-typed-dict unpacking disables anonymous typed dict creation
                         can_create_anonymous_typed_dict = false;
+                        if let Some(hint) = hint
+                            && let Some(check_errors) = hint.errors()
+                        {
+                            let tcc: &dyn Fn() -> TypeCheckContext =
+                                &|| TypeCheckContext::of_kind(TypeCheckKind::AnnAssign);
+                            if let Some(key_hint) = &key_hint
+                                && !self.check_type(
+                                    &key_t,
+                                    key_hint.ty(),
+                                    x.value.range(),
+                                    check_errors,
+                                    tcc,
+                                )
+                            {
+                                has_type_mismatch = true;
+                            }
+                            if let Some(value_hint) = &value_hint
+                                && !self.check_type(
+                                    &value_t,
+                                    value_hint.ty(),
+                                    x.value.range(),
+                                    check_errors,
+                                    tcc,
+                                )
+                            {
+                                has_type_mismatch = true;
+                            }
+                        }
                         if !key_t.is_error() {
                             if let Some(key_hint) = &key_hint
                                 && self.is_subset_eq(&key_t, key_hint)
@@ -1160,6 +1153,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             });
+            if has_type_mismatch
+                && let Some(hint) = hint
+                && hint.errors().is_some()
+            {
+                return hint.ty().clone();
+            }
             if can_create_anonymous_typed_dict
                 && !typed_dict_fields_map.is_empty()
                 && typed_dict_fields_map.len() <= ANONYMOUS_TYPED_DICT_MAX_ITEMS
