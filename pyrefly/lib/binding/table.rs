@@ -41,6 +41,7 @@ macro_rules! table {
             $($vis)* variance_checks: $t<$crate::binding::binding::KeyVarianceCheck>,
             $($vis)* annotations: $t<$crate::binding::binding::KeyAnnotation>,
             $($vis)* class_metadata: $t<$crate::binding::binding::KeyClassMetadata>,
+            $($vis)* django_relations: $t<$crate::binding::binding::KeyDjangoRelations>,
             $($vis)* class_mros: $t<$crate::binding::binding::KeyClassMro>,
             $($vis)* abstract_class_check: $t<$crate::binding::binding::KeyAbstractClassCheck>,
             $($vis)* legacy_tparams: $t<$crate::binding::binding::KeyLegacyTypeParam>,
@@ -150,6 +151,12 @@ macro_rules! table {
             fn get_mut(&mut self) -> &mut Self::Value { &mut self.class_metadata }
         }
 
+        impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyDjangoRelations> for $name {
+            type Value = $t<$crate::binding::binding::KeyDjangoRelations>;
+            fn get(&self) -> &Self::Value { &self.django_relations }
+            fn get_mut(&mut self) -> &mut Self::Value { &mut self.django_relations }
+        }
+
         impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyClassMro> for $name {
             type Value = $t<$crate::binding::binding::KeyClassMro>;
             fn get(&self) -> &Self::Value { &self.class_mros }
@@ -220,6 +227,7 @@ macro_rules! table_for_each(
         $f(&($e).variance_checks);
         $f(&($e).annotations);
         $f(&($e).class_metadata);
+        $f(&($e).django_relations);
         $f(&($e).class_mros);
         $f(&($e).abstract_class_check);
         $f(&($e).legacy_tparams);
@@ -248,6 +256,7 @@ macro_rules! table_mut_for_each(
         $f(&mut ($e).variance_checks);
         $f(&mut ($e).annotations);
         $f(&mut ($e).class_metadata);
+        $f(&mut ($e).django_relations);
         $f(&mut ($e).class_mros);
         $f(&mut ($e).abstract_class_check);
         $f(&mut ($e).legacy_tparams);
@@ -276,6 +285,7 @@ macro_rules! table_try_for_each(
         $f(&($e).variance_checks)?;
         $f(&($e).annotations)?;
         $f(&($e).class_metadata)?;
+        $f(&($e).django_relations)?;
         $f(&($e).class_mros)?;
         $f(&($e).abstract_class_check)?;
         $f(&($e).legacy_tparams)?;

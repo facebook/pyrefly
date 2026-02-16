@@ -37,6 +37,7 @@ use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::visit::VisitMut;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 use vec1::vec1;
@@ -48,9 +49,12 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
 use crate::alt::traits::Solve;
+use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Exported;
+use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::bindings::BindingEntry;
@@ -1093,6 +1097,7 @@ pub struct ThreadState {
     stack: CalcStack,
     /// For debugging only: thread-global that allows us to control debug logging across components.
     debug: RefCell<bool>,
+    django_reverse_relations: RefCell<Option<Arc<DjangoReverseRelationIndex>>>,
     /// Configuration for recursion depth limiting. None means disabled.
     recursion_limit_config: Option<RecursionLimitConfig>,
 }
@@ -1102,6 +1107,7 @@ impl ThreadState {
         Self {
             stack: CalcStack::new(),
             debug: RefCell::new(false),
+            django_reverse_relations: RefCell::new(None),
             recursion_limit_config,
         }
     }
@@ -1179,6 +1185,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn stack(&self) -> &CalcStack {
         &self.thread_state.stack
+    }
+
+    pub fn django_reverse_relations_index(&self) -> Arc<DjangoReverseRelationIndex> {
+        if let Some(index) = self.thread_state.django_reverse_relations.borrow().clone() {
+            return index;
+        }
+
+        let mut combined: SmallMap<Class, ClassSynthesizedFields> = SmallMap::new();
+        for module in self.answers.modules() {
+            let Some(index) =
+                self.answers
+                    .get(module, None, &KeyDjangoRelations, self.thread_state)
+            else {
+                continue;
+            };
+            for (class, fields) in index.iter() {
+                match combined.get_mut(class) {
+                    Some(existing) => {
+                        let merged = existing.clone().combine(fields.clone());
+                        *existing = merged;
+                    }
+                    None => {
+                        combined.insert(class.clone(), fields.clone());
+                    }
+                }
+            }
+        }
+
+        let index = Arc::new(DjangoReverseRelationIndex::new(combined));
+        *self.thread_state.django_reverse_relations.borrow_mut() = Some(index.clone());
+        index
     }
 
     fn recursion_limit_config(&self) -> Option<RecursionLimitConfig> {
