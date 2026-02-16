@@ -177,11 +177,11 @@ testcase!(
     r#"
 from typing import Iterable, MutableMapping, Literal
 x1: dict[str, int] = {"a": 1}
-x2: dict[str, int] = {"a": "oops"}  # E: `dict[str, str]` is not assignable to `dict[str, int]`
-x3: dict[str, Literal[1]] = {"a": 2} # E: `dict[str, int]` is not assignable to `dict[str, Literal[1]]`
+x2: dict[str, int] = {"a": "oops"}  # E: `str` is not assignable to `int`
+x3: dict[str, Literal[1]] = {"a": 2} # E: `int` is not assignable to `Literal[1]`
 x4: MutableMapping[str, int] = {"a": 1}
 x5: Iterable[str] = {"a": 1}
-x6: Iterable[int] = {"oops": 1}  # E: `dict[str, int]` is not assignable to `Iterable[int]`
+x6: Iterable[int] = {"oops": 1}  # E: `str` is not assignable to `int`
 x7: Iterable[Literal[4]] = {4: "a"}
 x8: object = {"a": 1}
 x9: list[str] = {"a": 1}  # E: `dict[str, int]` is not assignable to `list[str]`

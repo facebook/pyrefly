@@ -192,7 +192,7 @@ type X[K, V] = dict[K, V] | list[X[str, V]]
 
 x1: X = {0: 1}
 x2: X[int, int] = {0: 1}
-x3: X[str, int] = {0: 1}  # E: `dict[int, int]` is not assignable to `dict[str, int] | list[X[str, int]]`
+x3: X[str, int] = {0: 1}  # E: `int` is not assignable to `str`
 
 x4: X = [{'ok': 1}]
 x5: X[int, int] = [{'ok': 1}]
