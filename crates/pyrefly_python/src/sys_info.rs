@@ -346,7 +346,7 @@ impl Value {
             (Value::String(_), Value::String(_)) => true,
             (Value::Int(_), Value::Int(_)) => true,
             (Value::Bool(_), Value::Bool(_)) => true,
-            (Value::Truthiness(_), Value::Truthiness(_)) => false, // We don't know if they are the same ype
+            (Value::Truthiness(_), Value::Truthiness(_)) => false, // We don't know if they are the same type
             (Value::VersionInfo(_), Value::VersionInfo(_)) => true,
             (Value::VersionInfo(_), Value::Tuple(_)) => true,
             _ => false,
