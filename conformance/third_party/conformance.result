@@ -173,17 +173,8 @@
   "overloads_consistency.py": [],
   "overloads_definitions.py": [],
   "overloads_evaluation.py": [],
-  "protocols_class_objects.py": [
-    "Line 104: Expected 1 errors",
-    "Line 106: Expected 1 errors",
-    "Line 107: Expected 1 errors",
-    "Line 108: Expected 1 errors"
-  ],
-  "protocols_definition.py": [
-    "Line 116: Expected 1 errors",
-    "Line 117: Expected 1 errors",
-    "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`\\n  Protocol `Template` requires attribute `temp`']"
-  ],
+  "protocols_class_objects.py": [],
+  "protocols_definition.py": [],
   "protocols_explicit.py": [],
   "protocols_generic.py": [],
   "protocols_merging.py": [],

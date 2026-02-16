@@ -410,7 +410,17 @@ impl ClassField {
     }
 
     pub fn new_synthesized(ty: Type) -> Self {
-        // Detect if this is a property and construct the appropriate variant
+        Self::new_synthesized_inner(ty, false)
+    }
+
+    /// Like `new_synthesized`, but marks the field as a ClassVar.
+    pub fn new_synthesized_classvar(ty: Type) -> Self {
+        Self::new_synthesized_inner(ty, true)
+    }
+
+    fn new_synthesized_inner(ty: Type, is_classvar: bool) -> Self {
+        // Detect if this is a property and construct the appropriate variant.
+        // Properties and methods are never ClassVars.
         if ty.is_property_getter() || ty.is_property_setter_with_getter().is_some() {
             ClassField(
                 ClassFieldInner::Property {
@@ -436,7 +446,7 @@ impl ClassField {
                     annotation: None,
                     initialization: ClassFieldInitialization::ClassBody(None),
                     read_only_reason: None,
-                    is_classvar: false,
+                    is_classvar,
                     is_staticmethod: false,
                     is_foreign_key: false,
                     has_choices: false,
@@ -888,6 +898,22 @@ impl ClassField {
             ClassFieldInner::ClassAttribute { is_classvar, .. } => *is_classvar,
             ClassFieldInner::InstanceAttribute { .. } => false,
         }
+    }
+
+    /// Returns true if this field is a non-ClassVar, non-staticmethod data attribute.
+    /// This includes both annotation-only declarations (`x: int`) and assignments (`x: int = 1`).
+    /// Such fields should not count as proper class-level attributes when checking a class object
+    /// against a protocol, because they are instance variables (or defaults for instance creation),
+    /// not attributes on the class object itself.
+    pub fn is_non_classvar_data_attribute(&self) -> bool {
+        matches!(
+            &self.0,
+            ClassFieldInner::ClassAttribute {
+                is_classvar: false,
+                is_staticmethod: false,
+                ..
+            }
+        )
     }
 
     pub fn is_uninit_class_var(&self) -> bool {
@@ -3463,11 +3489,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub(in crate::alt::class) fn get_class_member(
-        &self,
-        cls: &Class,
-        name: &Name,
-    ) -> Option<Arc<ClassField>> {
+    pub(crate) fn get_class_member(&self, cls: &Class, name: &Name) -> Option<Arc<ClassField>> {
         self.get_class_member_with_defining_class(cls, name)
             .map(|member| member.value)
     }
@@ -4063,8 +4085,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> Result<(), Box<AttrSubsetError>> {
         match (got, want) {
-            (_, ClassAttribute::NoAccess(_)) => Ok(()),
-            (ClassAttribute::NoAccess(_), _) => Err(Box::new(AttrSubsetError::NoAccess)),
+            (_, ClassAttribute::NoAccess(_)) => return Ok(()),
+            (ClassAttribute::NoAccess(_), _) => return Err(Box::new(AttrSubsetError::NoAccess)),
+            _ => {}
+        }
+        let got_is_classvar = matches!(got, ClassAttribute::ReadOnly(_, ReadOnlyReason::ClassVar));
+        let want_is_classvar =
+            matches!(want, ClassAttribute::ReadOnly(_, ReadOnlyReason::ClassVar));
+        if got_is_classvar != want_is_classvar {
+            return Err(Box::new(AttrSubsetError::ClassVarMismatch {
+                got_is_classvar,
+            }));
+        }
+        match (got, want) {
+            (_, ClassAttribute::NoAccess(_)) | (ClassAttribute::NoAccess(_), _) => {
+                unreachable!("handled above")
+            }
             (
                 ClassAttribute::Property(_, _, _),
                 ClassAttribute::ReadOnly(..) | ClassAttribute::ReadWrite(..),

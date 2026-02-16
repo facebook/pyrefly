@@ -392,16 +392,17 @@ impl<'a> BindingsBuilder<'a> {
                     django_fields_with_choices.push(name.clone().into_key());
                 }
             }
-            let (is_initialized_on_class, is_annotated) = match &definition {
-                ClassFieldDefinition::DefinedInMethod { annotation, .. } => {
-                    (false, annotation.is_some())
-                }
-                ClassFieldDefinition::DeclaredByAnnotation { .. } => (false, true),
-                ClassFieldDefinition::AssignedInBody { annotation, .. } => {
-                    (true, annotation.is_some())
-                }
-                _ => (true, false),
-            };
+            let (is_initialized_on_class, is_annotated, is_defined_in_class_body) =
+                match &definition {
+                    ClassFieldDefinition::DefinedInMethod { annotation, .. } => {
+                        (false, annotation.is_some(), false)
+                    }
+                    ClassFieldDefinition::DeclaredByAnnotation { .. } => (false, true, true),
+                    ClassFieldDefinition::AssignedInBody { annotation, .. } => {
+                        (true, annotation.is_some(), true)
+                    }
+                    _ => (true, false, true),
+                };
 
             let docstring_range = field_docstrings.get(&range).copied();
 
@@ -410,6 +411,7 @@ impl<'a> BindingsBuilder<'a> {
                 ClassFieldProperties::new(
                     is_annotated,
                     is_initialized_on_class,
+                    is_defined_in_class_body,
                     range,
                     docstring_range,
                 ),
@@ -790,6 +792,7 @@ impl<'a> BindingsBuilder<'a> {
                 ClassFieldProperties::new(
                     member_annotation.is_some() || class_kind == SynthesizedClassKind::NamedTuple,
                     member_value.is_some(),
+                    true, // Synthesized fields are class body fields
                     range,
                     None, // Synthesized fields don't have docstrings
                 ),
