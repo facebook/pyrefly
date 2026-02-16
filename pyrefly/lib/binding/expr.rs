@@ -458,18 +458,26 @@ impl<'a> BindingsBuilder<'a> {
             }
         }
         self.ensure_expr(&mut lambda.body, usage);
-        // Pyrefly currently does not support `yield` in lambdas, but we cannot drop them
-        // entirely or we will panic at solve time.
-        //
-        // TODO: We should properly handle `yield` and `yield from`; lambdas can be generators.
-        // One example of this is in the standard library, in `_collections_abc.pyi`:
-        // https://github.com/python/cpython/blob/965662ee4a986605b60da470d9e7c1e9a6f922b3/Lib/_collections_abc.py#L92
         let (yields_and_returns, _, _, _) = self.scopes.pop_function_scope();
-        for (idx, y, _) in yields_and_returns.yields {
-            self.insert_binding_idx(idx, BindingYield::Invalid(y));
+        for (idx, y, is_unreachable) in yields_and_returns.yields {
+            self.insert_binding_idx(
+                idx,
+                if is_unreachable {
+                    BindingYield::Unreachable(y)
+                } else {
+                    BindingYield::Yield(None, y)
+                },
+            );
         }
-        for (idx, y, _) in yields_and_returns.yield_froms {
-            self.insert_binding_idx(idx, BindingYieldFrom::Invalid(y));
+        for (idx, y, is_unreachable) in yields_and_returns.yield_froms {
+            self.insert_binding_idx(
+                idx,
+                if is_unreachable {
+                    BindingYieldFrom::Unreachable(y)
+                } else {
+                    BindingYieldFrom::YieldFrom(None, IsAsync::new(false), y)
+                },
+            );
         }
     }
 
