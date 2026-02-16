@@ -1027,7 +1027,7 @@ impl Query {
                 Type::ClassType(c)
                     if c.name() == "classproperty" || c.name() == "cached_classproperty" =>
                 {
-                    let result_ty = c.targs().as_slice().get(1).unwrap();
+                    let result_ty = c.targs().as_slice().first().unwrap();
                     (Some(String::from("property")), result_ty)
                 }
                 _ => (None, ty),
@@ -1082,7 +1082,6 @@ impl Query {
                         }
                         _ => answers.get_idx(class_field_idx).map(|cf| cf.ty()),
                     };
-
                     let field_ty = field_ty?;
                     let (kind, field_ty) = get_kind_and_field_type(&field_ty);
 
