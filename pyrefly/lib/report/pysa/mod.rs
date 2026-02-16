@@ -42,6 +42,7 @@ use pyrefly_util::thread_pool::ThreadPool;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use serde::Serialize;
 
 use crate::error::error::Error as TypeError;
@@ -523,7 +524,7 @@ fn write_errors_file(
                     module_id: module_ids
                         .get(ModuleKey::from_module(error.module()))
                         .unwrap(),
-                    location: PysaLocation::new(error.display_range().clone()),
+                    location: PysaLocation::from_text_range(error.range(), error.module()),
                     kind: error.error_kind(),
                     message: error.msg(),
                 })

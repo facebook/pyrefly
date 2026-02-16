@@ -6,7 +6,6 @@
  */
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -21,8 +20,8 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_info::JoinStyle;
-use pyrefly_types::types::Type;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::uniques::UniqueFactory;
@@ -95,6 +94,7 @@ use crate::table_for_each;
 use crate::table_try_for_each;
 use crate::types::globals::ImplicitGlobal;
 use crate::types::quantified::QuantifiedKind;
+use crate::types::types::AnyStyle;
 use crate::types::types::Var;
 
 /// The result of looking up a name. Similar to `NameReadInfo`, but
@@ -219,6 +219,7 @@ pub struct BindingsBuilder<'a> {
     pub lookup: &'a dyn LookupExport,
     pub sys_info: &'a SysInfo,
     pub class_count: u32,
+    type_alias_count: u32,
     await_context: AwaitContext,
     errors: &'a ErrorCollector,
     solver: &'a Solver,
@@ -257,6 +258,31 @@ impl Bindings {
         let mut res = 0;
         table_for_each!(&self.0.table, |x: &BindingEntry<_>| res += x.1.len());
         res
+    }
+
+    /// Create a minimal Bindings for testing purposes.
+    ///
+    /// This creates a fake module with the given name and no actual bindings,
+    /// which is useful for creating distinguishable CalcIds in tests.
+    #[cfg(test)]
+    pub fn for_test(name: &str) -> Self {
+        use std::path::PathBuf;
+
+        use pyrefly_python::module::Module;
+        use pyrefly_python::module_path::ModulePath;
+
+        let module_name = ModuleName::from_str(name);
+        let module_path = ModulePath::filesystem(PathBuf::from(format!("/test/{}.py", name)));
+        let contents = Arc::new(String::new());
+        let module_info = Module::new(module_name, module_path, contents);
+        Self(Arc::new(BindingsInner {
+            module_info,
+            table: Default::default(),
+            scope_trace: None,
+            unused_parameters: Vec::new(),
+            unused_imports: Vec::new(),
+            unused_variables: Vec::new(),
+        }))
     }
 
     pub fn display<K: Keyed>(&self, idx: Idx<K>) -> impl Display + '_
@@ -396,7 +422,7 @@ impl Bindings {
         let b = self.get(self.key_to_idx(&Key::ReturnType(ShortIdentifier::new(name))));
         if let Binding::ReturnType(box r) = b {
             r.kind.has_return_annotation()
-        } else if let Binding::Type(_) = b {
+        } else if matches!(b, Binding::Any(_)) {
             // This happens when we have an un-annotated return & the inference behavior is "skip and infer Any"
             false
         } else {
@@ -431,6 +457,7 @@ impl Bindings {
             solver,
             uniques,
             class_count: 0,
+            type_alias_count: 0,
             await_context: AwaitContext::General,
             has_docstring: Ast::has_docstring(&x),
             scopes: Scopes::module(x.range, enable_trace),
@@ -683,6 +710,22 @@ impl<'a> BindingsBuilder<'a> {
         self.table.get::<K>().0.idx_to_key(idx)
     }
 
+    fn idx_to_binding<K>(&self, idx: Idx<K>) -> Option<&K::Value>
+    where
+        K: Keyed,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        self.table.get::<K>().1.get(idx)
+    }
+
+    fn idx_to_binding_mut<K>(&mut self, idx: Idx<K>) -> Option<&mut K::Value>
+    where
+        K: Keyed,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        self.table.get_mut::<K>().1.get_mut(idx)
+    }
+
     /// Declare a `Key` as a usage, which can be used for name lookups. Like `idx_for_promise`,
     /// this is a promise to later provide a `Binding` corresponding this key.
     pub fn declare_current_idx(&mut self, key: Key) -> CurrentIdx {
@@ -760,10 +803,10 @@ impl<'a> BindingsBuilder<'a> {
     /// - we bind the function body (note that this isn't true for, e.g. a `@no_type_check` function!)
     /// - our scan of the function body is consistent with our traversal when binding
     pub fn last_statement_idx_for_implicit_return(&mut self, last: LastStmt, x: &Expr) -> Idx<Key> {
-        self.table.types.0.insert(match last {
+        self.idx_for_promise(match last {
             LastStmt::Expr => Key::StmtExpr(x.range()),
             LastStmt::With(_) => Key::ContextExpr(x.range()),
-            LastStmt::Match(match_range) => Key::MatchExhaustive(match_range),
+            LastStmt::Exhaustive(kind, range) => Key::Exhaustive(kind, range),
         })
     }
 
@@ -831,7 +874,7 @@ impl<'a> BindingsBuilder<'a> {
     fn inject_globals(&mut self) {
         for global in ImplicitGlobal::implicit_globals(self.has_docstring) {
             let key = Key::ImplicitGlobal(global.name().clone());
-            let idx = self.table.insert(key, Binding::Global(global.clone()));
+            let idx = self.insert_binding(key, Binding::Global(global.clone()));
             self.bind_name(global.name(), idx, FlowStyle::Other);
         }
     }
@@ -926,7 +969,7 @@ impl<'a> BindingsBuilder<'a> {
             if !visited_keys.insert(idx) {
                 return None;
             }
-            let binding = self.table.types.1.get(idx)?;
+            let binding = self.idx_to_binding(idx)?;
             match binding {
                 Binding::CompletedPartialType(inner_idx, _) => {
                     idx = *inner_idx;
@@ -939,6 +982,28 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 Binding::NameAssign { expr: value, .. } => {
                     return self.as_special_export_inner(value, visited_names, visited_keys);
+                }
+                Binding::Import(module_name, name, _) => {
+                    return self.lookup.is_special_export(*module_name, name);
+                }
+                Binding::Phi(_, branches) => {
+                    // Check all branches for a consistent special export (e.g. try/except
+                    // importing Literal from typing vs typing_extensions).
+                    let mut result = None;
+                    for branch in branches {
+                        let branch_result = self.special_export_from_binding_idx(
+                            branch.value_key,
+                            visited_names,
+                            visited_keys,
+                        );
+                        match (&result, &branch_result) {
+                            (None, _) => result = branch_result,
+                            (_, None) => {}
+                            (Some(a), Some(b)) if a == b => {}
+                            _ => return None,
+                        }
+                    }
+                    return result;
                 }
                 _ => return None,
             }
@@ -961,7 +1026,7 @@ impl<'a> BindingsBuilder<'a> {
             .scopes
             .validate_mutable_capture_and_get_key(Hashed::new(&name.id), kind)
         {
-            Ok(key) => Binding::Forward(self.table.types.0.insert(key)),
+            Ok(key) => Binding::Forward(self.idx_for_promise(key)),
             Err(error) => {
                 let should_suppress = matches!(kind, MutableCaptureKind::Nonlocal)
                     && self.scopes.in_module_or_class_top_level()
@@ -973,7 +1038,7 @@ impl<'a> BindingsBuilder<'a> {
                         error.message(name),
                     );
                 }
-                Binding::Type(Type::any_error())
+                Binding::Any(AnyStyle::Error)
             }
         };
         // Insert that type into the current flow.
@@ -1001,7 +1066,7 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.mark_import_used(name.key());
                 self.scopes.mark_variable_used(name.key());
                 NameLookupResult::Found {
-                    idx: self.table.types.0.insert(key),
+                    idx: self.idx_for_promise(key),
                     initialized,
                 }
             }
@@ -1039,9 +1104,9 @@ impl<'a> BindingsBuilder<'a> {
 
         // Build an index from Definition idx -> PartialTypeWithUpstreamsCompleted idx,
         // and create a map of the first-use graph to minimize allocations.
-        let def_to_upstreams: HashMap<Idx<Key>, Idx<Key>> =
+        let def_to_upstreams: SmallMap<Idx<Key>, Idx<Key>> =
             self.build_definition_to_upstreams_index();
-        let mut first_uses_to_add: HashMap<Idx<Key>, Vec<Idx<Key>>> = HashMap::new();
+        let mut first_uses_to_add: SmallMap<Idx<Key>, Vec<Idx<Key>>> = SmallMap::new();
 
         // Process each deferred binding, tracking what we find in the first-use graph.
         for deferred_binding in deferred {
@@ -1055,11 +1120,11 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     /// Build an index from Key::Definition idx to Key::PartialTypeWithUpstreamsCompleted idx.
-    fn build_definition_to_upstreams_index(&self) -> HashMap<Idx<Key>, Idx<Key>> {
-        let mut index = HashMap::new();
+    fn build_definition_to_upstreams_index(&self) -> SmallMap<Idx<Key>, Idx<Key>> {
+        let mut index = SmallMap::new();
         for (idx, _) in self.table.types.0.items() {
             if let Some(Binding::PartialTypeWithUpstreamsCompleted(def_idx, _)) =
-                self.table.types.1.get(idx)
+                self.idx_to_binding(idx)
             {
                 index.insert(*def_idx, idx);
             }
@@ -1077,7 +1142,7 @@ impl<'a> BindingsBuilder<'a> {
             return;
         }
         if let Some(Binding::PartialTypeWithUpstreamsCompleted(_, first_uses)) =
-            self.table.types.1.get_mut(partial_type_idx)
+            self.idx_to_binding_mut(partial_type_idx)
         {
             let mut vec: Vec<_> = std::mem::take(first_uses).into_vec();
             vec.extend(additional_first_uses);
@@ -1089,8 +1154,8 @@ impl<'a> BindingsBuilder<'a> {
     fn finalize_bound_name(
         &mut self,
         deferred: DeferredBoundName,
-        def_to_upstreams: &HashMap<Idx<Key>, Idx<Key>>,
-        first_uses_to_add: &mut HashMap<Idx<Key>, Vec<Idx<Key>>>,
+        def_to_upstreams: &SmallMap<Idx<Key>, Idx<Key>>,
+        first_uses_to_add: &mut SmallMap<Idx<Key>, Vec<Idx<Key>>>,
     ) {
         // Follow Forward chains to find any partial type
         let (default_idx, partial_type_info) =
@@ -1206,7 +1271,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             seen.insert(current);
 
-            match self.table.types.1.get(current) {
+            match self.idx_to_binding(current) {
                 Some(Binding::Forward(target)) => {
                     current = *target;
                 }
@@ -1223,7 +1288,7 @@ impl<'a> BindingsBuilder<'a> {
     /// Mark a CompletedPartialType as used by a specific binding.
     fn mark_first_use(&mut self, partial_type_idx: Idx<Key>, user_idx: Idx<Key>) {
         if let Some(Binding::CompletedPartialType(_, first_use)) =
-            self.table.types.1.get_mut(partial_type_idx)
+            self.idx_to_binding_mut(partial_type_idx)
         {
             *first_use = FirstUse::UsedBy(user_idx);
         }
@@ -1235,7 +1300,7 @@ impl<'a> BindingsBuilder<'a> {
     /// where we don't want to pin partial types. Should be called after `lookup_name`.
     pub fn mark_does_not_pin_if_first_use(&mut self, partial_type_idx: Idx<Key>) {
         if let Some(Binding::CompletedPartialType(_, first_use)) =
-            self.table.types.1.get_mut(partial_type_idx)
+            self.idx_to_binding_mut(partial_type_idx)
             && matches!(first_use, FirstUse::Undetermined)
         {
             *first_use = FirstUse::DoesNotPin;
@@ -1291,6 +1356,8 @@ impl<'a> BindingsBuilder<'a> {
         idx: Idx<Key>,
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
+        self.check_for_type_alias_redefinition(name, idx);
+        self.check_for_imported_final_reassignment(name, idx);
         let name = Hashed::new(name);
         let write_info = self
             .scopes
@@ -1306,6 +1373,42 @@ impl<'a> BindingsBuilder<'a> {
                 .record_bind_in_anywhere(name.into_key().clone(), range, idx);
         }
         write_info.annotation
+    }
+
+    fn check_for_type_alias_redefinition(&self, name: &Name, idx: Idx<Key>) {
+        let prev_idx = self.scopes.current_flow_idx(name);
+        if let Some(prev_idx) = prev_idx {
+            if matches!(
+                self.idx_to_binding(prev_idx),
+                Some(Binding::TypeAlias { .. })
+            ) {
+                self.error(
+                    self.idx_to_key(idx).range(),
+                    ErrorInfo::Kind(ErrorKind::Redefinition),
+                    format!("Cannot redefine existing type alias `{name}`",),
+                )
+            } else if matches!(self.idx_to_binding(idx), Some(Binding::TypeAlias { .. })) {
+                self.error(
+                    self.idx_to_key(idx).range(),
+                    ErrorInfo::Kind(ErrorKind::Redefinition),
+                    format!("Cannot redefine existing name `{name}` as a type alias",),
+                );
+            }
+        }
+    }
+
+    fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
+        let prev_idx = self.scopes.current_flow_idx(name);
+        if let Some(prev_idx) = prev_idx
+            && let Some(Binding::Import(module, original_name, _)) = self.idx_to_binding(prev_idx)
+            && self.lookup.is_final(*module, original_name)
+        {
+            self.error(
+                self.idx_to_key(idx).range(),
+                ErrorInfo::Kind(ErrorKind::BadAssignment),
+                format!("Cannot assign to `{name}` because it is imported as final"),
+            );
+        }
     }
 
     pub fn type_params(&mut self, x: &mut TypeParams) -> SmallSet<Name> {
@@ -1631,7 +1734,7 @@ impl<'a> BindingsBuilder<'a> {
     ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
         // Follow Forwards to get to the actual original binding.
         // Short circuit if there are too many forwards - it may mean there's a cycle.
-        let mut original_binding = self.table.types.1.get(original_idx);
+        let mut original_binding = self.idx_to_binding(original_idx);
         let mut gas = Gas::new(100);
         while let Some(
             Binding::Forward(fwd_idx)
@@ -1644,7 +1747,7 @@ impl<'a> BindingsBuilder<'a> {
                 return None;
             } else {
                 original_idx = *fwd_idx;
-                original_binding = self.table.types.1.get(original_idx);
+                original_binding = self.idx_to_binding(original_idx);
             }
         }
         Some((original_idx, original_binding))
@@ -1752,6 +1855,12 @@ impl<'a> BindingsBuilder<'a> {
         f(&mut checker, self);
         self.semantic_checker = checker;
     }
+
+    pub fn type_alias_index(&mut self) -> TypeAliasIndex {
+        let res = TypeAliasIndex(self.type_alias_count);
+        self.type_alias_count += 1;
+        res
+    }
 }
 
 impl<'a> SemanticSyntaxContext for BindingsBuilder<'a> {
@@ -1767,7 +1876,8 @@ impl<'a> SemanticSyntaxContext for BindingsBuilder<'a> {
     }
 
     fn future_annotations_or_stub(&self) -> bool {
-        self.module_info.source_type() == ruff_python_ast::PySourceType::Stub
+        self.scopes.has_future_annotations()
+            || self.module_info.source_type() == ruff_python_ast::PySourceType::Stub
     }
 
     fn report_semantic_error(&self, error: SemanticSyntaxError) {

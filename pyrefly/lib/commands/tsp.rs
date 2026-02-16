@@ -50,6 +50,7 @@ pub fn run_tsp(
             args.workspace_indexing_limit,
             false,
             surface,
+            None, // No path remapping for TSP
         );
 
         // Reuse the existing lsp_loop but with TSP initialization

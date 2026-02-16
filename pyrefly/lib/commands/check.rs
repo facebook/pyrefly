@@ -67,6 +67,7 @@ use crate::module::typeshed::stdlib_search_path;
 use crate::report;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
+use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::ProgressBarSubscriber;
@@ -380,7 +381,7 @@ impl OutputFormat {
             Self::MinText => Self::write_error_text_to_file(path, relative_to, errors, false),
             Self::FullText => Self::write_error_text_to_file(path, relative_to, errors, true),
             Self::Json => Self::write_error_json_to_file(path, relative_to, errors),
-            Self::Github => Self::write_error_github_to_file(path, relative_to, errors),
+            Self::Github => Self::write_error_github_to_file(path, errors),
             Self::OmitErrors => Ok(()),
         }
     }
@@ -390,54 +391,35 @@ impl OutputFormat {
             Self::MinText => Self::write_error_text_to_console(relative_to, errors, false),
             Self::FullText => Self::write_error_text_to_console(relative_to, errors, true),
             Self::Json => Self::write_error_json_to_console(relative_to, errors),
-            Self::Github => Self::write_error_github_to_console(relative_to, errors),
+            Self::Github => Self::write_error_github_to_console(errors),
             Self::OmitErrors => Ok(()),
         }
     }
 
-    fn write_error_github(
-        writer: &mut impl Write,
-        relative_to: &Path,
-        errors: &[Error],
-    ) -> anyhow::Result<()> {
+    fn write_error_github(writer: &mut impl Write, errors: &[Error]) -> anyhow::Result<()> {
         for error in errors {
-            if let Some(command) = github_actions_command(error, relative_to) {
+            if let Some(command) = github_actions_command(error) {
                 writeln!(writer, "{command}")?;
             }
         }
         Ok(())
     }
 
-    fn buffered_write_error_github(
-        writer: impl Write,
-        relative_to: &Path,
-        errors: &[Error],
-    ) -> anyhow::Result<()> {
+    fn buffered_write_error_github(writer: impl Write, errors: &[Error]) -> anyhow::Result<()> {
         let mut writer = BufWriter::new(writer);
-        Self::write_error_github(&mut writer, relative_to, errors)?;
+        Self::write_error_github(&mut writer, errors)?;
         writer.flush()?;
         Ok(())
     }
 
-    fn write_error_github_to_file(
-        path: &Path,
-        relative_to: &Path,
-        errors: &[Error],
-    ) -> anyhow::Result<()> {
+    fn write_error_github_to_file(path: &Path, errors: &[Error]) -> anyhow::Result<()> {
         let file = File::create(path)?;
-        Self::buffered_write_error_github(file, relative_to, errors)
+        Self::buffered_write_error_github(file, errors)
     }
 
-    fn write_error_github_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
-        Self::buffered_write_error_github(stdout(), relative_to, errors)
+    fn write_error_github_to_console(errors: &[Error]) -> anyhow::Result<()> {
+        Self::buffered_write_error_github(stdout(), errors)
     }
-}
-
-fn should_emit_github_errors() -> bool {
-    matches!(
-        std::env::var("GITHUB_ACTIONS"),
-        Ok(value) if value.eq_ignore_ascii_case("true")
-    )
 }
 
 fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
@@ -451,10 +433,10 @@ fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
     }
 }
 
-fn github_actions_command(error: &Error, relative_to: &Path) -> Option<String> {
+fn github_actions_command(error: &Error) -> Option<String> {
     let command = severity_to_github_command(error.severity())?;
     let range = error.display_range();
-    let file = github_actions_path(error.path().as_path(), relative_to);
+    let file = github_actions_path(error.path().as_path());
     let params = format!(
         "file={},line={},col={},endLine={},endColumn={},title={}",
         escape_workflow_property(&file),
@@ -471,18 +453,8 @@ fn github_actions_command(error: &Error, relative_to: &Path) -> Option<String> {
 const WORKFLOW_DATA_ENCODE_SET: &AsciiSet = &CONTROLS.add(b'%');
 const WORKFLOW_PROPERTY_ENCODE_SET: &AsciiSet = &WORKFLOW_DATA_ENCODE_SET.add(b':').add(b',');
 
-fn github_actions_path(path: &Path, relative_to: &Path) -> String {
-    let relative = if relative_to.as_os_str().is_empty() {
-        path
-    } else {
-        path.strip_prefix(relative_to).unwrap_or(path)
-    };
-    let candidate = if relative.as_os_str().is_empty() {
-        path
-    } else {
-        relative
-    };
-    let mut path_str = candidate.to_string_lossy().into_owned();
+fn github_actions_path(path: &Path) -> String {
+    let mut path_str = path.to_string_lossy().into_owned();
     if std::path::MAIN_SEPARATOR != '/' {
         path_str = path_str.replace(std::path::MAIN_SEPARATOR, "/");
     }
@@ -560,11 +532,6 @@ impl Handles {
                 .remove(&ModulePath::filesystem(file.to_path_buf()));
         }
     }
-}
-
-struct RequireLevels {
-    specified: Require,
-    default: Require,
 }
 
 async fn get_watcher_events(watcher: &mut Watcher) -> anyhow::Result<CategorizedEvents> {
@@ -929,9 +896,6 @@ impl CheckArgs {
                 .output_format
                 .write_errors_to_console(relative_to.as_path(), &shown_errors)?;
         }
-        if should_emit_github_errors() && self.output.output_format != OutputFormat::Github {
-            OutputFormat::Github.write_errors_to_console(relative_to.as_path(), &shown_errors)?;
-        }
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {
             print_error_counts(&shown_errors, limit);
@@ -1037,7 +1001,6 @@ impl CheckArgs {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -1066,13 +1029,13 @@ mod tests {
     }
 
     #[test]
-    fn github_actions_command_includes_relative_path_and_metadata() {
-        let cmd = github_actions_command(&sample_error(vec1!["bad".into()]), Path::new("/repo"))
+    fn github_actions_command_includes_full_path_and_metadata() {
+        let cmd = github_actions_command(&sample_error(vec1!["bad".into()]))
             .expect("should emit command");
         assert!(cmd.starts_with("::error "), "{cmd}");
         assert!(
-            cmd.contains("file=foo.py"),
-            "relative path expected, got {cmd}"
+            cmd.contains("file=/repo/foo.py"),
+            "full path expected, got {cmd}"
         );
         assert!(
             cmd.contains("title=Pyrefly bad-assignment"),
@@ -1087,18 +1050,18 @@ mod tests {
         let notice = sample_error(vec1!["bad".into()]).with_severity(Severity::Info);
         let ignored = sample_error(vec1!["bad".into()]).with_severity(Severity::Ignore);
         assert!(
-            github_actions_command(&warning, Path::new(""))
+            github_actions_command(&warning)
                 .unwrap()
                 .starts_with("::warning "),
             "warning severity not mapped"
         );
         assert!(
-            github_actions_command(&notice, Path::new(""))
+            github_actions_command(&notice)
                 .unwrap()
                 .starts_with("::notice "),
             "info severity not mapped"
         );
-        assert!(github_actions_command(&ignored, Path::new("")).is_none());
+        assert!(github_actions_command(&ignored).is_none());
     }
 
     #[test]
@@ -1114,9 +1077,9 @@ mod tests {
     fn github_output_format_writes_commands() {
         let errors = vec![sample_error(vec1!["bad".into()])];
         let mut buf = Vec::new();
-        OutputFormat::write_error_github(&mut buf, Path::new("/repo"), &errors).unwrap();
+        OutputFormat::write_error_github(&mut buf, &errors).unwrap();
         let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("::error file=foo.py"));
+        assert!(output.contains("::error file=/repo/foo.py"));
         assert!(output.ends_with("::bad\n"));
     }
 }

@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::min;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -35,6 +36,7 @@ use lsp_types::CodeActionParams;
 use lsp_types::CodeActionProviderCapability;
 use lsp_types::CodeActionResponse;
 use lsp_types::CodeActionTriggerKind;
+use lsp_types::CompletionItem;
 use lsp_types::CompletionList;
 use lsp_types::CompletionOptions;
 use lsp_types::CompletionParams;
@@ -58,6 +60,7 @@ use lsp_types::DocumentHighlightParams;
 use lsp_types::DocumentSymbol;
 use lsp_types::DocumentSymbolParams;
 use lsp_types::DocumentSymbolResponse;
+use lsp_types::FileEvent;
 use lsp_types::FileSystemWatcher;
 use lsp_types::FoldingRange;
 use lsp_types::FoldingRangeKind;
@@ -73,7 +76,6 @@ use lsp_types::HoverParams;
 use lsp_types::HoverProviderCapability;
 use lsp_types::ImplementationProviderCapability;
 use lsp_types::InitializeParams;
-use lsp_types::InitializeResult;
 use lsp_types::InlayHint;
 use lsp_types::InlayHintLabel;
 use lsp_types::InlayHintLabelPart;
@@ -111,6 +113,7 @@ use lsp_types::SignatureHelp;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::SignatureHelpParams;
 use lsp_types::SymbolInformation;
+use lsp_types::SymbolKind;
 use lsp_types::TextDocumentContentChangeEvent;
 use lsp_types::TextDocumentIdentifier;
 use lsp_types::TextDocumentPositionParams;
@@ -118,6 +121,7 @@ use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
 use lsp_types::TextEdit;
 use lsp_types::TypeDefinitionProviderCapability;
+use lsp_types::TypeHierarchyItem;
 use lsp_types::Unregistration;
 use lsp_types::UnregistrationParams;
 use lsp_types::Url;
@@ -165,11 +169,15 @@ use lsp_types::request::References;
 use lsp_types::request::RegisterCapability;
 use lsp_types::request::Rename;
 use lsp_types::request::Request as _;
+use lsp_types::request::ResolveCompletionItem;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::SemanticTokensRefresh;
 use lsp_types::request::Shutdown;
 use lsp_types::request::SignatureHelpRequest;
+use lsp_types::request::TypeHierarchyPrepare;
+use lsp_types::request::TypeHierarchySubtypes;
+use lsp_types::request::TypeHierarchySupertypes;
 use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
@@ -182,6 +190,7 @@ use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
@@ -195,6 +204,7 @@ use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::telemetry::SubTaskTelemetry;
 use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::telemetry::TelemetryDidChangeWatchedFilesStats;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
 use pyrefly_util::telemetry::TelemetryFileStats;
@@ -208,6 +218,7 @@ use ruff_text_size::TextSize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
@@ -215,6 +226,10 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::ModuleInfo;
+use crate::alt::types::class_metadata::ClassMro;
+use crate::binding::binding::BindingClass;
+use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyClassMro;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
 use crate::error::error::Error;
@@ -231,9 +246,11 @@ use crate::lsp::non_wasm::lsp::as_request;
 use crate::lsp::non_wasm::lsp::as_request_response_pair;
 use crate::lsp::non_wasm::lsp::new_notification;
 use crate::lsp::non_wasm::lsp::new_response;
+use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
+use crate::lsp::non_wasm::mru::CompletionMru;
 use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
@@ -246,11 +263,16 @@ use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
 use crate::lsp::non_wasm::stdlib::should_show_error_for_display_mode;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::type_hierarchy::collect_class_defs;
+use crate::lsp::non_wasm::type_hierarchy::find_class_at_position_in_ast;
+use crate::lsp::non_wasm::type_hierarchy::prepare_type_hierarchy_item;
 use crate::lsp::non_wasm::unsaved_file_tracker::UnsavedFileTracker;
 use crate::lsp::non_wasm::will_rename_files::will_rename_files;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
+use crate::lsp::wasm::completion::CompletionOptions as CompletionRequestOptions;
+use crate::lsp::wasm::completion::supports_snippet_completions;
 use crate::lsp::wasm::hover::get_hover;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
@@ -275,6 +297,7 @@ use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::PublishDiagnosticsSubscriber;
+use crate::types::class::ClassDefIndex;
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -327,10 +350,14 @@ pub trait TspInterface: Send + Sync {
 
     fn uris_pending_close(&self) -> &Mutex<HashMap<String, usize>>;
 
+    fn pending_watched_file_changes(&self) -> &Mutex<Vec<FileEvent>>;
+
     /// Get access to the recheck queue for async task processing
     fn run_recheck_queue(&self, telemetry: &impl Telemetry);
 
     fn stop_recheck_queue(&self);
+
+    fn dispatch_lsp_events(&self);
 
     /// Process an LSP event and return the next step
     fn process_event<'a>(
@@ -509,9 +536,11 @@ pub struct Server {
     /// operations we have yet to process.
     uris_pending_close: Mutex<HashMap<String, usize>>,
     workspaces: Arc<Workspaces>,
+    completion_mru: Mutex<CompletionMru>,
     outgoing_request_id: AtomicI32,
     outgoing_requests: Mutex<HashMap<RequestId, Request>>,
     filewatcher_registered: AtomicBool,
+    watched_patterns: Mutex<SmallSet<WatchPattern>>,
     version_info: Mutex<HashMap<PathBuf, i32>>,
     id: Uuid,
     /// The surface/entrypoint for the language server (`--from` CLI arg)
@@ -547,6 +576,10 @@ pub struct Server {
     /// When true, background indexing (populate_project/workspace_files) is deferred
     /// until we receive the config response, avoiding double-indexing at startup.
     awaiting_initial_workspace_config: AtomicBool,
+    /// Optional callback for remapping paths before converting to URIs.
+    path_remapper: Option<PathRemapper>,
+    /// Accumulated file watcher events waiting to be processed as a batch.
+    pending_watched_file_changes: Mutex<Vec<FileEvent>>,
 }
 
 pub fn shutdown_finish(connection: &Connection, id: RequestId) {
@@ -633,10 +666,27 @@ pub fn initialize_start(
 
 // Sends the initialize response and waits for the initialized notification.
 // If the connection is closed, or we receive an exit notification, returns false.
-pub fn initialize_finish(
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerCapabilitiesWithTypeHierarchy {
+    #[serde(flatten)]
+    base: ServerCapabilities,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    type_hierarchy_provider: Option<bool>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InitializeResult<C> {
+    capabilities: C,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    server_info: Option<ServerInfo>,
+}
+
+pub fn initialize_finish<C: Serialize>(
     connection: &Connection,
     id: RequestId,
-    capabilities: ServerCapabilities,
+    capabilities: C,
     server_info: Option<ServerInfo>,
 ) -> anyhow::Result<bool> {
     let result = InitializeResult {
@@ -697,24 +747,20 @@ pub fn initialize_finish(
 /// - priority_events includes those that should be handled as soon as possible (e.g. know that a
 ///   request is cancelled)
 /// - queued_events includes most of the other events.
-pub fn dispatch_lsp_events(
-    connection: &Connection,
-    lsp_queue: &LspQueue,
-    close_pending_uris: &Mutex<HashMap<String, usize>>,
-) {
-    for msg in &connection.receiver {
+pub fn dispatch_lsp_events(server: &Server) {
+    for msg in &server.connection().receiver {
         match msg {
             Message::Request(x) => {
                 if x.method == Shutdown::METHOD {
-                    shutdown_finish(connection, x.id);
+                    shutdown_finish(server.connection(), x.id);
                     break;
                 }
-                if lsp_queue.send(LspEvent::LspRequest(x)).is_err() {
+                if server.lsp_queue().send(LspEvent::LspRequest(x)).is_err() {
                     return;
                 }
             }
             Message::Response(x) => {
-                if lsp_queue.send(LspEvent::LspResponse(x)).is_err() {
+                if server.lsp_queue().send(LspEvent::LspResponse(x)).is_err() {
                     return;
                 }
             }
@@ -722,43 +768,71 @@ pub fn dispatch_lsp_events(
                 let send_result = if let Some(Ok(params)) =
                     as_notification::<DidOpenTextDocument>(&x)
                 {
-                    lsp_queue.send(LspEvent::DidOpenTextDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidOpenTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidChangeTextDocument>(&x) {
-                    lsp_queue.send(LspEvent::DidChangeTextDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidChangeTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidCloseTextDocument>(&x) {
-                    close_pending_uris
+                    server
+                        .uris_pending_close()
                         .lock()
                         .entry(params.text_document.uri.path().to_owned())
                         .and_modify(|pending| *pending += 1)
                         .or_insert(1);
-                    lsp_queue.send(LspEvent::DidCloseTextDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidCloseTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidSaveTextDocument>(&x) {
-                    lsp_queue.send(LspEvent::DidSaveTextDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidSaveTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidOpenNotebookDocument>(&x) {
-                    lsp_queue.send(LspEvent::DidOpenNotebookDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidOpenNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidChangeNotebookDocument>(&x) {
-                    lsp_queue.send(LspEvent::DidChangeNotebookDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidChangeNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidCloseNotebookDocument>(&x) {
-                    close_pending_uris
+                    server
+                        .uris_pending_close()
                         .lock()
                         .entry(params.notebook_document.uri.path().to_owned())
                         .and_modify(|pending| *pending += 1)
                         .or_insert(1);
-                    lsp_queue.send(LspEvent::DidCloseNotebookDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidCloseNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidSaveNotebookDocument>(&x) {
-                    lsp_queue.send(LspEvent::DidSaveNotebookDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidSaveNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidChangeWatchedFiles>(&x) {
-                    lsp_queue.send(LspEvent::DidChangeWatchedFiles(params))
+                    server
+                        .pending_watched_file_changes()
+                        .lock()
+                        .extend(params.changes);
+                    // In order to avoid sequential invalidations, we insert changes in the dispatch thread,
+                    // but drain these in the LSP thread. This coalesces changes on duplicates.
+                    server.lsp_queue().send(LspEvent::DrainWatchedFileChanges)
                 } else if let Some(Ok(params)) = as_notification::<DidChangeWorkspaceFolders>(&x) {
-                    lsp_queue.send(LspEvent::DidChangeWorkspaceFolders(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidChangeWorkspaceFolders(params))
                 } else if let Some(Ok(params)) = as_notification::<DidChangeConfiguration>(&x) {
-                    lsp_queue.send(LspEvent::DidChangeConfiguration(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidChangeConfiguration(params))
                 } else if let Some(Ok(params)) = as_notification::<Cancel>(&x) {
                     let id = match params.id {
                         NumberOrString::Number(i) => RequestId::from(i),
                         NumberOrString::String(s) => RequestId::from(s),
                     };
-                    lsp_queue.send(LspEvent::CancelRequest(id))
+                    server.lsp_queue().send(LspEvent::CancelRequest(id))
                 } else if as_notification::<Exit>(&x).is_some() {
                     // Send LspEvent::Exit and stop listening
                     break;
@@ -773,13 +847,13 @@ pub fn dispatch_lsp_events(
         }
     }
     // when the connection closes, make sure we send an exit to the other thread
-    let _ = lsp_queue.send(LspEvent::Exit);
+    let _ = server.lsp_queue().send(LspEvent::Exit);
 }
 
 pub fn capabilities(
     indexing_mode: IndexingMode,
     initialization_params: &InitializeParams,
-) -> ServerCapabilities {
+) -> ServerCapabilitiesWithTypeHierarchy {
     let augments_syntax_tokens = initialization_params
         .capabilities
         .text_document
@@ -797,7 +871,12 @@ pub fn capabilities(
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
-    ServerCapabilities {
+    let type_hierarchy_provider = match indexing_mode {
+        IndexingMode::None => None,
+        IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => Some(true),
+    };
+
+    let base = ServerCapabilities {
         position_encoding: Some(PositionEncodingKind::UTF16),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::INCREMENTAL,
@@ -810,13 +889,16 @@ pub fn capabilities(
             code_action_kinds: Some(vec![
                 CodeActionKind::QUICKFIX,
                 CodeActionKind::REFACTOR_EXTRACT,
+                CodeActionKind::REFACTOR_REWRITE,
                 CodeActionKind::new("refactor.move"),
                 CodeActionKind::REFACTOR_INLINE,
+                CodeActionKind::SOURCE_FIX_ALL,
             ]),
             ..Default::default()
         })),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some(vec![".".to_owned(), "'".to_owned(), "\"".to_owned()]),
+            resolve_provider: Some(true),
             ..Default::default()
         }),
         document_highlight_provider: Some(OneOf::Left(true)),
@@ -903,6 +985,11 @@ pub fn capabilities(
             None
         },
         ..Default::default()
+    };
+
+    ServerCapabilitiesWithTypeHierarchy {
+        base,
+        type_hierarchy_provider,
     }
 }
 
@@ -913,12 +1000,20 @@ pub enum ProcessEvent {
 
 const PYTHON_SECTION: &str = "python";
 
+struct TypeHierarchyTarget {
+    def_index: ClassDefIndex,
+    module_path: ModulePath,
+    name_range: TextRange,
+    is_object: bool,
+}
+
 pub fn lsp_loop(
     connection: Connection,
     initialization_params: InitializeParams,
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     build_system_blocking: bool,
+    path_remapper: Option<PathRemapper>,
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     info!("Reading messages");
@@ -932,14 +1027,11 @@ pub fn lsp_loop(
         workspace_indexing_limit,
         build_system_blocking,
         from,
+        path_remapper,
     );
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            dispatch_lsp_events(
-                &server.connection.0,
-                &server.lsp_queue,
-                &server.uris_pending_close,
-            );
+            dispatch_lsp_events(&server);
         });
         scope.spawn(|| {
             server.recheck_queue.run_until_stopped(&server, telemetry);
@@ -1009,6 +1101,24 @@ impl Server {
         }
         info!("Could not convert uri to filepath: {}", uri);
         None
+    }
+
+    fn break_completion_item_into_mru_parts(item: &CompletionItem) -> (&str, &str) {
+        let label = item.label.trim();
+        let auto_import_text = if item.additional_text_edits.is_some() {
+            item.detail.as_deref().unwrap_or("").trim()
+        } else {
+            ""
+        };
+        (label, auto_import_text)
+    }
+
+    fn record_completion_mru(&self, item: &CompletionItem) {
+        let (label, auto_import_text) = Self::break_completion_item_into_mru_parts(item);
+        if label.is_empty() {
+            return;
+        }
+        self.completion_mru.lock().record(label, auto_import_text);
     }
 
     fn extract_request_params_or_send_err_response<T>(
@@ -1191,8 +1301,15 @@ impl Server {
                 self.set_file_stats(params.notebook_document.uri.clone(), telemetry_event);
                 self.did_save(params.notebook_document.uri);
             }
-            LspEvent::DidChangeWatchedFiles(params) => {
-                self.did_change_watched_files(params, telemetry, telemetry_event);
+            LspEvent::DrainWatchedFileChanges => {
+                let changes = std::mem::take(&mut *self.pending_watched_file_changes.lock());
+                if !changes.is_empty() {
+                    self.did_change_watched_files(
+                        DidChangeWatchedFilesParams { changes },
+                        telemetry,
+                        telemetry_event,
+                    );
+                }
             }
             LspEvent::DidChangeWorkspaceFolders(params) => {
                 self.workspace_folders_changed(params, telemetry_event);
@@ -1218,6 +1335,7 @@ impl Server {
                 // we really don't want to implicitly cancel those.
                 const ONLY_ONCE: &[&str] = &[
                     Completion::METHOD,
+                    ResolveCompletionItem::METHOD,
                     SignatureHelpRequest::METHOD,
                     GotoDefinition::METHOD,
                     ProvideType::METHOD,
@@ -1364,6 +1482,15 @@ impl Server {
                             x.id,
                             self.completion(&transaction, params),
                         ));
+                    }
+                } else if let Some(params) = as_request::<ResolveCompletionItem>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<ResolveCompletionItem>(
+                            params, &x.id,
+                        )
+                    {
+                        self.record_completion_mru(&params);
+                        self.send_response(new_response(x.id, Ok(params)));
                     }
                 } else if let Some(params) = as_request::<DocumentHighlightRequest>(&x) {
                     if let Some(params) = self
@@ -1656,6 +1783,43 @@ impl Server {
                         self.set_file_stats(params.item.uri.clone(), telemetry_event);
                         self.async_call_hierarchy_outgoing_calls(x.id, &transaction, params);
                     }
+                } else if let Some(params) = as_request::<TypeHierarchyPrepare>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<TypeHierarchyPrepare>(
+                            params, &x.id,
+                        )
+                    {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry_event,
+                        );
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self.prepare_type_hierarchy(&transaction, params)),
+                        ));
+                    }
+                } else if let Some(params) = as_request::<TypeHierarchySupertypes>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<TypeHierarchySupertypes>(
+                            params, &x.id,
+                        )
+                    {
+                        self.set_file_stats(params.item.uri.clone(), telemetry_event);
+                        self.async_type_hierarchy_supertypes(x.id, &transaction, params);
+                    }
+                } else if let Some(params) = as_request::<TypeHierarchySubtypes>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<TypeHierarchySubtypes>(
+                            params, &x.id,
+                        )
+                    {
+                        self.set_file_stats(params.item.uri.clone(), telemetry_event);
+                        self.async_type_hierarchy_subtypes(x.id, &transaction, params);
+                    }
                 } else if &x.method == "pyrefly/textDocument/docstringRanges" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
                     self.set_file_stats(text_document.uri.clone(), telemetry_event);
@@ -1713,6 +1877,7 @@ impl Server {
         workspace_indexing_limit: usize,
         build_system_blocking: bool,
         surface: Option<String>,
+        path_remapper: Option<PathRemapper>,
     ) -> Self {
         let folders = if let Some(capability) = &initialize_params.capabilities.workspace
             && let Some(true) = capability.workspace_folders
@@ -1773,9 +1938,11 @@ impl Server {
             cancellation_handles: Mutex::new(HashMap::new()),
             uris_pending_close: Mutex::new(HashMap::new()),
             workspaces,
+            completion_mru: Mutex::new(CompletionMru::default()),
             outgoing_request_id: AtomicI32::new(1),
             outgoing_requests: Mutex::new(HashMap::new()),
             filewatcher_registered: AtomicBool::new(false),
+            watched_patterns: Mutex::new(SmallSet::new()),
             version_info: Mutex::new(HashMap::new()),
             id: Uuid::new_v4(),
             surface,
@@ -1785,6 +1952,8 @@ impl Server {
             do_not_commit_recheck: AtomicBool::new(false),
             // Will be set to true if we send a workspace/configuration request
             awaiting_initial_workspace_config: AtomicBool::new(should_request_workspace_settings),
+            path_remapper,
+            pending_watched_file_changes: Mutex::new(Vec::new()),
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
@@ -1999,20 +2168,6 @@ impl Server {
         );
     }
 
-    fn validate_in_memory_without_committing<'a>(
-        &'a self,
-        ide_transaction_manager: &mut TransactionManager<'a>,
-        telemetry: &mut TelemetryEvent,
-    ) {
-        let noncommittable_transaction =
-            ide_transaction_manager.non_committable_transaction(&self.state);
-        self.validate_in_memory_for_possibly_committable_transaction(
-            ide_transaction_manager,
-            Err(noncommittable_transaction),
-            telemetry,
-        );
-    }
-
     fn supports_completion_item_details(&self) -> bool {
         self.initialize_params
             .capabilities
@@ -2196,6 +2351,27 @@ impl Server {
                         self.populate_all_project_files_in_config(config, telemetry);
                     }
                 }
+            }
+        }
+    }
+
+    /// Populate project files for multiple configs
+    ///
+    /// Deduplication is handled by `indexed_configs`
+    /// Unlike `populate_project_files_if_necessary`, this performs the work directly
+    /// instead of creating a new task on the recheck queue, so it should only be
+    /// called from the recheck queue.
+    fn populate_project_files_for_configs(
+        &self,
+        configs: Vec<ArcId<ConfigFile>>,
+        telemetry: &mut TelemetryEvent,
+    ) {
+        for config in configs {
+            if config.skip_lsp_config_indexing {
+                continue;
+            }
+            if self.indexed_configs.lock().insert(config.dupe()) {
+                self.populate_all_project_files_in_config(config, telemetry);
             }
         }
     }
@@ -2477,21 +2653,14 @@ impl Server {
         self.open_files.write().insert(path.clone(), contents);
         self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
         if !subsequent_mutation {
-            // In order to improve perceived startup perf, when a file is opened, we run a
-            // non-committing transaction that indexes the file with default require level Exports.
-            // This is very fast but doesn't follow transitive dependencies, so completions are
-            // incomplete. This makes most IDE features available immediately while
-            // populate_{project,workspace}_files below runs a transaction at default require level
-            // Indexing in the background, generating a more complete index which becomes available
-            // a few seconds later.
-            //
-            // Note that this trick works only when a pyrefly config file is present. In the absence
-            // of a config file, all features become available when background indexing completes.
             info!(
                 "File {} opened, prepare to validate open files.",
                 path.display()
             );
-            self.validate_in_memory_without_committing(ide_transaction_manager, telemetry_event);
+            self.validate_in_memory_and_commit_if_possible(
+                ide_transaction_manager,
+                telemetry_event,
+            );
         }
         // Skip background indexing if we're still waiting for the initial workspace config.
         // The indexing will be triggered when we receive the config response.
@@ -2521,15 +2690,13 @@ impl Server {
             ));
         };
 
-        let mut version_info = self.version_info.lock();
+        let version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
         if version < *old_version {
             return Err(anyhow::anyhow!(
                 "new_version < old_version in `textDocument/didChange` notification: new_version={version:?} old_version={old_version:?} text_document.uri={uri:?}"
             ));
         }
-        version_info.insert(file_path.clone(), version);
-        // drop this to avoid deadlock
         drop(version_info);
         let mut lock = self.open_files.write();
         let Some(original) = lock.get_mut(&file_path) else {
@@ -2543,6 +2710,8 @@ impl Server {
             params.content_changes,
         )));
         drop(lock);
+        // Update version_info only after the mutation has fully succeeded.
+        self.version_info.lock().insert(file_path.clone(), version);
         if !subsequent_mutation {
             info!(
                 "File {} changed, prepare to validate open files.",
@@ -2576,13 +2745,16 @@ impl Server {
             ));
         };
 
-        let mut version_info = self.version_info.lock();
+        let version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
         if version < *old_version {
             return Err(anyhow::anyhow!(
                 "new_version < old_version in `notebookDocument/didChange` notification: new_version={version:?} old_version={old_version:?} notebook_document.uri={uri:?}"
             ));
         }
+        // Drop version_info before mutating state. We'll update it after the
+        // mutation succeeds so that version and state stay consistent on error.
+        drop(version_info);
 
         let mut lock = self.open_files.write();
         let Some(original) = lock.get_mut(&file_path) else {
@@ -2608,8 +2780,6 @@ impl Server {
         if let Some(metadata) = &params.change.metadata {
             notebook_document.metadata = Some(metadata.clone());
         }
-        version_info.insert(file_path.clone(), version);
-        drop(version_info);
         notebook_document.version = version;
         // Changes to cells
         if let Some(change) = &params.change.cells {
@@ -2628,12 +2798,24 @@ impl Server {
                 // Do not remove the cells from `open_notebook_cells`, since
                 // incoming requests could still reference them.
                 if delete_count > 0 {
-                    notebook_document.cells.drain(start..start + delete_count);
+                    let end = min(start + delete_count, notebook_document.cells.len());
+                    notebook_document.cells.drain(start..end);
                 }
                 // Insert new cells
                 if let Some(new_cells) = &structure.array.cells {
+                    let cells = &mut notebook_document.cells;
                     for (i, cell) in new_cells.iter().enumerate() {
-                        notebook_document.cells.insert(start + i, cell.clone());
+                        let next_index = start + i;
+                        if next_index == cells.len() {
+                            cells.push(cell.clone());
+                        } else if next_index > cells.len() {
+                            return Err(anyhow::anyhow!(
+                                "Attempted to update notebook document, but cells are missing. Tried to add cell at index {next_index} but only {} cells exist.",
+                                cells.len()
+                            ));
+                        } else {
+                            cells.insert(next_index, cell.clone());
+                        }
                     }
                 }
                 // Set contents for new cells
@@ -2686,6 +2868,10 @@ impl Server {
         let new_notebook = Arc::new(LspNotebook::new(ruff_notebook, notebook_document));
         *original = Arc::new(LspFile::Notebook(new_notebook));
         drop(lock);
+        // Update version_info only after the mutation has fully succeeded, so
+        // that on error the version stays at the old value and subsequent
+        // notifications operate against consistent state.
+        self.version_info.lock().insert(file_path.clone(), version);
 
         if !subsequent_mutation {
             info!(
@@ -2725,6 +2911,41 @@ impl Server {
         if events.is_empty() {
             return;
         }
+
+        // Log the files that changed
+        let total = events.created.len()
+            + events.modified.len()
+            + events.removed.len()
+            + events.unknown.len();
+        info!(
+            "[Pyrefly] DidChangeWatchedFiles: {} file(s) changed ({} created, {} modified, {} removed, {} unknown)",
+            total,
+            events.created.len(),
+            events.modified.len(),
+            events.removed.len(),
+            events.unknown.len()
+        );
+        for path in &events.created {
+            info!("[Pyrefly]   created: {}", path.display());
+        }
+        for path in &events.modified {
+            info!("[Pyrefly]   modified: {}", path.display());
+        }
+        for path in &events.removed {
+            info!("[Pyrefly]   removed: {}", path.display());
+        }
+        for path in &events.unknown {
+            info!("[Pyrefly]   unknown: {}", path.display());
+        }
+
+        // Record the files that changed for telemetry
+        telemetry_event.set_did_change_watched_files_stats(TelemetryDidChangeWatchedFilesStats {
+            created: events.created.clone(),
+            modified: events.modified.clone(),
+            removed: events.removed.clone(),
+            unknown: events.unknown.clone(),
+        });
+
         let should_requery_build_system = should_requery_build_system(&events);
 
         // Rewatch files if necessary (config changed, files added/removed, etc.)
@@ -2880,23 +3101,22 @@ impl Server {
         if modified {
             self.invalidate_config_and_validate_in_memory();
         }
-        if was_awaiting_initial_config {
-            // This is the initial config response, so we can trigger background indexing.
-            // Find unique configs for all currently open files and populate them.
-            if self.indexing_mode != IndexingMode::None {
-                // ArcId<> does hashing and equality based on the pointer address
-                #[allow(clippy::mutable_key_type)]
-                let configs: HashSet<_> = self
-                    .open_files
-                    .read()
-                    .keys()
-                    .filter_map(|path| path.parent())
-                    .filter_map(|dir| self.state.config_finder().directory(dir))
-                    .collect();
-                for config in configs {
-                    self.populate_project_files_if_necessary(Some(config), telemetry_event);
-                }
-            }
+        if was_awaiting_initial_config && self.indexing_mode != IndexingMode::None {
+            // We need to resolve configs after invalidation completes, so enqueue that
+            // calculation in the recheck queue to ensure ordering.
+            self.recheck_queue.queue_task(
+                TelemetryEventKind::PopulateProjectFiles,
+                Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
+                    let configs: Vec<_> = server
+                        .open_files
+                        .read()
+                        .keys()
+                        .filter_map(|path| path.parent())
+                        .filter_map(|dir| server.state.config_finder().directory(dir))
+                        .collect();
+                    server.populate_project_files_for_configs(configs, telemetry_event);
+                }),
+            );
             self.populate_workspace_files_if_necessary(telemetry_event);
         }
     }
@@ -3051,6 +3271,7 @@ impl Server {
                 Ok(None),
             ));
         };
+        let path_remapper = self.path_remapper.clone();
         self.async_find_from_definition_helper(
             request_id,
             transaction,
@@ -3093,7 +3314,7 @@ impl Server {
             move |results: Vec<(ModuleInfo, Vec<TextRange>)>| {
                 let mut lsp_targets = Vec::new();
                 for (info, ranges) in results {
-                    if let Some(uri) = module_info_to_uri(&info) {
+                    if let Some(uri) = module_info_to_uri(&info, path_remapper.as_ref()) {
                         for range in ranges {
                             lsp_targets.push(Location {
                                 uri: uri.clone(),
@@ -3121,7 +3342,7 @@ impl Server {
         params: CompletionParams,
     ) -> anyhow::Result<CompletionResponse> {
         let uri = &params.text_document_position.text_document.uri;
-        let (handle, import_format) = match self
+        let (handle, lsp_config) = match self
             .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(Completion::METHOD))
         {
             None => {
@@ -3130,16 +3351,37 @@ impl Server {
                     items: Vec::new(),
                 }));
             }
-            Some((x, config)) => (x, config.and_then(|c| c.import_format).unwrap_or_default()),
+            Some((x, config)) => (x, config),
         };
+        let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
+        let complete_function_parens = lsp_config
+            .and_then(|c| c.complete_function_parens)
+            .unwrap_or(false);
+        let completion_options = CompletionRequestOptions {
+            supports_completion_item_details: self.supports_completion_item_details(),
+            complete_function_parens,
+            supports_snippet_completions: supports_snippet_completions(
+                &self.initialize_params.capabilities,
+            ),
+        };
+        let mru_snapshot = self.completion_mru.lock().clone();
         let (items, is_incomplete) = transaction
             .get_module_info(&handle)
             .map(|info| {
-                transaction.completion_with_incomplete(
+                transaction.completion_with_incomplete_mru(
                     &handle,
                     self.from_lsp_position(uri, &info, params.text_document_position.position),
                     import_format,
-                    self.supports_completion_item_details(),
+                    completion_options,
+                    |item| {
+                        let (label, auto_import_text) =
+                            Self::break_completion_item_into_mru_parts(item);
+                        if label.is_empty() {
+                            None
+                        } else {
+                            mru_snapshot.index_for(label, auto_import_text)
+                        }
+                    },
                 )
             })
             .unwrap_or_default();
@@ -3162,9 +3404,18 @@ impl Server {
         let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
         let module_info = transaction.get_module_info(&handle)?;
         let range = self.from_lsp_range(uri, &module_info, params.range);
+        let only_kinds = params.context.only.as_ref();
+        let allow_quickfix = only_kinds
+            .is_none_or(|kinds| kinds.iter().any(|kind| kind == &CodeActionKind::QUICKFIX));
+        let allow_fix_all = only_kinds.is_none_or(|kinds| {
+            kinds
+                .iter()
+                .any(|kind| kind == &CodeActionKind::SOURCE_FIX_ALL)
+        });
         let mut actions = Vec::new();
-        if let Some(quickfixes) =
-            transaction.local_quickfix_code_actions_sorted(&handle, range, import_format)
+        if allow_quickfix
+            && let Some(quickfixes) =
+                transaction.local_quickfix_code_actions_sorted(&handle, range, import_format)
         {
             actions.extend(quickfixes.into_iter().filter_map(
                 |(title, info, range, insert_text)| {
@@ -3189,6 +3440,32 @@ impl Server {
                     }))
                 },
             ));
+        }
+        if allow_fix_all && let Some(edits) = transaction.redundant_cast_fix_all_edits(&handle) {
+            let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+            for (module, edit_range, new_text) in edits {
+                let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
+                    module,
+                    range: edit_range,
+                }) else {
+                    continue;
+                };
+                changes.entry(lsp_location.uri).or_default().push(TextEdit {
+                    range: lsp_location.range,
+                    new_text,
+                });
+            }
+            if !changes.is_empty() {
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: "Remove all redundant casts".to_owned(),
+                    kind: Some(CodeActionKind::SOURCE_FIX_ALL),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some(changes),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }));
+            }
         }
         // Optimization: do not calculate refactors for automated codeactions since they're expensive
         // If we had lazy code actions, we could keep them.
@@ -3232,7 +3509,13 @@ impl Server {
         if let Some(refactors) = transaction.extract_variable_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
+        if let Some(refactors) = transaction.invert_boolean_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
         if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.extract_superclass_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.inline_variable_code_actions(&handle, range) {
@@ -3261,6 +3544,9 @@ impl Server {
             push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.introduce_parameter_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.convert_star_import_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
         if let Some(action) =
@@ -3377,6 +3663,7 @@ impl Server {
         position: Position,
         map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) {
+        let path_remapper = self.path_remapper.clone();
         self.async_find_from_definition_helper(
             request_id,
             transaction,
@@ -3405,7 +3692,7 @@ impl Server {
                 // Transform ModuleInfo -> Url and TextRange -> Range
                 let mut locations = Vec::new();
                 for (info, ranges) in results {
-                    if let Some(uri) = module_info_to_uri(&info) {
+                    if let Some(uri) = module_info_to_uri(&info, path_remapper.as_ref()) {
                         locations.push((uri, ranges.into_map(|range| info.to_lsp_range(range))));
                     };
                 }
@@ -3939,14 +4226,6 @@ impl Server {
                 ..
             }) => {
                 let relative_pattern_support = relative_pattern_support.is_some_and(|b| b);
-                if self.filewatcher_registered.load(Ordering::Relaxed) {
-                    self.send_request::<UnregisterCapability>(UnregistrationParams {
-                        unregisterations: Vec::from([Unregistration {
-                            id: Self::FILEWATCHER_ID.to_owned(),
-                            method: DidChangeWatchedFiles::METHOD.to_owned(),
-                        }]),
-                    });
-                }
                 let configs = self.workspaces.loaded_configs.clean_and_get_configs();
                 let mut glob_patterns = SmallSet::new();
                 for root in &roots {
@@ -3960,15 +4239,43 @@ impl Server {
                     });
                 }
                 glob_patterns.extend(ConfigFile::get_paths_to_watch(&configs));
-                let watchers = glob_patterns
+                let mut watched_patterns = self.watched_patterns.lock();
+
+                let should_rewatch = watched_patterns.difference(&glob_patterns).next().is_some();
+                // Serialization is the most expensive part of this function, so avoid rewatching
+                // when we can.
+                let (new_patterns, should_rewatch) = if should_rewatch {
+                    *watched_patterns = glob_patterns.clone();
+                    // we should clear out all of our watchers and rewatch everything
+                    (glob_patterns, true)
+                } else {
+                    // we only want to watch new patterns
+                    let new_patterns = glob_patterns
+                        .difference(&watched_patterns)
+                        .cloned()
+                        .collect();
+                    watched_patterns.extend(glob_patterns);
+                    (new_patterns, false)
+                };
+
+                let watchers = new_patterns
                     .into_iter()
-                    .map(|p| Self::get_pattern_to_watch(p, relative_pattern_support))
+                    .map(|p| Self::get_pattern_to_watch(p.to_owned(), relative_pattern_support))
                     .map(|glob_pattern| FileSystemWatcher {
                         glob_pattern,
                         kind: Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete),
                     })
                     .collect::<Vec<_>>();
+
                 pattern_count = watchers.len();
+                if self.filewatcher_registered.load(Ordering::Relaxed) && should_rewatch {
+                    self.send_request::<UnregisterCapability>(UnregistrationParams {
+                        unregisterations: Vec::from([Unregistration {
+                            id: Self::FILEWATCHER_ID.to_owned(),
+                            method: DidChangeWatchedFiles::METHOD.to_owned(),
+                        }]),
+                    });
+                }
                 self.send_request::<RegisterCapability>(RegistrationParams {
                     registrations: Vec::from([Registration {
                         id: Self::FILEWATCHER_ID.to_owned(),
@@ -4092,6 +4399,7 @@ impl Server {
             &self.open_files,
             params,
             supports_document_changes,
+            self.path_remapper.as_ref(),
         )
     }
 
@@ -4100,7 +4408,7 @@ impl Server {
             module: definition_module_info,
             range,
         } = location;
-        let mut uri = module_info_to_uri(definition_module_info)?;
+        let mut uri = module_info_to_uri(definition_module_info, self.path_remapper.as_ref())?;
         if let Some(cell_idx) = definition_module_info.to_cell_for_lsp(range.start()) {
             // We only have this information for open notebooks, without being provided the URI from the client
             // we don't know what URI refers to which cell.
@@ -4165,6 +4473,7 @@ impl Server {
             >(request_id, Ok(None)));
         };
 
+        let path_remapper = self.path_remapper.clone();
         // The CallHierarchyItem we receive is already at the definition position
         // (thanks to prepare_call_hierarchy doing the go-to-definition step).
         self.async_find_from_definition_helper(
@@ -4184,7 +4493,7 @@ impl Server {
                     &target_def,
                 )
             },
-            transform_incoming_calls,
+            move |callers| transform_incoming_calls(callers, path_remapper.as_ref()),
         );
     }
 
@@ -4260,7 +4569,7 @@ impl Server {
 
         for def in definitions {
             // Get the URI for the definition's module
-            let Some(def_uri) = module_info_to_uri(&def.module) else {
+            let Some(def_uri) = module_info_to_uri(&def.module, self.path_remapper.as_ref()) else {
                 continue;
             };
 
@@ -4283,6 +4592,282 @@ impl Server {
         }
         None
     }
+
+    fn type_hierarchy_target_from_definition(
+        transaction: &mut CancellableTransaction,
+        handle: &Handle,
+        definition: &FindDefinitionItemWithDocstring,
+    ) -> Option<TypeHierarchyTarget> {
+        let ast = transaction.as_ref().get_ast(handle)?;
+        let class_def = find_class_at_position_in_ast(&ast, definition.definition_range.start())?;
+        let bindings = transaction.as_ref().get_bindings(handle)?;
+        let key = KeyClass(ShortIdentifier::new(&class_def.name));
+        let class_idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+        let def_index = match bindings.get(class_idx) {
+            BindingClass::ClassDef(class_binding) => class_binding.def_index,
+            BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
+        };
+        Some(TypeHierarchyTarget {
+            def_index,
+            module_path: definition.module.path().dupe(),
+            name_range: class_def.name.range,
+            is_object: class_def.name.id == "object"
+                && definition.module.name().as_str() == "builtins",
+        })
+    }
+
+    fn type_hierarchy_candidate_handles(
+        transaction: &mut CancellableTransaction,
+        handle: &Handle,
+        definition: &FindDefinitionItemWithDocstring,
+        target: &TypeHierarchyTarget,
+    ) -> Result<Vec<Handle>, Cancelled> {
+        let definition_location =
+            TextRangeWithModule::new(definition.module.dupe(), target.name_range);
+        let candidate_handles = transaction.process_rdeps_with_definition(
+            handle.sys_info(),
+            &definition_location,
+            |_, handle, _| Some(handle.dupe()),
+        )?;
+        let mut handles = Vec::new();
+        let mut handle_paths = HashSet::new();
+        for candidate in candidate_handles {
+            if handle_paths.insert(candidate.path().dupe()) {
+                handles.push(candidate);
+            }
+        }
+        Ok(handles)
+    }
+
+    fn type_hierarchy_subtype_items(
+        transaction: &CancellableTransaction,
+        target: &TypeHierarchyTarget,
+        handles: Vec<Handle>,
+        path_remapper: Option<&PathRemapper>,
+    ) -> Vec<TypeHierarchyItem> {
+        let mut items = Vec::new();
+        let mut seen: HashSet<(ModulePath, TextRange)> = HashSet::new();
+        for candidate in handles {
+            let Some(ast) = transaction.as_ref().get_ast(&candidate) else {
+                continue;
+            };
+            let Some(solutions) = transaction.as_ref().get_solutions(&candidate) else {
+                continue;
+            };
+            let Some(bindings) = transaction.as_ref().get_bindings(&candidate) else {
+                continue;
+            };
+            let Some(module_info) = transaction.as_ref().get_module_info(&candidate) else {
+                continue;
+            };
+            let Some(candidate_uri) = module_info_to_uri(&module_info, path_remapper) else {
+                continue;
+            };
+
+            let mut class_defs = Vec::new();
+            collect_class_defs(ast.body.as_slice(), &mut class_defs);
+            for class_def in class_defs {
+                let key = KeyClass(ShortIdentifier::new(&class_def.name));
+                let Some(class_idx) = bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+                    continue;
+                };
+                let class_def_index = match bindings.get(class_idx) {
+                    BindingClass::ClassDef(class_binding) => class_binding.def_index,
+                    BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
+                };
+                if class_def_index == target.def_index && module_info.path() == &target.module_path
+                {
+                    continue;
+                }
+                let is_subtype = if target.is_object {
+                    true
+                } else {
+                    let mro = solutions.get(&KeyClassMro(class_def_index));
+                    matches!(
+                        mro.as_ref(),
+                        ClassMro::Resolved(ancestors)
+                            if ancestors
+                                .iter()
+                                .any(|ancestor| {
+                                    let ancestor_class = ancestor.class_object();
+                                    ancestor_class.index() == target.def_index
+                                        && ancestor_class.module_path() == &target.module_path
+                                })
+                    )
+                };
+                if !is_subtype {
+                    continue;
+                }
+                if !seen.insert((module_info.path().dupe(), class_def.range())) {
+                    continue;
+                }
+                items.push(prepare_type_hierarchy_item(
+                    class_def,
+                    &module_info,
+                    candidate_uri.clone(),
+                ));
+            }
+        }
+        items
+    }
+
+    /// Prepares type hierarchy by validating that the symbol at the cursor is a class.
+    fn prepare_type_hierarchy(
+        &self,
+        transaction: &Transaction<'_>,
+        params: lsp_types::TypeHierarchyPrepareParams,
+    ) -> Option<Vec<TypeHierarchyItem>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, None)?;
+        let module_info = transaction.get_module_info(&handle)?;
+        let position = self.from_lsp_position(
+            uri,
+            &module_info,
+            params.text_document_position_params.position,
+        );
+
+        let definitions = transaction.find_definition(&handle, position, FindPreference::default());
+
+        for def in definitions {
+            let Some(def_uri) = module_info_to_uri(&def.module, self.path_remapper.as_ref()) else {
+                continue;
+            };
+            let Some(def_handle) = self.make_handle_if_enabled(&def_uri, None) else {
+                continue;
+            };
+            let Some(ast) = transaction.get_ast(&def_handle) else {
+                continue;
+            };
+            if let Some(class_def) =
+                find_class_at_position_in_ast(&ast, def.definition_range.start())
+            {
+                let item = prepare_type_hierarchy_item(class_def, &def.module, def_uri);
+                return Some(vec![item]);
+            }
+        }
+        None
+    }
+
+    fn async_type_hierarchy_supertypes<'a>(
+        &'a self,
+        request_id: RequestId,
+        transaction: &Transaction<'a>,
+        params: lsp_types::TypeHierarchySupertypesParams,
+    ) {
+        let uri = params.item.uri.clone();
+        let Some(handle) = self.make_handle_if_enabled(&uri, Some(TypeHierarchySupertypes::METHOD))
+        else {
+            return self.send_response(new_response::<Option<Vec<TypeHierarchyItem>>>(
+                request_id,
+                Ok(None),
+            ));
+        };
+
+        let path_remapper = self.path_remapper.clone();
+        let type_hierarchy_item_from_class_type =
+            move |class_type: &crate::types::class::ClassType| -> Option<TypeHierarchyItem> {
+                let class = class_type.class_object();
+                let module = class.module();
+                let uri = module_info_to_uri(module, path_remapper.as_ref())?;
+                let range = module.to_lsp_range(class.range());
+                Some(TypeHierarchyItem {
+                    name: class.name().to_string(),
+                    kind: SymbolKind::CLASS,
+                    tags: None,
+                    detail: Some(format!("{}.{}", module.name(), class.name())),
+                    uri,
+                    range,
+                    selection_range: range,
+                    data: None,
+                })
+            };
+
+        self.async_find_from_definition_helper(
+            request_id,
+            transaction,
+            handle,
+            &uri,
+            params.item.selection_range.start,
+            FindPreference::default(),
+            move |transaction, handle, definition| {
+                transaction.run(&[handle.dupe()], Require::Everything)?;
+                let Some(target) =
+                    Self::type_hierarchy_target_from_definition(transaction, handle, &definition)
+                else {
+                    return Ok(Vec::new());
+                };
+                let Some(solutions) = transaction.as_ref().get_solutions(handle) else {
+                    return Ok(Vec::new());
+                };
+
+                let mro = solutions.get(&KeyClassMro(target.def_index));
+                let stdlib = transaction.as_ref().get_stdlib(handle);
+                let mut items = Vec::new();
+                if let ClassMro::Resolved(ancestors) = mro.as_ref() {
+                    for ancestor in ancestors {
+                        if let Some(item) = type_hierarchy_item_from_class_type(ancestor) {
+                            items.push(item);
+                        }
+                    }
+                    if !target.is_object
+                        && let Some(item) = type_hierarchy_item_from_class_type(stdlib.object())
+                    {
+                        items.push(item);
+                    }
+                }
+                Ok(items)
+            },
+            |items| items,
+        );
+    }
+
+    fn async_type_hierarchy_subtypes<'a>(
+        &'a self,
+        request_id: RequestId,
+        transaction: &Transaction<'a>,
+        params: lsp_types::TypeHierarchySubtypesParams,
+    ) {
+        let uri = params.item.uri.clone();
+        let Some(handle) = self.make_handle_if_enabled(&uri, Some(TypeHierarchySubtypes::METHOD))
+        else {
+            return self.send_response(new_response::<Option<Vec<TypeHierarchyItem>>>(
+                request_id,
+                Ok(None),
+            ));
+        };
+
+        let path_remapper = self.path_remapper.clone();
+        self.async_find_from_definition_helper(
+            request_id,
+            transaction,
+            handle,
+            &uri,
+            params.item.selection_range.start,
+            FindPreference::default(),
+            move |transaction, handle, definition| {
+                transaction.run(&[handle.dupe()], Require::Everything)?;
+                let Some(target) =
+                    Self::type_hierarchy_target_from_definition(transaction, handle, &definition)
+                else {
+                    return Ok(Vec::new());
+                };
+                let handles = Self::type_hierarchy_candidate_handles(
+                    transaction,
+                    handle,
+                    &definition,
+                    &target,
+                )?;
+                transaction.run(&handles, Require::Everything)?;
+                Ok(Self::type_hierarchy_subtype_items(
+                    transaction,
+                    &target,
+                    handles,
+                    path_remapper.as_ref(),
+                ))
+            },
+            |items| items,
+        );
+    }
 }
 
 impl TspInterface for Server {
@@ -4300,6 +4885,14 @@ impl TspInterface for Server {
 
     fn uris_pending_close(&self) -> &Mutex<HashMap<String, usize>> {
         &self.uris_pending_close
+    }
+
+    fn pending_watched_file_changes(&self) -> &Mutex<Vec<FileEvent>> {
+        &self.pending_watched_file_changes
+    }
+
+    fn dispatch_lsp_events(&self) {
+        dispatch_lsp_events(self);
     }
 
     fn run_recheck_queue(&self, telemetry: &impl Telemetry) {

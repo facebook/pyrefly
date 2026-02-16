@@ -810,6 +810,14 @@ impl ConfigFile {
                  self.root.infer_with_first_use.unwrap())
     }
 
+    pub fn tensor_shapes(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_tensor_shapes, path)
+            .unwrap_or_else(||
+                 // we can use unwrap here, because the value in the root config must
+                 // be set in `ConfigFile::configure()`.
+                 self.root.tensor_shapes.unwrap())
+    }
+
     pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
         self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path)
             .unwrap_or_else(||
@@ -1069,6 +1077,10 @@ impl ConfigFile {
             self.root.infer_with_first_use = Some(true);
         }
 
+        if self.root.tensor_shapes.is_none() {
+            self.root.tensor_shapes = Some(false);
+        }
+
         let tools_from_permissive_ignores = match self.root.permissive_ignores {
             Some(true) => Some(Tool::all()),
             Some(false) => Some(Tool::default_enabled()),
@@ -1136,9 +1148,9 @@ impl ConfigFile {
                     ]),
                     true,
                     vec![
-                        "python/typeshed_experimental".into(),
-                        "python/typeshed_internal".into(),
-                        "python/pyre_temporary_stubs".into(),
+                        "../python/typeshed_experimental".into(),
+                        "../python/typeshed_internal".into(),
+                        "../python/pyre_temporary_stubs".into(),
                     ],
                 ));
             }
@@ -1442,6 +1454,7 @@ mod tests {
                     disable_type_errors_in_ide: None,
                     ignore_errors_in_generated_code: Some(true),
                     infer_with_first_use: None,
+                    tensor_shapes: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
                     ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
@@ -1462,6 +1475,7 @@ mod tests {
                         disable_type_errors_in_ide: None,
                         ignore_errors_in_generated_code: Some(false),
                         infer_with_first_use: Some(false),
+                        tensor_shapes: None,
                         replace_imports_with_any: Some(Vec::new()),
                         ignore_missing_imports: Some(Vec::new()),
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
@@ -1848,6 +1862,7 @@ baseline = "baseline.json"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
@@ -2157,6 +2172,7 @@ baseline = "baseline.json"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
@@ -2191,6 +2207,7 @@ baseline = "baseline.json"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,

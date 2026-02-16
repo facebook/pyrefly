@@ -37,7 +37,7 @@ jobs:
         prefix-key: pyrefly
     - uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: nightly-2025-09-14
+        toolchain: nightly-2025-12-05
         components: clippy, rustfmt
     - run: cargo fmt -- --check
     - run: cargo clippy --release
@@ -50,5 +50,6 @@ jobs:
         JQ: jq
         TEST_PY: ${{ github.workspace }}/test.py
         PYREFLY_PY: ${{ github.workspace }}/pyrefly/python
+        TENSOR_TEST_ROOT: ${{ github.workspace }}/test/tensor_shapes
       run: env -u GITHUB_ACTIONS scrut test test
       if: ${{ matrix.os != 'windows-latest' }}

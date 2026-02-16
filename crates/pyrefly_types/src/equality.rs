@@ -6,11 +6,13 @@
  */
 
 use std::hash::Hash;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use compact_str::CompactString;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::qname::QName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::uniques::Unique;
@@ -147,8 +149,11 @@ impl TypeEq for String {}
 impl TypeEq for CompactString {}
 impl TypeEq for str {}
 
+impl<T> TypeEq for PhantomData<T> {}
+
 impl TypeEq for Name {}
 impl TypeEq for ModuleName {}
+impl TypeEq for ModulePath {}
 impl TypeEq for TextRange {}
 impl TypeEq for ShortIdentifier {}
 
@@ -290,12 +295,12 @@ mod tests {
     use crate::callable::Function;
     use crate::callable::FunctionKind;
     use crate::callable::ParamList;
+    use crate::heap::TypeHeap;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedKind;
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
     use crate::types::Forallable;
-    use crate::types::TParam;
     use crate::types::TParams;
     use crate::types::Type;
 
@@ -317,6 +322,12 @@ mod tests {
 
     #[derive(TypeEq, PartialEq, Eq, Debug)]
     struct Generic<T>(T);
+
+    #[derive(TypeEq, PartialEq, Eq, Debug)]
+    enum WithLifetime<'t> {
+        Unused(std::marker::PhantomData<&'t ()>),
+        Value(i32),
+    }
 
     #[test]
     fn test_type_eq() {
@@ -362,13 +373,21 @@ mod tests {
         );
         assert!(Generic(1).type_eq(&Generic(1), &mut ctx));
         assert!(!Generic(1).type_eq(&Generic(2), &mut ctx));
+
+        assert!(WithLifetime::Value(1).type_eq(&WithLifetime::Value(1), &mut ctx));
+        assert!(!WithLifetime::Value(1).type_eq(&WithLifetime::Value(2), &mut ctx));
+        assert!(
+            !WithLifetime::Value(1)
+                .type_eq(&WithLifetime::Unused(std::marker::PhantomData), &mut ctx)
+        );
     }
 
     #[test]
     fn test_equal_forall() {
         let uniques = UniqueFactory::new();
+        let heap = TypeHeap::new();
 
-        fn mk_function(uniques: &UniqueFactory) -> Type {
+        fn mk_function(uniques: &UniqueFactory, heap: &TypeHeap) -> Type {
             let q = Quantified::new(
                 uniques.fresh(),
                 Name::new_static("test"),
@@ -378,12 +397,10 @@ mod tests {
                 PreInferenceVariance::Invariant,
             );
 
-            let tparams = TParams::new(vec![TParam {
-                quantified: q.clone(),
-            }]);
+            let tparams = TParams::new(vec![q.clone()]);
 
             Forallable::Function(Function {
-                signature: Callable::list(ParamList::everything(), q.clone().to_type()),
+                signature: Callable::list(ParamList::everything(), q.clone().to_type(heap)),
                 metadata: FuncMetadata {
                     kind: FunctionKind::Overload,
                     flags: FuncFlags::default(),
@@ -392,8 +409,8 @@ mod tests {
             .forall(Arc::new(tparams))
         }
 
-        let a = mk_function(&uniques);
-        let b = mk_function(&uniques);
+        let a = mk_function(&uniques, &heap);
+        let b = mk_function(&uniques, &heap);
         assert_eq!(a, a);
         assert_ne!(a, b);
 

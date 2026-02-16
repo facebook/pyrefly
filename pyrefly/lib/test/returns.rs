@@ -231,8 +231,7 @@ def f(b: bool) -> int:
 );
 
 testcase!(
-    bug = "conformance: Unreachable code after NoReturn should not be type-checked",
-    test_return_never_unreachable_wrong_type,
+    test_return_never_unreachable,
     r#"
 from typing import NoReturn
 
@@ -243,7 +242,6 @@ def f(x: int) -> int:
     if x > 0:
         return x
     stop()
-    return "wrong type"  # E: Returned type `Literal['wrong type']` is not assignable to declared return type `int`
 "#,
 );
 

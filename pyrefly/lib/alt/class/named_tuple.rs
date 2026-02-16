@@ -71,7 +71,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .map(|name| {
                     self.resolve_named_tuple_element(cls, name)
-                        .unwrap_or_else(Type::any_implicit)
+                        .unwrap_or_else(|| self.heap.mk_any_implicit())
                 })
                 .collect(),
         )
@@ -82,7 +82,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .map(|name| {
                 let (ty, required) = match self.get_non_synthesized_class_member(cls, name) {
-                    None => (Type::any_implicit(), Required::Required),
+                    None => (self.heap.mk_any_implicit(), Required::Required),
                     Some(c) => (c.as_named_tuple_type(), c.as_named_tuple_requiredness()),
                 };
                 Param::Pos(name.clone(), ty, required)
@@ -93,17 +93,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn get_named_tuple_new(&self, cls: &Class, elements: &SmallSet<Name>) -> ClassSynthesizedField {
         let mut params = vec![Param::Pos(
             Name::new_static("cls"),
-            Type::type_form(Type::SelfType(self.as_class_type_unchecked(cls))),
+            self.heap
+                .mk_type_form(self.heap.mk_self_type(self.as_class_type_unchecked(cls))),
             Required::Required,
         )];
         params.extend(self.get_named_tuple_field_params(cls, elements));
-        let ty = Type::Function(Box::new(Function {
+        let ty = self.heap.mk_function(Function {
             signature: Callable::list(
                 ParamList::new(params),
-                Type::SelfType(self.as_class_type_unchecked(cls)),
+                self.heap.mk_self_type(self.as_class_type_unchecked(cls)),
             ),
             metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::NEW),
-        }));
+        });
         ClassSynthesizedField::new(ty)
     }
 
@@ -111,13 +112,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let params = vec![
             self.class_self_param(cls, false),
             // NamedTuple.__init__ accepts any args at runtime; rely on __new__ for checking.
-            Param::VarArg(None, Type::any_implicit()),
-            Param::Kwargs(None, Type::any_implicit()),
+            Param::VarArg(None, self.heap.mk_any_implicit()),
+            Param::Kwargs(None, self.heap.mk_any_implicit()),
         ];
-        let ty = Type::Function(Box::new(Function {
-            signature: Callable::list(ParamList::new(params), Type::None),
+        let ty = self.heap.mk_function(Function {
+            signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
             metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
-        }));
+        });
         ClassSynthesizedField::new(ty)
     }
 
@@ -131,23 +132,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .map(
                 |name| match self.get_non_synthesized_class_member(cls, name) {
-                    None => Type::any_implicit(),
+                    None => self.heap.mk_any_implicit(),
                     Some(c) => c.as_named_tuple_type(),
                 },
             )
             .collect();
-        let ty = Type::Function(Box::new(Function {
+        let ty = self.heap.mk_function(Function {
             signature: Callable::list(
                 ParamList::new(params),
-                Type::ClassType(self.stdlib.iterable(self.unions(element_types))),
+                self.heap
+                    .mk_class_type(self.stdlib.iterable(self.unions(element_types))),
             ),
             metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::ITER),
-        }));
+        });
         ClassSynthesizedField::new(ty)
     }
 
     fn get_named_tuple_match_args(&self, elements: &SmallSet<Name>) -> ClassSynthesizedField {
-        let ty = Type::concrete_tuple(
+        let ty = self.heap.mk_concrete_tuple(
             elements
                 .iter()
                 .map(|e| Lit::Str(e.as_str().into()).to_implicit_type())
