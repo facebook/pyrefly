@@ -592,7 +592,12 @@ fn definition_short_identifier(bindings: &Bindings, key: &Key) -> Option<ShortId
     }
 }
 
-fn first_use_source_for_key(bindings: &Bindings, module: &Module, key: &Key) -> Option<String> {
+fn first_use_source_for_key(
+    bindings: &Bindings,
+    module: &Module,
+    key: &Key,
+    hover_position: TextSize,
+) -> Option<String> {
     let Some(def_identifier) = definition_short_identifier(bindings, key) else {
         return None;
     };
@@ -604,6 +609,9 @@ fn first_use_source_for_key(bindings: &Bindings, module: &Module, key: &Key) -> 
     match bindings.get(idx) {
         Binding::CompletedPartialType(_, FirstUse::UsedBy(use_idx)) => {
             let use_range = bindings.idx_to_key(*use_idx).range();
+            if use_range.contains(hover_position) {
+                return None;
+            }
             let location = format_type_source_location(module, use_range);
             let mut msg = format!("Inferred from first use at {location}");
             if let Some(snippet) = format_code_snippet(module, use_range) {
@@ -648,7 +656,7 @@ fn type_sources_for_hover(
     if let Some(narrow_source) = narrow_source_for_key(&bindings, &module, idx) {
         sources.push(narrow_source);
     }
-    if let Some(first_use_source) = first_use_source_for_key(&bindings, &module, &key) {
+    if let Some(first_use_source) = first_use_source_for_key(&bindings, &module, &key, position) {
         sources.push(first_use_source);
     }
     sources
