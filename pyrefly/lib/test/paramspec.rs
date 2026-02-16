@@ -93,6 +93,21 @@ reveal_type(foo2)  # E: revealed type: (x: @_, y: @_) -> @_
 );
 
 testcase!(
+    test_paramspec_overload_callback,
+    r#"
+import shutil
+from contextlib import ExitStack
+
+def foo(tmpdir: str) -> None:
+    with ExitStack() as resources:
+        resources.callback(shutil.rmtree, tmpdir, ignore_errors=True)
+
+def bar(tmpdir: str) -> None:
+    shutil.rmtree(tmpdir, ignore_errors=True)
+"#,
+);
+
+testcase!(
     bug = "Generic class constructors don't work with ParamSpec",
     test_param_spec_generic_constructor,
     r#"
