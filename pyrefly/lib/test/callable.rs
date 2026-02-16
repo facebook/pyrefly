@@ -908,7 +908,7 @@ zoo(partial(bar, b=99))
 );
 
 testcase!(
-    bug = "Self in Metaclass should be error, treated as Any. Any in metaclass call should act like no annot.",
+    bug = "Self in Metaclass should be treated as Any. Any in metaclass call should act like no annot.",
     test_callable_class_substitute_self,
     r#"
 from typing import Any, Callable, Self, assert_type
@@ -916,7 +916,7 @@ from typing import Any, Callable, Self, assert_type
 def ret[T](f: Callable[[], T]) -> T: ...
 
 class Meta(type):
-    def __call__(self, *args, **kwargs) -> Self: ... # TODO: Error here and treat `Self` as `Any`
+    def __call__(self, *args, **kwargs) -> Self: ... # E: `Self` cannot be used in a metaclass
 
 # metaclass __call__
 class A(metaclass=Meta):

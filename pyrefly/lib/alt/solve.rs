@@ -3421,6 +3421,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         if let Some(cls) = &self.get_idx(class_key).as_ref().0 {
+            let metadata = self.get_metadata_for_class(cls);
+            if metadata.is_metaclass() {
+                self.error(
+                    errors,
+                    r,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    "`Self` cannot be used in a metaclass".to_owned(),
+                );
+            }
             match self.instantiate(cls) {
                 Type::ClassType(class_type) => {
                     self.heap.mk_type_form(self.heap.mk_self_type(class_type))

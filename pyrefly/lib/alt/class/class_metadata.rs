@@ -225,6 +225,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         || metadata.is_marshmallow_schema()
                 });
 
+        let is_metaclass = bases_with_metadata
+            .iter()
+            .any(|(base_class_object, metadata)| {
+                base_class_object.is_builtin("type") || metadata.is_metaclass()
+            });
+
         // Compute various pieces of special metadata.
         let has_base_any = contains_base_class_any
             || bases_with_metadata
@@ -381,6 +387,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_attrs_class,
             django_model_metadata,
             is_marshmallow_schema,
+            is_metaclass,
         )
     }
 

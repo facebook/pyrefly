@@ -64,6 +64,8 @@ pub struct ClassMetadata {
     is_attrs_class: bool,
     django_model_metadata: Option<DjangoModelMetadata>,
     is_marshmallow_schema: bool,
+    /// Whether this class is a metaclass (i.e., a subclass of `type`).
+    is_metaclass: bool,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -102,6 +104,7 @@ impl ClassMetadata {
         is_attrs_class: bool,
         django_model_metadata: Option<DjangoModelMetadata>,
         is_marshmallow_schema: bool,
+        is_metaclass: bool,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass,
@@ -125,6 +128,7 @@ impl ClassMetadata {
             is_attrs_class,
             django_model_metadata,
             is_marshmallow_schema,
+            is_metaclass,
         }
     }
 
@@ -151,6 +155,7 @@ impl ClassMetadata {
             is_attrs_class: false,
             django_model_metadata: None,
             is_marshmallow_schema: false,
+            is_metaclass: false,
         }
     }
 
@@ -189,6 +194,11 @@ impl ClassMetadata {
 
     pub fn is_marshmallow_schema(&self) -> bool {
         self.is_marshmallow_schema
+    }
+
+    /// Whether this class is a metaclass (i.e., a subclass of `type`).
+    pub fn is_metaclass(&self) -> bool {
+        self.is_metaclass
     }
 
     pub fn is_attrs_class(&self) -> bool {

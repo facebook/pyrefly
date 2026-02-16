@@ -6331,6 +6331,61 @@
   "generics_self_usage.py": [
     {
       "code": -2,
+      "column": 14,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 73,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 73
+    },
+    {
+      "code": -2,
+      "column": 23,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 73,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 27,
+      "stop_line": 73
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 76,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 10,
+      "stop_line": 76
+    },
+    {
+      "code": -2,
+      "column": 15,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 101,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 19,
+      "stop_line": 101
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 103,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 16,
+      "stop_line": 103
+    },
+    {
+      "code": -2,
       "column": 12,
       "concise_description": "Invalid base class: `Self`",
       "description": "Invalid base class: `Self`",
@@ -6339,6 +6394,61 @@
       "severity": "error",
       "stop_column": 16,
       "stop_line": 103
+    },
+    {
+      "code": -2,
+      "column": 30,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 106,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 34,
+      "stop_line": 106
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`Self` cannot be used in a static method",
+      "description": "`Self` cannot be used in a static method",
+      "line": 111,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 13,
+      "stop_line": 111
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`Self` cannot be used in a static method",
+      "description": "`Self` cannot be used in a static method",
+      "line": 116,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 25,
+      "stop_line": 116
+    },
+    {
+      "code": -2,
+      "column": 37,
+      "concise_description": "`Self` cannot be used in a metaclass",
+      "description": "`Self` cannot be used in a metaclass",
+      "line": 121,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 41,
+      "stop_line": 121
+    },
+    {
+      "code": -2,
+      "column": 42,
+      "concise_description": "`Self` cannot be used in a metaclass",
+      "description": "`Self` cannot be used in a metaclass",
+      "line": 125,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 46,
+      "stop_line": 125
     }
   ],
   "generics_syntax_compatibility.py": [
