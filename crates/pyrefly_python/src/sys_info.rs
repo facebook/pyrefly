@@ -321,7 +321,7 @@ enum Value {
     String(String),
     Int(i64),
     Bool(bool),
-    /// I know what the value evaluates to when considered truthy, but not it's precise outcome.
+    /// I know what the value evaluates to when considered truthy, but not its precise outcome.
     /// We make sure below that it never compares equal to itself
     Truthiness(bool),
     VersionInfo(PythonVersion),
