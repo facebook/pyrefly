@@ -380,7 +380,7 @@ fn build_import_edit(
     if has_existing_import(ast, target_handle.module(), member_name) {
         return None;
     }
-    let (position, insert_text, _) = insert_import_edit(
+    let import_edit = insert_import_edit(
         ast,
         transaction.config_finder(),
         handle.dupe(),
@@ -388,8 +388,7 @@ fn build_import_edit(
         member_name,
         import_format,
     );
-    let range = TextRange::at(position, TextSize::new(0));
-    Some((module_info.dupe(), range, insert_text))
+    Some((module_info.dupe(), import_edit.range, import_edit.new_text))
 }
 
 fn has_existing_import(ast: &ModModule, module_name: ModuleName, name: &str) -> bool {
