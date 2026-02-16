@@ -82,6 +82,23 @@ def f(a: A):
 );
 
 testcase!(
+    test_infers_attribute_union_from_class_and_method_assignments,
+    r#"
+from typing import assert_type
+
+class A:
+    value = 1
+
+    def promote(self, flag: bool) -> None:
+        if flag:
+            self.value = "a"
+
+def takes(a: A) -> None:
+    assert_type(a.value, int | str)
+    "#,
+);
+
+testcase!(
     test_unannotated_attribute_bad_assignment,
     r#"
 class A:
@@ -2217,6 +2234,19 @@ class A:
 def f(a: A):
     assert_type(a.x, Any | None)
     assert_type(a.y, None)
+    "#,
+);
+
+testcase!(
+    test_class_attr_infers_from_method_assignments,
+    r#"
+from typing import assert_type
+class A:
+    a = 1
+    def set_a(self, value: str):
+        self.a = value
+def f(a: A):
+    assert_type(a.a, int | str)
     "#,
 );
 
