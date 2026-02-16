@@ -232,6 +232,42 @@ a: int = "test"  # type: ignore
 }
 
 #[test]
+fn hover_shows_type_sources_for_narrow_and_first_use() {
+    let code = r#"
+def f(x: int | None) -> None:
+    if x is None:
+        return
+    y = []
+    y.append(1)
+    x
+#   ^
+    y
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("**Type source**"),
+        "Expected type source section, got: {report}"
+    );
+    assert!(
+        report.contains("Narrowed by condition"),
+        "Expected narrowing source in hover, got: {report}"
+    );
+    assert!(
+        report.contains("`x is not None`"),
+        "Expected narrowing condition snippet in hover, got: {report}"
+    );
+    assert!(
+        report.contains("Inferred from first use"),
+        "Expected inference source in hover, got: {report}"
+    );
+    assert!(
+        report.contains("`y.append(1)`"),
+        "Expected first-use snippet in hover, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_string_with_hash_character() {
     let code = r#"
 x = "hello # world"  # pyrefly: ignore
