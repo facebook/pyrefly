@@ -481,7 +481,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::SetComp(x) => {
                 let elem_hint = hint.and_then(|ty| self.decompose_set(ty));
                 self.ifs_infer(&x.generators, errors);
-                self.ifs_infer(&x.generators, errors);
                 let elem_ty = self.expr_infer_with_hint_promote(
                     &x.elt,
                     elem_hint.as_ref().map(|hint| hint.as_ref()),
