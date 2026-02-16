@@ -2730,6 +2730,7 @@ client.post("")
             "missing {expected} in completions:\n{trimmed}"
         );
     }
+}
 fn completion_sorts_incompatible_call_argument_last() {
     let code = r#"
 class Base:
