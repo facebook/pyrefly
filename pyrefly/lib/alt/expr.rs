@@ -96,6 +96,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
+use crate::error::context::TypeCheckKind;
 use crate::solver::solver::CallContext;
 use crate::types::callable::DefaultValue;
 use crate::types::callable::Param;
@@ -1543,6 +1544,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .any(|x| x.key.is_some() && !x.value.is_none_literal_expr());
             let mut key_tys = Vec::new();
             let mut value_tys = Vec::new();
+            let mut has_type_mismatch = false;
             items.iter().for_each(|x| match &x.key {
                 Some(key) => {
                     let key_t = self.expr_infer_with_hint_promote(
@@ -1561,6 +1563,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }),
                         errors,
                     );
+                    if let Some(hint) = hint
+                        && let Some(check_errors) = hint.errors()
+                    {
+                        let tcc: &dyn Fn() -> TypeCheckContext =
+                            &|| TypeCheckContext::of_kind(TypeCheckKind::AnnAssign);
+                        if let Some(key_hint) = &key_hint
+                            && !self.check_type(
+                                &key_t,
+                                key_hint,
+                                key.range(),
+                                check_errors,
+                                tcc,
+                            )
+                        {
+                            has_type_mismatch = true;
+                        }
+                        if let Some(value_hint) = &value_hint
+                            && !self.check_type(
+                                &value_t,
+                                value_hint,
+                                x.value.range(),
+                                check_errors,
+                                tcc,
+                            )
+                        {
+                            has_type_mismatch = true;
+                        }
+                    }
                     if !key_t.is_error() {
                         key_tys.push(key_t);
                     }
@@ -1607,6 +1637,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else if let Some((key_t, value_t)) = self.unwrap_mapping(&ty) {
                         // Non-anonymous-typed-dict unpacking disables anonymous typed dict creation
                         can_create_anonymous_typed_dict = false;
+                        if let Some(hint) = hint
+                            && let Some(check_errors) = hint.errors()
+                        {
+                            let tcc: &dyn Fn() -> TypeCheckContext =
+                                &|| TypeCheckContext::of_kind(TypeCheckKind::AnnAssign);
+                            if let Some(key_hint) = &key_hint
+                                && !self.check_type(
+                                    &key_t,
+                                    key_hint,
+                                    x.value.range(),
+                                    check_errors,
+                                    tcc,
+                                )
+                            {
+                                has_type_mismatch = true;
+                            }
+                            if let Some(value_hint) = &value_hint
+                                && !self.check_type(
+                                    &value_t,
+                                    value_hint,
+                                    x.value.range(),
+                                    check_errors,
+                                    tcc,
+                                )
+                            {
+                                has_type_mismatch = true;
+                            }
+                        }
                         if !key_t.is_error() {
                             if let Some(key_hint) = &key_hint
                                 && self.is_subset_eq(&key_t, key_hint)
@@ -1636,6 +1694,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             });
+            if has_type_mismatch
+                && let Some(hint) = hint
+                && hint.errors().is_some()
+            {
+                return match hint.types() {
+                    [hint] => hint.clone(),
+                    hints => Type::union(hints.to_vec()),
+                };
+            }
             let any_field_has_open_placeholder = typed_dict_fields_map.values().any(|field| {
                 field
                     .ty
