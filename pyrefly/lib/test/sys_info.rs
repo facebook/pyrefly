@@ -162,6 +162,62 @@ assert_type(Y(), int)
 );
 
 testcase!(
+    test_platform_membership,
+    r#"
+from typing import assert_type
+import sys
+if sys.platform in ("linux", "darwin"):
+    X = str
+else:
+    X = int
+assert_type(X(), str)
+
+if sys.platform not in {"win32", "cygwin"}:
+    Y = str
+else:
+    Y = int
+assert_type(Y(), str)
+
+if sys.platform in ["linux", "win32"]:
+    Z = str
+else:
+    Z = int
+assert_type(Z(), str)
+"#,
+);
+
+testcase!(
+    test_sys_version_subscript,
+    r#"
+from typing import assert_type
+import sys
+if sys.version_info[:2] >= (3, 10):
+    X = str
+else:
+    X = int
+assert_type(X(), str)
+
+if sys.version_info[0] == 3:
+    Y = str
+else:
+    Y = int
+assert_type(Y(), str)
+
+if sys.version_info == (3, 13):
+    Z = str
+else:
+    Z = int
+assert_type(Z(), str)
+
+if sys.version_info == (3, 13, 0):
+    W = str
+else:
+    W = int
+assert_type(W(), str)
+"#,
+);
+
+testcase!(
     test_sys_info_with_or,
     r#"
 from typing import TYPE_CHECKING, Literal, assert_type
