@@ -50,6 +50,7 @@ use vec1::vec1;
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
+use crate::binding::binding::BindingDjangoRelations;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BranchInfo;
@@ -58,7 +59,9 @@ use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyDecoratedFunction;
+use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
@@ -231,6 +234,7 @@ pub struct BindingsBuilder<'a> {
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
+    django_relation_fields: Vec<Idx<KeyClassField>>,
     semantic_checker: SemanticSyntaxChecker,
     semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
     /// BoundName lookups deferred until after AST traversal
@@ -466,6 +470,7 @@ impl Bindings {
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
+            django_relation_fields: Vec::new(),
             semantic_checker: SemanticSyntaxChecker::new(),
             semantic_syntax_errors: RefCell::new(Vec::new()),
             deferred_bound_names: Vec::new(),
@@ -528,6 +533,12 @@ impl Bindings {
                     .insert(KeyExport(name.into_key()), BindingExport(binding));
             }
         }
+        builder.table.insert(
+            KeyDjangoRelations,
+            BindingDjangoRelations {
+                fields: builder.django_relation_fields.into_boxed_slice(),
+            },
+        );
         Self(Arc::new(BindingsInner {
             module_info,
             table: builder.table,
@@ -766,6 +777,9 @@ impl<'a> BindingsBuilder<'a> {
         self.unused_variables.extend(unused);
     }
 
+    pub fn record_django_relation_field(&mut self, field: Idx<KeyClassField>) {
+        self.django_relation_fields.push(field);
+    }
     pub fn record_used_imports_from_dunder_all_names<T>(&mut self, dunder_all_names: T)
     where
         T: Iterator<Item = &'a Name>,

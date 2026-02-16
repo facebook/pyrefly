@@ -159,6 +159,8 @@ pub struct ModuleDep {
     pub classes: SmallSet<ClassDefIndex>,
     /// Which type aliases do we depend on?
     pub type_aliases: SmallSet<TypeAliasIndex>,
+    /// Do we depend on Django reverse relations for the module?
+    pub django_relations: bool,
 }
 
 impl ModuleDep {
@@ -177,6 +179,7 @@ impl ModuleDep {
             wildcard: false,
             classes: SmallSet::new(),
             type_aliases: SmallSet::new(),
+            django_relations: false,
         }
     }
 
@@ -195,6 +198,7 @@ impl ModuleDep {
             wildcard: false,
             classes: SmallSet::new(),
             type_aliases: SmallSet::new(),
+            django_relations: false,
         }
     }
 
@@ -205,6 +209,7 @@ impl ModuleDep {
             wildcard: true,
             classes: SmallSet::new(),
             type_aliases: SmallSet::new(),
+            django_relations: false,
         }
     }
 
@@ -217,6 +222,7 @@ impl ModuleDep {
             wildcard: false,
             classes,
             type_aliases: SmallSet::new(),
+            django_relations: false,
         }
     }
 
@@ -229,6 +235,18 @@ impl ModuleDep {
             wildcard: false,
             classes: SmallSet::new(),
             type_aliases,
+            django_relations: false,
+        }
+    }
+
+    /// Create a dependency on Django reverse relations in the module.
+    pub fn django_relations_dep() -> Self {
+        Self {
+            names: SmallMap::new(),
+            wildcard: false,
+            classes: SmallSet::new(),
+            type_aliases: SmallSet::new(),
+            django_relations: true,
         }
     }
 
@@ -256,6 +274,7 @@ impl ModuleDep {
         self.type_aliases.extend(other.type_aliases);
 
         self.wildcard |= other.wildcard;
+        self.django_relations |= other.django_relations;
     }
 
     /// Check if this dependency should be invalidated given a set of changed exports.
@@ -314,13 +333,15 @@ impl ModuleDep {
             ChangedExport::ClassDefIndex(idx) => self.classes.contains(idx),
             ChangedExport::TypeAliasIndex(idx) => self.type_aliases.contains(idx),
             ChangedExport::Metadata(name) => self.names.get(name).is_some_and(|d| d.metadata),
+            ChangedExport::DjangoRelations => self.django_relations,
         }
     }
 }
 
 impl AnyExportedKey {
     /// Convert this exported key to a `ModuleDep`.
-    /// `KeyExport` maps to a name type dependency, all class-related keys map to class dependencies.
+    /// `KeyExport` maps to a name type dependency, class-related keys map to class dependencies,
+    /// and other exported keys use their own dependency kinds.
     pub fn to_module_dep(&self) -> ModuleDep {
         match self {
             AnyExportedKey::KeyExport(k) => ModuleDep::name_type(k.0.clone()),
@@ -330,6 +351,7 @@ impl AnyExportedKey {
             AnyExportedKey::KeyClassSynthesizedFields(k) => ModuleDep::class_dep(k.0),
             AnyExportedKey::KeyVariance(k) => ModuleDep::class_dep(k.0),
             AnyExportedKey::KeyClassMetadata(k) => ModuleDep::class_dep(k.0),
+            AnyExportedKey::KeyDjangoRelations(_) => ModuleDep::django_relations_dep(),
             AnyExportedKey::KeyClassMro(k) => ModuleDep::class_dep(k.0),
             AnyExportedKey::KeyAbstractClassCheck(k) => ModuleDep::class_dep(k.0),
             AnyExportedKey::KeyTypeAlias(k) => ModuleDep::type_alias_dep(k.0),
@@ -2427,6 +2449,22 @@ impl<'a> LookupExport for TransactionHandle<'a> {
 }
 
 impl<'a> LookupAnswer for TransactionHandle<'a> {
+    fn modules(&self) -> SmallSet<ModuleName> {
+        let mut res = self
+            .transaction
+            .data
+            .updated_modules
+            .iter_unordered()
+            .map(|x| x.0.module())
+            .collect::<SmallSet<_>>();
+        for handle in self.transaction.readable.modules.keys() {
+            if self.transaction.data.updated_modules.get(handle).is_none() {
+                res.insert(handle.module());
+            }
+        }
+        res
+    }
+
     fn get<K: Solve<Self> + Exported>(
         &self,
         module: ModuleName,

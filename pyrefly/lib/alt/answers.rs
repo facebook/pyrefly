@@ -27,6 +27,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::CalcId;
@@ -425,6 +426,9 @@ impl Solutions {
 }
 
 pub trait LookupAnswer: Sized {
+    /// Return all modules that are available for lookup.
+    fn modules(&self) -> SmallSet<ModuleName>;
+
     /// Look up the value. If present, the `path` is a hint which can optimize certain cases.
     ///
     /// Return None if the file is undergoing concurrent modification.
