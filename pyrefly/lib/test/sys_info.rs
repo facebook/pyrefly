@@ -188,6 +188,7 @@ assert_type(Z(), str)
 
 testcase!(
     test_sys_version_subscript,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"
 from typing import assert_type
 import sys
