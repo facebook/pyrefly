@@ -56,6 +56,7 @@ use ruff_python_ast::Number;
 use ruff_python_ast::Operator;
 use ruff_python_ast::StringLiteralValue;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -102,6 +103,43 @@ pub enum TypeOrExpr<'a> {
     /// Bundles a `Type` with a `TextRange`, allowing us to give good errors.
     Type(&'a Type, TextRange),
     Expr(&'a Expr),
+}
+
+fn lambda_yield_ranges(body: &Expr) -> (Vec<TextRange>, Vec<TextRange>) {
+    struct Collector {
+        yields: Vec<TextRange>,
+        yield_froms: Vec<TextRange>,
+    }
+
+    impl<'a> Visitor<'a> for Collector {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            match expr {
+                Expr::Lambda(_)
+                | Expr::Generator(_)
+                | Expr::ListComp(_)
+                | Expr::SetComp(_)
+                | Expr::DictComp(_) => {
+                    // Skip nested scopes: yields there shouldn't affect the outer lambda.
+                }
+                Expr::Yield(x) => {
+                    self.yields.push(x.range);
+                    ruff_python_ast::visitor::walk_expr(self, expr);
+                }
+                Expr::YieldFrom(x) => {
+                    self.yield_froms.push(x.range);
+                    ruff_python_ast::visitor::walk_expr(self, expr);
+                }
+                _ => ruff_python_ast::visitor::walk_expr(self, expr),
+            }
+        }
+    }
+
+    let mut collector = Collector {
+        yields: Vec::new(),
+        yield_froms: Vec::new(),
+    };
+    collector.visit_expr(body);
+    (collector.yields, collector.yield_froms)
 }
 
 impl Ranged for TypeOrExpr<'_> {
@@ -428,6 +466,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return_hint.as_ref().map(|hint| hint.as_ref()),
                     errors,
                 );
+                let (yields, yield_froms) = lambda_yield_ranges(&lambda.body);
+                let ret = if !(yields.is_empty() && yield_froms.is_empty()) {
+                    let yield_ty = self.unions(
+                        yields
+                            .iter()
+                            .map(|range| self.get(&KeyYield(*range)).yield_ty.clone())
+                            .chain(
+                                yield_froms
+                                    .iter()
+                                    .map(|range| self.get(&KeyYieldFrom(*range)).yield_ty.clone()),
+                            )
+                            .collect(),
+                    );
+                    self.stdlib
+                        .generator(yield_ty, self.heap.mk_any_implicit(), ret)
+                        .to_type()
+                } else {
+                    ret
+                };
                 self.heap.mk_callable(params, ret)
             }
             Expr::Tuple(x) => self.tuple_infer(x, hint, errors),
