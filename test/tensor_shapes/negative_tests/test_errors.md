@@ -1,6 +1,323 @@
-# Dim type checking error tests
+# Tensor type checking error tests
 
-These tests verify that the type checker correctly catches Dim type errors.
+These tests verify that the type checker correctly catches shape mismatches and other errors.
+
+## Generic tensor substitution with wrong shape (test_compare_generic_tensor)
+
+```scrut
+$ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_compare_generic_tensor.py"
+ INFO revealed type: int [reveal-type]
+  --> *test_compare_generic_tensor.py:20:12 (glob)
+   |
+20 | reveal_type(result1)  # Returns: int ✅
+   |            ---------
+   |
+ INFO revealed type: Tensor[2, 3] [reveal-type]
+  --> *test_compare_generic_tensor.py:32:12 (glob)
+   |
+32 | reveal_type(result2)  # Returns: Tensor[N, 3] or Tensor[2, 3] ??
+   |            ---------
+   |
+ERROR `Tensor[2, 3]` is not assignable to `Tensor[100, 3]` [bad-assignment]
+  --> *test_compare_generic_tensor.py:36:36 (glob)
+   |
+36 | wrong_assignment: Tensor[100, 3] = result2  # Should ERROR if result2 is Tensor[2, 3]
+   |                                    ^^^^^^^
+   |
+  Size mismatch: expected 100, got 2
+[1]
+```
+
+## Symbolic dimension binding with wrong expected type (test_check_symbolic_binding)
+
+```scrut
+$ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_check_symbolic_binding.py"
+ INFO revealed type: Tensor[2, 3] [reveal-type]
+  --> *test_check_symbolic_binding.py:26:16 (glob)
+   |
+26 |     reveal_type(result)
+   |                --------
+   |
+ INFO revealed type: Tensor[2, 3] [reveal-type]
+  --> *test_check_symbolic_binding.py:34:16 (glob)
+   |
+34 |     reveal_type(result)
+   |                --------
+   |
+ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[4, 3]` [bad-return]
+  --> *test_check_symbolic_binding.py:35:12 (glob)
+   |
+35 |     return result  # Should ERROR: Tensor[2, 3] not assignable to Tensor[4, 3]
+   |            ^^^^^^
+   |
+  Size mismatch: expected 4, got 2
+ INFO revealed type: Dim[(N * M)] [reveal-type]
+  --> *test_check_symbolic_binding.py:40:16 (glob)
+   |
+40 |     reveal_type(s)
+   |                ---
+   |
+ERROR Returned type `Dim[(N * M)]` is not assignable to declared return type `Dim[(N + M)]` [bad-return]
+  --> *test_check_symbolic_binding.py:41:12 (glob)
+   |
+41 |     return s
+   |            ^
+   |
+  Size mismatch: expected (M + N), got (M * N)
+ INFO revealed type: Tensor[(N * M)] [reveal-type]
+  --> *test_check_symbolic_binding.py:46:16 (glob)
+   |
+46 |     reveal_type(v)
+   |                ---
+   |
+ERROR Returned type `Tensor[(N * M)]` is not assignable to declared return type `Tensor[(N + M)]` [bad-return]
+  --> *test_check_symbolic_binding.py:47:12 (glob)
+   |
+47 |     return v
+   |            ^
+   |
+  Size mismatch: expected (M + N), got (M * N)
+ INFO revealed type: Dim[(N * M)] [reveal-type]
+  --> *test_check_symbolic_binding.py:52:16 (glob)
+   |
+52 |     reveal_type(s)
+   |                ---
+   |
+ERROR Returned type `Dim[(N * M)]` is not assignable to declared return type `Dim[K]` [bad-return]
+  --> *test_check_symbolic_binding.py:53:12 (glob)
+   |
+53 |     return s
+   |            ^
+   |
+  Size mismatch: expected K, got (M * N)
+ INFO revealed type: Tensor[(N * M)] [reveal-type]
+  --> *test_check_symbolic_binding.py:58:16 (glob)
+   |
+58 |     reveal_type(v)
+   |                ---
+   |
+ERROR Returned type `Tensor[(N * M)]` is not assignable to declared return type `Tensor[K]` [bad-return]
+  --> *test_check_symbolic_binding.py:59:12 (glob)
+   |
+59 |     return v
+   |            ^
+   |
+  Size mismatch: expected K, got (M * N)
+ INFO revealed type: Dim[@_] [reveal-type]
+  --> *test_check_symbolic_binding.py:64:16 (glob)
+   |
+64 |     reveal_type(n)
+   |                ---
+   |
+ INFO revealed type: Tensor[@_] [reveal-type]
+  --> *test_check_symbolic_binding.py:71:16 (glob)
+   |
+71 |     reveal_type(t)
+   |                ---
+   |
+[1]
+```
+
+## Literal shape mismatch (test_literal_shape_check)
+
+```scrut
+$ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_literal_shape_check.py"
+ INFO revealed type: Tensor[2, 3] [reveal-type]
+  --> *test_literal_shape_check.py:19:16 (glob)
+   |
+19 |     reveal_type(x)
+   |                ---
+   |
+ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[4, 3]` [bad-return]
+  --> *test_literal_shape_check.py:22:12 (glob)
+   |
+22 |     return x  # Tensor[2, 3] not assignable to Tensor[4, 3]
+   |            ^
+   |
+  Size mismatch: expected 4, got 2
+[1]
+```
+
+## TypeVar substitution with multiple mismatches (test_typevar_substitution_bug)
+
+```scrut
+$ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_typevar_substitution_bug.py"
+ INFO revealed type: Tensor[2, 3] [reveal-type]
+  --> *test_typevar_substitution_bug.py:25:16 (glob)
+   |
+25 |     reveal_type(x_concrete)  # Should be Tensor[2, 3]
+   |                ------------
+   |
+ INFO revealed type: Tensor[2, 3] [reveal-type]
+  --> *test_typevar_substitution_bug.py:29:16 (glob)
+   |
+29 |       reveal_type(
+   |  ________________-
+30 | |         result
+31 | |     )  # Should be Tensor[2, 3] (N substituted with 2), but is Tensor[N, 3]
+   | |_____-
+   |
+ERROR `Tensor[2, 3]` is not assignable to `Tensor[4, 3]` [bad-assignment]
+  --> *test_typevar_substitution_bug.py:35:27 (glob)
+   |
+35 |     case2: Tensor[4, 3] = result  # Should ERROR but doesn't (N=4)
+   |                           ^^^^^^
+   |
+  Size mismatch: expected 4, got 2
+ERROR `Tensor[2, 3]` is not assignable to `Tensor[100, 3]` [bad-assignment]
+  --> *test_typevar_substitution_bug.py:36:29 (glob)
+   |
+36 |     case3: Tensor[100, 3] = result  # Should ERROR but probably doesn't (N=100)
+   |                             ^^^^^^
+   |
+  Size mismatch: expected 100, got 2
+[1]
+```
+
+## Flatten with wrong expected shape (test_concat_flatten_types)
+
+```scrut
+$ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_concat_flatten_types.py"
+ INFO revealed type: Tensor[N, 3] [reveal-type]
+  --> *test_concat_flatten_types.py:18:16 (glob)
+   |
+18 |     reveal_type(x)
+   |                ---
+   |
+ INFO revealed type: Tensor[M, 3] [reveal-type]
+  --> *test_concat_flatten_types.py:19:16 (glob)
+   |
+19 |     reveal_type(y)
+   |                ---
+   |
+ INFO revealed type: Tensor[(N + M), 3] [reveal-type]
+  --> *test_concat_flatten_types.py:21:16 (glob)
+   |
+21 |     reveal_type(z)
+   |                ---
+   |
+ INFO revealed type: Tensor[B, N, M] [reveal-type]
+  --> *test_concat_flatten_types.py:27:16 (glob)
+   |
+27 |     reveal_type(x)
+   |                ---
+   |
+ INFO revealed type: Tensor[(2 + 5), 3] [reveal-type]
+  --> *test_concat_flatten_types.py:36:16 (glob)
+   |
+36 |     reveal_type(z)  # Expected: Tensor[7, 3], but might be Tensor[N + M, 3]?
+   |                ---
+   |
+ERROR Returned type `Tensor[(2 + 5), 3]` is not assignable to declared return type `Tensor[100, 3]` [bad-return]
+  --> *test_concat_flatten_types.py:39:12 (glob)
+   |
+39 |     return z  # Should ERROR if z is Tensor[7, 3]
+   |            ^
+   |
+  Size mismatch: expected 100, got 7
+ INFO revealed type: Tensor[((2 * 3) * 4)] [reveal-type]
+  --> *test_concat_flatten_types.py:46:16 (glob)
+   |
+46 |     reveal_type(y)  # Expected: Tensor[24], but might be Tensor[B * N * M]?
+   |                ---
+   |
+ERROR Returned type `Tensor[((2 * 3) * 4)]` is not assignable to declared return type `Tensor[999]` [bad-return]
+  --> *test_concat_flatten_types.py:49:12 (glob)
+   |
+49 |     return y  # Should ERROR if y is Tensor[24]
+   |            ^
+   |
+  Size mismatch: expected 999, got 24
+[1]
+```
+
+## Dim type variable in non-Tensor context (test_dim_in_non_tensor)
+
+```scrut
+$ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_dim_in_non_tensor.py"
+ INFO revealed type: MyContainer[5] [reveal-type]
+  --> *test_dim_in_non_tensor.py:23:12 (glob)
+   |
+23 | reveal_type(result)  # Should be: MyContainer[5]
+   |            --------
+   |
+ INFO revealed type: int [reveal-type]
+  --> *test_dim_in_non_tensor.py:33:12 (glob)
+   |
+33 | reveal_type(result2)  # Should be: int
+   |            ---------
+   |
+[0]
+```
+
+## View/reshape validation errors (test_view_errors)
+
+```scrut
+$ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_view_errors.py"
+ERROR Invalid dimension value -1: can only specify one unknown dimension as -1 [invalid-argument]
+  --> *test_view_errors.py:19:15 (glob)
+   |
+19 |     y = x.view(-1, -1)  # ERROR: can only specify one unknown dimension as -1
+   |               ^^^^^^^^
+   |
+ERROR Invalid dimension value -1: shape 3, -1 is not compatible with input size 200 [invalid-argument]
+  --> *test_view_errors.py:26:15 (glob)
+   |
+26 |     y = x.view(3, -1)  # ERROR: 200 / 3 is not an integer
+   |               ^^^^^^^
+   |
+ERROR Invalid dimension value -2: cannot specify -2 as a reshape dimension [invalid-argument]
+  --> *test_view_errors.py:33:15 (glob)
+   |
+33 |     y = x.view(-2, 10)  # ERROR: invalid dimension value
+   |               ^^^^^^^^
+   |
+ERROR Invalid dimension value 0: reshape dimensions cannot contain 0 [invalid-argument]
+  --> *test_view_errors.py:40:15 (glob)
+   |
+40 |     y = x.view(0, -1)  # ERROR: reshape dimensions cannot contain 0
+   |               ^^^^^^^
+   |
+[1]
+```
+
+## Item validation on non-scalar tensors (test_item_error)
+
+```scrut
+$ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_item_error.py"
+ERROR Invalid dimension value 1: item() only works on 0-dimensional tensors, got 1D tensor [invalid-argument]
+  --> *test_item_error.py:20:11 (glob)
+   |
+20 |     x.item()
+   |           ^^
+   |
+ERROR Invalid dimension value 2: item() only works on 0-dimensional tensors, got 2D tensor [invalid-argument]
+  --> *test_item_error.py:28:11 (glob)
+   |
+28 |     x.item()
+   |           ^^
+   |
+[1]
+```
+
+## View with zero dimension (test_view_simple)
+
+```scrut
+$ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_view_simple.py"
+ERROR Invalid dimension value 0: reshape dimensions cannot contain 0 [invalid-argument]
+  --> *test_view_simple.py:26:15 (glob)
+   |
+26 |     y = x.view(0, -1)  # Should ERROR but still return Tensor
+   |               ^^^^^^^
+   |
+ INFO revealed type: Tensor [reveal-type]
+  --> *test_view_simple.py:27:16 (glob)
+   |
+27 |     reveal_type(y)
+   |                ---
+   |
+[1]
+```
 
 ## Dim type variable unification (test_symint_unification)
 
@@ -77,7 +394,7 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_symint_any.py"
 [0]
 ```
 
-## Tensor subtyping rules (test_tensor_subtyping)
+## Tensor subtyping errors (test_tensor_subtyping)
 
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_subtyping.py"
@@ -146,7 +463,7 @@ ERROR Argument `Tensor[2, 3]` is not assignable to parameter `x` with type `Tens
 [1]
 ```
 
-## Tensor indexing operations (test_tensor_indexing)
+## Tensor indexing errors (test_tensor_indexing)
 
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_indexing.py"
@@ -167,7 +484,7 @@ ERROR Returned type `Tensor[5, 20]` is not assignable to declared return type `T
 [1]
 ```
 
-## Tensor arithmetic operations (test_tensor_arithmetic)
+## Tensor arithmetic errors (test_tensor_arithmetic)
 
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_arithmetic.py"
@@ -219,7 +536,7 @@ ERROR Cannot broadcast tensor shapes: Invalid dimension value 0: Cannot broadcas
 [1]
 ```
 
-## Tensor generic expression substitution (test_tensor_generic_exprs)
+## Generic function substitution with expressions (test_tensor_generic_exprs)
 
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_generic_exprs.py"
@@ -247,7 +564,7 @@ ERROR Returned type `Tensor[(4 * 2), 5]` is not assignable to declared return ty
 [1]
 ```
 
-## Tensor expression equivalence (test_tensor_expr_equiv)
+## Shape expression equivalence (test_tensor_expr_equiv)
 
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_expr_equiv.py"
@@ -275,7 +592,7 @@ ERROR Returned type `Tensor[5, 4]` is not assignable to declared return type `Te
 [1]
 ```
 
-## Tensor variadic shape patterns (test_tensor_variadic)
+## Variadic shape patterns (test_tensor_variadic)
 
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_variadic.py"

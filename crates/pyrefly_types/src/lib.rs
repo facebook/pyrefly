@@ -34,6 +34,7 @@ pub mod heap;
 pub mod keywords;
 pub mod lit_int;
 pub mod literal;
+pub mod meta_shape;
 pub mod module;
 pub mod param_spec;
 pub mod quantified;
