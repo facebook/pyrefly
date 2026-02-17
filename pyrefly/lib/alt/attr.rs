@@ -96,6 +96,10 @@ pub enum AttrSubsetError {
     Getattr,
     // either `got` or `want` is a module fallback
     ModuleFallback,
+    // `got` and `want` differ on whether they are ClassVar
+    ClassVarMismatch {
+        got_is_classvar: bool,
+    },
     // `got` is not a subtype of `want`
     // applies to methods, read-only attributes, and property getters
     Covariant {
@@ -157,6 +161,17 @@ impl AttrSubsetError {
                 format!(
                     "`{child_class}.{attr_name}` or `{parent_class}.{attr_name}` are module fallbacks, which cannot be checked for override compatibility"
                 )
+            }
+            AttrSubsetError::ClassVarMismatch { got_is_classvar } => {
+                if *got_is_classvar {
+                    format!(
+                        "`{child_class}.{attr_name}` is a ClassVar, but `{parent_class}.{attr_name}` is not"
+                    )
+                } else {
+                    format!(
+                        "`{child_class}.{attr_name}` is not a ClassVar, but `{parent_class}.{attr_name}` is"
+                    )
+                }
             }
             AttrSubsetError::Covariant {
                 got,
@@ -1426,6 +1441,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // against a protocol, we prefer methods on the metaclass over methods on the
                     // class object. See test::enums::test_iterate for why we need to do this.
                     acc.found_class_attribute(attr, base)
+                } else if let AttributeBase1::ClassObject(class) = &**protocol_base
+                    && self
+                        .get_class_member(class.class_object(), attr_name)
+                        .is_some_and(|field| field.is_non_classvar_data_attribute())
+                {
+                    // Non-ClassVar class body attributes are instance variable defaults.
+                    // They should not satisfy protocol requirements when checking class objects,
+                    // because the protocol expects a proper attribute on the object, not just
+                    // a default value for instance creation.
+                    acc.not_found(NotFoundOn::ClassObject(class.class_object().dupe(), base))
                 } else {
                     self.lookup_attr_from_attribute_base1((**protocol_base).clone(), attr_name, acc)
                 }
