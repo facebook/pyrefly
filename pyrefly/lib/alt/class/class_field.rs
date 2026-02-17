@@ -3128,6 +3128,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let got_sig = ctx.display(got).to_string();
                             let want_sig = ctx.display(want).to_string();
 
+                            // Normalize function names so both lines show the
+                            // attribute name, not the original function name
+                            // (e.g., when `method = helper`).
+                            let normalize_name = |sig: &str| -> String {
+                                if let Some(rest) = sig.strip_prefix("def ")
+                                    && let Some(paren) = rest.find('(')
+                                {
+                                    return format!("def {field_name}{}", &rest[paren..]);
+                                }
+                                sig.to_owned()
+                            };
+                            let got_sig = normalize_name(&got_sig);
+                            let want_sig = normalize_name(&want_sig);
+
                             if let Some(lines) = render_signature_diff(&want_sig, &got_sig) {
                                 diff_lines = lines;
                             }

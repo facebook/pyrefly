@@ -428,13 +428,8 @@ class B(A):
         assert_eq!(messages[0], expected);
     }
 
-    /// Named function override: verifies signature diff is shown when a
-    /// named function is assigned to a class attribute.
-    ///
-    /// BUG: The diff shows `def helper(...)` instead of `def method(...)`,
-    /// mixing the original function name with the attribute name. This makes
-    /// the diff harder to read since the function names differ between the
-    /// expected and found lines.
+    /// Named function override: verifies signature diff normalizes the
+    /// function name to the attribute name for readability.
     #[test]
     fn test_signature_diff_named_function() {
         let messages = error_messages(
@@ -458,7 +453,7 @@ class B(A):
                              ^^^^^^^^^     ^^^ return type
                              |
                              parameters
-  found:    def helper(self: Unknown) -> None: ...
+  found:    def method(self: Unknown) -> None: ...
                              ^^^^^^^     ^^^^ return type
                              |
                              parameters"#;
