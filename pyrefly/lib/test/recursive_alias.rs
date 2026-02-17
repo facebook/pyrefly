@@ -272,3 +272,48 @@ g(h2)
 g(h3)  # E: not assignable
     "#,
 );
+
+testcase!(
+    test_nongeneric_referencing_generic,
+    r#"
+from typing import TypeVar, Union, TypeAlias, reveal_type
+
+T = TypeVar("T")
+Inner = Union[T, list[T]]
+Outer: TypeAlias = dict[str, Inner]
+
+def f(x: Outer) -> None:
+    reveal_type(x)  # E: dict[str, Inner]
+
+y: Outer[int] = {}  # E: not subscriptable
+    "#,
+);
+
+testcase!(
+    test_nongeneric_referencing_scoped_generic,
+    r#"
+from typing import reveal_type
+
+type Inner[T] = T | list[T]
+type Outer = dict[str, Inner]
+
+def f(x: Outer) -> None:
+    reveal_type(x)  # E: dict[str, Inner]
+
+y: Outer[int] = {}  # E: not subscriptable
+    "#,
+);
+
+testcase!(
+    test_nongeneric_referencing_specialized_generic,
+    r#"
+from typing import TypeVar, Union, TypeAlias, reveal_type
+
+T = TypeVar("T")
+Inner = Union[T, list[T]]
+Outer: TypeAlias = dict[str, Inner[int]]
+
+def f(x: Outer) -> None:
+    reveal_type(x)  # E: dict[str, Inner]
+    "#,
+);
