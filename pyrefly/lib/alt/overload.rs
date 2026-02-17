@@ -206,7 +206,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn call_overloads(
         &self,
         overloads: Vec1<TargetWithTParams<Function>>,
-        metadata: FuncMetadata,
+        metadata: &FuncMetadata,
         self_obj: Option<Type>,
         args: &[CallArg],
         keywords: &[CallKeyword],
@@ -259,7 +259,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Note: steps 4-6 are performed in `find_closest_overload`.
                 let (mut closest_overload, mut matched) = self.find_closest_overload(
                     &arity_compatible_overloads,
-                    &metadata,
+                    metadata,
                     self_obj.as_ref(),
                     &args,
                     &keywords,
@@ -284,7 +284,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     for (cur_args, cur_keywords) in arg_lists.clone().iter() {
                         let (cur_closest, cur_matched) = self.find_closest_overload(
                             &arity_compatible_overloads,
-                            &metadata,
+                            metadata,
                             self_obj.as_ref(),
                             cur_args,
                             cur_keywords,

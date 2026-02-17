@@ -1060,7 +1060,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             CallTarget::FunctionOverload(overloads, metadata) => {
                 self.call_overloads(
                     overloads,
-                    metadata,
+                    &metadata,
                     None,
                     args,
                     keywords,
@@ -1075,7 +1075,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             CallTarget::BoundMethodOverload(obj, overloads, meta) => {
                 self.call_overloads(
                     overloads,
-                    meta,
+                    &meta,
                     Some(obj),
                     args,
                     keywords,

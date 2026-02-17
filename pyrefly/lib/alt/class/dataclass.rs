@@ -619,7 +619,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }))
                 .unwrap(),
-                (*overload.metadata).clone(),
+                &overload.metadata,
                 None,
                 &args.args.map(CallArg::expr_maybe_starred),
                 &args.keywords.map(CallKeyword::new),
