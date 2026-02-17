@@ -13,6 +13,7 @@ use itertools::EitherOrBoth;
 use itertools::Itertools;
 use itertools::izip;
 use pyrefly_python::dunder;
+use pyrefly_types::callable::Callable;
 use pyrefly_types::dimension::ShapeError;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::dimension::contains_var_in_type;
@@ -26,11 +27,16 @@ use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
+use pyrefly_types::types::Overload;
 use pyrefly_types::types::Union;
+use pyrefly_util::owner::Owner;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
+use crate::alt::callable::CallArg;
+use crate::alt::expr::TypeOrExpr;
 use crate::solver::solver::OpenTypedDictSubsetError;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetError;
@@ -951,6 +957,72 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         }
     }
 
+    fn is_subset_overload(&mut self, overload: &Overload, want: &Type) -> Result<(), SubsetError> {
+        if any(overload.signatures.iter(), |l| {
+            self.is_subset_eq(&l.as_type(), want)
+        })
+        .is_ok()
+        {
+            return Ok(());
+        }
+        if let Type::Callable(box Callable {
+            params: Params::List(params),
+            ret,
+        }) = want
+            && params
+                .items()
+                .iter()
+                .all(|param| matches!(param, Param::PosOnly(..)))
+        {
+            // Compare an overloaded function against a Callable annotation:
+            // Expand the parameter types in the Callable and see if we can match every expanded
+            // Callable. We create fake args in order to reuse the argument type expansion logic
+            // from overload call evaluation.
+            let mut requiredness = Vec::new();
+            let mut fake_args = Vec::new();
+            for param in params.items() {
+                match param {
+                    Param::PosOnly(_, ty, required) => {
+                        requiredness.push(required);
+                        fake_args.push(CallArg::Arg(TypeOrExpr::Type(ty, TextRange::default())));
+                    }
+                    // We already checked that all params are PosOnly.
+                    _ => unreachable!(),
+                }
+            }
+            let mut args_expander = self.type_order.args_expander(fake_args, Vec::new());
+            let errors = self.type_order.error_swallower();
+            let owner = Owner::new();
+            while let Some(arg_lists) = args_expander.expand(&errors, &owner) {
+                if all(arg_lists.iter(), |(args, _empty_kws)| {
+                    let ts = args
+                        .iter()
+                        .zip(requiredness.iter())
+                        .map(|(arg, required)| match arg {
+                            CallArg::Arg(TypeOrExpr::Type(t, _)) => {
+                                ((**t).clone(), (**required).clone())
+                            }
+                            // We manually constructed the callargs above, so we know their exact shape.
+                            _ => unreachable!(),
+                        })
+                        .collect();
+                    let callable = Type::Callable(Box::new(Callable::list(
+                        ParamList::new_types(ts),
+                        ret.clone(),
+                    )));
+                    any(overload.signatures.iter(), |l| {
+                        self.is_subset_eq(&l.as_type(), &callable)
+                    })
+                })
+                .is_ok()
+                {
+                    return Ok(());
+                }
+            }
+        }
+        Err(SubsetError::Other)
+    }
+
     fn can_be_recursive(&self, t1: &Type, t2: &Type) -> bool {
         match (t1, t2) {
             // We only care if the RHS is a protocol
@@ -1201,9 +1273,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             {
                 Ok(())
             }
-            (Type::Overload(overload), u) => any(overload.signatures.iter(), |l| {
-                self.is_subset_eq(&l.as_type(), u)
-            }),
+            (Type::Overload(overload), want) => self.is_subset_overload(overload, want),
             (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))
                 if let Some(l_no_self) =
                     self.type_order.bind_boundmethod(method, &mut |got, want| {
