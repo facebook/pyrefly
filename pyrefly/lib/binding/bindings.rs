@@ -1191,14 +1191,14 @@ impl<'a> BindingsBuilder<'a> {
         def_to_upstreams: &SmallMap<Idx<Key>, Idx<Key>>,
         first_uses_to_add: &mut SmallMap<Idx<Key>, Vec<Idx<Key>>>,
     ) {
-        // For TypeAliasRhs usage, check if the name resolves to the same
-        // type alias (self-reference) and produce a TypeAliasRef binding.
-        // The expansion step in wrap_type_alias handles non-recursive Refs
-        // when all-aliases mode is enabled in a future step.
-        if let Usage::TypeAliasRhs(alias_name) = &deferred.usage
+        // For TypeAliasRhs usage, check if the name resolves to a type
+        // alias and produce a TypeAliasRef binding. This covers both
+        // self-references and cross-references to other aliases in the
+        // same module. The expansion step in wrap_type_alias inlines
+        // non-recursive Refs at solve time.
+        if matches!(deferred.usage, Usage::TypeAliasRhs)
             && let Some((name, key_type_alias, tparams)) =
                 self.follow_to_type_alias(deferred.lookup_result_idx)
-            && &name == alias_name
         {
             self.insert_binding_idx(
                 deferred.bound_name_idx,
@@ -1220,7 +1220,7 @@ impl<'a> BindingsBuilder<'a> {
 
             if matches!(
                 deferred.usage,
-                Usage::StaticTypeInformation | Usage::TypeAliasRhs(_)
+                Usage::StaticTypeInformation | Usage::TypeAliasRhs
             ) {
                 self.mark_does_not_pin_if_first_use(pinned_idx);
                 self.insert_binding_idx(deferred.bound_name_idx, Binding::Forward(pinned_idx));

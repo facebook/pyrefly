@@ -1225,6 +1225,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         mut ta: TypeAlias,
         params: &TypeAliasParams,
+        current_index: Option<TypeAliasIndex>,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
@@ -1232,8 +1233,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self.heap.mk_any_error();
         }
 
+        // Step 1: Expand non-recursive UntypedAlias(Ref(...)) nodes by
+        // inlining the referenced alias's body. Only runs for binding-time
+        // aliases (current_index is Some); implicit legacy aliases detected
+        // at solve time skip expansion.
+        if let Some(index) = current_index {
+            self.expand_type_alias_refs(ta.as_type_mut(), index);
+        }
+
+        // Step 2: Check for cyclic self-references after expansion.
         self.check_type_alias_for_cyclic_reference(name, &ta, range, errors);
 
+        // Step 3: Extract type parameters from the (now expanded) body.
         let mut seen_type_vars = SmallMap::new();
         let mut seen_type_var_tuples = SmallMap::new();
         let mut seen_param_specs = SmallMap::new();
@@ -1375,7 +1386,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Recursive references (detected via a visiting set) are left in place.
     /// `current_index` is the alias being defined — pre-seeded in the
     /// visiting set so self-references are immediately recognized as recursive.
-    #[allow(dead_code)]
     fn expand_type_alias_refs(&self, ty: &mut Type, current_index: TypeAliasIndex) {
         let mut visiting = SmallSet::new();
         visiting.insert((self.module().name(), current_index));
@@ -1386,7 +1396,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// `UntypedAlias(Ref(...))` nodes for same-module aliases, looks up
     /// the raw body from `KeyTypeAlias`, and inlines it. Cross-module
     /// refs are left untouched (they resolve through the exports table).
-    #[allow(dead_code)]
     fn expand_type_alias_refs_inner(
         &self,
         ty: &mut Type,
@@ -1417,7 +1426,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::Type(inner) => *inner,
                     _ => return,
                 };
-                // Apply type arguments if the reference was parameterized
+                // Apply type arguments if the reference was parameterized.
+                // For generic aliases used without explicit args, promote_forall
+                // in untype_opt will have already injected implicit Any args.
                 if let Some(args) = &r.args {
                     args.substitute_into_mut(&mut body);
                 }
@@ -1427,7 +1438,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 visiting.shift_remove(&key);
                 *ty = body;
             }
-            _ => ty.visit_mut(&mut |child: &mut Type| {
+            _ => ty.recurse_mut(&mut |child: &mut Type| {
                 self.expand_type_alias_refs_inner(child, visiting);
             }),
         }
@@ -2955,6 +2966,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 name,
                 ta,
                 &TypeAliasParams::Legacy(legacy_tparams.clone()),
+                None,
                 expr.range(),
                 errors,
             )
@@ -4577,6 +4589,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 name,
                 (*self.get_idx(*key_type_alias)).clone(),
                 tparams,
+                Some(self.bindings().idx_to_key(*key_type_alias).0),
                 *range,
                 errors,
             ),
@@ -4895,7 +4908,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // to avoid a cycle.
             Type::TypeAlias(ta @ box TypeAliasData::Ref(_)) => Some(Type::UntypedAlias(ta)),
             t @ Type::Unpack(
-                box Type::Tuple(_) | box Type::TypeVarTuple(_) | box Type::Quantified(_),
+                box Type::Tuple(_)
+                | box Type::TypeVarTuple(_)
+                | box Type::Quantified(_)
+                | box Type::UntypedAlias(_),
             ) => Some(t),
             Type::Unpack(box Type::Var(v)) if let Some(_guard) = self.recurse(v) => self
                 .untype_opt(

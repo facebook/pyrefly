@@ -76,6 +76,11 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             _ => {}
         }
         match bindings.get(current_idx) {
+            // TypeAliasRef is a terminal binding — the name directly references
+            // another type alias. Treat it as a definition for IDE purposes.
+            Binding::TypeAliasRef { .. } => {
+                return Some(current_key);
+            }
             Binding::Forward(k)
             | Binding::Narrow(k, _, _)
             | Binding::CompletedPartialType(k, ..)

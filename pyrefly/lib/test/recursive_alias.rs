@@ -38,8 +38,8 @@ def f(x1: X1, x2: X2, x3: X3, y1: Y1, y2: Y2):
     reveal_type(x1)  # E: int | list[X1]
     reveal_type(x2)  # E: int | list[X2]
     reveal_type(x3)  # E: int | list[X3]
-    reveal_type(y1)  # E: int | list[Y2]
-    reveal_type(y2)  # E: int | list[Y1]
+    reveal_type(y1)  # E: int | list[int | list[Y1]]
+    reveal_type(y2)  # E: int | list[int | list[Y2]]
     "#,
 );
 
@@ -250,7 +250,7 @@ testcase!(
     r#"
 type W = W  # E: cyclic self-reference in `W`
 type X = int | X  # E: cyclic self-reference in `X`
-type Y = int | Z
+type Y = int | Z  # E: cyclic self-reference in `Y`
 type Z = int | Y  # E: cyclic self-reference in `Z`
     "#,
 );
@@ -283,7 +283,7 @@ Inner = Union[T, list[T]]
 Outer: TypeAlias = dict[str, Inner]
 
 def f(x: Outer) -> None:
-    reveal_type(x)  # E: dict[str, Inner]
+    reveal_type(x)  # E: dict[str, list[Unknown] | Unknown]
 
 y: Outer[int] = {}  # E: not subscriptable
     "#,
@@ -298,7 +298,7 @@ type Inner[T] = T | list[T]
 type Outer = dict[str, Inner]
 
 def f(x: Outer) -> None:
-    reveal_type(x)  # E: dict[str, Inner]
+    reveal_type(x)  # E: dict[str, list[Unknown] | Unknown]
 
 y: Outer[int] = {}  # E: not subscriptable
     "#,
@@ -314,6 +314,6 @@ Inner = Union[T, list[T]]
 Outer: TypeAlias = dict[str, Inner[int]]
 
 def f(x: Outer) -> None:
-    reveal_type(x)  # E: dict[str, Inner]
+    reveal_type(x)  # E: dict[str, int | list[int]]
     "#,
 );

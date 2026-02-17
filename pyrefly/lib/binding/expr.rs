@@ -30,7 +30,6 @@ use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Operator;
 use ruff_python_ast::StringLiteral;
-use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -89,10 +88,10 @@ pub enum Usage {
     /// Static type context that should not pin partial types.
     StaticTypeInformation,
     /// Type alias RHS context. Like StaticTypeInformation, does not pin
-    /// partial types. Additionally signals that self-references (name
-    /// references matching the alias being defined) should produce
-    /// Binding::TypeAliasRef instead of Binding::Forward.
-    TypeAliasRhs(Name),
+    /// partial types. Additionally signals that names resolving to type
+    /// alias bindings should produce Binding::TypeAliasRef instead of
+    /// Binding::Forward.
+    TypeAliasRhs,
 }
 
 impl Usage {
@@ -101,7 +100,7 @@ impl Usage {
         match other {
             Self::CurrentIdx(idx) => Self::Narrowing(Some(*idx)),
             Self::Narrowing(idx) => Self::Narrowing(*idx),
-            Self::StaticTypeInformation | Self::TypeAliasRhs(_) => Self::Narrowing(None),
+            Self::StaticTypeInformation | Self::TypeAliasRhs => Self::Narrowing(None),
         }
     }
 
@@ -110,7 +109,7 @@ impl Usage {
         match self {
             Usage::CurrentIdx(idx) => Some(*idx),
             Usage::Narrowing(idx) => *idx,
-            Usage::StaticTypeInformation | Usage::TypeAliasRhs(_) => None,
+            Usage::StaticTypeInformation | Usage::TypeAliasRhs => None,
         }
     }
 
@@ -332,7 +331,7 @@ impl<'a> BindingsBuilder<'a> {
             return self.insert_binding_overwrite(key, Binding::Any(AnyStyle::Error));
         }
         let used_in_static_type =
-            matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs(_));
+            matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs);
         let lookup_result =
             if used_in_static_type && let Some((tparams_collector, tparam_id)) = tparams_lookup {
                 self.intercept_lookup(tparams_collector, tparam_id)

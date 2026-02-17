@@ -1089,7 +1089,7 @@ BadAlias4 = TypeAliasType("BadAlias4", "BadAlias4")  # E: cyclic self-reference 
 BadAlias5 = TypeAliasType("BadAlias5", T | "BadAlias5[str]", type_params=(T,))  # E: cyclic self-reference in `BadAlias5`
 
 # Mutual circular reference
-BadAlias6 = TypeAliasType("BadAlias6", "BadAlias7")
+BadAlias6 = TypeAliasType("BadAlias6", "BadAlias7")  # E: cyclic self-reference in `BadAlias6`
 BadAlias7 = TypeAliasType("BadAlias7", BadAlias6)  # E: cyclic self-reference in `BadAlias7`
 
 # Self-reference via list
@@ -1132,7 +1132,7 @@ type RecursiveTypeAlias3 = RecursiveTypeAlias3  # E: cyclic self-reference in `R
 
 type RecursiveTypeAlias4[T] = T | RecursiveTypeAlias4[str]  # E: cyclic self-reference in `RecursiveTypeAlias4`
 
-type RecursiveTypeAlias6 = RecursiveTypeAlias7
+type RecursiveTypeAlias6 = RecursiveTypeAlias7  # E: cyclic self-reference in `RecursiveTypeAlias6`
 type RecursiveTypeAlias7 = RecursiveTypeAlias6  # E: cyclic self-reference in `RecursiveTypeAlias7`
 "#,
 );

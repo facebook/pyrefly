@@ -15,8 +15,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "`TypeAlias[GoodTypeAlias3, type[list[GoodTypeAlias2]]]` is not subscriptable",
-      "description": "`TypeAlias[GoodTypeAlias3, type[list[GoodTypeAlias2]]]` is not subscriptable",
+      "concise_description": "`TypeAlias[GoodTypeAlias3, type[list[int | None]]]` is not subscriptable",
+      "description": "`TypeAlias[GoodTypeAlias3, type[list[int | None]]]` is not subscriptable",
       "line": 68,
       "name": "unsupported-operation",
       "severity": "error",
@@ -721,6 +721,17 @@
       "severity": "error",
       "stop_column": 61,
       "stop_line": 75
+    },
+    {
+      "code": -2,
+      "column": 93,
+      "concise_description": "Found cyclic self-reference in `MutualReference2`",
+      "description": "Found cyclic self-reference in `MutualReference2`",
+      "line": 75,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 123,
+      "stop_line": 75
     }
   ],
   "aliases_type_statement.py": [
@@ -1035,6 +1046,17 @@
     {
       "code": -2,
       "column": 28,
+      "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias6`",
+      "description": "Found cyclic self-reference in `RecursiveTypeAlias6`",
+      "line": 88,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 47,
+      "stop_line": 88
+    },
+    {
+      "code": -2,
+      "column": 28,
       "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias7`",
       "description": "Found cyclic self-reference in `RecursiveTypeAlias7`",
       "line": 89,
@@ -1121,6 +1143,17 @@
       "severity": "error",
       "stop_column": 79,
       "stop_line": 47
+    },
+    {
+      "code": -2,
+      "column": 13,
+      "concise_description": "Found cyclic self-reference in `BadAlias6`",
+      "description": "Found cyclic self-reference in `BadAlias6`",
+      "line": 48,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 52,
+      "stop_line": 48
     },
     {
       "code": -2,
