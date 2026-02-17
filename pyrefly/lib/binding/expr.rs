@@ -1028,7 +1028,8 @@ impl<'a> BindingsBuilder<'a> {
     /// create a special binding that can be used to remap the special form to a proper
     /// self type during answers solving.
     ///
-    /// Note that this binding will only be present if we are in a class.
+    /// If we are in a class, creates a `SelfTypeLiteral` binding.
+    /// Otherwise, emits an error since `Self` is only valid within a class.
     fn track_potential_typing_self(&mut self, x: &Expr) {
         match self.as_special_export(x) {
             Some(SpecialExport::SelfType) => {
@@ -1038,6 +1039,12 @@ impl<'a> BindingsBuilder<'a> {
                     self.insert_binding(
                         Key::SelfTypeLiteral(x.range()),
                         Binding::SelfTypeLiteral(current_class_idx, x.range()),
+                    );
+                } else {
+                    self.error(
+                        x.range(),
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        "`Self` must appear within a class".to_owned(),
                     );
                 }
             }
