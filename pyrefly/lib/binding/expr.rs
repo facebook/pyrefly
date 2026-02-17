@@ -475,6 +475,7 @@ impl<'a> BindingsBuilder<'a> {
                 if is_unreachable {
                     BindingYieldFrom::Unreachable(y)
                 } else {
+                    // Lambdas cannot be async in Python, so this is always false.
                     BindingYieldFrom::YieldFrom(None, IsAsync::new(false), y)
                 },
             );
