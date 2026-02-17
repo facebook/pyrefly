@@ -20,28 +20,25 @@ use crate::ModuleInfo;
 use crate::config::error_kind::ErrorKind;
 use crate::error::error::Error;
 
-static PYREFLY_IGNORE_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"#\s*pyrefly:\s*ignore\s*\[([^\]]*)\]").unwrap());
+static PYREFLY_IGNORE_COMMENT_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"#\s*pyrefly:\s*ignore(?:\s*\[([^\]]*)\])?").unwrap());
 
 pub(crate) fn add_pyrefly_ignore_code_action(
     module_info: &ModuleInfo,
     error: &Error,
 ) -> Option<(String, Module, TextRange, String)> {
-    if module_info.is_notebook() || module_info.is_generated() {
-        return None;
-    }
-    if error.error_kind() == ErrorKind::UnusedIgnore {
+    if !should_offer_pyrefly_ignore(module_info, error) {
         return None;
     }
     let error_code = error.error_kind().to_name();
     let title = format!("Add `# pyrefly: ignore [{error_code}]`");
     let error_line = error.display_range().start.line_within_file();
-    let (line_range, line_text) = line_text_and_range(module_info, error_line)?;
+    let (line_range, line_text) = get_line_text_and_range(module_info, error_line)?;
 
-    if pyrefly_ignore_blank(line_text) {
+    if has_blank_pyrefly_ignore_comment(line_text) {
         return None;
     }
-    if let Some(existing_codes) = pyrefly_ignore_codes(line_text) {
+    if let Some(existing_codes) = get_current_pyrefly_ignore_codes(line_text) {
         if existing_codes.iter().any(|code| code == error_code) {
             return None;
         }
@@ -52,10 +49,10 @@ pub(crate) fn add_pyrefly_ignore_code_action(
     }
 
     if let Some(above_line) = error_line.decrement()
-        && let Some((above_range, above_text)) = line_text_and_range(module_info, above_line)
+        && let Some((above_range, above_text)) = get_line_text_and_range(module_info, above_line)
         && above_text.trim_start().starts_with('#')
-        && !pyrefly_ignore_blank(above_text)
-        && let Some(existing_codes) = pyrefly_ignore_codes(above_text)
+        && !has_blank_pyrefly_ignore_comment(above_text)
+        && let Some(existing_codes) = get_current_pyrefly_ignore_codes(above_text)
     {
         if existing_codes.iter().any(|code| code == error_code) {
             return None;
@@ -67,11 +64,24 @@ pub(crate) fn add_pyrefly_ignore_code_action(
     }
 
     let insert_range = TextRange::new(line_range.end(), line_range.end());
-    let insert_text = format!("  # pyrefly: ignore [{error_code}]");
+    let insert_text = if find_comment_start_in_line(line_text).is_some() {
+        format!("  pyrefly: ignore [{error_code}]")
+    } else {
+        format!("  # pyrefly: ignore [{error_code}]")
+    };
     Some((title, module_info.dupe(), insert_range, insert_text))
 }
 
-fn line_text_and_range(module_info: &ModuleInfo, line: LineNumber) -> Option<(TextRange, &str)> {
+fn should_offer_pyrefly_ignore(module_info: &ModuleInfo, error: &Error) -> bool {
+    !module_info.is_notebook()
+        && !module_info.is_generated()
+        && error.error_kind() != ErrorKind::UnusedIgnore
+}
+
+fn get_line_text_and_range(
+    module_info: &ModuleInfo,
+    line: LineNumber,
+) -> Option<(TextRange, &str)> {
     let line_index = line.to_zero_indexed() as usize;
     if line_index >= module_info.lined_buffer().line_count() {
         return None;
@@ -86,10 +96,10 @@ fn line_text_and_range(module_info: &ModuleInfo, line: LineNumber) -> Option<(Te
     Some((TextRange::new(start, end), line_text))
 }
 
-fn pyrefly_ignore_codes(line: &str) -> Option<Vec<String>> {
+fn get_current_pyrefly_ignore_codes(line: &str) -> Option<Vec<String>> {
     let comment_start = find_comment_start_in_line(line)?;
     let comment_part = &line[comment_start..];
-    let captures = PYREFLY_IGNORE_REGEX.captures(comment_part)?;
+    let captures = PYREFLY_IGNORE_COMMENT_REGEX.captures(comment_part)?;
     let inside = captures.get(1)?.as_str();
     let codes = inside
         .split(',')
@@ -97,42 +107,25 @@ fn pyrefly_ignore_codes(line: &str) -> Option<Vec<String>> {
         .filter(|code| !code.is_empty())
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    if codes.is_empty() {
+        return None;
+    }
     Some(codes)
 }
 
-fn pyrefly_ignore_blank(line: &str) -> bool {
+/// Returns true if the line already has a `# pyrefly: ignore` comment without any codes.
+fn has_blank_pyrefly_ignore_comment(line: &str) -> bool {
     let Some(comment_start) = find_comment_start_in_line(line) else {
         return false;
     };
-    let mut rest = line[comment_start..].trim_start();
-    if !rest.starts_with('#') {
+    let comment_part = &line[comment_start..];
+    let Some(captures) = PYREFLY_IGNORE_COMMENT_REGEX.captures(comment_part) else {
         return false;
-    }
-    rest = rest[1..].trim_start();
-    if !rest.starts_with("pyrefly") {
-        return false;
-    }
-    rest = rest["pyrefly".len()..].trim_start();
-    if !rest.starts_with(':') {
-        return false;
-    }
-    rest = rest[1..].trim_start();
-    if !rest.starts_with("ignore") {
-        return false;
-    }
-    rest = &rest["ignore".len()..];
-    let mut chars = rest.chars();
-    let Some(first) = chars.next() else {
+    };
+    let Some(group) = captures.get(1) else {
         return true;
     };
-    if first.is_alphanumeric() || first == '-' || first == '_' {
-        return false;
-    }
-    if first.is_whitespace() {
-        let trimmed = rest.trim_start();
-        return !trimmed.starts_with('[');
-    }
-    first != '['
+    group.as_str().trim().is_empty()
 }
 
 fn merge_pyrefly_ignore_codes(existing: Vec<String>, new_code: &str) -> Vec<String> {
@@ -150,9 +143,9 @@ fn replace_pyrefly_ignore_comment(line: &str, new_comment: &str) -> Option<Strin
     let comment_start = find_comment_start_in_line(line)?;
     let code_part = &line[..comment_start];
     let comment_part = &line[comment_start..];
-    if !PYREFLY_IGNORE_REGEX.is_match(comment_part) {
+    if !PYREFLY_IGNORE_COMMENT_REGEX.is_match(comment_part) {
         return None;
     }
-    let updated_comment = PYREFLY_IGNORE_REGEX.replace(comment_part, new_comment);
+    let updated_comment = PYREFLY_IGNORE_COMMENT_REGEX.replace(comment_part, new_comment);
     Some(format!("{code_part}{updated_comment}"))
 }

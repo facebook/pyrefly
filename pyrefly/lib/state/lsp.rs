@@ -7,6 +7,7 @@
 
 use std::cmp::Ordering;
 use std::cmp::Reverse;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -1966,6 +1967,7 @@ impl<'a> Transaction<'a> {
         let mut import_actions = Vec::new();
         let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
+        let mut other_action_keys: HashSet<(String, TextRange, String)> = HashSet::new();
         for error in errors {
             let error_range = error.range();
             if error_range.contains_range(range)
@@ -1973,9 +1975,11 @@ impl<'a> Transaction<'a> {
                     &module_info,
                     &error,
                 )
-                && !other_actions.iter().any(|existing| existing == &action)
             {
-                other_actions.push(action);
+                let key = (action.0.clone(), action.2, action.3.clone());
+                if other_action_keys.insert(key) {
+                    other_actions.push(action);
+                }
             }
             match error.error_kind() {
                 ErrorKind::UnknownName => {

@@ -873,6 +873,35 @@ x: int = "hello"  # pyrefly: ignore [bad-assignment]
 }
 
 #[test]
+fn quickfix_add_pyrefly_ignore_code_with_existing_comment() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "x: int = \"hello\" # intentional error\n#         ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+1 | x: int = "hello" # intentional error
+              ^
+Code Actions Results:
+# Title: Add `# pyrefly: ignore [bad-assignment]`
+
+## Before:
+x: int = "hello" # intentional error
+#         ^
+## After:
+x: int = "hello" # intentional error  pyrefly: ignore [bad-assignment]
+#         ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
 fn quickfix_merge_pyrefly_ignore_codes() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
