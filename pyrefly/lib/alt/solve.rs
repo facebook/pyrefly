@@ -19,6 +19,7 @@ use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::facet::FacetKind;
 use pyrefly_types::tensor::TensorType;
 use pyrefly_types::type_alias::TypeAliasData;
+use pyrefly_types::type_alias::TypeAliasRef;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -1333,7 +1334,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         keys.iter()
             .filter_map(|key| {
                 if let BindingLegacyTypeParam::ParamKeyed(def_key) = self.bindings().get(*key)
-                    && matches!(self.bindings().get(*def_key), Binding::TypeAlias { .. })
+                    && matches!(
+                        self.bindings().get(*def_key),
+                        Binding::TypeAlias { .. } | Binding::TypeAliasRef { .. }
+                    )
                 {
                     // In the bindings phase, we were unable to determine whether this key
                     // pointed to a legacy type parameter, so we created a
@@ -4500,6 +4504,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 *range,
                 errors,
             ),
+            Binding::TypeAliasRef {
+                name,
+                key_type_alias,
+                tparams,
+            } => {
+                let index = self.bindings().idx_to_key(*key_type_alias).0;
+                let r = TypeAliasRef {
+                    name: name.clone(),
+                    args: None,
+                    module_name: self.module().name(),
+                    module_path: self.module().path().clone(),
+                    index,
+                };
+                let tparams = self.create_type_alias_params_recursive(tparams);
+                Forallable::TypeAlias(TypeAliasData::Ref(r)).forall(tparams)
+            }
             Binding::LambdaParameter(var) => var.to_type(self.heap),
             Binding::FunctionParameter(param) => self.binding_to_type_function_parameter(param),
             Binding::SuperInstance(style, range) => self.solve_super_binding(style, *range, errors),

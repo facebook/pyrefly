@@ -1993,6 +1993,14 @@ pub enum Binding {
         key_type_alias: Idx<KeyTypeAlias>,
         range: TextRange,
     },
+    /// A reference to a type alias, produced when a name in a type alias RHS
+    /// resolves to another type alias definition. Directly produces a
+    /// `Forallable::TypeAlias(TypeAliasData::Ref(...))` at solve time.
+    TypeAliasRef {
+        name: Name,
+        key_type_alias: Idx<KeyTypeAlias>,
+        tparams: TypeAliasParams,
+    },
     /// An entry in a MatchMapping. The Key looks up the value being matched, the Expr is the key we're extracting.
     PatternMatchMapping(Expr, Idx<Key>),
     /// An entry in a MatchClass. The Key looks up the value being matched, the Expr is the class name.
@@ -2246,6 +2254,7 @@ impl DisplayWith<Bindings> for Binding {
                 )
             }
             Self::TypeAlias { name, .. } => write!(f, "TypeAlias({name})"),
+            Self::TypeAliasRef { name, .. } => write!(f, "TypeAliasRef({name})"),
             Self::PatternMatchMapping(mapping_key, binding_key) => {
                 write!(
                     f,
@@ -2405,6 +2414,7 @@ impl Binding {
             Binding::ClassDef(_, _) => Some(SymbolKind::Class),
             Binding::Module(_, _, _) => Some(SymbolKind::Module),
             Binding::TypeAlias { .. } => Some(SymbolKind::TypeAlias),
+            Binding::TypeAliasRef { .. } => Some(SymbolKind::TypeAlias),
             Binding::NameAssign { name, .. } if name.as_str() == name.to_uppercase() => {
                 Some(SymbolKind::Constant)
             }

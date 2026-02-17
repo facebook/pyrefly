@@ -61,12 +61,14 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
+use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::NarrowUseLocation;
+use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
@@ -1189,6 +1191,24 @@ impl<'a> BindingsBuilder<'a> {
         def_to_upstreams: &SmallMap<Idx<Key>, Idx<Key>>,
         first_uses_to_add: &mut SmallMap<Idx<Key>, Vec<Idx<Key>>>,
     ) {
+        // For TypeAliasRhs usage, check if the name resolves to the same type alias
+        // (self-reference) and produce a TypeAliasRef binding if so.
+        if let Usage::TypeAliasRhs(alias_name) = &deferred.usage
+            && let Some((name, key_type_alias, tparams)) =
+                self.follow_to_type_alias(deferred.lookup_result_idx)
+            && &name == alias_name
+        {
+            self.insert_binding_idx(
+                deferred.bound_name_idx,
+                Binding::TypeAliasRef {
+                    name,
+                    key_type_alias,
+                    tparams,
+                },
+            );
+            return;
+        }
+
         // Follow Forward chains to find any partial type
         let (default_idx, partial_type_info) =
             self.follow_to_partial_type(deferred.lookup_result_idx);
@@ -1320,6 +1340,43 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    /// Follow Forward chains to find a TypeAlias binding.
+    /// Returns `Some((name, key_type_alias, tparams))` if the chain ends at
+    /// a `Binding::TypeAlias`, or `None` otherwise.
+    fn follow_to_type_alias(
+        &self,
+        start_idx: Idx<Key>,
+    ) -> Option<(Name, Idx<KeyTypeAlias>, TypeAliasParams)> {
+        let mut current = start_idx;
+        let mut seen = SmallSet::new();
+        loop {
+            if seen.contains(&current) {
+                return None;
+            }
+            seen.insert(current);
+            match self.idx_to_binding(current) {
+                Some(Binding::Forward(target)) => {
+                    current = *target;
+                }
+                Some(Binding::TypeAlias {
+                    name,
+                    key_type_alias,
+                    tparams,
+                    ..
+                }) => {
+                    return Some((name.clone(), *key_type_alias, tparams.clone()));
+                }
+                Some(Binding::CompletedPartialType(target, _))
+                | Some(Binding::PartialTypeWithUpstreamsCompleted(target, _)) => {
+                    current = *target;
+                }
+                _ => {
+                    return None;
+                }
+            }
+        }
+    }
+
     /// Mark a CompletedPartialType as used by a specific binding.
     fn mark_first_use(&mut self, partial_type_idx: Idx<Key>, user_idx: Idx<Key>) {
         if let Some(Binding::CompletedPartialType(_, first_use)) =
@@ -1415,14 +1472,17 @@ impl<'a> BindingsBuilder<'a> {
         if let Some(prev_idx) = prev_idx {
             if matches!(
                 self.idx_to_binding(prev_idx),
-                Some(Binding::TypeAlias { .. })
+                Some(Binding::TypeAlias { .. } | Binding::TypeAliasRef { .. })
             ) {
                 self.error(
                     self.idx_to_key(idx).range(),
                     ErrorInfo::Kind(ErrorKind::Redefinition),
                     format!("Cannot redefine existing type alias `{name}`",),
                 )
-            } else if matches!(self.idx_to_binding(idx), Some(Binding::TypeAlias { .. })) {
+            } else if matches!(
+                self.idx_to_binding(idx),
+                Some(Binding::TypeAlias { .. } | Binding::TypeAliasRef { .. })
+            ) {
                 self.error(
                     self.idx_to_key(idx).range(),
                     ErrorInfo::Kind(ErrorKind::Redefinition),

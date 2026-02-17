@@ -92,7 +92,7 @@ pub enum Usage {
     /// partial types. Additionally signals that self-references (name
     /// references matching the alias being defined) should produce
     /// Binding::TypeAliasRef instead of Binding::Forward.
-    TypeAliasRhs(#[expect(dead_code)] Name),
+    TypeAliasRhs(Name),
 }
 
 impl Usage {

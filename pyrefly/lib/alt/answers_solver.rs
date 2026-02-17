@@ -1686,6 +1686,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 },
                 self.create_type_alias_params_recursive(tparams),
             ),
+            Binding::TypeAliasRef {
+                name,
+                key_type_alias,
+                tparams,
+            } => self.solver().fresh_alias_recursive(
+                self.uniques,
+                TypeAliasRef {
+                    name: name.clone(),
+                    args: None,
+                    module_name: self.module().name(),
+                    module_path: self.module().path().clone(),
+                    index: self.bindings().idx_to_key(*key_type_alias).0,
+                },
+                self.create_type_alias_params_recursive(tparams),
+            ),
             _ => self.solver().fresh_recursive(self.uniques),
         }
     }
