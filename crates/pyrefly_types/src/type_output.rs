@@ -663,13 +663,7 @@ mod tests {
         // Expected future behavior: [("Literal", Some(location)), ("[", None), ("1", None), ("]", None)]
 
         // Create Literal[1] type
-<<<<<<< HEAD
         let literal_type = Lit::Int(LitInt::new(1)).to_implicit_type();
-||||||| parent of a0412b19d (fmt)
-        let literal_type = Type::Literal(Lit::Int(LitInt::new(1)));
-=======
-        let literal_type = Lit::Int(crate::lit_int::LitInt::new(1)).to_implicit_type();
->>>>>>> a0412b19d (fmt)
 
         let ctx = TypeDisplayContext::new(&[&literal_type]);
         let mut output = OutputWithLocations::new(&ctx);
