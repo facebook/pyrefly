@@ -347,6 +347,7 @@ impl Bindings {
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
+            pytest_info: None,
             lambda_yield_keys: Vec::new(),
             class_scopes: Vec::new(),
             subsequently_initialized: SmallSet::new(),
