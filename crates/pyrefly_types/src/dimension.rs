@@ -726,6 +726,12 @@ pub enum ShapeError {
     /// For example: passing Dim[(A * B) // 2] to parameter Dim[X // 2]
     /// X appears in a nested position (inside // 2) and cannot be inferred
     NestedTypeVarNotInferred,
+
+    /// Cannot index a scalar (rank-0) tensor
+    ScalarIndex,
+
+    /// Too many indices for tensor rank
+    TooManyIndices { got: usize, max: usize },
 }
 
 impl Display for ShapeError {
@@ -755,6 +761,16 @@ impl Display for ShapeError {
             }
             Self::NestedTypeVarNotInferred => {
                 write!(f, "Type variable cannot be inferred from a nested position")
+            }
+            Self::ScalarIndex => {
+                write!(f, "Cannot index scalar tensor (rank 0)")
+            }
+            Self::TooManyIndices { got, max } => {
+                write!(
+                    f,
+                    "Too many indices for tensor: got {}, expected at most {}",
+                    got, max
+                )
             }
         }
     }

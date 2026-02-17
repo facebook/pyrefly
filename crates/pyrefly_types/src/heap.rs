@@ -29,6 +29,7 @@ use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
 use crate::special_form::SpecialForm;
+use crate::tensor::TensorType;
 use crate::type_alias::TypeAliasData;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
@@ -365,5 +366,10 @@ impl TypeHeap {
     /// Create a `Type::Size` from a SizeExpr.
     pub fn mk_size(&self, size_expr: SizeExpr) -> Type {
         Type::Size(size_expr)
+    }
+
+    /// Create a `Type::Tensor` from a TensorType.
+    pub fn mk_tensor(&self, tensor: TensorType) -> Type {
+        Type::Tensor(Box::new(tensor))
     }
 }

@@ -17,6 +17,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::facet::FacetKind;
+use pyrefly_types::tensor::TensorType;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::typed_dict::ExtraItems;
@@ -4776,13 +4777,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Type::Args(_)
             | Type::Kwargs(_)) => Some(ty),
             Type::Type(t) => {
-                // Canonicalize ClassType(Dim, [X]) to Type::Dim(X) for consistency
-                // This ensures bare Dim annotations produce the same representation as Dim[Any]
+                // Canonicalize bare Dim to Type::Dim for consistency.
+                // Subscripted Dim[X] is already converted to Type::Dim in parse_symint_type,
+                // so only the bare case (promoted to ClassType with default targs) reaches here.
                 if let Type::ClassType(cls) = t.as_ref()
                     && cls.has_qname("torch_shapes", "Dim")
-                    && cls.targs().len() == 1
                 {
                     return Some(self.heap.mk_dim(cls.targs().as_slice()[0].clone()));
+                }
+                // Canonicalize bare Tensor to Type::Tensor(shapeless) for consistency.
+                // Subscripted Tensor[2, 3] is already converted to Type::Tensor in
+                // parse_tensor_type, so only the bare case reaches here.
+                if let Type::ClassType(cls) = t.as_ref()
+                    && cls.has_qname("torch", "Tensor")
+                {
+                    return Some(TensorType::shapeless(cls.clone()).to_type());
                 }
                 Some(*t)
             }
@@ -4812,9 +4821,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::QuantifiedValue(q) => Some(q.to_type(self.heap)),
             Type::ArgsValue(q) => Some(self.heap.mk_args(*q)),
             Type::KwargsValue(q) => Some(self.heap.mk_kwargs(*q)),
-            // Dim and Size are already type forms
+            // Dim, SizeExpr, and Tensor are already type forms
             ty @ Type::Dim(_) => Some(ty),
             ty @ Type::Size(_) => Some(ty),
+            ty @ Type::Tensor(_) => Some(ty),
+            // Handle bare class definitions (e.g., Dim, Module) by canonicalizing them to type forms
+            Type::ClassDef(cls) => {
+                let canonicalized =
+                    self.canonicalize_all_class_types(Type::ClassDef(cls), range, errors);
+                self.untype_opt(canonicalized, range, errors)
+            }
             _ => None,
         }
     }
@@ -5154,12 +5170,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let elts: Vec<Param> = x
                     .elts
                     .iter()
-                    .map(|x| {
-                        Param::PosOnly(
-                            None,
-                            self.expr_untype(x, type_form_context, errors),
-                            Required::Required,
-                        )
+                    .map(|elt| {
+                        let ty = self.expr_untype(elt, type_form_context, errors);
+                        Param::PosOnly(None, ty, Required::Required)
                     })
                     .collect();
                 Type::ParamSpecValue(ParamList::new(elts))

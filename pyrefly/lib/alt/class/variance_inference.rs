@@ -16,6 +16,7 @@ use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::tensor::TensorShape;
 use pyrefly_types::types::Union;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -215,6 +216,28 @@ fn on_type(
             let sigs = &t.signatures;
             for sig in sigs {
                 on_type(variance, inj, &sig.as_type(), on_edge, on_var);
+            }
+        }
+        Type::Tensor(tensor) => {
+            // Tensor dimensions are invariant - Tensor[2, 3] is not a subtype of Tensor[3, 2]
+            let mut visit_dim = |ty: &Type| {
+                on_type(Variance::Invariant, inj, ty, on_edge, on_var);
+            };
+            match &tensor.shape {
+                TensorShape::Concrete(dims) => {
+                    for dim in dims {
+                        visit_dim(dim);
+                    }
+                }
+                TensorShape::Unpacked(box (prefix, middle, suffix)) => {
+                    for dim in prefix {
+                        visit_dim(dim);
+                    }
+                    visit_dim(middle);
+                    for dim in suffix {
+                        visit_dim(dim);
+                    }
+                }
             }
         }
         Type::Callable(t) => {

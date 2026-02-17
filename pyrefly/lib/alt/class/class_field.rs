@@ -26,6 +26,7 @@ use pyrefly_types::literal::LitStyle;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::read_only::IsFinalVariableInitialized;
 use pyrefly_types::simplify::unions;
+use pyrefly_types::tensor::TensorType;
 use pyrefly_types::type_var::PreInferenceVariance;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDictInner;
@@ -1085,6 +1086,8 @@ enum InstanceKind {
     Protocol(Type),
     Metaclass(ClassBase),
     LiteralString,
+    /// Tensor instance: Self is substituted with the full tensor type (including shape).
+    Tensor(TensorType),
 }
 
 /// Wrapper to hold a specialized instance of a class , unifying ClassType and TypedDict.
@@ -1152,6 +1155,14 @@ impl<'a> Instance<'a> {
         }
     }
 
+    fn of_tensor(tensor: &'a TensorType) -> Self {
+        Self {
+            kind: InstanceKind::Tensor(tensor.clone()),
+            class: tensor.base_class.class_object(),
+            targs: tensor.base_class.targs(),
+        }
+    }
+
     /// Instantiate a type that is relative to the class type parameters
     /// by substituting in the type arguments.
     fn instantiate_member(&self, raw_member: &mut Type) {
@@ -1173,6 +1184,7 @@ impl<'a> Instance<'a> {
             InstanceKind::Protocol(self_type) => self_type.clone(),
             InstanceKind::Metaclass(cls) => cls.clone().to_type(heap),
             InstanceKind::LiteralString => heap.mk_literal_string(LitStyle::Implicit),
+            InstanceKind::Tensor(tensor) => tensor.clone().to_type(),
         }
     }
 
@@ -1205,7 +1217,8 @@ impl<'a> Instance<'a> {
             | InstanceKind::Protocol(..)
             | InstanceKind::Metaclass(..)
             | InstanceKind::TypeVar(..)
-            | InstanceKind::LiteralString => Some(DescriptorBase::Instance(ClassType::new(
+            | InstanceKind::LiteralString
+            | InstanceKind::Tensor(..) => Some(DescriptorBase::Instance(ClassType::new(
                 self.class.dupe(),
                 self.targs.clone(),
             ))),
@@ -3467,6 +3480,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_self_attribute(&self, cls: &ClassType, name: &Name) -> Option<ClassAttribute> {
         self.get_class_member(cls.class_object(), name)
             .map(|field| self.as_instance_attribute(name, &field, &Instance::of_self_type(cls)))
+    }
+
+    /// Look up an attribute on a tensor instance, substituting Self with the full tensor type.
+    pub fn get_tensor_attribute(&self, tensor: &TensorType, name: &Name) -> Option<ClassAttribute> {
+        self.get_class_member(tensor.base_class.class_object(), name)
+            .map(|field| self.as_instance_attribute(name, &field, &Instance::of_tensor(tensor)))
     }
 
     pub fn get_protocol_attribute(
