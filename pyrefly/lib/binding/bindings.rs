@@ -1372,6 +1372,17 @@ impl<'a> BindingsBuilder<'a> {
                 | Some(Binding::PartialTypeWithUpstreamsCompleted(target, _)) => {
                     current = *target;
                 }
+                // In legacy type alias RHS processing, all names go through
+                // intercept_lookup which wraps them in PossibleLegacyTParam.
+                // By finalize time we can follow through to the original
+                // binding to check whether it's actually a type alias.
+                Some(Binding::PossibleLegacyTParam(tparam_idx, _)) => {
+                    if let Some(legacy_binding) = self.idx_to_binding(*tparam_idx) {
+                        current = legacy_binding.idx();
+                    } else {
+                        return None;
+                    }
+                }
                 _ => {
                     return None;
                 }
