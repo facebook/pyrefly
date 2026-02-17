@@ -19,6 +19,7 @@ use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::facet::FacetKind;
 use pyrefly_types::tensor::TensorType;
 use pyrefly_types::type_alias::TypeAliasData;
+use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_alias::TypeAliasRef;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::typed_dict::ExtraItems;
@@ -39,6 +40,7 @@ use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
@@ -98,6 +100,7 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
+use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
@@ -1355,6 +1358,69 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             })
             .collect()
+    }
+
+    /// Expand non-recursive `UntypedAlias(Ref(...))` nodes in a type by
+    /// inlining the referenced alias's raw body from `KeyTypeAlias`.
+    /// Recursive references (detected via a visiting set) are left in place.
+    /// `current_index` is the alias being defined — pre-seeded in the
+    /// visiting set so self-references are immediately recognized as recursive.
+    #[allow(dead_code)]
+    fn expand_type_alias_refs(&self, ty: &mut Type, current_index: TypeAliasIndex) {
+        let mut visiting = SmallSet::new();
+        visiting.insert((self.module().name(), current_index));
+        self.expand_type_alias_refs_inner(ty, &mut visiting);
+    }
+
+    /// Inner recursive walker for `expand_type_alias_refs`. Matches
+    /// `UntypedAlias(Ref(...))` nodes for same-module aliases, looks up
+    /// the raw body from `KeyTypeAlias`, and inlines it. Cross-module
+    /// refs are left untouched (they resolve through the exports table).
+    #[allow(dead_code)]
+    fn expand_type_alias_refs_inner(
+        &self,
+        ty: &mut Type,
+        visiting: &mut SmallSet<(ModuleName, TypeAliasIndex)>,
+    ) {
+        match ty {
+            Type::UntypedAlias(box TypeAliasData::Ref(r))
+                if r.module_name == self.module().name() =>
+            {
+                let key = (r.module_name, r.index);
+                if visiting.contains(&key) {
+                    // Recursive reference — leave as Ref for cycle detection
+                    return;
+                }
+                let key_type_alias = KeyTypeAlias(r.index);
+                let idx = self
+                    .bindings()
+                    .key_to_idx_hashed_opt(Hashed::new(&key_type_alias))
+                    .expect("same-module TypeAliasRef must have a corresponding KeyTypeAlias");
+                let ta: Arc<TypeAlias> = self.get_idx(idx);
+                // The body stored in KeyTypeAlias has already been through
+                // untype_opt during wrap_type_alias, so we just strip the
+                // Type::Type wrapper rather than re-running untype.
+                // Note: TypeAlias::error() and TypeAlias::unknown() store raw
+                // types (not wrapped in Type::Type), so we leave the Ref in
+                // place for those — the error is already reported elsewhere.
+                let mut body = match ta.as_type() {
+                    Type::Type(inner) => *inner,
+                    _ => return,
+                };
+                // Apply type arguments if the reference was parameterized
+                if let Some(args) = &r.args {
+                    args.substitute_into_mut(&mut body);
+                }
+                // Recursively expand any Refs in the inlined body
+                visiting.insert(key);
+                self.expand_type_alias_refs_inner(&mut body, visiting);
+                visiting.shift_remove(&key);
+                *ty = body;
+            }
+            _ => ty.visit_mut(&mut |child: &mut Type| {
+                self.expand_type_alias_refs_inner(child, visiting);
+            }),
+        }
     }
 
     fn context_value_enter(
