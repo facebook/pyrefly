@@ -9,7 +9,7 @@ repository = "https://github.com/facebook/pyrefly"
 license = "MIT"
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.100"
 clap = { version = "4.5.42", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 dupe = "0.9.1"
 enum-iterator = "2.3.0"
@@ -30,5 +30,5 @@ static_interner = "0.1.1"
 thiserror = "2.0.18"
 
 [dev-dependencies]
-serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
+serde_json = { version = "1.0.145", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 toml = { version = "0.9.11", features = ["preserve_order"] }

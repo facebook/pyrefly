@@ -9,7 +9,7 @@ repository = "https://github.com/facebook/pyrefly"
 license = "MIT"
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.100"
 clap = { version = "4.5.42", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 configparser = { version = "3.1.0", features = ["indexmap"] }
 convert_case = "0.11"
@@ -24,7 +24,7 @@ pyrefly_util = { path = "../pyrefly_util" }
 regex = "1.12.2"
 regex-syntax = "0.7.5"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
-serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
+serde_json = { version = "1.0.145", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 serde_jsonrc = "0.1"
 serde_with = { version = "3", features = ["hex", "json"] }
 starlark_map = "0.13.0"

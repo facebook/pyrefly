@@ -10,7 +10,7 @@ license = "MIT"
 build = "build.rs"
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.100"
 starlark_map = "0.13.0"
 tar = "0.4.44"
 zstd = "0.13"

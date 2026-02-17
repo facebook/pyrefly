@@ -440,7 +440,7 @@ dependencies = [
  "cfg-if",
  "itoa 1.0.17",
  "rustversion",
- "ryu 1.0.17",
+ "ryu 1.0.23",
  "serde",
  "static_assertions",
 ]
@@ -455,7 +455,7 @@ dependencies = [
  "cfg-if",
  "itoa 1.0.17",
  "rustversion",
- "ryu 1.0.17",
+ "ryu 1.0.23",
  "serde",
  "static_assertions",
 ]
@@ -1484,9 +1484,9 @@ checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
 name = "jobserver"
-version = "0.1.33"
+version = "0.1.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38f262f097c174adebe41eb73d66ae9c06b2844fb0da69969647bbddd9b0538a"
+checksum = "9afb3de4395d6b3e67a780b6de64b51c978ecf11cb9a462c66be7d4ca9039d33"
 dependencies = [
  "getrandom 0.3.3",
  "libc",
@@ -2760,9 +2760,9 @@ checksum = "b96a9549dc8d48f2c283938303c4b5a77aa29bfbc5b54b084fb1630408899a8f"
 
 [[package]]
 name = "ryu"
-version = "1.0.17"
+version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e86697c916019a8588c99b5fac3cead74ec0b4b819707a682fd4d23fa0ce1ba1"
+checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "same-file"
