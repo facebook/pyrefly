@@ -518,45 +518,47 @@ fn collect_matches(
     skip_range: Option<TextRange>,
 ) -> Vec<ExprMatch> {
     let mut matches = Vec::new();
-    ast.visit(&mut |expr: &Expr| {
-        if let Some(skip_range) = skip_range
-            && skip_range.contains_range(expr.range())
-        {
-            return;
-        }
-        if let Some(min_start) = min_start
-            && expr.range().start() < min_start
-        {
-            return;
-        }
-        let mut bindings = HashMap::new();
-        if !match_expr(
-            &pattern.return_expr,
-            expr,
-            &pattern.param_set,
-            &pattern.param_counts,
-            &mut bindings,
-            module_info,
-        ) {
-            return;
-        }
-        let expr_range = expr.range();
-        let mut should_add = true;
-        matches.retain(|existing: &ExprMatch| {
-            if existing.range.contains_range(expr_range) {
-                should_add = false;
-                true
-            } else {
-                !expr_range.contains_range(existing.range)
+    for stmt in &ast.body {
+        stmt.visit(&mut |expr: &Expr| {
+            if let Some(skip_range) = skip_range
+                && skip_range.contains_range(expr.range())
+            {
+                return;
+            }
+            if let Some(min_start) = min_start
+                && expr.range().start() < min_start
+            {
+                return;
+            }
+            let mut bindings = HashMap::new();
+            if !match_expr(
+                &pattern.return_expr,
+                expr,
+                &pattern.param_set,
+                &pattern.param_counts,
+                &mut bindings,
+                module_info,
+            ) {
+                return;
+            }
+            let expr_range = expr.range();
+            let mut should_add = true;
+            matches.retain(|existing: &ExprMatch| {
+                if existing.range.contains_range(expr_range) {
+                    should_add = false;
+                    true
+                } else {
+                    !expr_range.contains_range(existing.range)
+                }
+            });
+            if should_add {
+                matches.push(ExprMatch {
+                    range: expr_range,
+                    bindings,
+                });
             }
         });
-        if should_add {
-            matches.push(ExprMatch {
-                range: expr_range,
-                bindings,
-            });
-        }
-    });
+    }
     matches
 }
 

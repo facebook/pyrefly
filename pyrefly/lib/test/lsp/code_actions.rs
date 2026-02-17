@@ -3136,6 +3136,29 @@ second = square(3)
 }
 
 #[test]
+fn use_function_rewrites_expression_stmt_in_function_body() {
+    let mod1 = r#"
+def square(x):
+    return x ** 2
+
+def other(x):
+    x ** 2
+"#;
+    let (module_infos, actions) = compute_use_function_actions(&[("mod1", mod1)], "mod1", "square");
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_mod1 = apply_refactor_edits_for_module(module_infos.get("mod1").unwrap(), edits);
+    let expected_mod1 = r#"
+def square(x):
+    return x ** 2
+
+def other(x):
+    square(x)
+"#;
+    assert_eq!(expected_mod1.trim(), updated_mod1.trim());
+}
+
+#[test]
 fn use_function_zero_args() {
     let mod1 = r#"
 def one():
