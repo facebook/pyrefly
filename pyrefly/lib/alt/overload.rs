@@ -51,19 +51,24 @@ struct CalledOverload {
 }
 
 /// Performs argument type expansion for arguments to an overloaded function.
-struct ArgsExpander<'a> {
+pub struct ArgsExpander<'a, Ans: LookupAnswer> {
     /// The index of the next argument to expand. Left is positional args; right, keyword args.
     idx: Either<usize, usize>,
     /// Current argument lists.
     arg_lists: Vec<(Vec<CallArg<'a>>, Vec<CallKeyword<'a>>)>,
     /// Hard-coded limit to how many times we'll expand.
     gas: Gas,
+    solver: &'a AnswersSolver<'a, Ans>,
 }
 
-impl<'a> ArgsExpander<'a> {
+impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
     const GAS: usize = 100;
 
-    fn new(posargs: Vec<CallArg<'a>>, keywords: Vec<CallKeyword<'a>>) -> Self {
+    pub fn new(
+        posargs: Vec<CallArg<'a>>,
+        keywords: Vec<CallKeyword<'a>>,
+        solver: &'a AnswersSolver<'a, Ans>,
+    ) -> Self {
         Self {
             idx: if posargs.is_empty() {
                 Either::Right(0)
@@ -72,13 +77,13 @@ impl<'a> ArgsExpander<'a> {
             },
             arg_lists: vec![(posargs, keywords)],
             gas: Gas::new(Self::GAS as isize),
+            solver,
         }
     }
 
     /// Expand the next argument and return the expanded argument lists.
-    fn expand<Ans: LookupAnswer>(
+    pub fn expand(
         &mut self,
-        solver: &'a AnswersSolver<Ans>,
         errors: &ErrorCollector,
         owner: &'a Owner<Type>,
     ) -> Option<Vec<(Vec<CallArg<'a>>, Vec<CallKeyword<'a>>)>> {
@@ -105,10 +110,10 @@ impl<'a> ArgsExpander<'a> {
                 return None;
             }
         };
-        let expanded_types = Self::expand_type(value.infer(solver, errors), solver);
+        let expanded_types = self.expand_type(value.infer(self.solver, errors));
         if expanded_types.is_empty() {
             // Nothing to expand here, try the next argument.
-            self.expand(solver, errors, owner)
+            self.expand(errors, owner)
         } else {
             let expanded_types = expanded_types.into_map(|t| owner.push(t));
             let mut new_arg_lists = Vec::new();
@@ -148,7 +153,7 @@ impl<'a> ArgsExpander<'a> {
     }
 
     /// Expands a type according to https://typing.python.org/en/latest/spec/overload.html#argument-type-expansion.
-    fn expand_type<Ans: LookupAnswer>(ty: Type, solver: &AnswersSolver<Ans>) -> Vec<Type> {
+    fn expand_type(&self, ty: Type) -> Vec<Type> {
         match ty {
             Type::Union(box Union { members: ts, .. }) => ts,
             Type::ClassType(cls) if cls.is_builtin("bool") => {
@@ -157,22 +162,27 @@ impl<'a> ArgsExpander<'a> {
                     Lit::Bool(false).to_implicit_type(),
                 ]
             }
-            Type::ClassType(cls) if solver.get_metadata_for_class(cls.class_object()).is_enum() => {
-                solver
+            Type::ClassType(cls)
+                if self
+                    .solver
+                    .get_metadata_for_class(cls.class_object())
+                    .is_enum() =>
+            {
+                self.solver
                     .get_enum_members(cls.class_object())
                     .into_iter()
                     .map(Lit::to_implicit_type)
                     .collect()
             }
             Type::Type(box Type::Union(box Union { members: ts, .. })) => {
-                ts.into_map(|t| solver.heap.mk_type_form(t))
+                ts.into_map(|t| self.solver.heap.mk_type_form(t))
             }
             Type::Tuple(Tuple::Concrete(elements)) => {
                 let mut count: usize = 1;
                 let mut changed = false;
                 let mut element_expansions = Vec::new();
                 for e in elements {
-                    let element_expansion = Self::expand_type(e.clone(), solver);
+                    let element_expansion = self.expand_type(e.clone());
                     if element_expansion.is_empty() {
                         element_expansions.push(vec![e].into_iter());
                     } else {
@@ -190,7 +200,7 @@ impl<'a> ArgsExpander<'a> {
                     element_expansions
                         .into_iter()
                         .multi_cartesian_product()
-                        .map(|x| solver.heap.mk_concrete_tuple(x))
+                        .map(|x| self.solver.heap.mk_concrete_tuple(x))
                         .collect()
                 } else {
                     Vec::new()
@@ -206,7 +216,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn call_overloads(
         &self,
         overloads: Vec1<TargetWithTParams<Function>>,
-        metadata: FuncMetadata,
+        metadata: &FuncMetadata,
         self_obj: Option<Type>,
         args: &[CallArg],
         keywords: &[CallKeyword],
@@ -259,7 +269,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Note: steps 4-6 are performed in `find_closest_overload`.
                 let (mut closest_overload, mut matched) = self.find_closest_overload(
                     &arity_compatible_overloads,
-                    &metadata,
+                    metadata,
                     self_obj.as_ref(),
                     &args,
                     &keywords,
@@ -270,10 +280,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
 
                 // Step 3: perform argument type expansion.
-                let mut args_expander = ArgsExpander::new(args.clone(), keywords.clone());
+                let mut args_expander = ArgsExpander::new(args.clone(), keywords.clone(), self);
                 let owner = Owner::new();
-                'outer: while !matched
-                    && let Some(arg_lists) = args_expander.expand(self, errors, &owner)
+                'outer: while !matched && let Some(arg_lists) = args_expander.expand(errors, &owner)
                 {
                     // Expand by one argument (for example, try splitting up union types), and try the call with each
                     // resulting arguments list.
@@ -284,7 +293,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     for (cur_args, cur_keywords) in arg_lists.clone().iter() {
                         let (cur_closest, cur_matched) = self.find_closest_overload(
                             &arity_compatible_overloads,
-                            &metadata,
+                            metadata,
                             self_obj.as_ref(),
                             cur_args,
                             cur_keywords,

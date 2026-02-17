@@ -391,7 +391,7 @@ impl AnyExportedKey {
 pub trait Keyed: Hash + Eq + Clone + DisplayWith<ModuleInfo> + Debug + Ranged + 'static {
     const EXPORTED: bool = false;
     type Value: Debug + DisplayWith<Bindings>;
-    type Answer: Clone + Debug + Display + TypeEq + VisitMut<Type>;
+    type Answer: Clone + Debug + Display + TypeEq + VisitMut<Type> + Send + Sync;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx;
 
     /// Convert this key to an AnyExportedKey if it is an exported key.
@@ -1871,7 +1871,13 @@ pub struct BranchInfo {
 pub enum TypeAliasParams {
     Legacy(Option<Box<[Idx<KeyLegacyTypeParam>]>>),
     Scoped(Option<TypeParams>),
-    TypeAliasType(Vec<Expr>),
+    /// Type parameters for a type alias created via a `TypeAliasType` call
+    /// `declared_params` are the params declared via the `type_params` keyword.
+    /// `legacy_params` are all of the legacy type param usages in the alias.
+    TypeAliasType {
+        declared_params: Vec<Expr>,
+        legacy_params: Box<[Idx<KeyLegacyTypeParam>]>,
+    },
 }
 
 #[derive(Clone, Debug)]

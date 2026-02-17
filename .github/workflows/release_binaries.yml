@@ -15,6 +15,7 @@ permissions:
 
 env:
   GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
   # Use release tag if triggered by release, otherwise use manual input
   TAG_NAME: ${{ github.event.release.tag_name || inputs.tag_name }}
 

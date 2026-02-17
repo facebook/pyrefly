@@ -21,6 +21,7 @@ use crate::callable::ParamList;
 use crate::callable::Params;
 use crate::callable::Required;
 use crate::class::ClassType;
+use crate::dimension::SizeExpr;
 use crate::keywords::KwCall;
 use crate::literal::LitStyle;
 use crate::literal::Literal;
@@ -28,6 +29,7 @@ use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
 use crate::special_form::SpecialForm;
+use crate::tensor::TensorType;
 use crate::type_alias::TypeAliasData;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
@@ -354,5 +356,20 @@ impl TypeHeap {
     /// Create a `Type::Never` with the given style.
     pub fn mk_never_style(&self, style: crate::types::NeverStyle) -> Type {
         Type::Never(style)
+    }
+
+    /// Create a `Type::Dim` wrapping an inner type.
+    pub fn mk_dim(&self, inner: Type) -> Type {
+        Type::Dim(Box::new(inner))
+    }
+
+    /// Create a `Type::Size` from a SizeExpr.
+    pub fn mk_size(&self, size_expr: SizeExpr) -> Type {
+        Type::Size(size_expr)
+    }
+
+    /// Create a `Type::Tensor` from a TensorType.
+    pub fn mk_tensor(&self, tensor: TensorType) -> Type {
+        Type::Tensor(Box::new(tensor))
     }
 }

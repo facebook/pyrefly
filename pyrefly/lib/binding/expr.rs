@@ -458,18 +458,38 @@ impl<'a> BindingsBuilder<'a> {
             }
         }
         self.ensure_expr(&mut lambda.body, usage);
-        // Pyrefly currently does not support `yield` in lambdas, but we cannot drop them
-        // entirely or we will panic at solve time.
-        //
-        // TODO: We should properly handle `yield` and `yield from`; lambdas can be generators.
-        // One example of this is in the standard library, in `_collections_abc.pyi`:
-        // https://github.com/python/cpython/blob/965662ee4a986605b60da470d9e7c1e9a6f922b3/Lib/_collections_abc.py#L92
         let (yields_and_returns, _, _, _) = self.scopes.pop_function_scope();
-        for (idx, y, _) in yields_and_returns.yields {
-            self.insert_binding_idx(idx, BindingYield::Invalid(y));
+        let mut yield_keys = Vec::new();
+        for (idx, y, is_unreachable) in yields_and_returns.yields {
+            yield_keys.push(idx);
+            self.insert_binding_idx(
+                idx,
+                if is_unreachable {
+                    BindingYield::Unreachable(y)
+                } else {
+                    BindingYield::Yield(None, y)
+                },
+            );
         }
-        for (idx, y, _) in yields_and_returns.yield_froms {
-            self.insert_binding_idx(idx, BindingYieldFrom::Invalid(y));
+        let mut yield_from_keys = Vec::new();
+        for (idx, y, is_unreachable) in yields_and_returns.yield_froms {
+            yield_from_keys.push(idx);
+            self.insert_binding_idx(
+                idx,
+                if is_unreachable {
+                    BindingYieldFrom::Unreachable(y)
+                } else {
+                    // Lambdas cannot be async in Python, so this is always false.
+                    BindingYieldFrom::YieldFrom(None, IsAsync::new(false), y)
+                },
+            );
+        }
+        if !yield_keys.is_empty() || !yield_from_keys.is_empty() {
+            self.record_lambda_yield_keys(
+                lambda.range,
+                yield_keys.into_boxed_slice(),
+                yield_from_keys.into_boxed_slice(),
+            );
         }
     }
 
@@ -1008,7 +1028,8 @@ impl<'a> BindingsBuilder<'a> {
     /// create a special binding that can be used to remap the special form to a proper
     /// self type during answers solving.
     ///
-    /// Note that this binding will only be present if we are in a class.
+    /// If we are in a class, creates a `SelfTypeLiteral` binding.
+    /// Otherwise, emits an error since `Self` is only valid within a class.
     fn track_potential_typing_self(&mut self, x: &Expr) {
         match self.as_special_export(x) {
             Some(SpecialExport::SelfType) => {
@@ -1018,6 +1039,12 @@ impl<'a> BindingsBuilder<'a> {
                     self.insert_binding(
                         Key::SelfTypeLiteral(x.range()),
                         Binding::SelfTypeLiteral(current_class_idx, x.range()),
+                    );
+                } else {
+                    self.error(
+                        x.range(),
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        "`Self` must appear within a class".to_owned(),
                     );
                 }
             }

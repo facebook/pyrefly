@@ -103,6 +103,32 @@ fn find_marked_range_with(source: &str, start_marker: &str, end_marker: &str) ->
     )
 }
 
+/// Finds the text range for the Nth occurrence of `needle` in `source`.
+///
+/// This is used by tests that need to select a specific repeated token without
+/// adding extra inline markers.
+fn find_nth_range(source: &str, needle: &str, occurrence: usize) -> TextRange {
+    assert!(occurrence > 0, "occurrence is 1-based");
+    let mut start = 0;
+    let mut seen = 0;
+    while let Some(found) = source[start..].find(needle) {
+        let abs = start + found;
+        seen += 1;
+        if seen == occurrence {
+            let end = abs + needle.len();
+            return TextRange::new(
+                TextSize::try_from(abs).unwrap(),
+                TextSize::try_from(end).unwrap(),
+            );
+        }
+        start = abs + needle.len();
+    }
+    panic!(
+        "could not find occurrence {} of '{}' in source",
+        occurrence, needle
+    );
+}
+
 fn compute_extract_actions(
     code: &str,
 ) -> (
@@ -157,6 +183,73 @@ fn apply_first_extract_variable_action(code: &str) -> Option<String> {
     let (module_info, actions, _) = compute_extract_variable_actions(code);
     let edits = actions.first()?;
     Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
+fn compute_invert_boolean_actions(
+    code: &str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .invert_boolean_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn apply_first_invert_boolean_action(code: &str, selection: TextRange) -> Option<String> {
+    let (module_info, actions, _) = compute_invert_boolean_actions(code, selection);
+    let edits = actions.first()?;
+    Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
+fn assert_no_invert_boolean_action(code: &str, selection: TextRange) {
+    let (_, actions, _) = compute_invert_boolean_actions(code, selection);
+    assert!(
+        actions.is_empty(),
+        "expected no invert-boolean actions, found {}",
+        actions.len()
+    );
+}
+
+fn compute_invert_boolean_actions_allow_errors(
+    code: &str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Everything, false);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .invert_boolean_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn assert_no_invert_boolean_action_allow_errors(code: &str, selection: TextRange) {
+    let (_, actions, _) = compute_invert_boolean_actions_allow_errors(code, selection);
+    assert!(
+        actions.is_empty(),
+        "expected no invert-boolean actions, found {}",
+        actions.len()
+    );
 }
 
 fn cursor_selection(code: &str) -> TextRange {
@@ -440,6 +533,19 @@ fn compute_push_down_actions(
     })
 }
 
+fn compute_extract_superclass_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let selection = find_marked_range_with(code, "# SUPER-START", "# SUPER-END");
+    compute_move_actions(code, selection, |transaction, handle, selection| {
+        transaction.extract_superclass_code_actions(handle, selection)
+    })
+}
+
 #[test]
 fn basic_test() {
     let report = get_batched_lsp_operations_report_allow_error(
@@ -480,6 +586,35 @@ my_export
 from d import my_export
 my_export
 # ^
+# Title: Generate variable `my_export`
+
+## Before:
+my_export
+# ^
+## After:
+my_export = None
+my_export
+# ^
+# Title: Generate function `my_export`
+
+## Before:
+my_export
+# ^
+## After:
+def my_export():
+    pass
+my_export
+# ^
+# Title: Generate class `my_export`
+
+## Before:
+my_export
+# ^
+## After:
+class my_export:
+    pass
+my_export
+# ^
 
 
 
@@ -518,6 +653,35 @@ BytesIO
 from _io import BytesIO
 BytesIO
 # ^
+# Title: Generate variable `BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+BytesIO = None
+BytesIO
+# ^
+# Title: Generate function `BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+def BytesIO():
+    pass
+BytesIO
+# ^
+# Title: Generate class `BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+class BytesIO:
+    pass
+BytesIO
+# ^
 "#
         .trim(),
         report.trim(),
@@ -547,9 +711,69 @@ my_module
 import my_module
 my_module
 # ^
+# Title: Generate variable `my_module`
+
+## Before:
+my_module
+# ^
+## After:
+my_module = None
+my_module
+# ^
+# Title: Generate function `my_module`
+
+## Before:
+my_module
+# ^
+## After:
+def my_module():
+    pass
+my_module
+# ^
+# Title: Generate class `my_module`
+
+## Before:
+my_module
+# ^
+## After:
+class my_module:
+    pass
+my_module
+# ^
 "#
         .trim(),
         report.trim()
+    );
+}
+
+#[test]
+fn insertion_test_common_alias_module_import() {
+    let code = r#"
+np
+# ^
+"#;
+    let files = [("numpy", "data = 1\n"), ("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let actions = state
+        .transaction()
+        .local_quickfix_code_actions_sorted(
+            handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+        )
+        .unwrap_or_default();
+    let (_, _, _, insert_text) = actions
+        .iter()
+        .find(|(title, _, _, _)| title == "Use common alias: `import numpy as np`")
+        .expect("expected common alias import code action");
+    assert_eq!(insert_text.trim(), "import numpy as np");
+    assert!(
+        !actions
+            .iter()
+            .any(|(_, _, _, insert_text)| insert_text.trim() == "import numpy"),
+        "expected alias import to suppress non-aliased import code action"
     );
 }
 
@@ -582,6 +806,41 @@ my_export
 ## After:
 # i am a comment
 from a import my_export
+my_export
+# ^
+# Title: Generate variable `my_export`
+
+## Before:
+# i am a comment
+my_export
+# ^
+## After:
+# i am a comment
+my_export = None
+my_export
+# ^
+# Title: Generate function `my_export`
+
+## Before:
+# i am a comment
+my_export
+# ^
+## After:
+# i am a comment
+def my_export():
+    pass
+my_export
+# ^
+# Title: Generate class `my_export`
+
+## Before:
+# i am a comment
+my_export
+# ^
+## After:
+# i am a comment
+class my_export:
+    pass
 my_export
 # ^
 "#
@@ -617,6 +876,41 @@ my_export
 ## After:
 from a import my_export
 from typing import List
+my_export
+# ^
+# Title: Generate variable `my_export`
+
+## Before:
+from typing import List
+my_export
+# ^
+## After:
+from typing import List
+my_export = None
+my_export
+# ^
+# Title: Generate function `my_export`
+
+## Before:
+from typing import List
+my_export
+# ^
+## After:
+from typing import List
+def my_export():
+    pass
+my_export
+# ^
+# Title: Generate class `my_export`
+
+## Before:
+from typing import List
+my_export
+# ^
+## After:
+from typing import List
+class my_export:
+    pass
 my_export
 # ^
 "#
@@ -655,9 +949,168 @@ from a import my_export
 from a import another_thing
 my_export
 # ^
+# Title: Generate variable `my_export`
+
+## Before:
+from a import another_thing
+my_export
+# ^
+## After:
+from a import another_thing
+my_export = None
+my_export
+# ^
+# Title: Generate function `my_export`
+
+## Before:
+from a import another_thing
+my_export
+# ^
+## After:
+from a import another_thing
+def my_export():
+    pass
+my_export
+# ^
+# Title: Generate class `my_export`
+
+## Before:
+from a import another_thing
+my_export
+# ^
+## After:
+from a import another_thing
+class my_export:
+    pass
+my_export
+# ^
 "#
         .trim(),
         report.trim()
+    );
+}
+
+#[test]
+fn redundant_cast_quickfix() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "from typing import cast\nx: int = 0\nx = cast(int, x)\n#   ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | x = cast(int, x)
+        ^
+Code Actions Results:
+# Title: Remove redundant cast
+
+## Before:
+from typing import cast
+x: int = 0
+x = cast(int, x)
+#   ^
+## After:
+from typing import cast
+x: int = 0
+x = x
+#   ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn redundant_cast_fix_all() {
+    let (handles, state) = mk_multi_file_state(
+        &[(
+            "main",
+            "from typing import cast\nx: int = 0\nx = cast(int, x)\ny = cast(int, x)\n",
+        )],
+        Require::Exports,
+        false,
+    );
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let edits = transaction
+        .redundant_cast_fix_all_edits(handle)
+        .unwrap_or_default();
+    let updated = apply_refactor_edits_for_module(&module_info, &edits);
+    assert_eq!(
+        "from typing import cast\nx: int = 0\nx = x\ny = x\n",
+        updated
+    );
+}
+
+fn redundant_cast_action_after(code: &str, cursor_offset: usize) -> Option<String> {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main")?;
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle)?;
+    let position = TextSize::try_from(cursor_offset).ok()?;
+    let actions = transaction
+        .local_quickfix_code_actions_sorted(
+            handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+        )
+        .unwrap_or_default();
+    let (_, module, range, patch) = actions
+        .into_iter()
+        .find(|(title, _, _, _)| title == "Remove redundant cast")?;
+    if module.path() != module_info.path() {
+        return None;
+    }
+    let (_before, after) = apply_patch(&module_info, range, patch);
+    Some(after)
+}
+
+#[test]
+fn redundant_cast_parenthesized_expr() {
+    let code = "from typing import cast\na: int = 1\nb: int = 2\ncast(int, a + b)\n";
+    let cursor_offset = code.find("cast(").unwrap();
+    let after = redundant_cast_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import cast\na: int = 1\nb: int = 2\n(a + b)\n",
+        after
+    );
+}
+
+#[test]
+fn redundant_cast_nested_call() {
+    let code = "from typing import cast\na: int = 1\nb: int = 2\nprint(cast(int, a + b))\n";
+    let cursor_offset = code.find("cast(").unwrap();
+    let after = redundant_cast_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import cast\na: int = 1\nb: int = 2\nprint((a + b))\n",
+        after
+    );
+}
+
+#[test]
+fn redundant_cast_cursor_inside_args() {
+    let code = "from typing import cast\na: int = 1\nb: int = 2\ncast(int, a + b)\n";
+    let cursor_offset = code.find("a + b").unwrap();
+    let after = redundant_cast_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import cast\na: int = 1\nb: int = 2\n(a + b)\n",
+        after
+    );
+}
+
+#[test]
+fn redundant_cast_preserves_multiplication_precedence() {
+    let code =
+        "from typing import cast\nx: int = 1\ny: int = 2\nz: int = 3\nx * cast(int, y + z)\n";
+    let cursor_offset = code.find("cast(").unwrap();
+    let after = redundant_cast_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import cast\nx: int = 1\ny: int = 2\nz: int = 3\nx * (y + z)\n",
+        after
     );
 }
 
@@ -690,6 +1143,35 @@ TypeVar('T')
 # ^
 ## After:
 from typing import TypeVar
+TypeVar('T')
+# ^
+# Title: Generate variable `TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+TypeVar = None
+TypeVar('T')
+# ^
+# Title: Generate function `TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+def TypeVar():
+    pass
+TypeVar('T')
+# ^
+# Title: Generate class `TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+class TypeVar:
+    pass
 TypeVar('T')
 # ^
 "#
@@ -739,6 +1221,88 @@ my_func()
 from a import my_func
 my_func()
 # ^
+# Title: Generate variable `my_func`
+
+## Before:
+my_func()
+# ^
+## After:
+my_func = None
+my_func()
+# ^
+# Title: Generate function `my_func`
+
+## Before:
+my_func()
+# ^
+## After:
+def my_func():
+    pass
+my_func()
+# ^
+# Title: Generate class `my_func`
+
+## Before:
+my_func()
+# ^
+## After:
+class my_func:
+    pass
+my_func()
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_in_function_scope() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", "def foo():\n    print(undef_var)\n#         ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 |     print(undef_var)
+              ^
+Code Actions Results:
+# Title: Generate variable `undef_var`
+
+## Before:
+def foo():
+    print(undef_var)
+#         ^
+## After:
+def foo():
+    undef_var = None
+    print(undef_var)
+#         ^
+# Title: Generate function `undef_var`
+
+## Before:
+def foo():
+    print(undef_var)
+#         ^
+## After:
+def foo():
+    def undef_var():
+        pass
+    print(undef_var)
+#         ^
+# Title: Generate class `undef_var`
+
+## Before:
+def foo():
+    print(undef_var)
+#         ^
+## After:
+def foo():
+    class undef_var:
+        pass
+    print(undef_var)
+#         ^
 "#
         .trim(),
         report.trim()
@@ -991,6 +1555,65 @@ class Outer:
 }
 
 #[test]
+fn extract_function_excludes_vars_defined_in_selection() {
+    // variables defined within the selection should not become parameters, even
+    // when they are later used in augmented assignments (e.g., total += price).
+    let code = r#"
+def calculate_total_price(prices: list[int]) -> float:
+    # EXTRACT-START
+    total = 0
+    for price in prices:
+        total += price
+    with_tax = total * 1.085
+    # EXTRACT-END
+    return with_tax
+"#;
+    let updated = apply_first_extract_action(code).expect("expected extract refactor action");
+    let expected = r#"
+def extracted_function(prices):
+    total = 0
+    for price in prices:
+        total += price
+    with_tax = total * 1.085
+    return with_tax
+
+def calculate_total_price(prices: list[int]) -> float:
+    # EXTRACT-START
+    with_tax = extracted_function(prices)
+    # EXTRACT-END
+    return with_tax
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_includes_var_from_augmented_assign_without_prior_def() {
+    // When the selection contains only an augmented assignment (e.g., x += 1)
+    // without a prior definition of that variable, the variable must still be
+    // added as a parameter to the extracted function.
+    let code = r#"
+def update(x: int) -> int:
+    # EXTRACT-START
+    x += 1
+    # EXTRACT-END
+    return x
+"#;
+    let updated = apply_first_extract_action(code).expect("expected extract refactor action");
+    let expected = r#"
+def extracted_function(x):
+    x += 1
+    return x
+
+def update(x: int) -> int:
+    # EXTRACT-START
+    x = extracted_function(x)
+    # EXTRACT-END
+    return x
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn extract_variable_basic_refactor() {
     let code = r#"
 def process(data):
@@ -1016,6 +1639,145 @@ def process(data):
             # EXTRACT-END
         )
     return total
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_basic_refactor() {
+    let code = r#"
+def foo():
+    abc = True
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc = False
+    return (not abc)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_removes_not() {
+    let code = r#"
+def foo():
+    abc = False
+    if not abc:
+        return 1
+    return 0
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc = True
+    if abc:
+        return 1
+    return 0
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_rejects_multi_target_assignment() {
+    let code = r#"
+def foo():
+    abc = other = True
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    assert_no_invert_boolean_action(code, selection);
+}
+
+#[test]
+fn invert_boolean_annotated_assignment() {
+    let code = r#"
+def foo():
+    abc: bool = True
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc: bool = False
+    return (not abc)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_rejects_deleted_variable() {
+    let code = r#"
+def foo():
+    abc = True
+    del abc
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 3);
+    assert_no_invert_boolean_action_allow_errors(code, selection);
+}
+
+#[test]
+fn invert_boolean_multiple_assignments() {
+    let code = r#"
+def foo():
+    abc = True
+    abc = False
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 3);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc = True
+    abc = True
+    return (not abc)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_nested_expression_keeps_outer_not() {
+    let code = r#"
+def foo():
+    abc = True
+    other = True
+    return not (abc and other)
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc = False
+    other = True
+    return not ((not abc) and other)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_inverts_unary_not_assignment_value() {
+    let code = r#"
+def foo(other_var):
+    abc = not other_var
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo(other_var):
+    abc = other_var
+    return (not abc)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -1072,6 +1834,182 @@ class Base:
 class Child(Base):
     def foo(self):
         pass
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_superclass_basic() {
+    let code = r#"
+class Foo:
+    def a(self):
+        return 1
+    # SUPER-START
+    def b(self):
+        return 2
+    def c(self):
+        return 3
+    # SUPER-END
+    def d(self):
+        return 4
+"#;
+    let (module_info, actions, titles) = compute_extract_superclass_actions(code);
+    assert_eq!(vec!["Extract superclass `BaseFoo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class BaseFoo:
+    def b(self):
+        return 2
+    def c(self):
+        return 3
+
+class Foo(BaseFoo):
+    def a(self):
+        return 1
+    # SUPER-START
+    # SUPER-END
+    def d(self):
+        return 4
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_superclass_with_metaclass_inserts_pass() {
+    let code = r#"
+class Base:
+    pass
+
+class Meta(type):
+    pass
+
+class Foo(Base, metaclass=Meta):
+    # SUPER-START
+    def only(self):
+        pass
+    # SUPER-END
+"#;
+    let (module_info, actions, titles) = compute_extract_superclass_actions(code);
+    assert_eq!(vec!["Extract superclass `BaseFoo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class Base:
+    pass
+
+class Meta(type):
+    pass
+
+class BaseFoo:
+    def only(self):
+        pass
+
+class Foo(Base, BaseFoo, metaclass=Meta):
+    # SUPER-START
+    pass
+    # SUPER-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_superclass_with_decorator() {
+    let code = r#"
+class Foo:
+    # SUPER-START
+    @property
+    def bar(self) -> int:
+        return 1
+    # SUPER-END
+"#;
+    let (module_info, actions, titles) = compute_extract_superclass_actions(code);
+    assert_eq!(vec!["Extract superclass `BaseFoo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class BaseFoo:
+    @property
+    def bar(self) -> int:
+        return 1
+
+class Foo(BaseFoo):
+    # SUPER-START
+    pass
+    # SUPER-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_superclass_multiline_method() {
+    let code = r#"
+class Foo:
+    # SUPER-START
+    def complex(self):
+        x = 1
+        y = 2
+        if x > 0:
+            return x + y
+        else:
+            return y
+    # SUPER-END
+"#;
+    let (module_info, actions, titles) = compute_extract_superclass_actions(code);
+    assert_eq!(vec!["Extract superclass `BaseFoo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class BaseFoo:
+    def complex(self):
+        x = 1
+        y = 2
+        if x > 0:
+            return x + y
+        else:
+            return y
+
+class Foo(BaseFoo):
+    # SUPER-START
+    pass
+    # SUPER-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_superclass_docstring_only_no_action() {
+    let code = r#"
+class Foo:
+    # SUPER-START
+    """This class has only a docstring."""
+    # SUPER-END
+"#;
+    let (_, actions, titles) = compute_extract_superclass_actions(code);
+    // No action should be offered when there are no extractable members
+    assert!(actions.is_empty());
+    assert!(titles.is_empty());
+}
+
+#[test]
+fn extract_superclass_preserves_docstring() {
+    let code = r#"
+class Foo:
+    """Foo's docstring."""
+    # SUPER-START
+    def method(self):
+        pass
+    # SUPER-END
+"#;
+    let (module_info, actions, titles) = compute_extract_superclass_actions(code);
+    assert_eq!(vec!["Extract superclass `BaseFoo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class BaseFoo:
+    def method(self):
+        pass
+
+class Foo(BaseFoo):
+    """Foo's docstring."""
+    # SUPER-START
+    pass
+    # SUPER-END
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }

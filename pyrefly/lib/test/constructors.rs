@@ -688,6 +688,19 @@ takes_Cstr_wrong(C) # E: Argument `type[C]` is not assignable to parameter `x` w
 );
 
 testcase!(
+    test_init_to_callable_generics,
+    r#"
+from typing import Generic, TypeVar, assert_type, Callable
+T = TypeVar("T")
+class C(Generic[T]):
+    def __init__[V](self: "C[V]", x: V) -> None: pass
+def takes_callable[V](x: Callable[[V], C[V]], y: V) -> C[V]: ...
+assert_type(takes_callable(C, 42), C[int])
+assert_type(takes_callable(C, "hello"), C[str])
+    "#,
+);
+
+testcase!(
     test_init_class_scoped_typevars_in_self,
     r#"
 from typing import Generic, TypeVar
@@ -773,4 +786,15 @@ class Ok1(Generic[T]):
     def __init__(self, x: int | str) -> None:
         pass
 "#,
+);
+
+testcase!(
+    test_class_scoped_typevar_in_decorated_init,
+    r#"
+from typing import Any
+def decorate(f) -> Any: ...
+class A[T]:
+    @decorate
+    def __init__(self: A[T]): ...  # E: self type cannot reference class type parameter `T`
+    "#,
 );

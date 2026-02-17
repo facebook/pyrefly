@@ -1070,6 +1070,13 @@ a = True if # E: Parse
 );
 
 testcase!(
+    test_syntax_error_resulting_in_empty_defintion,
+    r#"
+@:a=1 # E: Parse # E: Could not find name `a`
+    "#,
+);
+
+testcase!(
     test_mangled_for,
     r#"
 # This has identical Identifiers in the AST, which seems like the right AST.
@@ -1890,6 +1897,22 @@ from typing import assert_type
 class Foo:
     def __class_getitem__(cls, item: int) -> str:
         return str(item)
+
+assert_type(Foo[0], str)
+"#,
+);
+
+testcase!(
+    test_class_metaclass_getitem,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    def __getitem__(self, item: int) -> str:
+        return str(item)
+
+class Foo(metaclass=Meta):
+    pass
 
 assert_type(Foo[0], str)
 "#,

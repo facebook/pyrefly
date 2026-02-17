@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pyrefly.org/schemas/pyproject-tool-pyrefly.json",
+  "title": "Pyrefly Configuration in pyproject.toml",
+  "description": "Configuration for Pyrefly under the [tool.pyrefly] section in pyproject.toml",
+  "type": "object",
+  "properties": {
+    "tool": {
+      "type": "object",
+      "properties": {
+        "pyrefly": {
+          "$ref": "pyrefly.json"
+        }
+      }
+    }
+  }
+}

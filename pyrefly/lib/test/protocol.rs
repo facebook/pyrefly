@@ -827,7 +827,7 @@ from typing import Generic, TypeVar, Protocol, Callable
 T = TypeVar('T')
 U = TypeVar('U')
 
-class Functor(Protocol[T]):
+class Functor(Protocol[T]):  # E: Type variable `T` in class `Functor` is declared as invariant, but could be covariant based on its usage
     """A Functor protocol - common in functional programming."""
     def map(self, f: Callable[[T], U]) -> Functor[U]: ...
 
@@ -851,7 +851,7 @@ from typing import Generic, TypeVar, Protocol, Callable
 T = TypeVar('T')
 U = TypeVar('U')
 
-class TrickyProtocol(Protocol[T]):
+class TrickyProtocol(Protocol[T]):  # E: Type variable `T` in class `TrickyProtocol` is declared as invariant, but could be covariant based on its usage
     def recurse(self, f: Callable[[T], U]) -> "TrickyProtocol[U]": ...
     def check(self) -> T: ...
 
@@ -868,7 +868,6 @@ def test():
 );
 
 testcase!(
-    bug = "conformance: Should error on ClassVar protocol assignments with class objects",
     test_protocols_class_objects_conformance,
     r#"
 from typing import ClassVar, Protocol
@@ -892,15 +891,14 @@ class CMeta(type):
 
 class ConcreteC3(metaclass=CMeta): ...
 
-pc1: ProtoC1 = ConcreteC1  # should error
-pc3: ProtoC1 = ConcreteC2  # should error
-pc4: ProtoC2 = ConcreteC2  # should error
-pc5: ProtoC1 = ConcreteC3  # should error
+pc1: ProtoC1 = ConcreteC1  # E: `type[ConcreteC1]` is not assignable to `ProtoC1`
+pc3: ProtoC1 = ConcreteC2  # E: `type[ConcreteC2]` is not assignable to `ProtoC1`
+pc4: ProtoC2 = ConcreteC2  # E: `type[ConcreteC2]` is not assignable to `ProtoC2`
+pc5: ProtoC1 = ConcreteC3  # E: `type[ConcreteC3]` is not assignable to `ProtoC1`
 "#,
 );
 
 testcase!(
-    bug = "conformance: Protocol with self-assigned var should not require that var from implementations",
     test_protocols_definition_conformance,
     r#"
 from typing import ClassVar, Protocol, Sequence
@@ -918,8 +916,7 @@ class Concrete:
     def method(self) -> None:
         return
 
-# Bug: pyrefly makes 'temp' a required attribute even though the self.temp error was raised
-var: Template = Concrete("value", 42)  # E: `Concrete` is not assignable to `Template`
+var: Template = Concrete("value", 42)
 
 class Template2(Protocol):
     val1: ClassVar[Sequence[int]]
@@ -930,8 +927,8 @@ class Concrete2_Bad3:
 class Concrete2_Bad4:
     val1: Sequence[int] = [2]
 
-v2_bad3: Template2 = Concrete2_Bad3()  # should error: instance attr vs ClassVar
-v2_bad4: Template2 = Concrete2_Bad4()  # should error: instance attr vs ClassVar
+v2_bad3: Template2 = Concrete2_Bad3()  # E: `Concrete2_Bad3` is not assignable to `Template2`
+v2_bad4: Template2 = Concrete2_Bad4()  # E: `Concrete2_Bad4` is not assignable to `Template2`
 "#,
 );
 

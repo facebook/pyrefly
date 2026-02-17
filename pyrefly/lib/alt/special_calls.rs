@@ -69,7 +69,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .noreturn_to_never()
                     .anon_callables()
                     .anon_typed_dicts(self.stdlib)
-                    .distribute_type_over_union()
+                    .distribute_type_over_union(self.heap)
                     .simplify_intersections();
                 // Make assert_type(Self@SomeClass, typing.Self) work.
                 ty.subst_self_type_mut(&self_form);

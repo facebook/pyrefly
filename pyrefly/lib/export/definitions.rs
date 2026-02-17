@@ -152,6 +152,8 @@ pub struct Definitions {
     pub implicitly_imported_submodules: SmallSet<Name>,
     /// Deprecated names that are defined in this module.
     pub deprecated: SmallMap<Name, Deprecation>,
+    /// Names that are marked `Final`
+    pub final_names: SmallSet<Name>,
     /// Special exports defined in this module
     pub special_exports: SmallMap<Name, SpecialExport>,
 }
@@ -235,6 +237,28 @@ fn implicitly_imported_submodule(
         .strip_prefix(importing_module_name.components().as_slice())
         .and_then(|components| components.first())
         .cloned()
+}
+
+/// Check if an annotation refers to `Final` or `Final[T]`,
+/// handling both bare names and qualified forms like `typing.Final`.
+fn is_final_annotation(annotation: &Expr) -> bool {
+    let target = match annotation {
+        Expr::Subscript(sub) => &*sub.value,
+        other => other,
+    };
+    let (base, value) = match target {
+        Expr::Name(x) => (None, &x.id),
+        Expr::Attribute(ExprAttribute {
+            value: box Expr::Name(base),
+            attr,
+            ..
+        }) => (Some(&base.id), &attr.id),
+        _ => return false,
+    };
+    SpecialExport::new(value).is_some_and(|special| {
+        special == SpecialExport::Final
+            && base.is_none_or(|base| special.defined_in(ModuleName::from_name(base)))
+    })
 }
 
 fn is_overload_decorator(decorator: &Decorator) -> bool {
@@ -527,6 +551,7 @@ impl<'a> DefinitionsBuilder<'a> {
                         entries: DunderAllEntry::as_list(v.as_ref()),
                     };
                 }
+                let has_final_annotation = is_final_annotation(&x.annotation);
                 match &*x.target {
                     Expr::Name(x) => {
                         self.add_name(
@@ -537,6 +562,9 @@ impl<'a> DefinitionsBuilder<'a> {
                                 ShortIdentifier::expr_name(x),
                             ),
                         );
+                        if has_final_annotation {
+                            self.inner.final_names.insert(x.id.clone());
+                        }
                     }
                     _ => self.expr_lvalue(&x.target),
                 }

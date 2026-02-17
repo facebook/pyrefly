@@ -205,7 +205,7 @@ class B(Generic[*Ts, *Ts]):  # E: Duplicated type parameter declaration
 class C(Generic[P, P]):  # E: Duplicated type parameter declaration
     pass
 
-class D(Protocol[T, T]):  # E: Duplicated type parameter declaration
+class D(Protocol[T, T]):  # E: Duplicated type parameter declaration  # E: Type variable `T` in class `D` is declared as invariant, but could be covariant based on its usage
     pass
 class E(Protocol[*Ts, *Ts]):  # E: Duplicated type parameter declaration
     pass

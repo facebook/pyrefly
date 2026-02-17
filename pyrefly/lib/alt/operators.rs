@@ -8,7 +8,13 @@
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
+use pyrefly_types::dimension::SizeExpr;
+use pyrefly_types::dimension::simplify;
 use pyrefly_types::literal::LitStyle;
+use pyrefly_types::literal::Literal;
+use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::tensor::TensorType;
+use pyrefly_types::tensor::broadcast_shapes;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
@@ -66,6 +72,82 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None,
             None,
         )
+    }
+
+    /// Try to handle binary operations on symbolic integer types (Dim, SizeExpr, TypeVar Quantified).
+    /// Returns Some(result_type) if the operation was handled, None otherwise.
+    fn try_symint_binop(&self, op: Operator, lhs: &Type, rhs: &Type) -> Option<Type> {
+        // Only handle if tensor shapes feature is enabled
+        if !self.solver().tensor_shapes {
+            return None;
+        }
+
+        // Only handle arithmetic operations that make sense for dimensions
+        if !matches!(
+            op,
+            Operator::Add | Operator::Sub | Operator::Mult | Operator::FloorDiv
+        ) {
+            return None;
+        }
+
+        // Check if at least one operand is a symbolic dimension type
+        let is_dim_operand = |ty: &Type| match ty {
+            Type::Dim(_) | Type::Size(_) => true,
+            Type::QuantifiedValue(q) => {
+                matches!(q.kind, QuantifiedKind::TypeVar)
+            }
+            _ => false,
+        };
+        if !is_dim_operand(lhs) && !is_dim_operand(rhs) {
+            return None;
+        }
+
+        // Extract the dimension type from Dim, Literal, or Quantified
+        let to_dim_type = |ty: &Type| -> Option<Type> {
+            match ty {
+                Type::Dim(inner_ty) => {
+                    // Dim wraps a dimension type (could be SizeExpr, Quantified, etc.)
+                    Some((**inner_ty).clone())
+                }
+                Type::Literal(box Literal {
+                    value: Lit::Int(n), ..
+                }) => {
+                    // Convert literal to SizeExpr
+                    n.as_i64()
+                        .map(|val| self.heap.mk_size(SizeExpr::Literal(val)))
+                }
+                Type::QuantifiedValue(q)
+                    if matches!(q.kind, pyrefly_types::quantified::QuantifiedKind::TypeVar) =>
+                {
+                    // TypeVar Quantified can be used in dimension arithmetic
+                    Some(Type::Quantified(q.clone()))
+                }
+                Type::Size(_) => {
+                    // SizeExpr is already a dimension type - pass through
+                    Some(ty.clone())
+                }
+                _ => None,
+            }
+        };
+
+        let (l_type, r_type) = (to_dim_type(lhs)?, to_dim_type(rhs)?);
+
+        // Perform the operation on the dimension types
+        let result_ty = match op {
+            Operator::Add => simplify(self.heap.mk_size(SizeExpr::add(l_type, r_type))),
+            Operator::Sub => simplify(self.heap.mk_size(SizeExpr::sub(l_type, r_type))),
+            Operator::Mult => simplify(self.heap.mk_size(SizeExpr::mul(l_type, r_type))),
+            Operator::FloorDiv => simplify(self.heap.mk_size(SizeExpr::floor_div(l_type, r_type))),
+            _ => unreachable!(),
+        };
+
+        // If either operand is Dim, return Dim-wrapped result
+        // Otherwise (e.g., Dim-bounded type parameters), return unwrapped dimension type
+        if matches!(lhs, Type::Dim(_)) || matches!(rhs, Type::Dim(_)) {
+            Some(self.heap.mk_dim(result_ty))
+        } else {
+            Some(result_ty)
+        }
     }
 
     fn try_binop_calls(
@@ -286,6 +368,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Type::Tuple(r) = rhs
                 {
                     self.tuple_concat(l, r)
+                } else if matches!(
+                    x.op,
+                    Operator::Add
+                        | Operator::Sub
+                        | Operator::Mult
+                        | Operator::Div
+                        | Operator::Mod
+                        | Operator::Pow
+                        | Operator::FloorDiv
+                ) && let Type::Tensor(l_tensor) = lhs
+                    && let Type::Tensor(r_tensor) = rhs
+                {
+                    // Tensor element-wise operations with broadcasting
+                    self.broadcast_tensor_binop(l_tensor, r_tensor, x.range, errors)
+                } else if let Some(result) = self.try_symint_binop(x.op, lhs, rhs) {
+                    result
                 } else {
                     binop_call(x.op, lhs, rhs, x.range)
                 }
@@ -332,6 +430,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Type::Tuple(r) = rhs
                 {
                     self.tuple_concat(l, r)
+                } else if let Some(result) = self.try_symint_binop(x.op, lhs, rhs) {
+                    result
                 } else {
                     binop_call(x.op, lhs, rhs, x.range)
                 }
@@ -473,6 +573,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         self.distribute_over_union(&t, |t| match x.op {
             UnaryOp::USub => {
+                // Special handling for Dim: model -N as Sub(0, N)
+                if let Type::Dim(inner_ty) = t {
+                    let zero = self.heap.mk_size(SizeExpr::Literal(0));
+                    let result_ty =
+                        simplify(self.heap.mk_size(SizeExpr::sub(zero, (**inner_ty).clone())));
+                    return self.heap.mk_dim(result_ty);
+                }
                 let f = |lit: &Lit| lit.negate();
                 unop(t, &f, &dunder::NEG)
             }
@@ -598,6 +705,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             // All other combinations: no warning
             _ => {}
+        }
+    }
+
+    /// Handle element-wise binary operations on tensors with broadcasting.
+    /// broadcast_shapes handles all shape variants: Concrete shapes are broadcast
+    /// precisely, Unpacked shapes match suffix then middles then prefixes, and
+    /// mixed Concrete+Unpacked aligns against the suffix.
+    fn broadcast_tensor_binop(
+        &self,
+        left: &TensorType,
+        right: &TensorType,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        match broadcast_shapes(&left.shape, &right.shape) {
+            Ok(result_shape) => TensorType::new(left.base_class.clone(), result_shape).to_type(),
+            Err(err) => {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                    format!("Cannot broadcast tensor shapes: {}", err),
+                );
+                Type::any_error()
+            }
         }
     }
 }

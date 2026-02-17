@@ -44,6 +44,8 @@ use crate::callable::Required;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
+use crate::dimension;
+use crate::dimension::SizeExpr;
 use crate::heap::TypeHeap;
 use crate::keywords::DataclassTransformMetadata;
 use crate::keywords::KwCall;
@@ -56,10 +58,9 @@ use crate::quantified::Quantified;
 use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
+use crate::tensor::TensorType;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
-use crate::type_var::PreInferenceVariance;
-use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
 use crate::typed_dict::TypedDict;
@@ -104,62 +105,10 @@ impl Display for TParamsSource {
     }
 }
 
-// TODO: Consider removing TParam since it would be no longer needed
-// now that variance is pushed in quantified.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct TParam {
-    pub quantified: Quantified,
-}
-
-impl Display for TParam {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name())?;
-        // Display bounds/constraints
-        match self.restriction() {
-            Restriction::Bound(t) => write!(f, ": {}", t)?,
-            Restriction::Constraints(ts) => {
-                write!(f, ": (")?;
-                for (i, t) in ts.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", t)?;
-                }
-                write!(f, ")")?;
-            }
-            Restriction::Unrestricted => {}
-        }
-        // Display default
-        if let Some(default) = self.default() {
-            write!(f, " = {}", default)?;
-        }
-        Ok(())
-    }
-}
-
-impl TParam {
-    pub fn name(&self) -> &Name {
-        self.quantified.name()
-    }
-
-    pub fn default(&self) -> Option<&Type> {
-        self.quantified.default()
-    }
-
-    pub fn restriction(&self) -> &Restriction {
-        self.quantified.restriction()
-    }
-
-    pub fn variance(&self) -> PreInferenceVariance {
-        self.quantified.variance()
-    }
-}
-
 /// Wraps a vector of type parameters.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
-pub struct TParams(Vec<TParam>);
+pub struct TParams(Vec<Quantified>);
 
 /// Implement `VisitMut` for `Arc<TParams>` as a no-op.
 ///
@@ -181,12 +130,16 @@ impl Visit<Type> for Arc<TParams> {
 
 impl Display for TParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}]", commas_iter(|| self.0.iter()))
+        write!(
+            f,
+            "[{}]",
+            commas_iter(|| self.0.iter().map(|q| q.display_with_bounds()))
+        )
     }
 }
 
 impl TParams {
-    pub fn new(tparams: Vec<TParam>) -> TParams {
+    pub fn new(tparams: Vec<Quantified>) -> TParams {
         Self(tparams)
     }
 
@@ -202,15 +155,11 @@ impl TParams {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &TParam> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &Quantified> {
         self.0.iter()
     }
 
-    pub fn quantifieds(&self) -> impl ExactSizeIterator<Item = &Quantified> + '_ {
-        self.0.iter().map(|x| &x.quantified)
-    }
-
-    pub fn as_vec(&self) -> &[TParam] {
+    pub fn as_vec(&self) -> &[Quantified] {
         &self.0
     }
 
@@ -235,11 +184,11 @@ impl TArgs {
         &self.0.0
     }
 
-    pub fn iter_paired(&self) -> impl ExactSizeIterator<Item = (&TParam, &Type)> {
+    pub fn iter_paired(&self) -> impl ExactSizeIterator<Item = (&Quantified, &Type)> {
         self.0.0.iter().zip(self.0.1.iter())
     }
 
-    pub fn iter_paired_mut(&mut self) -> impl ExactSizeIterator<Item = (&TParam, &mut Type)> {
+    pub fn iter_paired_mut(&mut self) -> impl ExactSizeIterator<Item = (&Quantified, &mut Type)> {
         self.0.0.iter().zip(self.0.1.iter_mut())
     }
 
@@ -280,7 +229,7 @@ impl TArgs {
     pub fn substitution_map(&self) -> SmallMap<&Quantified, &Type> {
         let tparams = self.tparams();
         let tys = self.as_slice();
-        tparams.quantifieds().zip(tys.iter()).collect()
+        tparams.iter().zip(tys.iter()).collect()
     }
 
     pub fn substitution<'a>(&'a self) -> Substitution<'a> {
@@ -288,7 +237,13 @@ impl TArgs {
     }
 
     pub fn substitute_into_mut(&self, ty: &mut Type) {
-        self.substitution().substitute_into_mut(ty)
+        if let Type::TypeAlias(box TypeAliasData::Ref(r)) = ty {
+            // We don't have the value of the type alias available to do the substitution, so store
+            // the targs so that we can apply them when the value is looked up.
+            r.args = Some(self.clone())
+        } else {
+            self.substitution().substitute_into_mut(ty)
+        }
     }
 
     pub fn substitute_into(&self, mut ty: Type) -> Type {
@@ -635,6 +590,26 @@ pub enum Type {
     /// For a TypedDict type `C`, `Partial[C]` represents an object with any subset of read-write
     /// keys from `C`, where each present key has the same value type as in `C`.
     PartialTypedDict(TypedDict),
+    /// Tensor type with shape information
+    /// Example: Tensor[2, 3] represents a 2x3 tensor
+    Tensor(Box<TensorType>),
+    /// Dimension value type - represents values that satisfy Dim bound
+    /// Examples:
+    ///   - Type::Size(SizeExpr::Literal(6)) for concrete dimension 6
+    ///   - Type::Size(SizeExpr::Var(v)) for dimension variables
+    ///
+    /// This is the type-level representation of dimension values, used when
+    /// type variables with Dim bound unify with concrete dimension values.
+    Size(SizeExpr),
+    /// Symbolic integer type - wraps dimension expressions for use in type annotations
+    /// Examples:
+    ///   - Type::Dim(SizeExpr(Literal(3))) for Dim[3]
+    ///   - Type::Dim(Quantified) for Dim[N]
+    ///   - Type::Dim(SizeExpr(Add(...))) for Dim[N+1]
+    ///
+    /// This is the type annotation form of symbolic integers, distinct from
+    /// concrete integer literals which use Type::Literal(Lit::Int(...)).
+    Dim(Box<Type>),
     Tuple(Tuple),
     Module(ModuleType),
     Forall(Box<Forall<Forallable>>),
@@ -674,6 +649,11 @@ pub enum Type {
     Any(AnyStyle),
     Never(NeverStyle),
     TypeAlias(Box<TypeAliasData>),
+    /// The result of untyping a type alias. For example, if we have `type X = int`, the type alias
+    /// stores `type[int]` as its value, which untypes to `int`. Since recursive references cannot
+    /// be immediately looked up for untyping (see `TypeAliasData::TypeAliasRef`), `UntypedAlias`
+    /// stores a reference that is untyped once we actually look up the value.
+    UntypedAlias(Box<TypeAliasData>),
     /// Represents the result of a super() call. The first ClassType is the point in the MRO that attribute lookup
     /// on the super instance should start at (*not* the class passed to the super() call), and the second
     /// ClassType is the second argument (implicit or explicit) to the super() call. For example, in:
@@ -718,6 +698,9 @@ impl Visit for Type {
             Type::ClassType(x) => x.visit(f),
             Type::TypedDict(x) => x.visit(f),
             Type::PartialTypedDict(x) => x.visit(f),
+            Type::Tensor(x) => x.visit(f),
+            Type::Size(x) => x.visit(f),
+            Type::Dim(x) => x.visit(f),
             Type::Tuple(x) => x.visit(f),
             Type::Module(x) => x.visit(f),
             Type::Forall(x) => x.visit(f),
@@ -743,6 +726,7 @@ impl Visit for Type {
             Type::Any(x) => x.visit(f),
             Type::Never(x) => x.visit(f),
             Type::TypeAlias(x) => x.visit(f),
+            Type::UntypedAlias(x) => x.visit(f),
             Type::SuperInstance(x) => x.visit(f),
             Type::SelfType(x) => x.visit(f),
             Type::KwCall(x) => x.visit(f),
@@ -766,6 +750,9 @@ impl VisitMut for Type {
             Type::ClassType(x) => x.visit_mut(f),
             Type::TypedDict(x) => x.visit_mut(f),
             Type::PartialTypedDict(x) => x.visit_mut(f),
+            Type::Tensor(x) => x.visit_mut(f),
+            Type::Size(x) => x.visit_mut(f),
+            Type::Dim(x) => x.visit_mut(f),
             Type::Tuple(x) => x.visit_mut(f),
             Type::Module(x) => x.visit_mut(f),
             Type::Forall(x) => x.visit_mut(f),
@@ -791,6 +778,7 @@ impl VisitMut for Type {
             Type::Any(x) => x.visit_mut(f),
             Type::Never(x) => x.visit_mut(f),
             Type::TypeAlias(x) => x.visit_mut(f),
+            Type::UntypedAlias(x) => x.visit_mut(f),
             Type::SuperInstance(x) => x.visit_mut(f),
             Type::SelfType(x) => x.visit_mut(f),
             Type::KwCall(x) => x.visit_mut(f),
@@ -1103,6 +1091,10 @@ impl Type {
             } else {
                 ty.recurse_mut(&mut |x| f(x, mp));
             }
+            // After substitution, simplify Size expressions (constant folding).
+            if let Type::Size(_) = ty {
+                *ty = dimension::simplify(ty.clone());
+            }
         }
         f(self, mp);
     }
@@ -1404,7 +1396,7 @@ impl Type {
     }
 
     // This doesn't handle generics currently
-    pub fn callable_return_type(&self) -> Option<Type> {
+    pub fn callable_return_type(&self, heap: &TypeHeap) -> Option<Type> {
         let mut rets = Vec::new();
         let mut get_ret = |callable: &Callable| {
             rets.push(callable.ret.clone());
@@ -1413,34 +1405,11 @@ impl Type {
         if rets.is_empty() {
             None
         } else {
-            Some(unions(rets))
+            Some(unions(rets, heap))
         }
     }
 
-    /// When a constructor is cast used as a callable, we need to set its return type to the instance type.
-    /// If a `self` type is in the callable, then this is set as the return type.
-    /// Otherwise, the return type is set to the class type.
-    /// This doesn't handle generics currently.
-    pub fn set_callable_return_type_for_constructor(&mut self, ret: Type) {
-        let mut set_ret = |callable: &mut Callable| {
-            match &callable.params {
-                Params::List(param_list)
-                    if let Some(first_param) = param_list.items().first()
-                        && let Param::Pos(_, ty, _) = first_param =>
-                {
-                    // Set the return type to the type of the first parameter
-                    // (i.e. `self`) if it exists and is positional.
-                    callable.ret = ty.clone();
-                }
-                _ => {
-                    callable.ret = ret.clone();
-                }
-            }
-        };
-        self.transform_toplevel_callable(&mut set_ret);
-    }
-
-    pub fn callable_first_param(&self) -> Option<Type> {
+    pub fn callable_first_param(&self, heap: &TypeHeap) -> Option<Type> {
         let mut params = Vec::new();
         let mut get_param = |callable: &Callable| {
             if let Some(p) = callable.get_first_param() {
@@ -1451,7 +1420,7 @@ impl Type {
         if params.is_empty() {
             None
         } else {
-            Some(unions(params))
+            Some(unions(params, heap))
         }
     }
 
@@ -1496,6 +1465,20 @@ impl Type {
         Type::Any(AnyStyle::Error)
     }
 
+    /// Canonicalize a dimension expression to a unique normal form.
+    ///
+    /// This transforms dimension expressions into a canonical form where:
+    /// - Like terms are combined (e.g., 4*N + 2*N = 6*N)
+    /// - Divisions are flattened (e.g., (N // M) // K = N // (M*K))
+    /// - Factors are GCD-reduced (e.g., (4*N) // (6*M) = (2*N) // (3*M))
+    /// - Expressions are ordered consistently
+    /// - Type::Any propagates through the entire expression
+    ///
+    /// This enables structural equality checking after canonicalization.
+    pub fn canonicalize(self) -> Self {
+        dimension::canonicalize(self)
+    }
+
     pub fn explicit_any(self) -> Self {
         self.transform(&mut |ty| {
             if let Type::Any(style) = ty {
@@ -1523,10 +1506,10 @@ impl Type {
     }
 
     /// type[a | b] -> type[a] | type[b]
-    pub fn distribute_type_over_union(self) -> Self {
+    pub fn distribute_type_over_union(self, heap: &TypeHeap) -> Self {
         self.transform(&mut |ty| {
             if let Type::Type(box Type::Union(box Union { members, .. })) = ty {
-                *ty = unions(members.drain(..).map(Type::type_form).collect());
+                *ty = unions(members.drain(..).map(Type::type_form).collect(), heap);
             }
         })
     }
@@ -1639,6 +1622,14 @@ impl Type {
     pub fn as_quantified(&self) -> Option<Quantified> {
         match self {
             Type::Quantified(q) => Some((**q).clone()),
+            _ => None,
+        }
+    }
+
+    /// Extract the literal value from a `SizeExpr::Literal`, if this is one.
+    pub fn as_shape_literal(&self) -> Option<i64> {
+        match self {
+            Type::Size(SizeExpr::Literal(n)) => Some(*n),
             _ => None,
         }
     }
