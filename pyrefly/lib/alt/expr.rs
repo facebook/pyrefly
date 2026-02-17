@@ -1489,12 +1489,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if key_hint.is_none() && value_hint.is_none() {
                     None
                 } else {
-                    Some((key_hint, value_hint))
+                    Some((hint.clone(), key_hint, value_hint))
                 }
             },
             |hints| {
-                let (key_hint, value_hint) = hints.unwrap_or_default();
-                self.dict_items_infer_inner(range, &items, hint, key_hint, value_hint, errors)
+                let (decomposed_hint, key_hint, value_hint) = match hints {
+                    Some((hint, key_hint, value_hint)) => (Some(hint), key_hint, value_hint),
+                    None => (None, None, None),
+                };
+                self.dict_items_infer_inner(
+                    range,
+                    &items,
+                    hint,
+                    decomposed_hint,
+                    key_hint,
+                    value_hint,
+                    errors,
+                )
             },
         )
     }
@@ -1504,6 +1515,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         items: &[&DictItem],
         hint: Option<HintRef>,
+        decomposed_hint: Option<Type>,
         key_hint: Option<Type>,
         value_hint: Option<Type>,
         errors: &ErrorCollector,
@@ -1721,10 +1733,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && let Some(hint) = hint
                 && hint.errors().is_some()
             {
-                return match hint.types() {
-                    [hint] => hint.clone(),
-                    hints => Type::union(hints.to_vec()),
-                };
+                return decomposed_hint
+                    .expect("dict item mismatch requires a successfully decomposed hint");
             }
             let any_field_has_open_placeholder = typed_dict_fields_map.values().any(|field| {
                 field
