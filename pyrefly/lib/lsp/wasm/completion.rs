@@ -656,6 +656,33 @@ impl Transaction<'_> {
                 }
                 let module_name_str = module_name.as_str().to_owned();
                 let source = autoimport_source(&module_name_str);
+                if let Some((submodule_name, position, insert_text, imported_module)) =
+                    self.submodule_autoimport_edit(handle, &ast, module_name, import_format)
+                {
+                    let import_text_edit = TextEdit {
+                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
+                        new_text: insert_text.clone(),
+                    };
+                    let additional_text_edits = Some(vec![import_text_edit]);
+                    let auto_import_label_detail = format!(" (import {imported_module})");
+                    completions.push(RankedCompletion {
+                        item: CompletionItem {
+                            label: submodule_name,
+                            detail: Some(insert_text),
+                            kind: Some(CompletionItemKind::MODULE),
+                            additional_text_edits,
+                            label_details: supports_completion_item_details.then_some(
+                                CompletionItemLabelDetails {
+                                    detail: Some(auto_import_label_detail),
+                                    description: Some(module_name_str.clone()),
+                                },
+                            ),
+                            ..Default::default()
+                        },
+                        source,
+                        is_incompatible: false,
+                    });
+                }
                 if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
                 {
                     let (import_text, additional_text_edits) = {

@@ -451,6 +451,42 @@ fn test_completion_with_autoimport() {
 }
 
 #[test]
+fn test_completion_with_autoimport_submodule() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("autoimport_submodule");
+
+    let mut interaction =
+        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+    interaction.client.did_change("foo.py", "auto_submodule");
+
+    interaction
+        .client
+        .completion("foo.py", 0, 14)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| {
+                item.label == "auto_submodule"
+                    && item.detail.as_ref().is_some_and(|detail| {
+                        detail.contains("from autoimport_submodule_pkg import auto_submodule")
+                    })
+                    && item
+                        .additional_text_edits
+                        .as_ref()
+                        .is_some_and(|edits| !edits.is_empty())
+            })
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_completion_with_autoimport_without_config() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
