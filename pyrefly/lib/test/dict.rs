@@ -167,7 +167,7 @@ fn test_dict_literal_error_range_points_to_value() {
         .transaction()
         .get_errors([&handle])
         .collect_errors()
-        .shown;
+        .ordinary;
     assert_eq!(errors.len(), 1);
     let err = &errors[0];
     let value_offset = code.find("2").expect("missing dict value literal");

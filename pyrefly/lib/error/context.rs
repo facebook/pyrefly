@@ -208,6 +208,8 @@ pub enum TypeCheckKind {
     /// var: SomeType = some_value check. This is separate from AnnotatedName because we can
     /// emit a more compact error message for this case.
     AnnAssign,
+    /// Check a dict literal key/value against a contextual dict hint.
+    DictLiteralItem,
     /// Check one portion of an unpacked assignment (e.g. `x, y = foo()`) against the expected type.
     UnpackedAssign,
     /// Class used in an `except C` clause.
@@ -263,6 +265,7 @@ impl TypeCheckKind {
             Self::AnnotatedName(..) => ErrorKind::BadAssignment,
             Self::IterationVariableMismatch(..) => ErrorKind::BadAssignment,
             Self::AnnAssign => ErrorKind::BadAssignment,
+            Self::DictLiteralItem => ErrorKind::BadAssignment,
             Self::UnpackedAssign => ErrorKind::BadAssignment,
             Self::ExceptionClass => ErrorKind::InvalidInheritance,
             Self::YieldValue => ErrorKind::InvalidYield,
