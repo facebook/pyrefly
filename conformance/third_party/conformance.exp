@@ -1330,6 +1330,17 @@
       "severity": "error",
       "stop_column": 52,
       "stop_line": 64
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Found cyclic self-reference in `BadAlias21`",
+      "description": "Found cyclic self-reference in `BadAlias21`",
+      "line": 66,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 59,
+      "stop_line": 66
     }
   ],
   "aliases_variance.py": [

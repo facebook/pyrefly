@@ -1180,6 +1180,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Check whether a type alias body contains a cyclic self-reference.
+    ///
+    /// Two kinds of invalid self-reference are detected:
+    /// 1. Direct top-level union member: `type X = int | X` (X appears as a
+    ///    direct union alternative, producing `int | int | ...` which is just `int`)
+    /// 2. Unguarded nested reference inside a builtin class, `type[...]`, or
+    ///    tuple: `type X = list[X]` (X appears inside a container with no union
+    ///    base case, producing an uninhabitable infinite type)
+    ///
+    /// Valid recursive aliases like `type X = int | list[X]` have a base case
+    /// (`int`) in the union, so the self-reference is "guarded".
+    ///
+    /// We only check for unguarded references inside builtin classes,
+    /// `type[...]`, and tuples, not user-defined generic classes. A
+    /// user-defined `class C[T]: x: T | None` makes `type A = C[A]`
+    /// inhabitable (e.g. `C(x=C(x=None))`), so we can't assume all generic
+    /// containers require their type parameter.
     fn check_type_alias_for_cyclic_reference(
         &self,
         name: &Name,
@@ -1190,19 +1206,76 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Unwrap the type[body] wrapper. We operate on the inner body because
         // map_over_union wraps inner union members in type[...] when traversing
         // inside Type::Type, which would prevent matching UntypedAlias nodes.
+        // Note: TypeAlias::error() and TypeAlias::unknown() store raw types
+        // (not wrapped in Type::Type), so we skip the check for those.
         let ty = ta.as_type();
         let body = match &ty {
             Type::Type(inner) => inner.as_ref(),
-            _ => unreachable!("TypeAlias::as_type() should always return Type::Type(...)"),
+            _ => return,
         };
-        let mut contains_cyclic_ref = false;
-        // We only check for the name of the current alias to avoid reporting duplicate errors
-        // for a cycle involving multiple aliases.
         let is_self_ref = |ty: &Type| matches!(ty, Type::UntypedAlias(ta) if ta.name() == name);
+
+        // Check 1: Direct top-level union member (e.g. `int | X`).
+        let mut direct_self_ref = false;
         self.map_over_union(body, |ty| {
-            contains_cyclic_ref |= is_self_ref(ty);
+            direct_self_ref |= is_self_ref(ty);
         });
-        if contains_cyclic_ref {
+
+        // Check 2: Unguarded nested reference (e.g. `list[X]`).
+        // A self-reference is "guarded" if it appears inside a union where at
+        // least one sibling branch does not (transitively) contain the self-ref.
+        // Returns true if the type contains a self-reference that is not guarded
+        // by a union base case, only recursing into known builtin collections.
+        fn has_unguarded_self_ref(ty: &Type, is_self_ref: &dyn Fn(&Type) -> bool) -> bool {
+            if is_self_ref(ty) {
+                return true;
+            }
+            match ty {
+                Type::Union(box Union { members, .. }) => {
+                    // If any member is free of self-refs, it provides a base case
+                    // and all other self-referencing members are guarded.
+                    let mut has_self_ref = false;
+                    let mut has_base_case = false;
+                    for m in members {
+                        if has_unguarded_self_ref(m, is_self_ref) {
+                            has_self_ref = true;
+                        } else {
+                            has_base_case = true;
+                        }
+                    }
+                    has_self_ref && !has_base_case
+                }
+                // Builtin classes use their type parameters in required
+                // positions (as elements, fields, or yielded values), so a
+                // self-reference with no union base case is uninhabitable.
+                Type::ClassType(cls) if cls.class_object().module_name().as_str() == "builtins" => {
+                    cls.targs()
+                        .as_slice()
+                        .iter()
+                        .any(|arg| has_unguarded_self_ref(arg, is_self_ref))
+                }
+                // type[X] wraps X, so a self-ref is unguarded here too.
+                Type::Type(inner) => has_unguarded_self_ref(inner, is_self_ref),
+                // Tuples: fixed-length tuples require all elements, and
+                // unbounded tuples are degenerate (only empty tuple inhabits).
+                // In either case a self-ref with no union base case is invalid.
+                Type::Tuple(_) => {
+                    let mut found = false;
+                    ty.recurse(&mut |child: &Type| {
+                        if has_unguarded_self_ref(child, is_self_ref) {
+                            found = true;
+                        }
+                    });
+                    found
+                }
+                // For user-defined generic classes and other types, we don't
+                // recurse — the class may have optional fields of type T that
+                // provide a base case we can't see here.
+                _ => false,
+            }
+        }
+
+        if direct_self_ref || has_unguarded_self_ref(body, &is_self_ref) {
             self.error(
                 errors,
                 range,

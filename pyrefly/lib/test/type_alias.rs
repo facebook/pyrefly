@@ -1075,7 +1075,6 @@ class ClassB_1(B_Alias_1[T_contra, T_co]): ...  # E: Type variable `T_contra` is
 );
 
 testcase!(
-    bug = "conformance: Should detect circular dependencies in TypeAliasType definitions",
     test_typealiastype_circular_conformance,
     r#"
 from typing import TypeAliasType, TypeVar
@@ -1093,7 +1092,7 @@ BadAlias6 = TypeAliasType("BadAlias6", "BadAlias7")  # E: cyclic self-reference 
 BadAlias7 = TypeAliasType("BadAlias7", BadAlias6)  # E: cyclic self-reference in `BadAlias7`
 
 # Self-reference via list
-BadAlias21 = TypeAliasType("BadAlias21", list[BadAlias21])  # should error: circular dependency
+BadAlias21 = TypeAliasType("BadAlias21", list[BadAlias21])  # E: cyclic self-reference in `BadAlias21`
 "#,
 );
 

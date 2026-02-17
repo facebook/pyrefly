@@ -257,13 +257,38 @@ type Z = int | Y  # E: cyclic self-reference in `Z`
 );
 
 testcase!(
-    bug = "No base case aliases should be detected as cyclic",
     test_cyclic_no_base_case,
     r#"
 # These have no base case — every value would be infinitely nested.
-type A = list[A]
-type B = dict[str, B]
-type C = tuple[int, C]
+type A = list[A]  # E: cyclic self-reference in `A`
+type B = dict[str, B]  # E: cyclic self-reference in `B`
+type C = tuple[int, C]  # E: cyclic self-reference in `C`
+type D = tuple[D, ...]  # E: cyclic self-reference in `D`
+    "#,
+);
+
+testcase!(
+    test_user_defined_container_not_cyclic,
+    r#"
+# User-defined generic classes may have optional T fields,
+# making `type A = C[A]` inhabitable (e.g. C(x=C(x=None))).
+# We don't flag these as cyclic since we can't inspect the class body.
+class C[T]:
+    x: T | None
+    def __init__(self, x: T | None = None) -> None:
+        self.x = x
+type A = C[A]
+a: A = C(x=C(x=None))
+    "#,
+);
+
+testcase!(
+    test_alias_referencing_error_alias,
+    r#"
+# An alias referencing another alias that has an error in its body
+# should not panic during expansion.
+type Bad = Undefined  # E: Could not find
+type Good = int | Bad
     "#,
 );
 
