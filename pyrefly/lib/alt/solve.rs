@@ -1171,7 +1171,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .map(|e| self.expr_infer(e, &self.error_swallower()))
             .collect();
-        self.check_type_alias_for_cyclic_reference(name, &ty, range, errors);
         TypeAlias::new(
             name.clone(),
             self.heap.mk_type_form(ty),
@@ -1180,18 +1179,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
+    /// Check whether a type alias body contains a cyclic self-reference.
     fn check_type_alias_for_cyclic_reference(
         &self,
         name: &Name,
-        ty: &Type,
+        ta: &TypeAlias,
         range: TextRange,
         errors: &ErrorCollector,
     ) {
+        // Unwrap the type[body] wrapper. We operate on the inner body because
+        // map_over_union wraps inner union members in type[...] when traversing
+        // inside Type::Type, which would prevent matching UntypedAlias nodes.
+        let ty = ta.as_type();
+        let body = match &ty {
+            Type::Type(inner) => inner.as_ref(),
+            _ => unreachable!("TypeAlias::as_type() should always return Type::Type(...)"),
+        };
         let mut contains_cyclic_ref = false;
         // We only check for the name of the current alias to avoid reporting duplicate errors
         // for a cycle involving multiple aliases.
         let is_self_ref = |ty: &Type| matches!(ty, Type::UntypedAlias(ta) if ta.name() == name);
-        self.map_over_union(ty, |ty| {
+        self.map_over_union(body, |ty| {
             contains_cyclic_ref |= is_self_ref(ty);
         });
         if contains_cyclic_ref {
@@ -1223,6 +1231,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if ta.as_type().is_error() {
             return self.heap.mk_any_error();
         }
+
+        self.check_type_alias_for_cyclic_reference(name, &ta, range, errors);
 
         let mut seen_type_vars = SmallMap::new();
         let mut seen_type_var_tuples = SmallMap::new();

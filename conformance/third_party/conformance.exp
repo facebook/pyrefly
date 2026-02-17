@@ -1102,35 +1102,35 @@
     },
     {
       "code": -2,
-      "column": 41,
+      "column": 13,
       "concise_description": "Found cyclic self-reference in `BadAlias4`",
       "description": "Found cyclic self-reference in `BadAlias4`",
       "line": 46,
       "name": "invalid-type-alias",
       "severity": "error",
-      "stop_column": 50,
+      "stop_column": 52,
       "stop_line": 46
     },
     {
       "code": -2,
-      "column": 40,
+      "column": 13,
       "concise_description": "Found cyclic self-reference in `BadAlias5`",
       "description": "Found cyclic self-reference in `BadAlias5`",
       "line": 47,
       "name": "invalid-type-alias",
       "severity": "error",
-      "stop_column": 60,
+      "stop_column": 79,
       "stop_line": 47
     },
     {
       "code": -2,
-      "column": 40,
+      "column": 13,
       "concise_description": "Found cyclic self-reference in `BadAlias7`",
       "description": "Found cyclic self-reference in `BadAlias7`",
       "line": 49,
       "name": "invalid-type-alias",
       "severity": "error",
-      "stop_column": 49,
+      "stop_column": 50,
       "stop_line": 49
     },
     {
