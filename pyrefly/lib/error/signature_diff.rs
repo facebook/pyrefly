@@ -92,14 +92,18 @@ fn diff_ranges(expected: &str, found: &str) -> Option<(Range<usize>, Range<usize
     let expected_span = if expected_end > lcp {
         lcp..expected_end
     } else {
-        let pos = lcp.min(expected_bytes.len().saturating_sub(1));
-        pos..(pos + 1)
+        // The expected params are a prefix of the found params (or vice versa).
+        // Point at the first character after the shared prefix, which in the
+        // full source corresponds to the closing `)` or `,` — indicating where
+        // parameters are missing or extra. Clamp to the string length to avoid
+        // producing an out-of-bounds range when the entire string is a prefix
+        // (e.g., for Callable types whose return type ends at the string boundary).
+        lcp..(lcp + 1).min(expected_bytes.len())
     };
     let found_span = if found_end > lcp {
         lcp..found_end
     } else {
-        let pos = lcp.min(found_bytes.len().saturating_sub(1));
-        pos..(pos + 1)
+        lcp..(lcp + 1).min(found_bytes.len())
     };
     Some((expected_span, found_span))
 }
@@ -227,10 +231,6 @@ mod tests {
 
     /// Integration test verifying the full error message produced by the
     /// override checker includes the signature diff annotation.
-    ///
-    /// BUG: When one signature has fewer params, the "found" caret
-    /// points at `B` in `self: B` instead of indicating missing parameters,
-    /// and the return type diff is noise.
     #[test]
     fn test_override_signature_diff_full_message() {
         let messages = error_messages(
@@ -256,17 +256,13 @@ class B(A):
                            |
                            parameters
   found:    def foo(self: B) -> None: ...
-                          ^     ^^^^ return type
-                          |
-                          parameters"#;
+                           ^    ^^^^ return type
+                           |
+                           parameters"#;
         assert_eq!(messages[0], expected);
     }
 
     /// Override has too many arguments (inverse of the basic test).
-    ///
-    /// BUG: The "expected" caret points at `B` in `self: B` labeled
-    /// "parameters", which is misleading when the real issue is that the
-    /// override added extra parameters.
     #[test]
     fn test_signature_diff_too_many_args() {
         let messages = error_messages(
@@ -285,7 +281,7 @@ class B(A):
   `B.foo` has type `(self: B, x: int, y: str) -> None`, which is not assignable to `(self: B) -> None`, the type of `A.foo`
   Signature mismatch:
   expected: def foo(self: B) -> None: ...
-                          ^ parameters
+                           ^ parameters
   found:    def foo(self: B, x: int, y: str) -> None: ...
                            ^^^^^^^^^^^^^^^^ parameters"#;
         assert_eq!(messages[0], expected);
@@ -464,5 +460,21 @@ class B(A):
                              |
                              parameters"#;
         assert_eq!(messages[0], expected);
+    }
+
+    /// Callable-style signatures (no `def`, no `: ...` suffix) where the
+    /// shorter return type is a prefix of the longer one. Previously panicked
+    /// because `diff_ranges` produced a span past the end of the source string.
+    #[test]
+    fn test_render_signature_diff_callable_prefix_return_type() {
+        use super::render_signature_diff;
+        let expected = "() -> EdgeFoo | EdgeBar";
+        let found = "() -> Edge";
+        // Should not panic. The diff should highlight the return type difference.
+        let result = render_signature_diff(expected, found);
+        assert!(
+            result.is_some(),
+            "Expected a signature diff for differing return types"
+        );
     }
 }
