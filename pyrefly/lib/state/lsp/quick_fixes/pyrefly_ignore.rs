@@ -5,23 +5,19 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::LazyLock;
-
 use dupe::Dupe;
 use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::module::Module;
 use pyrefly_util::lined_buffer::LineNumber;
-use regex::Regex;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
-use starlark_map::small_set::SmallSet;
 
 use crate::ModuleInfo;
 use crate::config::error_kind::ErrorKind;
 use crate::error::error::Error;
-
-static PYREFLY_IGNORE_COMMENT_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"#\s*pyrefly:\s*ignore(?:\s*\[([^\]]*)\])?").unwrap());
+use crate::error::suppress::merge_error_codes;
+use crate::error::suppress::parse_ignore_comment;
+use crate::error::suppress::replace_ignore_comment;
 
 pub(crate) fn add_pyrefly_ignore_code_action(
     module_info: &ModuleInfo,
@@ -38,13 +34,12 @@ pub(crate) fn add_pyrefly_ignore_code_action(
     if has_blank_pyrefly_ignore_comment(line_text) {
         return None;
     }
-    if let Some(existing_codes) = get_current_pyrefly_ignore_codes(line_text) {
+    if let Some(existing_codes) = parse_ignore_comment(line_text) {
         if existing_codes.iter().any(|code| code == error_code) {
             return None;
         }
-        let merged = merge_pyrefly_ignore_codes(existing_codes, error_code);
-        let new_comment = format!("# pyrefly: ignore [{}]", merged.join(", "));
-        let updated_line = replace_pyrefly_ignore_comment(line_text, &new_comment)?;
+        let new_comment = merge_error_codes(existing_codes, &[error_code.to_owned()]);
+        let updated_line = replace_ignore_comment(line_text, &new_comment);
         return Some((title, module_info.dupe(), line_range, updated_line));
     }
 
@@ -52,14 +47,13 @@ pub(crate) fn add_pyrefly_ignore_code_action(
         && let Some((above_range, above_text)) = get_line_text_and_range(module_info, above_line)
         && above_text.trim_start().starts_with('#')
         && !has_blank_pyrefly_ignore_comment(above_text)
-        && let Some(existing_codes) = get_current_pyrefly_ignore_codes(above_text)
+        && let Some(existing_codes) = parse_ignore_comment(above_text)
     {
         if existing_codes.iter().any(|code| code == error_code) {
             return None;
         }
-        let merged = merge_pyrefly_ignore_codes(existing_codes, error_code);
-        let new_comment = format!("# pyrefly: ignore [{}]", merged.join(", "));
-        let updated_line = replace_pyrefly_ignore_comment(above_text, &new_comment)?;
+        let new_comment = merge_error_codes(existing_codes, &[error_code.to_owned()]);
+        let updated_line = replace_ignore_comment(above_text, &new_comment);
         return Some((title, module_info.dupe(), above_range, updated_line));
     }
 
@@ -96,56 +90,38 @@ fn get_line_text_and_range(
     Some((TextRange::new(start, end), line_text))
 }
 
-fn get_current_pyrefly_ignore_codes(line: &str) -> Option<Vec<String>> {
-    let comment_start = find_comment_start_in_line(line)?;
-    let comment_part = &line[comment_start..];
-    let captures = PYREFLY_IGNORE_COMMENT_REGEX.captures(comment_part)?;
-    let inside = captures.get(1)?.as_str();
-    let codes = inside
-        .split(',')
-        .map(|code| code.trim())
-        .filter(|code| !code.is_empty())
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if codes.is_empty() {
-        return None;
-    }
-    Some(codes)
-}
-
 /// Returns true if the line already has a `# pyrefly: ignore` comment without any codes.
 fn has_blank_pyrefly_ignore_comment(line: &str) -> bool {
     let Some(comment_start) = find_comment_start_in_line(line) else {
         return false;
     };
-    let comment_part = &line[comment_start..];
-    let Some(captures) = PYREFLY_IGNORE_COMMENT_REGEX.captures(comment_part) else {
+    let mut rest = line[comment_start..].trim_start();
+    if !rest.starts_with('#') {
         return false;
-    };
-    let Some(group) = captures.get(1) else {
+    }
+    rest = rest[1..].trim_start();
+    if !rest.starts_with("pyrefly") {
+        return false;
+    }
+    rest = rest["pyrefly".len()..].trim_start();
+    if !rest.starts_with(':') {
+        return false;
+    }
+    rest = rest[1..].trim_start();
+    if !rest.starts_with("ignore") {
+        return false;
+    }
+    rest = &rest["ignore".len()..];
+    let mut chars = rest.chars();
+    let Some(first) = chars.next() else {
         return true;
     };
-    group.as_str().trim().is_empty()
-}
-
-fn merge_pyrefly_ignore_codes(existing: Vec<String>, new_code: &str) -> Vec<String> {
-    let mut all_codes = SmallSet::new();
-    for code in existing {
-        all_codes.insert(code);
+    if first.is_alphanumeric() || first == '-' || first == '_' {
+        return false;
     }
-    all_codes.insert(new_code.to_owned());
-    let mut merged: Vec<_> = all_codes.into_iter().collect();
-    merged.sort();
-    merged
-}
-
-fn replace_pyrefly_ignore_comment(line: &str, new_comment: &str) -> Option<String> {
-    let comment_start = find_comment_start_in_line(line)?;
-    let code_part = &line[..comment_start];
-    let comment_part = &line[comment_start..];
-    if !PYREFLY_IGNORE_COMMENT_REGEX.is_match(comment_part) {
-        return None;
+    if first.is_whitespace() {
+        let trimmed = rest.trim_start();
+        return !trimmed.starts_with('[');
     }
-    let updated_comment = PYREFLY_IGNORE_COMMENT_REGEX.replace(comment_part, new_comment);
-    Some(format!("{code_part}{updated_comment}"))
+    first != '['
 }

@@ -134,7 +134,7 @@ fn read_and_validate_file(path: &Path) -> anyhow::Result<String> {
 /// Extracts error codes from an existing pyrefly ignore comment.
 /// Returns Some(Vec<String>) if the line contains a valid ignore comment, None otherwise.
 /// Uses string-aware parsing to avoid matching inside string literals.
-fn parse_ignore_comment(line: &str) -> Option<Vec<String>> {
+pub(crate) fn parse_ignore_comment(line: &str) -> Option<Vec<String>> {
     let comment_start = find_comment_start_in_line(line)?;
     let comment_part = &line[comment_start..];
     let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[([^\]]*)\]").unwrap();
@@ -193,7 +193,7 @@ fn get_indentation(line: &str) -> &str {
 
 /// Merges new error codes with existing ones in a suppression comment.
 /// Returns the updated comment string with merged and sorted error codes.
-fn merge_error_codes(existing_codes: Vec<String>, new_codes: &[String]) -> String {
+pub(crate) fn merge_error_codes(existing_codes: Vec<String>, new_codes: &[String]) -> String {
     let mut all_codes: SmallSet<String> = SmallSet::new();
     for code in existing_codes {
         all_codes.insert(code);
@@ -209,7 +209,7 @@ fn merge_error_codes(existing_codes: Vec<String>, new_codes: &[String]) -> Strin
 /// Replaces the ignore comment in a line with the merged version.
 /// Preserves the rest of the line content.
 /// Uses string-aware parsing to only replace in the comment portion.
-fn replace_ignore_comment(line: &str, merged_comment: &str) -> String {
+pub(crate) fn replace_ignore_comment(line: &str, merged_comment: &str) -> String {
     if let Some(comment_start) = find_comment_start_in_line(line) {
         let code_part = &line[..comment_start];
         let comment_part = &line[comment_start..];
