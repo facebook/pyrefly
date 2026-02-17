@@ -3651,16 +3651,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .filter_map(|branch| {
                     // Filter branches based on type-based termination (Never/NoReturn)
+                    let t = self.get_idx(branch.value_key);
                     if let Some(term_key) = branch.termination_key
                         && self.get_idx(term_key).ty().is_never()
                     {
                         None
                     } else {
-                        Some(branch.value_key)
+                        Some(t)
                     }
                 })
-                .filter_map(|k| {
-                    let t: Arc<TypeInfo> = self.get_idx(k);
+                .filter_map(|t| {
                     // Filter out all `@overload`-decorated types except the one that
                     // accumulates all signatures into a Type::Overload.
                     if matches!(t.ty(), Type::Overload(_)) || !t.ty().is_overload() {
@@ -3669,7 +3669,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None
                     }
                 })
-                .collect::<Vec<_>>();
+                .collect();
 
             TypeInfo::join(
                 type_infos,
