@@ -257,6 +257,17 @@ type Z = int | Y  # E: cyclic self-reference in `Z`
 );
 
 testcase!(
+    bug = "No base case aliases should be detected as cyclic",
+    test_cyclic_no_base_case,
+    r#"
+# These have no base case — every value would be infinitely nested.
+type A = list[A]
+type B = dict[str, B]
+type C = tuple[int, C]
+    "#,
+);
+
+testcase!(
     test_recursive_function_type,
     r#"
 from typing import Callable
