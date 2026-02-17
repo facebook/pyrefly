@@ -1110,6 +1110,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut kept = Vec::with_capacity(lookup_found.len());
         let mut violations = Vec::new();
         for (attr, base) in lookup_found.drain(..) {
+            match &attr {
+                Attribute::ClassAttribute(ClassAttribute::Property(..))
+                | Attribute::ClassAttribute(ClassAttribute::Descriptor(..)) => {
+                    kept.push((attr, base));
+                    continue;
+                }
+                _ => {}
+            }
             let Some(class) = self.class_for_slots_restriction(&base) else {
                 kept.push((attr, base));
                 continue;
