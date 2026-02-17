@@ -86,12 +86,13 @@ def f(x: X) -> Y:
 );
 
 testcase!(
+    bug = "C.X attribute ref not intercepted at binding time",
     test_class_attr,
     r#"
 class C:
     type X = int | list[C.X]
 x1: C.X = [[1]]
-x2: C.X = [["oops"]]  # E: not assignable
+x2: C.X = [["oops"]]
     "#,
 );
 

@@ -29,7 +29,6 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasData;
-use pyrefly_types::type_alias::TypeAliasRef;
 use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::recurser::Guard;
@@ -1669,37 +1668,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.get_idx(*prior_idx)
                     .arc_clone_ty()
                     .promote_implicit_literals(self.stdlib),
-            ),
-            Binding::TypeAlias {
-                name,
-                tparams,
-                key_type_alias,
-                range: _,
-            } => self.solver().fresh_alias_recursive(
-                self.uniques,
-                TypeAliasRef {
-                    name: name.clone(),
-                    args: None,
-                    module_name: self.module().name(),
-                    module_path: self.module().path().clone(),
-                    index: self.bindings().idx_to_key(*key_type_alias).0,
-                },
-                self.create_type_alias_params_recursive(tparams),
-            ),
-            Binding::TypeAliasRef {
-                name,
-                key_type_alias,
-                tparams,
-            } => self.solver().fresh_alias_recursive(
-                self.uniques,
-                TypeAliasRef {
-                    name: name.clone(),
-                    args: None,
-                    module_name: self.module().name(),
-                    module_path: self.module().path().clone(),
-                    index: self.bindings().idx_to_key(*key_type_alias).0,
-                },
-                self.create_type_alias_params_recursive(tparams),
             ),
             _ => self.solver().fresh_recursive(self.uniques),
         }
