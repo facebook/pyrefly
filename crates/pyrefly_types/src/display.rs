@@ -2052,8 +2052,9 @@ def overloaded_func[T](
 
     #[test]
     fn test_get_types_with_location_typevar() {
+        let heap = TypeHeap::new();
         let tvar = fake_tyvar("T", "test.module", 15);
-        let t = tvar.to_type();
+        let t = tvar.to_type(&heap);
         let parts = get_parts(&t);
 
         let typevar_part = parts.iter().find(|part| part.text == "TypeVar");
