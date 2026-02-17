@@ -234,7 +234,10 @@ impl<'a> BindingsBuilder<'a> {
         func_name: &Identifier,
         class_key: Option<Idx<KeyClass>>,
         tparams_builder: &mut Option<LegacyTParamCollector>,
-    ) -> (TextRange, Idx<KeyAnnotation>) {
+    ) -> (TextRange, Idx<KeyAnnotation>, bool) {
+        // Check if the return annotation is `Self` before processing
+        let is_self_annotation = self.is_self_type_annotation(&x);
+
         self.ensure_type(&mut x, tparams_builder);
         (
             x.range(),
@@ -246,7 +249,28 @@ impl<'a> BindingsBuilder<'a> {
                     class_key,
                 ),
             ),
+            is_self_annotation,
         )
+    }
+
+    /// Check if an expression is `Self` from typing or `typing_extensions`
+    fn is_self_type_annotation(&self, expr: &Expr) -> bool {
+        use ruff_python_ast::Expr as AstExpr;
+
+        match expr {
+            // Simple: Self (bare name)
+            AstExpr::Name(n) => &n.id == "Self",
+            // typing.Self or typing_extensions.Self
+            AstExpr::Attribute(attr) => {
+                &attr.attr.id == "Self"
+                    && if let AstExpr::Name(module) = &*attr.value {
+                        &module.id == "typing" || &module.id == "typing_extensions"
+                    } else {
+                        false
+                    }
+            }
+            _ => false,
+        }
     }
 
     fn function_header(
@@ -256,7 +280,7 @@ impl<'a> BindingsBuilder<'a> {
         class_key: Option<Idx<KeyClass>>,
         usage: &mut Usage,
     ) -> (
-        Option<(TextRange, Idx<KeyAnnotation>)>,
+        Option<(TextRange, Idx<KeyAnnotation>, bool)>,
         Vec<Idx<KeyLegacyTypeParam>>,
     ) {
         let tparams = x
@@ -374,7 +398,7 @@ impl<'a> BindingsBuilder<'a> {
         func_name: &Identifier,
         is_async: bool,
         yields_and_returns: YieldsAndReturns,
-        return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>)>,
+        return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>, bool)>,
         implicit_return: Option<Idx<Key>>,
         should_infer_return_type: bool,
         stub_or_impl: FunctionStubOrImpl,
@@ -384,7 +408,11 @@ impl<'a> BindingsBuilder<'a> {
     ) {
         let is_generator =
             !(yields_and_returns.yields.is_empty() && yields_and_returns.yield_froms.is_empty());
-        let return_ann = return_ann_with_range.as_ref().map(|(_, key)| *key);
+        let return_ann = return_ann_with_range.as_ref().map(|(_, key, _)| *key);
+        let annotation_was_self = return_ann_with_range
+            .as_ref()
+            .map(|(_, _, was_self)| *was_self)
+            .unwrap_or(false);
 
         // Collect the keys of explicit returns.
         let return_keys = yields_and_returns
@@ -399,6 +427,9 @@ impl<'a> BindingsBuilder<'a> {
                         is_async,
                         range: x.range,
                         is_unreachable,
+                        annotation_was_self,
+                        class_metadata_key,
+                        decorators: decorators.clone(),
                     }),
                 )
             })
@@ -434,19 +465,21 @@ impl<'a> BindingsBuilder<'a> {
 
         let return_type_binding = {
             let kind = match (return_ann_with_range, implicit_return) {
-                (Some((range, annotation)), Some(implicit_return)) => {
+                (Some((range, annotation, annotation_was_self)), Some(implicit_return)) => {
                     // We have an explicit return annotation and we want to validate it.
                     ReturnTypeKind::ShouldValidateAnnotation {
                         range,
                         annotation,
                         stub_or_impl,
-                        decorators,
+                        decorators: decorators.clone(),
                         implicit_return,
                         is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
                         has_explicit_return: !return_keys.is_empty(),
+                        annotation_was_self,
+                        class_metadata_key,
                     }
                 }
-                (Some((range, annotation)), None) => {
+                (Some((range, annotation, _)), None) => {
                     // We have an explicit return annotation and we just want to trust it.
                     ReturnTypeKind::ShouldTrustAnnotation {
                         annotation,
@@ -533,7 +566,7 @@ impl<'a> BindingsBuilder<'a> {
         decorators: &Decorators,
         range: TextRange,
         is_async: bool,
-        return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>)>,
+        return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>, bool)>,
         func_name: &Identifier,
         parent: &NestingContext,
         undecorated_idx: Idx<KeyUndecoratedFunction>,

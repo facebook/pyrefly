@@ -195,22 +195,6 @@ class C:
 );
 
 testcase!(
-    bug = "conformance: Should error when returning concrete class instead of Self",
-    test_self_return_concrete_class,
-    r#"
-from typing import Self
-
-class Shape:
-    def method(self) -> Self:
-        return Shape()  # should error: returns Shape, not Self
-
-    @classmethod
-    def cls_method(cls) -> Self:
-        return Shape()  # should error: returns Shape, not Self
-"#,
-);
-
-testcase!(
     test_self_in_class_body_expression,
     r#"
 from typing import Self, assert_type
@@ -227,5 +211,53 @@ class SomeClass:
 
 assert_type(SomeClass().cache, dict[int, SomeClass])
 assert_type(SomeClass().get_instance(), SomeClass)
+"#,
+);
+
+testcase!(
+    test_self_return_shape_error,
+    r#"
+from typing import Self
+
+class Circle: pass
+
+class Shape(Circle):
+    def method(self) -> Self:
+        return Circle()  # E:
+
+    @classmethod
+    def cls_method(cls) -> Self:
+        return Circle()  # E:
+"#,
+);
+
+testcase!(
+    test_self_return_shape_final_ok,
+    r#"
+from typing import Self, final
+
+@final
+class Shape:
+    def method(self) -> Self:
+        return Shape()
+
+    @classmethod
+    def cls_method(cls) -> Self:
+        return Shape()
+"#,
+);
+
+testcase!(
+    test_self_return_concrete_class_error,
+    r#"
+from typing import Self
+
+class Shape:
+    def method(self) -> Self:
+        return Shape()  # E:
+
+    @classmethod
+    def cls_method(cls) -> Self:
+        return Shape()  # E:
 "#,
 );
