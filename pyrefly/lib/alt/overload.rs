@@ -51,7 +51,7 @@ struct CalledOverload {
 }
 
 /// Performs argument type expansion for arguments to an overloaded function.
-struct ArgsExpander<'a, Ans: LookupAnswer> {
+pub struct ArgsExpander<'a, Ans: LookupAnswer> {
     /// The index of the next argument to expand. Left is positional args; right, keyword args.
     idx: Either<usize, usize>,
     /// Current argument lists.
@@ -64,7 +64,7 @@ struct ArgsExpander<'a, Ans: LookupAnswer> {
 impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
     const GAS: usize = 100;
 
-    fn new(
+    pub fn new(
         posargs: Vec<CallArg<'a>>,
         keywords: Vec<CallKeyword<'a>>,
         solver: &'a AnswersSolver<'a, Ans>,
@@ -82,7 +82,7 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
     }
 
     /// Expand the next argument and return the expanded argument lists.
-    fn expand(
+    pub fn expand(
         &mut self,
         errors: &ErrorCollector,
         owner: &'a Owner<Type>,
