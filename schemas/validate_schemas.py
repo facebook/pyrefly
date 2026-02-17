@@ -76,9 +76,22 @@ class TestPositiveValidation(unittest.TestCase):
         schema_file = SCHEMAS_DIR / "pyproject-tool-pyrefly.json"
         with open(toml_file, "r") as f:
             config = toml.load(f)
-        config_to_validate = config["tool"]["pyrefly"]
         validator = _make_validator(schema_file)
-        validator.validate(config_to_validate)
+        validator.validate(config)
+
+
+class TestSchemaValidity(unittest.TestCase):
+    """Meta-validation: JSON schemas themselves must be valid Draft-07 schemas."""
+
+    def test_pyrefly_schema_is_valid(self) -> None:
+        with open(SCHEMAS_DIR / "pyrefly.json", "r") as f:
+            schema = json.load(f)
+        jsonschema.Draft7Validator.check_schema(schema)
+
+    def test_pyproject_schema_is_valid(self) -> None:
+        with open(SCHEMAS_DIR / "pyproject-tool-pyrefly.json", "r") as f:
+            schema = json.load(f)
+        jsonschema.Draft7Validator.check_schema(schema)
 
 
 # Each entry is (test_name_suffix, toml_string). All should be rejected.
@@ -161,10 +174,42 @@ NEGATIVE_TEST_CASES: list[tuple[str, str]] = [
         "python_version_bad_pattern",
         'python-version = "3.x.1"',
     ),
+    (
+        "python_version_trailing_dot",
+        'python-version = "3."',
+    ),
+    (
+        "python_version_four_parts",
+        'python-version = "3.12.0.1"',
+    ),
     # --- minItems violation ---
     (
         "build_system_command_empty_array",
         '[build-system]\ntype = "custom"\ncommand = []',
+    ),
+    # --- Wrong item types within arrays ---
+    (
+        "search_path_non_string_items",
+        "search-path = [123, 456]",
+    ),
+    (
+        "enabled_ignores_integer_in_enum_array",
+        "enabled-ignores = [42, 99]",
+    ),
+    # --- Float instead of integer ---
+    (
+        "recursion_depth_limit_float",
+        "recursion-depth-limit = 3.5",
+    ),
+    # --- Conditional build-system: custom with extras ---
+    (
+        "build_system_custom_with_extras",
+        '[build-system]\ntype = "custom"\ncommand = ["query"]\nextras = ["--flag"]',
+    ),
+    # --- Sub-config with invalid inner field ---
+    (
+        "sub_config_invalid_error_severity",
+        '[[sub-config]]\nmatches = "*.py"\n\n[sub-config.errors]\nbad-assignment = "critical"',
     ),
 ]
 
