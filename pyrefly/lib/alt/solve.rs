@@ -3647,10 +3647,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if branches.len() == 1 {
             self.get_idx(branches[0].value_key).arc_clone()
         } else {
-            // Filter branches based on type-based termination (Never/NoReturn)
-            let live_value_keys: Vec<Idx<Key>> = branches
+            let type_infos: Vec<_> = branches
                 .iter()
                 .filter_map(|branch| {
+                    // Filter branches based on type-based termination (Never/NoReturn)
                     match branch.termination_key {
                         None => {
                             // No terminal statement, branch is live
@@ -3668,19 +3668,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 })
-                .collect();
-
-            // If all branches terminated, use all value keys (consistent with binding-time)
-            let keys_to_use = if live_value_keys.is_empty() {
-                branches.iter().map(|b| b.value_key).collect()
-            } else {
-                live_value_keys
-            };
-
-            let type_infos = keys_to_use
-                .iter()
                 .filter_map(|k| {
-                    let t: Arc<TypeInfo> = self.get_idx(*k);
+                    let t: Arc<TypeInfo> = self.get_idx(k);
                     // Filter out all `@overload`-decorated types except the one that
                     // accumulates all signatures into a Type::Overload.
                     if matches!(t.ty(), Type::Overload(_)) || !t.ty().is_overload() {
