@@ -56,7 +56,6 @@ use ruff_text_size::TextSize;
 use serde::Deserialize;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
-use starlark_map::small_set::SmallSet;
 
 use crate::ModuleInfo;
 use crate::alt::answers_solver::AnswersSolver;
@@ -510,6 +509,43 @@ pub struct FindDefinitionItem {
     pub metadata: DefinitionMetadata,
     pub definition_range: TextRange,
     pub module: Module,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct QuickfixAction {
+    title: String,
+    module_info: Module,
+    range: TextRange,
+    insert_text: String,
+    is_deprecated: bool,
+    is_private_import: bool,
+}
+
+impl QuickfixAction {
+    fn to_tuple(self) -> (String, Module, TextRange, String) {
+        (self.title, self.module_info, self.range, self.insert_text)
+    }
+}
+
+impl Ord for QuickfixAction {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Sort import code actions: non-private first, then non-deprecated, then alphabetically
+        match (self.is_private_import, other.is_private_import) {
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            _ => match (self.is_deprecated, other.is_deprecated) {
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                _ => self.title.cmp(&other.title),
+            },
+        }
+    }
+}
+
+impl PartialOrd for QuickfixAction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl<'a> Transaction<'a> {
@@ -1939,95 +1975,39 @@ impl<'a> Transaction<'a> {
                         for (handle_to_import_from, export) in
                             self.search_exports_exact(unknown_name)
                         {
-                            let (position, insert_text, _) = insert_import_edit(
-                                &ast,
-                                self.config_finder(),
-                                handle.dupe(),
-                                handle_to_import_from.dupe(),
-                                unknown_name,
+                            self.create_quickfix_action_for_export(
+                                handle,
                                 import_format,
+                                &module_info,
+                                &ast,
+                                &mut import_actions,
+                                unknown_name,
+                                handle_to_import_from,
+                                export,
                             );
-                            let range = TextRange::at(position, TextSize::new(0));
-                            let is_deprecated = export.deprecation.is_some();
-                            let title = format!(
-                                "Insert import: `{}`{}",
-                                insert_text.trim(),
-                                if is_deprecated { " (deprecated)" } else { "" }
-                            );
-
-                            let is_private_import = handle_to_import_from
-                                .module()
-                                .components()
-                                .last()
-                                .is_some_and(|component| component.as_str().starts_with('_'));
-
-                            import_actions.push((
-                                title,
-                                module_info.dupe(),
-                                range,
-                                insert_text,
-                                is_deprecated,
-                                is_private_import,
-                            ));
                         }
 
-                        let mut aliased_modules = SmallSet::new();
-                        if let Some(module_name_str) = common_alias_target_module(unknown_name) {
-                            let module_name = ModuleName::from_str(module_name_str);
-                            if module_name != handle.module()
-                                && let Some(module_handle) =
-                                    self.import_handle(handle, module_name, None).finding()
-                            {
-                                let (position, insert_text, _) = import_regular_import_edit(
-                                    &ast,
-                                    module_handle,
-                                    Some(unknown_name),
-                                );
-                                let range = TextRange::at(position, TextSize::new(0));
-                                let title = format!("Use common alias: `{}`", insert_text.trim());
-                                let is_private_import = module_name
-                                    .components()
-                                    .last()
-                                    .is_some_and(|component| component.as_str().starts_with('_'));
-                                import_actions.push((
-                                    title,
-                                    module_info.dupe(),
-                                    range,
-                                    insert_text,
-                                    false,
-                                    is_private_import,
-                                ));
-                                aliased_modules.insert(module_name);
-                            }
-                        }
+                        let aliased_module = self.create_quickfix_action_for_common_alias_import(
+                            handle,
+                            &module_info,
+                            &ast,
+                            &mut import_actions,
+                            unknown_name,
+                        );
 
                         for module_name in self.search_modules_fuzzy(unknown_name) {
-                            if module_name == handle.module() {
-                                continue;
-                            }
-                            if aliased_modules.contains(&module_name) {
-                                continue;
-                            }
-                            if let Some(module_handle) =
-                                self.import_handle(handle, module_name, None).finding()
+                            if module_name == handle.module()
+                                || aliased_module.is_some_and(|m| m == module_name)
                             {
-                                let (position, insert_text, _) =
-                                    import_regular_import_edit(&ast, module_handle, None);
-                                let range = TextRange::at(position, TextSize::new(0));
-                                let title = format!("Insert import: `{}`", insert_text.trim());
-                                let is_private_import = module_name
-                                    .components()
-                                    .last()
-                                    .is_some_and(|component| component.as_str().starts_with('_'));
-                                import_actions.push((
-                                    title,
-                                    module_info.dupe(),
-                                    range,
-                                    insert_text,
-                                    false,
-                                    is_private_import,
-                                ));
+                                continue;
                             }
+                            self.create_quickfix_action_for_fuzzy_match(
+                                handle,
+                                &module_info,
+                                &ast,
+                                &mut import_actions,
+                                module_name,
+                            );
                         }
 
                         if let Some(mut actions) = quick_fixes::generate_code::generate_code_actions(
@@ -2057,34 +2037,121 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        // Sort import code actions: non-private first, then non-deprecated, then alphabetically
-        import_actions.sort_by(
-            |(title1, _, _, _, is_deprecated1, is_private1),
-             (title2, _, _, _, is_deprecated2, is_private2)| {
-                match (is_private1, is_private2) {
-                    (true, false) => Ordering::Greater,
-                    (false, true) => Ordering::Less,
-                    _ => match (is_deprecated1, is_deprecated2) {
-                        (true, false) => Ordering::Greater,
-                        (false, true) => Ordering::Less,
-                        _ => title1.cmp(title2),
-                    },
-                }
-            },
-        );
+        import_actions.sort();
 
         // Keep only the first suggestion for each unique import text (after sorting,
         // this will be the public/non-deprecated version)
-        import_actions.dedup_by(|a, b| a.3 == b.3);
+        import_actions.dedup_by(|a, b| a.insert_text == b.insert_text);
 
         // Drop the deprecated flag and return
-        let mut actions: Vec<(String, Module, TextRange, String)> = import_actions
-            .into_iter()
-            .map(|(title, module, range, insert_text, _, _)| (title, module, range, insert_text))
-            .collect();
+        let mut actions: Vec<(String, Module, TextRange, String)> =
+            import_actions.into_iter().map(|a| a.to_tuple()).collect();
         actions.extend(generate_actions);
         actions.extend(other_actions);
         (!actions.is_empty()).then_some(actions)
+    }
+
+    fn create_quickfix_action_for_common_alias_import(
+        &self,
+        handle: &Handle,
+        module_info: &Module,
+        ast: &std::sync::Arc<ModModule>,
+        import_actions: &mut Vec<QuickfixAction>,
+        unknown_name: &str,
+    ) -> Option<ModuleName> {
+        let module_name_str = common_alias_target_module(unknown_name)?;
+        let module_name = ModuleName::from_str(module_name_str);
+        if module_name == handle.module() {
+            return None;
+        }
+        let module_handle = self.import_handle(handle, module_name, None).finding()?;
+        let (position, insert_text, _) =
+            import_regular_import_edit(ast, module_handle, Some(unknown_name));
+        let range = TextRange::at(position, TextSize::new(0));
+        let title = format!("Use common alias: `{}`", insert_text.trim());
+        let is_private_import = module_name
+            .components()
+            .last()
+            .is_some_and(|component| component.as_str().starts_with('_'));
+        import_actions.push(QuickfixAction {
+            title,
+            module_info: module_info.dupe(),
+            range,
+            insert_text,
+            is_deprecated: false,
+            is_private_import,
+        });
+        Some(module_name)
+    }
+
+    fn create_quickfix_action_for_fuzzy_match(
+        &self,
+        handle: &Handle,
+        module_info: &Module,
+        ast: &std::sync::Arc<ModModule>,
+        import_actions: &mut Vec<QuickfixAction>,
+        module_name: ModuleName,
+    ) {
+        if let Some(module_handle) = self.import_handle(handle, module_name, None).finding() {
+            let (position, insert_text, _) = import_regular_import_edit(ast, module_handle, None);
+            let range = TextRange::at(position, TextSize::new(0));
+            let title = format!("Insert import: `{}`", insert_text.trim());
+            let is_private_import = module_name
+                .components()
+                .last()
+                .is_some_and(|component| component.as_str().starts_with('_'));
+            import_actions.push(QuickfixAction {
+                title,
+                module_info: module_info.dupe(),
+                range,
+                insert_text,
+                is_deprecated: false,
+                is_private_import,
+            });
+        }
+    }
+
+    fn create_quickfix_action_for_export(
+        &self,
+        handle: &Handle,
+        import_format: ImportFormat,
+        module_info: &Module,
+        ast: &std::sync::Arc<ModModule>,
+        import_actions: &mut Vec<QuickfixAction>,
+        unknown_name: &str,
+        handle_to_import_from: Handle,
+        export: Export,
+    ) {
+        let (position, insert_text, _) = insert_import_edit(
+            ast,
+            self.config_finder(),
+            handle.dupe(),
+            handle_to_import_from.dupe(),
+            unknown_name,
+            import_format,
+        );
+        let range = TextRange::at(position, TextSize::new(0));
+        let is_deprecated = export.deprecation.is_some();
+        let title = format!(
+            "Insert import: `{}`{}",
+            insert_text.trim(),
+            if is_deprecated { " (deprecated)" } else { "" }
+        );
+
+        let is_private_import = handle_to_import_from
+            .module()
+            .components()
+            .last()
+            .is_some_and(|component| component.as_str().starts_with('_'));
+
+        import_actions.push(QuickfixAction {
+            title,
+            module_info: module_info.dupe(),
+            range,
+            insert_text,
+            is_deprecated,
+            is_private_import,
+        });
     }
 
     pub fn redundant_cast_fix_all_edits(
