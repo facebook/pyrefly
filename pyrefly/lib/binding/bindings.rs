@@ -1191,8 +1191,10 @@ impl<'a> BindingsBuilder<'a> {
         def_to_upstreams: &SmallMap<Idx<Key>, Idx<Key>>,
         first_uses_to_add: &mut SmallMap<Idx<Key>, Vec<Idx<Key>>>,
     ) {
-        // For TypeAliasRhs usage, check if the name resolves to the same type alias
-        // (self-reference) and produce a TypeAliasRef binding if so.
+        // For TypeAliasRhs usage, check if the name resolves to the same
+        // type alias (self-reference) and produce a TypeAliasRef binding.
+        // The expansion step in wrap_type_alias handles non-recursive Refs
+        // when all-aliases mode is enabled in a future step.
         if let Usage::TypeAliasRhs(alias_name) = &deferred.usage
             && let Some((name, key_type_alias, tparams)) =
                 self.follow_to_type_alias(deferred.lookup_result_idx)
