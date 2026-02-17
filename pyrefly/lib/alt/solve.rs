@@ -3651,21 +3651,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .filter_map(|branch| {
                     // Filter branches based on type-based termination (Never/NoReturn)
-                    match branch.termination_key {
-                        None => {
-                            // No terminal statement, branch is live
-                            Some(branch.value_key)
-                        }
-                        Some(term_key) => {
-                            let term_type = self.get_idx(term_key);
-                            if term_type.ty().is_never() {
-                                // Branch terminated with Never/NoReturn
-                                None
-                            } else {
-                                // Terminal statement doesn't return Never, branch is live
-                                Some(branch.value_key)
-                            }
-                        }
+                    if let Some(term_key) = branch.termination_key
+                        && self.get_idx(term_key).ty().is_never()
+                    {
+                        None
+                    } else {
+                        Some(branch.value_key)
                     }
                 })
                 .filter_map(|k| {
