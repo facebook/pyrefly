@@ -62,6 +62,8 @@ use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
+use crate::binding::binding::KeyYield;
+use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::NarrowUseLocation;
@@ -175,6 +177,10 @@ struct BindingsInner {
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
+    /// Yield and yield-from indices for each lambda that contains yields,
+    /// keyed by the lambda's TextRange. Populated at binding time so the
+    /// solver can look up yield info without re-walking the AST.
+    lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
 }
 
 impl Display for Bindings {
@@ -235,6 +241,8 @@ pub struct BindingsBuilder<'a> {
     semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
     /// BoundName lookups deferred until after AST traversal
     deferred_bound_names: Vec<DeferredBoundName>,
+    /// Yield and yield-from indices for lambdas that contain yields.
+    lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -282,6 +290,7 @@ impl Bindings {
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
+            lambda_yield_keys: Vec::new(),
         }))
     }
 
@@ -306,6 +315,16 @@ impl Bindings {
 
     pub fn unused_variables(&self) -> &[UnusedVariable] {
         &self.0.unused_variables
+    }
+
+    /// Returns the yield and yield-from indices for a lambda at the given range,
+    /// or empty slices if the lambda has no yields.
+    pub fn lambda_yield_keys(&self, range: TextRange) -> (&[Idx<KeyYield>], &[Idx<KeyYieldFrom>]) {
+        self.0
+            .lambda_yield_keys
+            .iter()
+            .find(|(r, _, _)| *r == range)
+            .map_or((&[], &[]), |(_, yields, yield_froms)| (yields, yield_froms))
     }
 
     pub fn available_definitions(&self, position: TextSize) -> SmallSet<Idx<Key>> {
@@ -469,6 +488,7 @@ impl Bindings {
             semantic_checker: SemanticSyntaxChecker::new(),
             semantic_syntax_errors: RefCell::new(Vec::new()),
             deferred_bound_names: Vec::new(),
+            lambda_yield_keys: Vec::new(),
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -539,6 +559,7 @@ impl Bindings {
             unused_parameters: builder.unused_parameters,
             unused_imports: builder.unused_imports,
             unused_variables: builder.unused_variables,
+            lambda_yield_keys: builder.lambda_yield_keys,
         }))
     }
 
@@ -764,6 +785,17 @@ impl<'a> BindingsBuilder<'a> {
 
     pub fn record_unused_variables(&mut self, unused: Vec<UnusedVariable>) {
         self.unused_variables.extend(unused);
+    }
+
+    /// Record the yield and yield-from binding indices for a lambda expression.
+    pub fn record_lambda_yield_keys(
+        &mut self,
+        range: TextRange,
+        yield_keys: Box<[Idx<KeyYield>]>,
+        yield_from_keys: Box<[Idx<KeyYieldFrom>]>,
+    ) {
+        self.lambda_yield_keys
+            .push((range, yield_keys, yield_from_keys));
     }
 
     pub fn record_used_imports_from_dunder_all_names<T>(&mut self, dunder_all_names: T)

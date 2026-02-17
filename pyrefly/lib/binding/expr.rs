@@ -459,7 +459,9 @@ impl<'a> BindingsBuilder<'a> {
         }
         self.ensure_expr(&mut lambda.body, usage);
         let (yields_and_returns, _, _, _) = self.scopes.pop_function_scope();
+        let mut yield_keys = Vec::new();
         for (idx, y, is_unreachable) in yields_and_returns.yields {
+            yield_keys.push(idx);
             self.insert_binding_idx(
                 idx,
                 if is_unreachable {
@@ -469,7 +471,9 @@ impl<'a> BindingsBuilder<'a> {
                 },
             );
         }
+        let mut yield_from_keys = Vec::new();
         for (idx, y, is_unreachable) in yields_and_returns.yield_froms {
+            yield_from_keys.push(idx);
             self.insert_binding_idx(
                 idx,
                 if is_unreachable {
@@ -478,6 +482,13 @@ impl<'a> BindingsBuilder<'a> {
                     // Lambdas cannot be async in Python, so this is always false.
                     BindingYieldFrom::YieldFrom(None, IsAsync::new(false), y)
                 },
+            );
+        }
+        if !yield_keys.is_empty() || !yield_from_keys.is_empty() {
+            self.record_lambda_yield_keys(
+                lambda.range,
+                yield_keys.into_boxed_slice(),
+                yield_from_keys.into_boxed_slice(),
             );
         }
     }
