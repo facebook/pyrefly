@@ -109,7 +109,9 @@ def data():
 def test_data(data):
     assert data == 1
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
