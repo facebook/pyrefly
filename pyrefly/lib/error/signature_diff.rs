@@ -398,13 +398,9 @@ class B(A):
         assert_eq!(messages[0], expected);
     }
 
-    /// Lambda override: the parameter name mismatch error takes priority
-    /// over signature diff rendering for lambdas.
-    ///
-    /// BUG: The error says "Got parameter name `self`, expected `x`" which
-    /// implies a naming issue, but the real problem is wrong arity. The
-    /// PosParamName check in class_field.rs short-circuits before the
-    /// general assignability check, so no signature diff is shown.
+    /// Lambda override: when the arity differs, the override falls through
+    /// to the general BadOverride path, showing the signature diff instead
+    /// of a misleading parameter name mismatch.
     #[test]
     fn test_signature_diff_lambda() {
         let messages = error_messages(
@@ -418,10 +414,17 @@ class B(A):
 "#,
         );
         assert_eq!(messages.len(), 1, "Expected one error, got {messages:?}");
-        // Lambda triggers a parameter name mismatch rather than a signature diff.
-        let expected = "Class member `B.foo` overrides parent class `A` \
-                        in an inconsistent manner\n  \
-                        Got parameter name `self`, expected `x`";
+        let expected = r#"Class member `B.foo` overrides parent class `A` in an inconsistent manner
+  `B.foo` has type `(self: Unknown) -> None`, which is not consistent with `(self: B, x: int) -> int` in `A.foo` (the type of read-write attributes cannot be changed)
+  Signature mismatch:
+  expected: def foo(self: B, x: int) -> int: ...
+                          ^^^^^^^^^     ^^^ return type
+                          |
+                          parameters
+  found:    (self: Unknown) -> None
+                   ^^^^^^^     ^^^^ return type
+                   |
+                   parameters"#;
         assert_eq!(messages[0], expected);
     }
 

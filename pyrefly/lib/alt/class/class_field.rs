@@ -3077,21 +3077,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Err(
                     box (AttrSubsetError::Covariant {
                         subset_error: SubsetError::PosParamName(child, parent),
+                        ref got,
+                        ref want,
                         ..
                     }
                     | AttrSubsetError::Invariant {
                         subset_error: SubsetError::PosParamName(child, parent),
+                        ref got,
+                        ref want,
                         ..
                     }
                     | AttrSubsetError::Contravariant {
                         subset_error: SubsetError::PosParamName(child, parent),
+                        ref got,
+                        ref want,
                         ..
                     }),
-                ) => Some(OverrideError {
-                    kind: ErrorKind::BadParamNameOverride,
-                    message: format!("Got parameter name `{child}`, expected `{parent}`"),
-                    diff_lines: Vec::new(),
-                }),
+                ) if {
+                    // Only use PosParamName when both signatures have the same
+                    // number of parameters. When the counts differ, the name
+                    // mismatch is an artifact of comparing misaligned parameter
+                    // lists (e.g., a lambda whose `self` wasn't stripped by
+                    // method binding). In that case, fall through to BadOverride
+                    // so we get the signature diff.
+                    let got_sigs = got.callable_signatures();
+                    let want_sigs = want.callable_signatures();
+                    got_sigs.len() == 1
+                        && want_sigs.len() == 1
+                        && got_sigs[0].arg_counts().positional.max
+                            == want_sigs[0].arg_counts().positional.max
+                } =>
+                {
+                    Some(OverrideError {
+                        kind: ErrorKind::BadParamNameOverride,
+                        message: format!("Got parameter name `{child}`, expected `{parent}`"),
+                        diff_lines: Vec::new(),
+                    })
+                }
                 Err(error) => {
                     let mut diff_lines = Vec::new();
                     if let AttrSubsetError::Covariant { got, want, .. }
