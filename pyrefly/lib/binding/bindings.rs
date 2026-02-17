@@ -1196,7 +1196,10 @@ impl<'a> BindingsBuilder<'a> {
         if let Some((pinned_idx, unpinned_idx, first_use)) = partial_type_info {
             let is_narrowing = matches!(deferred.usage, Usage::Narrowing(_));
 
-            if matches!(deferred.usage, Usage::StaticTypeInformation) {
+            if matches!(
+                deferred.usage,
+                Usage::StaticTypeInformation | Usage::TypeAliasRhs(_)
+            ) {
                 self.mark_does_not_pin_if_first_use(pinned_idx);
                 self.insert_binding_idx(deferred.bound_name_idx, Binding::Forward(pinned_idx));
                 return;

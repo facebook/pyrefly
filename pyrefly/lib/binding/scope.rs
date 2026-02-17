@@ -2369,7 +2369,7 @@ impl Scopes {
     /// - For other usages: Normal lookup behavior.
     pub fn look_up_name_for_read(&self, name: Hashed<&Name>, usage: &Usage) -> NameReadInfo {
         let skip_class_overload_function_definitions =
-            matches!(usage, Usage::StaticTypeInformation);
+            matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs(_));
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
 
