@@ -6,14 +6,26 @@
  */
 
 use std::collections::HashMap;
+use std::fs::create_dir_all;
+use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
+use pyrefly_util::absolutize::Absolutize;
+use pyrefly_util::arc_id::ArcId;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use tempfile::Builder;
 
+use crate::config::config::ConfigFile;
+use crate::config::config::ProjectLayout;
+use crate::config::finder::ConfigFinder;
 use crate::module::module_info::ModuleInfo;
+use crate::state::load::FileContents;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::require::Require;
@@ -3156,6 +3168,122 @@ def other(x):
     square(x)
 "#;
     assert_eq!(expected_mod1.trim(), updated_mod1.trim());
+}
+
+#[test]
+fn use_function_limits_edits_to_project_config() {
+    let temp = Builder::new()
+        .prefix("pyrefly-test-")
+        .tempdir()
+        .expect("failed to create tempdir");
+    let main_root = temp.path().join("main");
+    let other_root = temp.path().join("other");
+    create_dir_all(&main_root).expect("failed to create main project root");
+    create_dir_all(&other_root).expect("failed to create other project root");
+
+    let main_path = main_root.join("main.py");
+    let other_path = other_root.join("other.py");
+
+    let main_code = r#"
+def one():
+    return 1
+
+value = 1
+"#;
+    let other_code = r#"
+value = 1
+"#;
+
+    let mut main_config = ConfigFile::init_at_root(&main_root, &ProjectLayout::Flat, false);
+    main_config.interpreters.skip_interpreter_query = true;
+    main_config.configure();
+    let main_config = ArcId::new(main_config);
+
+    let mut other_config = ConfigFile::init_at_root(&other_root, &ProjectLayout::Flat, false);
+    other_config.interpreters.skip_interpreter_query = true;
+    other_config.configure();
+    let other_config = ArcId::new(other_config);
+
+    let config_finder = {
+        let main_root = main_root.clone();
+        let other_root = other_root.clone();
+        let main_config_for_before = main_config.clone();
+        let other_config_for_before = other_config.clone();
+        let main_config_fallback = main_config.clone();
+        ConfigFinder::new_custom(
+            Box::new(move |_, path| {
+                let absolute = match path.details() {
+                    ModulePathDetails::FileSystem(p) | ModulePathDetails::Memory(p) => {
+                        Some(p.as_path().absolutize())
+                    }
+                    ModulePathDetails::Namespace(p) => Some(p.as_path().absolutize()),
+                    _ => None,
+                };
+                let Some(absolute) = absolute else {
+                    return Ok(None);
+                };
+                if absolute.starts_with(&main_root) {
+                    return Ok(Some(main_config_for_before.clone()));
+                }
+                if absolute.starts_with(&other_root) {
+                    return Ok(Some(other_config_for_before.clone()));
+                }
+                Ok(None)
+            }),
+            Box::new(|_| (ArcId::new(ConfigFile::default()), Vec::new())),
+            Box::new(move |_, _| main_config_fallback.clone()),
+            Box::new(|| {}),
+        )
+    };
+
+    let state = State::new(config_finder);
+    let main_handle = Handle::new(
+        ModuleName::from_str("main"),
+        ModulePath::memory(main_path.clone()),
+        main_config.get_sys_info(),
+    );
+    let other_handle = Handle::new(
+        ModuleName::from_str("other"),
+        ModulePath::memory(other_path.clone()),
+        other_config.get_sys_info(),
+    );
+
+    let mut transaction = state.new_committable_transaction(Require::Everything, None);
+    transaction.as_mut().set_memory(vec![
+        (
+            main_path.clone(),
+            Some(Arc::new(FileContents::from_source(main_code.to_owned()))),
+        ),
+        (
+            other_path.clone(),
+            Some(Arc::new(FileContents::from_source(other_code.to_owned()))),
+        ),
+    ]);
+    transaction.as_mut().run(
+        &[main_handle.clone(), other_handle.clone()],
+        Require::Everything,
+    );
+    state.commit_transaction(transaction, None);
+
+    let transaction = state.transaction();
+    let main_info = transaction.get_module_info(&main_handle).unwrap();
+    let other_info = transaction.get_module_info(&other_handle).unwrap();
+    let position = position_of_function_name(main_info.contents(), "one");
+    let actions = transaction
+        .use_function_code_actions(&main_handle, TextRange::new(position, position))
+        .unwrap_or_default();
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_main = apply_refactor_edits_for_module(&main_info, edits);
+    let updated_other = apply_refactor_edits_for_module(&other_info, edits);
+    let expected_main = r#"
+def one():
+    return 1
+
+value = one()
+"#;
+    assert_eq!(expected_main.trim(), updated_main.trim());
+    assert_eq!(other_code.trim(), updated_other.trim());
 }
 
 #[test]

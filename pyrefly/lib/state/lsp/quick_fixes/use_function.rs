@@ -13,6 +13,7 @@ use lsp_types::CodeActionKind;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Alias;
 use ruff_python_ast::Expr;
@@ -91,14 +92,38 @@ pub(crate) fn use_function_code_actions(
         def_range: function_def.range(),
         module_name: handle.module(),
     };
+    let function_config = transaction.get_config(handle)?;
 
     let mut edits: Vec<(Module, TextRange, String)> = Vec::new();
     let mut matched_any = false;
 
     for target_handle in transaction.handles() {
+        let Some(target_config) = transaction.get_config(&target_handle) else {
+            continue;
+        };
+        if target_config != function_config {
+            continue;
+        }
         let Some(target_info) = transaction.get_module_info(&target_handle) else {
             continue;
         };
+        let target_path = target_info.path();
+        let is_project_path = match target_path.details() {
+            ModulePathDetails::FileSystem(_)
+            | ModulePathDetails::Memory(_)
+            | ModulePathDetails::Namespace(_) => {
+                function_config
+                    .project_includes
+                    .covers(target_path.as_path())
+                    && !function_config
+                        .project_excludes
+                        .covers(target_path.as_path())
+            }
+            _ => false,
+        };
+        if !is_project_path {
+            continue;
+        }
         if transaction.is_third_party_module(&target_info, &target_handle)
             && !transaction.is_source_file(&target_info, &target_handle)
         {
