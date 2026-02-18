@@ -120,12 +120,13 @@ impl Transaction<'_> {
                     return true;
                 }
                 // Collect ranges of positional args already fully provided (before this one).
+                // `.take(i)` is sufficient; all args before index `i` necessarily end
+                // before the cursor since AST sibling ranges don't overlap.
                 let provided_arg_ranges: Vec<TextRange> = call
                     .arguments
                     .args
                     .iter()
                     .take(i)
-                    .filter(|a| a.range().end() <= find)
                     .map(|a| a.range())
                     .collect();
                 *res = Some((
