@@ -4,8 +4,7 @@
     "description": "Python autocomplete, typechecking, code navigation and more! Powered by Pyrefly, an open-source language server",
     "icon": "images/pyrefly-symbol.png",
     "extensionKind": [
-        "workspace",
-        "web"
+        "workspace"
     ],
     "author": "Facebook",
     "license": "Apache2",
