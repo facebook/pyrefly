@@ -642,9 +642,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(CalleeKind::Class(ClassKind::Property(name))) => {
                 Some(SpecialDecorator::Property(name))
             }
-            Some(CalleeKind::Class(ClassKind::CachedProperty(name))) => {
-                Some(SpecialDecorator::CachedProperty(name))
-            }
             Some(CalleeKind::Class(ClassKind::EnumMember)) => Some(SpecialDecorator::EnumMember),
             Some(CalleeKind::Function(FunctionKind::Override)) => Some(SpecialDecorator::Override),
             Some(CalleeKind::Function(FunctionKind::Final)) => Some(SpecialDecorator::Final),
@@ -699,16 +696,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     setter: None,
                     has_deleter: false,
                 });
-                true
-            }
-            SpecialDecorator::CachedProperty(_) => {
-                flags.property_metadata = Some(PropertyMetadata {
-                    role: PropertyRole::Getter,
-                    getter: self.heap.mk_any_error(),
-                    setter: None,
-                    has_deleter: false,
-                });
-                flags.is_cached_property = true;
                 true
             }
             SpecialDecorator::EnumMember => {
@@ -1058,7 +1045,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             SpecialDecorator::StaticMethod(name) => name.as_str(),
             SpecialDecorator::ClassMethod(name) => name.as_str(),
             SpecialDecorator::Property(name) => name.as_str(),
-            SpecialDecorator::CachedProperty(name) => name.as_str(),
             SpecialDecorator::EnumMember => "member",
             SpecialDecorator::Override => "override",
             SpecialDecorator::Final => "final",

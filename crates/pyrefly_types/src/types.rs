@@ -1196,10 +1196,6 @@ impl Type {
             .is_some_and(|meta| matches!(meta.role, PropertyRole::Getter))
     }
 
-    pub fn is_cached_property(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.is_cached_property)
-    }
-
     pub fn is_property_setter_decorator(&self) -> bool {
         self.property_metadata()
             .is_some_and(|meta| matches!(meta.role, PropertyRole::SetterDecorator))

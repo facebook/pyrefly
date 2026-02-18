@@ -4007,31 +4007,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     narrowed_types,
                 );
             }
-            ClassAttribute::Property(getter, None, cls) => {
-                let is_cached_property = getter.is_cached_property();
-                if is_cached_property {
-                    let attr_ty = self.call_property_getter(getter, range, errors, context);
-                    self.check_set_read_write_and_infer_narrow(
-                        attr_ty,
-                        attr_name,
-                        got,
-                        range,
-                        errors,
-                        context,
-                        *should_narrow,
-                        narrowed_types,
-                    );
-                    *should_narrow = false;
-                } else {
-                    let e = NoAccessReason::SettingReadOnlyProperty(cls);
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::new(ErrorKind::ReadOnly, context),
-                        e.to_error_msg(attr_name),
-                    );
-                    *should_narrow = false;
-                }
+            ClassAttribute::Property(_, None, cls) => {
+                let e = NoAccessReason::SettingReadOnlyProperty(cls);
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::new(ErrorKind::ReadOnly, context),
+                    e.to_error_msg(attr_name),
+                );
+                *should_narrow = false;
             }
             ClassAttribute::Property(_, Some(setter), _) => {
                 let got = CallArg::arg(got);
