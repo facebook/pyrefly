@@ -74,6 +74,21 @@ pub(super) fn line_indent_and_start(
     Some((indent, insert_position))
 }
 
+pub(super) fn find_enclosing_statement_range(
+    ast: &ModModule,
+    selection: TextRange,
+) -> Option<TextRange> {
+    let covering_nodes = Ast::locate_node(ast, selection.start());
+    for node in covering_nodes {
+        if let Some(stmt) = node.as_stmt_ref()
+            && stmt.range().contains_range(selection)
+        {
+            return Some(stmt.range());
+        }
+    }
+    None
+}
+
 pub(super) fn first_parameter_name(parameters: &Parameters) -> Option<String> {
     if let Some(param) = parameters.posonlyargs.first() {
         return Some(param.name().id.to_string());
@@ -119,6 +134,35 @@ pub(super) fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
         TextSize::try_from(start + offset).unwrap_or(selection.start())
     } else {
         selection.start()
+    }
+}
+
+pub(super) fn expr_needs_parens(expr: &Expr) -> bool {
+    !matches!(
+        expr,
+        Expr::Name(_)
+            | Expr::NumberLiteral(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_)
+            | Expr::Subscript(_)
+            | Expr::Attribute(_)
+            | Expr::Call(_)
+            | Expr::List(_)
+            | Expr::Dict(_)
+            | Expr::Set(_)
+            | Expr::Tuple(_)
+            | Expr::FString(_)
+    )
+}
+
+pub(super) fn wrap_if_needed(expr: &Expr, text: &str) -> String {
+    if expr_needs_parens(expr) {
+        format!("({text})")
+    } else {
+        text.to_owned()
     }
 }
 
@@ -388,4 +432,12 @@ pub(super) fn validate_non_empty_selection<'a>(
     } else {
         Some(selection_text)
     }
+}
+
+/// Returns true if the statement is a member definition (function, class, or assignment).
+pub(super) fn is_member_stmt(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::FunctionDef(_) | Stmt::ClassDef(_) | Stmt::Assign(_) | Stmt::AnnAssign(_)
+    )
 }

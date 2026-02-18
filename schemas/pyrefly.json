@@ -5,6 +5,12 @@
   "description": "Configuration file for Pyrefly, a fast Python language server and type checker",
   "type": "object",
   "$defs": {
+    "errorSeverity": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "string", "enum": ["ignore", "info", "warn", "error"] }
+      ]
+    },
     "configBase": {
       "type": "object",
       "properties": {
@@ -12,21 +18,18 @@
           "description": "Configure the severity for each kind of error that Pyrefly emits. Set error code to true to enable (default severity), false to disable, or use a severity string ('ignore', 'info', 'warn', 'error'). Any valid Pyrefly error code can be used, not just the ones listed here.",
           "type": "object",
           "additionalProperties": {
-            "oneOf": [
-              { "type": "boolean" },
-              { "type": "string", "enum": ["ignore", "info", "warn", "error"] }
-            ]
+            "$ref": "#/$defs/errorSeverity"
           },
           "properties": {
-            "bad-assignment": {},
-            "bad-return": {},
-            "missing-import": {},
-            "invalid-argument": {},
-            "assert-type": {},
-            "bad-override": {},
-            "incompatible-type": {},
-            "unused-import": {},
-            "undefined-variable": {}
+            "bad-assignment": { "$ref": "#/$defs/errorSeverity" },
+            "bad-return": { "$ref": "#/$defs/errorSeverity" },
+            "missing-import": { "$ref": "#/$defs/errorSeverity" },
+            "invalid-argument": { "$ref": "#/$defs/errorSeverity" },
+            "assert-type": { "$ref": "#/$defs/errorSeverity" },
+            "bad-override": { "$ref": "#/$defs/errorSeverity" },
+            "incompatible-type": { "$ref": "#/$defs/errorSeverity" },
+            "unused-import": { "$ref": "#/$defs/errorSeverity" },
+            "undefined-variable": { "$ref": "#/$defs/errorSeverity" }
           },
           "default": {}
         },
@@ -233,7 +236,12 @@
               "type": "array",
               "items": {
                 "type": "string"
-              }
+              },
+              "minItems": 1
+            },
+            "repo-root": {
+              "description": "The root directory of the repository for the build system.",
+              "type": "string"
             }
           },
           "required": ["type"],

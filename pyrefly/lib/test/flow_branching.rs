@@ -1489,7 +1489,7 @@ def f(x: str | None):
 testcase!(
     test_noreturn_all_branches_terminate,
     r#"
-from typing import assert_type, NoReturn
+from typing import assert_type, NoReturn, Never
 
 def raises() -> NoReturn:
     raise Exception()
@@ -1499,10 +1499,7 @@ def f(x: int | str):
         raises()
     else:
         raises()
-    # All branches terminate with a NoReturn call; when Pyrefly
-    # encounters this it just ignores the NoReturn and goes ahead
-    # producing the union.
-    assert_type(x, int | str)
+    assert_type(x, Never)
 "#,
 );
 

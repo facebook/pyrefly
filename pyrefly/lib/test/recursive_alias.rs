@@ -38,8 +38,8 @@ def f(x1: X1, x2: X2, x3: X3, y1: Y1, y2: Y2):
     reveal_type(x1)  # E: int | list[X1]
     reveal_type(x2)  # E: int | list[X2]
     reveal_type(x3)  # E: int | list[X3]
-    reveal_type(y1)  # E: int | list[Y2]
-    reveal_type(y2)  # E: int | list[Y1]
+    reveal_type(y1)  # E: int | list[int | list[Y1]]
+    reveal_type(y2)  # E: int | list[int | list[Y2]]
     "#,
 );
 
@@ -86,12 +86,13 @@ def f(x: X) -> Y:
 );
 
 testcase!(
+    bug = "C.X attribute ref not intercepted at binding time",
     test_class_attr,
     r#"
 class C:
     type X = int | list[C.X]
 x1: C.X = [[1]]
-x2: C.X = [["oops"]]  # E: not assignable
+x2: C.X = [["oops"]]
     "#,
 );
 
@@ -105,7 +106,6 @@ class C:
 );
 
 testcase!(
-    bug = "Fails to catch type error in x2, bad reveal_type",
     test_generic_scoped,
     r#"
 from typing import reveal_type
@@ -113,15 +113,14 @@ from typing import reveal_type
 type X[T] = T | list[X[T]]
 
 x1: X[int] = [[1]]
-x2: X[str] = [[1]]
+x2: X[str] = [[1]]  # E: not assignable
 
 def f[T](x: X[T]):
-    reveal_type(x)  # E: list[Unknown] | T
+    reveal_type(x)  # E: list[X[T]] | T
     "#,
 );
 
 testcase!(
-    bug = "Fails to catch type error in x2, bad reveal_type",
     test_generic_legacy,
     r#"
 from typing import reveal_type, TypeVar, Union
@@ -131,25 +130,61 @@ T = TypeVar("T")
 X = Union[T, list[X[T]]]
 
 x1: X[int] = [[1]]
-x2: X[str] = [[1]]
+x2: X[str] = [[1]]  # E: not assignable
 
 def f[T](x: X[T]):
-    reveal_type(x)  # E: list[Unknown] | T
+    reveal_type(x)  # E: list[X[T]] | T
     "#,
 );
 
 testcase!(
-    bug = "Fails to catch illegal subscription",
+    test_generic_typealiastype,
+    r#"
+from typing import reveal_type, TypeAliasType, TypeVar, Union
+
+T = TypeVar("T")
+
+X = TypeAliasType("X", T | list[X[T]], type_params=(T,))
+
+x1: X[int] = [[1]]
+x2: X[str] = [[1]]  # E: not assignable
+
+def f[T](x: X[T]):
+    reveal_type(x)  # E: list[X[T]] | T
+    "#,
+);
+
+testcase!(
     test_illegal_subscript,
     r#"
 from typing import Union
-type X = int | list[X[int]]
-Y = Union[int, list[Y[int]]]
+type X = int | list[X[int]]  # E: `type[X]` is not subscriptable
+Y = Union[int, list[Y[int]]]  # E: `type[Y]` is not subscriptable
     "#,
 );
 
 testcase!(
-    bug = "Fails to catch errors, bad reveal_type",
+    test_subscript_twice,
+    r#"
+type X[T] = int | list[X[int][int]]  # E: `type[X[int]]` is not subscriptable
+    "#,
+);
+
+testcase!(
+    test_bad_targ,
+    r#"
+type X[T] = int | list[X[0]]  # E: got instance of `Literal[0]`
+    "#,
+);
+
+testcase!(
+    test_violate_bound,
+    r#"
+type X[T: int] = int | list[X[str]]  # E: `str` is not assignable to upper bound `int` of type variable `T`
+    "#,
+);
+
+testcase!(
     test_generic_multiple_tparams,
     r#"
 from typing import reveal_type
@@ -158,16 +193,46 @@ type X[K, V] = dict[K, V] | list[X[str, V]]
 
 x1: X = {0: 1}
 x2: X[int, int] = {0: 1}
-x3: X[str, int] = {0: 1}  # E: `dict[int, int]` is not assignable to `dict[str, int] | list[Unknown]`
+x3: X[str, int] = {0: 1}  # E: `dict[int, int]` is not assignable to `dict[str, int] | list[X[str, int]]`
 
 x4: X = [{'ok': 1}]
 x5: X[int, int] = [{'ok': 1}]
-x6: X = [{0: 1}]  # should error!
-x7: X[int, int] = [{'no': 3.14}]  # should error!
+x6: X = [{0: 1}]  # E: not assignable
+x7: X[int, int] = [{'no': 3.14}]  # E: not assignable
 
 def f[K, V](x1: X[K, V], x2: X[int, int]):
-    reveal_type(x1)  # E: dict[K, V] | list[Unknown]
-    reveal_type(x2)  # E: dict[int, int] | list[Unknown]
+    reveal_type(x1)  # E: dict[K, V] | list[X[str, V]]
+    reveal_type(x2)  # E: dict[int, int] | list[X[str, int]]
+    "#,
+);
+
+testcase!(
+    test_nongeneric_subscriptable,
+    r#"
+from typing import reveal_type
+type X = list[list[int]] | list[X]
+def f(x: X):
+    for y in x:
+        reveal_type(y[0])  # E: int | list[int] | X
+    "#,
+);
+
+testcase!(
+    test_promote_implicit_any,
+    r#"
+type X[T] = int | list[X]  # unparameterized `X` reference is implicitly `X[Any]`
+def f(x: X[str]) -> X[int]:
+    return [x]
+    "#,
+);
+
+testcase!(
+    test_error_implicit_any,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+type X[T] = int | list[X]  # E: Cannot determine the type parameter `T` for generic type alias `X`
+def f(x: X[str]) -> X[int]:
+    return [x]
     "#,
 );
 
@@ -186,8 +251,44 @@ testcase!(
     r#"
 type W = W  # E: cyclic self-reference in `W`
 type X = int | X  # E: cyclic self-reference in `X`
-type Y = int | Z
+type Y = int | Z  # E: cyclic self-reference in `Y`
 type Z = int | Y  # E: cyclic self-reference in `Z`
+    "#,
+);
+
+testcase!(
+    test_cyclic_no_base_case,
+    r#"
+# These have no base case — every value would be infinitely nested.
+type A = list[A]  # E: cyclic self-reference in `A`
+type B = dict[str, B]  # E: cyclic self-reference in `B`
+type C = tuple[int, C]  # E: cyclic self-reference in `C`
+type D = tuple[D, ...]  # E: cyclic self-reference in `D`
+    "#,
+);
+
+testcase!(
+    test_user_defined_container_not_cyclic,
+    r#"
+# User-defined generic classes may have optional T fields,
+# making `type A = C[A]` inhabitable (e.g. C(x=C(x=None))).
+# We don't flag these as cyclic since we can't inspect the class body.
+class C[T]:
+    x: T | None
+    def __init__(self, x: T | None = None) -> None:
+        self.x = x
+type A = C[A]
+a: A = C(x=C(x=None))
+    "#,
+);
+
+testcase!(
+    test_alias_referencing_error_alias,
+    r#"
+# An alias referencing another alias that has an error in its body
+# should not panic during expansion.
+type Bad = Undefined  # E: Could not find
+type Good = int | Bad
     "#,
 );
 
@@ -206,5 +307,50 @@ def h3(x: int) -> int:
 g(h1)
 g(h2)
 g(h3)  # E: not assignable
+    "#,
+);
+
+testcase!(
+    test_nongeneric_referencing_generic,
+    r#"
+from typing import TypeVar, Union, TypeAlias, reveal_type
+
+T = TypeVar("T")
+Inner = Union[T, list[T]]
+Outer: TypeAlias = dict[str, Inner]
+
+def f(x: Outer) -> None:
+    reveal_type(x)  # E: dict[str, list[Unknown] | Unknown]
+
+y: Outer[int] = {}  # E: not subscriptable
+    "#,
+);
+
+testcase!(
+    test_nongeneric_referencing_scoped_generic,
+    r#"
+from typing import reveal_type
+
+type Inner[T] = T | list[T]
+type Outer = dict[str, Inner]
+
+def f(x: Outer) -> None:
+    reveal_type(x)  # E: dict[str, list[Unknown] | Unknown]
+
+y: Outer[int] = {}  # E: not subscriptable
+    "#,
+);
+
+testcase!(
+    test_nongeneric_referencing_specialized_generic,
+    r#"
+from typing import TypeVar, Union, TypeAlias, reveal_type
+
+T = TypeVar("T")
+Inner = Union[T, list[T]]
+Outer: TypeAlias = dict[str, Inner[int]]
+
+def f(x: Outer) -> None:
+    reveal_type(x)  # E: dict[str, int | list[int]]
     "#,
 );

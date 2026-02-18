@@ -36,11 +36,7 @@ Always verify your changes against these sources.
 
 ### 2. Update Both Schema Files
 
-When adding a new configuration option, update both:
-- `pyrefly.json` at the top level
-- `pyproject-tool-pyrefly.json` under `properties.tool.properties.pyrefly.properties`
-
-Ensure the option definitions are identical.
+When adding a new configuration option, update `pyrefly.json`. `pyproject-tool-pyrefly.json` contains the definition for the `[tool.pyrefly]` section in a `pyproject.toml` file, so it likely won't need to be updated.
 
 ### 3. Follow JSON Schema Best Practices
 
@@ -48,7 +44,7 @@ Ensure the option definitions are identical.
 - **Set appropriate types**: Use `string`, `boolean`, `array`, `object`, etc.
 - **Add default values**: Include the actual default value from the Rust code
 - **Use enums for fixed values**: For options like `python-platform` or `untyped-def-behavior`
-- **Add patterns for validation**: For example, version strings should match `^\d+(\.\d+)?(\.\d+)?$`
+- **Add patterns for simple validation**: For example, version strings should match `^\d+(\.\d+)?(\.\d+)?$`
 - **Mark required properties**: Use `required` array for mandatory fields
 
 ### 4. Add Test Cases
@@ -154,16 +150,6 @@ python schemas/validate_schemas.py
 ```
 
 Add test cases to `test-pyrefly.toml` and `test-pyproject.toml` that exercise your new configuration option.
-
-## Submitting Changes
-
-1. **Create a branch**: `git checkout -b update-schema-<feature-name>`
-2. **Make your changes**: Update both schema files
-3. **Add tests**: Update test configuration files
-4. **Validate**: Run `python schemas/validate_schemas.py`
-5. **Format**: Ensure JSON files are properly formatted (2-space indentation)
-6. **Commit**: Write a clear commit message explaining the change
-7. **Submit PR**: Create a pull request with a description of what was added/changed
 
 ## Questions?
 

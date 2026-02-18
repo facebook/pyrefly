@@ -19,6 +19,10 @@ site-package-path = ["venv/lib/python3.12/site-packages"]
 python-platform = "linux"
 python-version = "3.12.0"
 skip-interpreter-query = false
+python-interpreter-path = "venv/bin/python3"
+conda-environment = "myenv"
+fallback-python-interpreter-name = "python3"
+typeshed-path = "/path/to/typeshed"
 
 # Type checking behavior
 untyped-def-behavior = "check-and-infer-return-type"
@@ -38,8 +42,10 @@ use-ignore-files = true
 permissive-ignores = false
 enabled-ignores = ["type", "pyrefly"]
 
+skip-lsp-config-indexing = false
+
 # Baseline
-# baseline = "baseline.json"
+baseline = "baseline.json"
 
 # Error configuration
 [tool.pyrefly.errors]
@@ -61,3 +67,11 @@ assert-type = true
 matches = "**/*_pb2.py"
 ignore-errors-in-generated-code = true
 replace-imports-with-any = ["google.protobuf.*"]
+
+# Build system configuration
+[tool.pyrefly.build-system]
+type = "buck"
+isolation-dir = "pyrefly-iso"
+extras = ["--config", "client.id=pyrefly"]
+search-path-prefix = ["/prefix"]
+ignore-if-build-system-missing = true

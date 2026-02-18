@@ -391,7 +391,7 @@ impl AnyExportedKey {
 pub trait Keyed: Hash + Eq + Clone + DisplayWith<ModuleInfo> + Debug + Ranged + 'static {
     const EXPORTED: bool = false;
     type Value: Debug + DisplayWith<Bindings>;
-    type Answer: Clone + Debug + Display + TypeEq + VisitMut<Type>;
+    type Answer: Clone + Debug + Display + TypeEq + VisitMut<Type> + Send + Sync;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx;
 
     /// Convert this key to an AnyExportedKey if it is an exported key.
@@ -1871,7 +1871,13 @@ pub struct BranchInfo {
 pub enum TypeAliasParams {
     Legacy(Option<Box<[Idx<KeyLegacyTypeParam>]>>),
     Scoped(Option<TypeParams>),
-    TypeAliasType(Vec<Expr>),
+    /// Type parameters for a type alias created via a `TypeAliasType` call
+    /// `declared_params` are the params declared via the `type_params` keyword.
+    /// `legacy_params` are all of the legacy type param usages in the alias.
+    TypeAliasType {
+        declared_params: Vec<Expr>,
+        legacy_params: Box<[Idx<KeyLegacyTypeParam>]>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -1986,6 +1992,14 @@ pub enum Binding {
         tparams: TypeAliasParams,
         key_type_alias: Idx<KeyTypeAlias>,
         range: TextRange,
+    },
+    /// A reference to a type alias, produced when a name in a type alias RHS
+    /// resolves to another type alias definition. Directly produces a
+    /// `Forallable::TypeAlias(TypeAliasData::Ref(...))` at solve time.
+    TypeAliasRef {
+        name: Name,
+        key_type_alias: Idx<KeyTypeAlias>,
+        tparams: TypeAliasParams,
     },
     /// An entry in a MatchMapping. The Key looks up the value being matched, the Expr is the key we're extracting.
     PatternMatchMapping(Expr, Idx<Key>),
@@ -2240,6 +2254,7 @@ impl DisplayWith<Bindings> for Binding {
                 )
             }
             Self::TypeAlias { name, .. } => write!(f, "TypeAlias({name})"),
+            Self::TypeAliasRef { name, .. } => write!(f, "TypeAliasRef({name})"),
             Self::PatternMatchMapping(mapping_key, binding_key) => {
                 write!(
                     f,
@@ -2399,6 +2414,7 @@ impl Binding {
             Binding::ClassDef(_, _) => Some(SymbolKind::Class),
             Binding::Module(_, _, _) => Some(SymbolKind::Module),
             Binding::TypeAlias { .. } => Some(SymbolKind::TypeAlias),
+            Binding::TypeAliasRef { .. } => Some(SymbolKind::TypeAlias),
             Binding::NameAssign { name, .. } if name.as_str() == name.to_uppercase() => {
                 Some(SymbolKind::Constant)
             }

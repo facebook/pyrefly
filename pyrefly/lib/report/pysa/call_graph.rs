@@ -68,7 +68,9 @@ use crate::report::pysa::ast_visitor::AstScopedVisitor;
 use crate::report::pysa::ast_visitor::ScopeExportedFunctionFlags;
 use crate::report::pysa::ast_visitor::Scopes;
 use crate::report::pysa::ast_visitor::visit_module_ast;
+use crate::report::pysa::captured_variable::CaptureKind;
 use crate::report::pysa::captured_variable::CapturedVariableRef;
+use crate::report::pysa::captured_variable::ModuleCapturedVariables;
 use crate::report::pysa::captured_variable::WholeProgramCapturedVariables;
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::class::get_class_field_from_current_class_only;
@@ -1551,7 +1553,7 @@ struct CallGraphVisitor<'a> {
     function_base_definitions: &'a WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
     override_graph: &'a OverrideGraph,
     global_variables: &'a WholeProgramGlobalVariables,
-    captured_variables: &'a WholeProgramCapturedVariables,
+    captured_variables: &'a ModuleCapturedVariables<FunctionRef>,
     current_function: Option<FunctionRef>, // The current function, if it is exported.
     debug: bool,                           // Enable logging for the current function or class body.
     debug_scopes: Vec<bool>,               // The value of the debug flag for each scope.
@@ -2288,7 +2290,11 @@ impl<'a> CallGraphVisitor<'a> {
                     })
                     .unwrap()
             }
-            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Class(class_type, _))) => {
+            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Class(
+                class_type,
+                _,
+                _,
+            ))) => {
                 // Constructing a class instance.
                 let (init_method, new_method) = self
                     .module_context
@@ -2426,42 +2432,39 @@ impl<'a> CallGraphVisitor<'a> {
                 )
             })
             .map(|(function, context)| function.as_function_ref(&context))
-        {
             // Skip this path for constructor methods (__init__ and __new__) because they need
             // special handling via resolve_constructor_callees to properly populate init_targets
             // and new_targets. Constructor calls should fall through to the type-based
             // resolution below.
-            let is_constructor_method = function_ref.function_name == dunder::INIT
-                || function_ref.function_name == dunder::NEW;
+            && function_ref.function_name != dunder::INIT
+                && function_ref.function_name != dunder::NEW
+        {
+            let callee_type = self.module_context.answers.get_type_trace(name.range());
+            let callee_expr = Some(AnyNodeRef::from(name));
+            let callee_expr_suffix = Some(name.id.as_str());
 
-            if !is_constructor_method {
-                let callee_type = self.module_context.answers.get_type_trace(name.range());
-                let callee_expr = Some(AnyNodeRef::from(name));
-                let callee_expr_suffix = Some(name.id.as_str());
+            let callees =
+                CallCallees::new(Vec1::new(self.call_target_from_static_or_virtual_call(
+                    function_ref,
+                    callee_expr,
+                    callee_type.as_ref(),
+                    /* precise_receiver_type */ None,
+                    return_type,
+                    callee_expr_suffix,
+                    /* override_implicit_receiver*/ None,
+                    /* override_is_direct_call */ None,
+                    /* unknown_callee_as_direct_call */ true,
+                )));
 
-                let callees =
-                    CallCallees::new(Vec1::new(self.call_target_from_static_or_virtual_call(
-                        function_ref,
-                        callee_expr,
-                        callee_type.as_ref(),
-                        /* precise_receiver_type */ None,
-                        return_type,
-                        callee_expr_suffix,
-                        /* override_implicit_receiver*/ None,
-                        /* override_is_direct_call */ None,
-                        /* unknown_callee_as_direct_call */ true,
-                    )));
-
-                return IdentifierCallees {
-                    if_called: callees,
-                    global_targets: vec![],
-                    captured_variables: vec![],
-                };
-            }
+            return IdentifierCallees {
+                if_called: callees,
+                global_targets: vec![],
+                captured_variables: vec![],
+            };
         }
 
-        // Check if this is a global variable.
-        let global_targets = if let Some(global) =
+        // Check if this is a global variable or captured variable
+        let (global_variable, captured_variable) = if let Some(global) =
             go_to_definition.as_ref().and_then(|definition| {
                 let module_id = self
                     .module_context
@@ -2479,29 +2482,43 @@ impl<'a> CallGraphVisitor<'a> {
                         name: global_var.name.clone(),
                     })
             }) {
-            vec![global]
-        } else {
-            vec![]
-        };
-
-        // Check if this is a captured variable.
-        let captured_variables = if let Some(current_function) = self.current_function.as_ref()
-            && let Some(current_module_captured_variables) = self
+            (Some(global), None)
+        } else if let Some(current_function) = self.current_function.as_ref()
+            && let Some(captured_variable) = self
                 .captured_variables
-                .get_for_module(self.module_context.module_id)
-            && let Some(captured) = current_module_captured_variables
                 .get(current_function)
                 .and_then(|captured_variables| captured_variables.get(name.id()))
-                .cloned()
-                .map(|outer_function| CapturedVariableRef {
-                    outer_function,
-                    name: name.id().clone(),
-                }) {
-            vec![captured]
+        {
+            match captured_variable {
+                CaptureKind::Local(outer_function) => (
+                    None,
+                    Some(CapturedVariableRef {
+                        outer_function: outer_function.clone(),
+                        name: name.id().clone(),
+                    }),
+                ),
+                CaptureKind::Global
+                    if let Some(global_variables) = self
+                        .global_variables
+                        .get_for_module(self.module_context.module_id)
+                        && global_variables.contains(name.id()) =>
+                {
+                    (
+                        Some(GlobalVariableRef {
+                            module_id: self.module_context.module_id,
+                            module_name: self.module_context.module_info.name(),
+                            name: name.id().clone(),
+                        }),
+                        None,
+                    )
+                }
+                _ => (None, None),
+            }
         } else {
-            vec![]
+            (None, None)
         };
 
+        // Resolve callees using types, if the name is called.
         let callees = self.resolve_callees_from_expression_type(
             /* expression */ Some(AnyNodeRef::from(name)),
             /* expression_type */
@@ -2514,8 +2531,8 @@ impl<'a> CallGraphVisitor<'a> {
         );
         IdentifierCallees {
             if_called: callees,
-            global_targets,
-            captured_variables,
+            global_targets: global_variable.map_or(vec![], |g| vec![g]),
+            captured_variables: captured_variable.map_or(vec![], |c| vec![c]),
         }
     }
 
@@ -2586,12 +2603,13 @@ impl<'a> CallGraphVisitor<'a> {
                          attr_type: callee_type,
                      }| {
                         // TODO(T252263933): Need more precise return types for `__getitem__` in `typed_dict.py`
-                        let return_type =
-                            if let Some(return_type) = callee_type.callable_return_type() {
-                                ScalarTypeProperties::from_type(&return_type, self.module_context)
-                            } else {
-                                ScalarTypeProperties::none()
-                            };
+                        let return_type = if let Some(return_type) =
+                            callee_type.callable_return_type(self.module_context.answers.heap())
+                        {
+                            ScalarTypeProperties::from_type(&return_type, self.module_context)
+                        } else {
+                            ScalarTypeProperties::none()
+                        };
                         DunderAttrCallees {
                             callees: self.resolve_pyrefly_target(
                                 Some(target),
@@ -2993,7 +3011,7 @@ impl<'a> CallGraphVisitor<'a> {
     // for a call expression, we could simply query its type (e.g., query the type of `c(1)`).
     fn get_return_type_for_callee(&self, callee_type: Option<&Type>) -> ScalarTypeProperties {
         callee_type
-            .and_then(|ty| ty.callable_return_type())
+            .and_then(|ty| ty.callable_return_type(self.module_context.answers.heap()))
             .map(|return_type| ScalarTypeProperties::from_type(&return_type, self.module_context))
             .unwrap_or(ScalarTypeProperties::none())
     }
@@ -3279,7 +3297,9 @@ impl<'a> CallGraphVisitor<'a> {
         } = self.call_targets_from_magic_dunder_attr(
             /* base */
             iter_callee_type
-                .and_then(|iter_callee_type| iter_callee_type.callable_return_type())
+                .and_then(|iter_callee_type| {
+                    iter_callee_type.callable_return_type(self.module_context.answers.heap())
+                })
                 .as_ref(),
             /* attribute */ Some(&next_callee_name),
             iter_range,
@@ -3644,7 +3664,7 @@ impl<'a> CallGraphVisitor<'a> {
             }
             _ => None,
         };
-        if let Some(graphql_decorator) = self.matching_graphql_decorators.last().unwrap()
+        if let Some(Some(graphql_decorator)) = self.matching_graphql_decorators.last()
             && let Some(return_expression_type) =
                 return_stmt.value.as_ref().and_then(|return_expression| {
                     self.module_context
@@ -3973,7 +3993,7 @@ impl<'a> CallGraphVisitor<'a> {
                 if should_export_decorated_function(&decorated_function, self.module_context) {
                     let return_type = decorated_function
                         .ty
-                        .callable_return_type()
+                        .callable_return_type(self.module_context.answers.heap())
                         .map_or(ScalarTypeProperties::none(), |type_| {
                             ScalarTypeProperties::from_type(&type_, self.module_context)
                         });
@@ -4275,7 +4295,7 @@ fn resolve_call(
         debug_scopes: Vec::new(),
         override_graph,
         global_variables: &WholeProgramGlobalVariables::new(),
-        captured_variables: &WholeProgramCapturedVariables::new(),
+        captured_variables: &ModuleCapturedVariables::new(),
         error_collector: ErrorCollector::new(module_context.module_info.dupe(), ErrorStyle::Never),
         matching_graphql_decorators: Vec::new(),
     };
@@ -4323,7 +4343,7 @@ fn resolve_expression(
         debug_scopes: Vec::new(),
         override_graph,
         global_variables: &WholeProgramGlobalVariables::new(),
-        captured_variables: &WholeProgramCapturedVariables::new(),
+        captured_variables: &ModuleCapturedVariables::new(),
         error_collector: ErrorCollector::new(module_context.module_info.dupe(), ErrorStyle::Never),
         matching_graphql_decorators: Vec::new(),
     };
@@ -4426,6 +4446,7 @@ pub fn export_call_graphs(
 ) -> CallGraphs<ExpressionIdentifier, FunctionRef> {
     let mut call_graphs = CallGraphs::new();
 
+    let empty_captured_variables = ModuleCapturedVariables::new();
     let mut visitor = CallGraphVisitor {
         call_graphs: &mut call_graphs,
         module_context: context,
@@ -4437,7 +4458,9 @@ pub fn export_call_graphs(
         debug_scopes: Vec::new(),
         override_graph,
         global_variables,
-        captured_variables,
+        captured_variables: captured_variables
+            .get_for_module(context.module_id)
+            .unwrap_or(&empty_captured_variables),
         error_collector: ErrorCollector::new(context.module_info.dupe(), ErrorStyle::Never),
         matching_graphql_decorators: Vec::new(),
     };

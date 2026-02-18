@@ -26,9 +26,11 @@ use starlark_map::smallmap;
 use crate::callable::Function;
 use crate::class::Class;
 use crate::literal::Lit;
+use crate::quantified::Quantified;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
+use crate::type_alias::TypeAliasRef;
 use crate::type_output::DisplayOutput;
 use crate::type_output::OutputWithLocations;
 use crate::type_output::TypeOutput;
@@ -41,7 +43,6 @@ use crate::types::Forallable;
 use crate::types::NeverStyle;
 use crate::types::SuperObj;
 use crate::types::TArgs;
-use crate::types::TParam;
 use crate::types::Type;
 use crate::types::Union;
 
@@ -99,6 +100,11 @@ pub enum LspDisplayMode {
     Hover,
     /// Signature help mode: Single-line for LSP compatibility
     SignatureHelp,
+    /// Query mode: Used by programmatic consumers (e.g. type query endpoints).
+    /// Formats types with explicit wrappers (e.g. BoundMethod[...]) so that
+    /// consumers can unambiguously parse the type without relying on parameter
+    /// name heuristics.
+    Query,
 }
 
 #[derive(Debug, Default)]
@@ -194,8 +200,8 @@ impl<'a> TypeDisplayContext<'a> {
         Fmt(|f| self.fmt_helper(t, f, false))
     }
 
-    fn fmt_targ(&self, param: &TParam, arg: &Type, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if param.quantified.is_type_var_tuple()
+    fn fmt_targ(&self, param: &Quantified, arg: &Type, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if param.is_type_var_tuple()
             && let Type::Tuple(tuple) = arg
         {
             match tuple {
@@ -352,6 +358,28 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_type(&class_type.targs().as_slice()[0])?;
                 output.write_str(", ...]")
             }
+            // Display Dim[Unknown] as just "Dim" for cleaner output
+            Type::ClassType(class_type)
+                if class_type.has_qname("torch_shapes", "Dim")
+                    && class_type.targs().as_slice().len() == 1
+                    && matches!(
+                        class_type.targs().as_slice()[0],
+                        Type::Any(AnyStyle::Implicit | AnyStyle::Error)
+                    ) =>
+            {
+                output.write_qname(class_type.qname())
+            }
+            // Display Tensor[*tuple[Unknown, ...]] as just "Tensor"
+            Type::ClassType(class_type)
+                if class_type.has_qname("torch", "Tensor")
+                    && class_type.targs().as_slice().len() == 1
+                    && matches!(
+                        &class_type.targs().as_slice()[0],
+                        Type::Tuple(Tuple::Unbounded(box Type::Any(_)))
+                    ) =>
+            {
+                output.write_qname(class_type.qname())
+            }
             Type::ClassType(class_type) => {
                 output.write_qname(class_type.qname())?;
                 output.write_targs(class_type.targs())
@@ -388,6 +416,20 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
+            Type::Tensor(tensor) => output.write_str(&format!("{}", tensor)),
+            Type::Size(dim) => {
+                // Display dimension value directly without Literal wrapper
+                output.write_str(&format!("{}", dim))
+            }
+            Type::Dim(inner) => {
+                // Display Dim[Unknown] as just "Dim" for cleaner output
+                // (Unknown represents implicit Any from gradual typing)
+                // But keep Dim[Any] when explicitly annotated
+                match &**inner {
+                    Type::Any(AnyStyle::Implicit | AnyStyle::Error) => output.write_str("Dim"),
+                    _ => output.write_str(&format!("Dim[{}]", self.display_internal(inner))),
+                }
+            }
             Type::TypeVar(t) => {
                 let type_var_qname = self.stdlib.map(|s| s.type_var().qname());
                 output.write_builtin("TypeVar", type_var_qname)?;
@@ -504,6 +546,13 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::BoundMethod(box BoundMethod { obj, func }) => {
                 match self.lsp_display_mode {
+                    LspDisplayMode::Query => {
+                        output.write_str("BoundMethod[")?;
+                        self.fmt_helper_generic(obj, false, output)?;
+                        output.write_str(", ")?;
+                        self.fmt_helper_generic(&func.clone().as_type(), is_toplevel, output)?;
+                        output.write_str("]")
+                    }
                     LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
                         match func {
                             BoundMethodType::Function(Function {
@@ -525,7 +574,7 @@ impl<'a> TypeDisplayContext<'a> {
                                             self.fmt_helper_generic(t, false, o)
                                         })?;
                                     }
-                                    LspDisplayMode::Standard => unreachable!(),
+                                    _ => unreachable!(),
                                 }
                                 output.write_str(": ...")
                             }
@@ -541,7 +590,11 @@ impl<'a> TypeDisplayContext<'a> {
                                 output.write_str("def ")?;
                                 output.write_str(func_name.as_ref().as_str())?;
                                 output.write_str("[")?;
-                                write!(output, "{}", commas_iter(|| tparams.iter()))?;
+                                write!(
+                                    output,
+                                    "{}",
+                                    commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                                )?;
                                 output.write_str("]")?;
                                 match self.lsp_display_mode {
                                     LspDisplayMode::Hover => {
@@ -555,7 +608,7 @@ impl<'a> TypeDisplayContext<'a> {
                                             self.fmt_helper_generic(t, false, o)
                                         })?;
                                     }
-                                    LspDisplayMode::Standard => unreachable!(),
+                                    _ => unreachable!(),
                                 }
                                 output.write_str(": ...")
                             }
@@ -568,13 +621,7 @@ impl<'a> TypeDisplayContext<'a> {
                     LspDisplayMode::Hover | LspDisplayMode::SignatureHelp => {
                         self.fmt_helper_generic(&func.clone().as_type(), false, output)
                     }
-                    _ => {
-                        output.write_str("BoundMethod[")?;
-                        self.fmt_helper_generic(obj, false, output)?;
-                        output.write_str(", ")?;
-                        self.fmt_helper_generic(&func.clone().as_type(), is_toplevel, output)?;
-                        output.write_str("]")
-                    }
+                    _ => self.fmt_helper_generic(&func.clone().as_type(), is_toplevel, output),
                 }
             }
             Type::Never(NeverStyle::NoReturn) => {
@@ -718,14 +765,22 @@ impl<'a> TypeDisplayContext<'a> {
             }) => {
                 if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
                     output.write_str("[")?;
-                    write!(output, "{}", commas_iter(|| tparams.iter()))?;
+                    write!(
+                        output,
+                        "{}",
+                        commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                    )?;
                     output.write_str("]")?;
                     c.fmt_with_type_with_newlines(output, &|t, o| {
                         self.fmt_helper_generic(t, false, o)
                     })
                 } else {
                     output.write_str("[")?;
-                    write!(output, "{}", commas_iter(|| tparams.iter()))?;
+                    write!(
+                        output,
+                        "{}",
+                        commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                    )?;
                     output.write_str("]")?;
                     self.fmt_helper_generic(&body.clone().as_type(), false, output)
                 }
@@ -744,7 +799,11 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("def ")?;
                     output.write_str(func_name.as_ref().as_str())?;
                     output.write_str("[")?;
-                    write!(output, "{}", commas_iter(|| tparams.iter()))?;
+                    write!(
+                        output,
+                        "{}",
+                        commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                    )?;
                     output.write_str("]")?;
                     match self.lsp_display_mode {
                         LspDisplayMode::Hover => {
@@ -763,7 +822,11 @@ impl<'a> TypeDisplayContext<'a> {
                 }
                 _ => {
                     output.write_str("[")?;
-                    write!(output, "{}", commas_iter(|| tparams.iter()))?;
+                    write!(
+                        output,
+                        "{}",
+                        commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                    )?;
                     output.write_str("]")?;
                     self.fmt_helper_generic(&body.clone().as_type(), false, output)
                 }
@@ -779,7 +842,7 @@ impl<'a> TypeDisplayContext<'a> {
                         Some(tparams),
                     )
                 } else {
-                    output.write_str(ta.name().as_str())
+                    write!(output, "type[{}{}]", ta.name(), tparams)
                 }
             }
             Type::Type(box Type::Any(_)) => output.write_str("type[Any]"),
@@ -855,13 +918,21 @@ impl<'a> TypeDisplayContext<'a> {
                 AnyStyle::Explicit => self.maybe_fmt_with_module("typing", "Any", output),
                 AnyStyle::Implicit | AnyStyle::Error => output.write_str("Unknown"),
             },
-            Type::TypeAlias(ta) => {
-                if is_toplevel && let TypeAliasData::Value(ta) = &**ta {
+            Type::TypeAlias(ta) => match &**ta {
+                TypeAliasData::Value(ta) if is_toplevel => {
                     ta.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o), None)
-                } else {
-                    output.write_str(ta.name().as_str())
                 }
+                TypeAliasData::Value(ta) => write!(output, "type[{}]", ta.name),
+                TypeAliasData::Ref(r) => {
+                    output.write_str("type[")?;
+                    self.fmt_helper_type_alias_ref(r, output)?;
+                    output.write_str("]")
+                }
+            },
+            Type::UntypedAlias(box TypeAliasData::Ref(r)) => {
+                self.fmt_helper_type_alias_ref(r, output)
             }
+            Type::UntypedAlias(ta) => output.write_str(ta.name().as_str()),
             Type::SuperInstance(box (cls, obj)) => {
                 output.write_str("super[")?;
                 output.write_qname(cls.qname())?;
@@ -898,6 +969,31 @@ impl<'a> TypeDisplayContext<'a> {
     ) -> fmt::Result {
         let output = &mut DisplayOutput::new(self, f);
         self.fmt_helper_generic(t, is_toplevel, output)
+    }
+
+    fn fmt_helper_type_alias_ref(
+        &self,
+        r: &TypeAliasRef,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        match r {
+            TypeAliasRef {
+                name,
+                args: Some(args),
+                ..
+            } => {
+                output.write_str(name.as_str())?;
+                write!(output, "[")?;
+                for (i, t) in args.as_slice().iter().enumerate() {
+                    if i > 0 {
+                        output.write_str(", ")?;
+                    }
+                    output.write_type(t)?;
+                }
+                write!(output, "]")
+            }
+            _ => output.write_str(r.name.as_str()),
+        }
     }
 
     /// This method wraps `fmt_helper_generic` with `OutputWithLocations` to track
@@ -1018,6 +1114,7 @@ pub mod tests {
     use crate::tuple::Tuple;
     use crate::type_alias::TypeAlias;
     use crate::type_alias::TypeAliasData;
+    use crate::type_alias::TypeAliasIndex;
     use crate::type_alias::TypeAliasStyle;
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
@@ -1025,7 +1122,6 @@ pub mod tests {
     use crate::types::BoundMethodType;
     use crate::types::Overload;
     use crate::types::OverloadType;
-    use crate::types::TParam;
     use crate::types::TParams;
 
     pub fn fake_class(name: &str, module: &str, range: u32) -> Class {
@@ -1045,21 +1141,19 @@ pub mod tests {
         )
     }
 
-    pub fn fake_tparams(tparams: Vec<TParam>) -> Arc<TParams> {
+    pub fn fake_tparams(tparams: Vec<Quantified>) -> Arc<TParams> {
         Arc::new(TParams::new(tparams))
     }
 
-    fn fake_tparam(uniques: &UniqueFactory, name: &str, kind: QuantifiedKind) -> TParam {
-        TParam {
-            quantified: Quantified::new(
-                uniques.fresh(),
-                Name::new(name),
-                kind,
-                None,
-                Restriction::Unrestricted,
-                PreInferenceVariance::Invariant,
-            ),
-        }
+    fn fake_tparam(uniques: &UniqueFactory, name: &str, kind: QuantifiedKind) -> Quantified {
+        Quantified::new(
+            uniques.fresh(),
+            Name::new(name),
+            kind,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
+        )
     }
 
     fn fake_tyvar(name: &str, module: &str, range: u32) -> TypeVar {
@@ -1332,7 +1426,7 @@ pub mod tests {
 
     #[test]
     fn test_display_typevar() {
-        let heap = TypeHeap::default();
+        let heap = TypeHeap::new();
         let t1 = fake_tyvar("foo", "bar", 1);
         let t2 = fake_tyvar("foo", "bar", 2);
         let t3 = fake_tyvar("qux", "bar", 2);
@@ -1523,17 +1617,44 @@ pub mod tests {
             Vec::new(),
         ))));
         let wrapped = Type::concrete_tuple(vec![alias.clone()]);
-        let type_of = Type::type_form(alias.clone());
         let mut ctx = TypeDisplayContext::new(&[]);
         // regular display
         assert_eq!(ctx.display(&alias).to_string(), "None");
-        assert_eq!(ctx.display(&wrapped).to_string(), "tuple[MyAlias]");
-        assert_eq!(ctx.display(&type_of).to_string(), "type[MyAlias]");
+        assert_eq!(ctx.display(&wrapped).to_string(), "tuple[type[MyAlias]]");
         // hover display
         ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(ctx.display(&alias).to_string(), "None");
-        assert_eq!(ctx.display(&wrapped).to_string(), "tuple[MyAlias]");
-        assert_eq!(ctx.display(&type_of).to_string(), "type[MyAlias]");
+        assert_eq!(ctx.display(&wrapped).to_string(), "tuple[type[MyAlias]]");
+    }
+
+    #[test]
+    fn test_display_specialized_untyped_alias() {
+        let uniques = UniqueFactory::new();
+
+        let tparams1 = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+        let alias1 = Type::UntypedAlias(Box::new(TypeAliasData::Ref(TypeAliasRef {
+            name: Name::new_static("X"),
+            args: Some(TArgs::new(tparams1, vec![Type::any_implicit()])),
+            module_name: ModuleName::from_str("test"),
+            module_path: ModulePath::memory(PathBuf::from("test.py")),
+            index: TypeAliasIndex(0),
+        })));
+
+        let tparams2 = fake_tparams(vec![
+            fake_tparam(&uniques, "K", QuantifiedKind::TypeVar),
+            fake_tparam(&uniques, "V", QuantifiedKind::TypeVar),
+        ]);
+        let alias2 = Type::UntypedAlias(Box::new(TypeAliasData::Ref(TypeAliasRef {
+            name: Name::new_static("Y"),
+            args: Some(TArgs::new(tparams2, vec![Type::any_implicit(), Type::None])),
+            module_name: ModuleName::from_str("test"),
+            module_path: ModulePath::memory(PathBuf::from("test.py")),
+            index: TypeAliasIndex(1),
+        })));
+
+        let ctx = TypeDisplayContext::new(&[&alias1, &alias2]);
+        assert_eq!(ctx.display(&alias1).to_string(), "X[Unknown]");
+        assert_eq!(ctx.display(&alias2).to_string(), "Y[Unknown, None]");
     }
 
     #[test]
@@ -1647,7 +1768,7 @@ pub mod tests {
         let mut ctx = TypeDisplayContext::new(&[&bound_method]);
         assert_eq!(
             ctx.display(&bound_method).to_string(),
-            "BoundMethod[type[MyClass], (self: Any, x: Any, y: Any) -> None]"
+            "(self: Any, x: Any, y: Any) -> None"
         );
         ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
@@ -1657,6 +1778,11 @@ pub mod tests {
     x: Any,
     y: Any
 ) -> None: ..."#
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Query);
+        assert_eq!(
+            ctx.display(&bound_method).to_string(),
+            "BoundMethod[type[MyClass], (self: Any, x: Any, y: Any) -> None]"
         );
     }
 
@@ -1672,7 +1798,7 @@ pub mod tests {
         let mut ctx = TypeDisplayContext::new(&[&bound_method]);
         assert_eq!(
             ctx.display(&bound_method).to_string(),
-            "BoundMethod[type[MyClass], [T](self: Any, x: Any, y: Any) -> None]"
+            "[T](self: Any, x: Any, y: Any) -> None"
         );
         ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
@@ -1682,6 +1808,11 @@ pub mod tests {
     x: Any,
     y: Any
 ) -> None: ..."#
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Query);
+        assert_eq!(
+            ctx.display(&bound_method).to_string(),
+            "BoundMethod[type[MyClass], [T](self: Any, x: Any, y: Any) -> None]"
         );
     }
 
@@ -1794,7 +1925,7 @@ def overloaded_func[T](
         let ctx = TypeDisplayContext::new(&[&bound_method_overload]);
         assert_eq!(
             ctx.display(&bound_method_overload).to_string(),
-            "BoundMethod[Any, Overload[\n  (x: Any) -> None\n  [T](x: Any, y: Any) -> None\n]]"
+            "Overload[\n  (x: Any) -> None\n  [T](x: Any, y: Any) -> None\n]"
         );
 
         // Test compact display mode as non-toplevel type (non-hover)
@@ -1802,7 +1933,7 @@ def overloaded_func[T](
         let ctx = TypeDisplayContext::new(&[&type_form_of_bound_method_overload]);
         assert_eq!(
             ctx.display(&type_form_of_bound_method_overload).to_string(),
-            "type[BoundMethod[Any, Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]]]"
+            "type[Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]]"
         );
 
         // Test hover display mode (with @overload decorators)

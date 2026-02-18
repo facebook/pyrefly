@@ -88,7 +88,7 @@ class A:
 
     def f2(self):
         assert_type(self, Self)
-    
+
     def f3(self: Self) -> Self:
         assert_type(self, Self)
         return self
@@ -228,4 +228,47 @@ class SomeClass:
 assert_type(SomeClass().cache, dict[int, SomeClass])
 assert_type(SomeClass().get_instance(), SomeClass)
 "#,
+);
+
+testcase!(
+    test_self_outside_class,
+    r#"
+from typing import Self
+
+def foo() -> Self: ... # E: `Self` must appear within a class
+x: Self # E: `Self` must appear within a class
+tupleSelf = tuple[Self] # E: `Self` must appear within a class
+    "#,
+);
+
+testcase!(
+    test_self_inside_class,
+    r#"
+from typing import Self
+
+class A[T]: pass
+class B(A[Self]): pass # E: `Self` must appear within a class
+class C:
+    @staticmethod
+    def foo() -> Self: ... # E: `Self` cannot be used in a static method
+
+    @staticmethod
+    def bar(x: Self) -> None: ... # E: `Self` cannot be used in a static method
+
+    @staticmethod
+    def baz() -> list[Self]: ... # E: `Self` cannot be used in a static method
+    "#,
+);
+
+testcase!(
+    test_self_inside_metaclass,
+    r#"
+from typing import Self
+
+class C(type):
+    x: Self  # E: `Self` cannot be used in a metaclass
+    def foo(cls) -> Self: ... # E: `Self` cannot be used in a metaclass
+    def __new__(cls, x: Self) -> Self: ... # E: `Self` cannot be used in a metaclass  # E: `Self` cannot be used in a metaclass
+    def __mul__(cls, count: int) -> list[Self]: ... # E: `Self` cannot be used in a metaclass
+    "#,
 );

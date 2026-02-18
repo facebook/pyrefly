@@ -154,7 +154,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         fields.insert(
             dunder::DATACLASS_FIELDS,
-            ClassSynthesizedField::new(self.heap.mk_class_type(dataclass_fields_type)),
+            ClassSynthesizedField::new_classvar(self.heap.mk_class_type(dataclass_fields_type)),
         );
 
         if dataclass.kws.order {
@@ -225,7 +225,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // We don't use assignability here because overloads could cause issues.
                 let get_return_ty = self
                     .get_class_member(descriptor_cls.class_object(), &dunder::GET)
-                    .and_then(|get_field| get_field.ty().callable_return_type());
+                    .and_then(|get_field| get_field.ty().callable_return_type(self.heap));
 
                 if let Some(Type::SelfType(_)) = get_return_ty {
                     continue;
@@ -264,7 +264,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Get the __get__ method's return type from the descriptor class.
                 let get_return_ty = self
                     .get_class_member(descriptor_cls.class_object(), &dunder::GET)
-                    .and_then(|get_field| get_field.ty().callable_return_type());
+                    .and_then(|get_field| get_field.ty().callable_return_type(self.heap));
 
                 // Get the __set__ method and extract the value parameter type (3rd param).
                 let set_value_ty = self
@@ -619,7 +619,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }))
                 .unwrap(),
-                (*overload.metadata).clone(),
+                &overload.metadata,
                 None,
                 &args.args.map(CallArg::expr_maybe_starred),
                 &args.keywords.map(CallKeyword::new),
@@ -705,7 +705,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let constructor_callable = self.constructor_to_callable_distributed(converter);
         let converter = constructor_callable.as_ref().unwrap_or(converter);
         self.distribute_over_union(converter, |ty| {
-            ty.callable_first_param()
+            ty.callable_first_param(self.heap)
                 .unwrap_or_else(|| self.heap.mk_any_implicit())
         })
     }
@@ -723,7 +723,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             constructor_callable
                 .as_ref()
                 .unwrap_or(factory)
-                .callable_return_type()
+                .callable_return_type(self.heap)
                 .unwrap_or_else(|| self.heap.mk_any_implicit()),
         )
     }

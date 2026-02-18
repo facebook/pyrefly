@@ -22,6 +22,7 @@ use crate::types::types::Var;
 // match an expression against a hint, but fall back to the inferred type
 // without any errors if the hint is incompatible.
 // Soft type hints are used for `e1 or e1` expressions.
+#[derive(Debug)]
 pub struct Hint<'a>(Type, Option<&'a ErrorCollector>);
 
 #[derive(Clone, Copy, Debug)]

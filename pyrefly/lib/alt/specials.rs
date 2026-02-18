@@ -133,6 +133,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         return None;
                     }
                 }
+                // UntypedAlias (from a TypeAliasRef) is opaque at the raw layer;
+                // it will be expanded in wrap_type_alias. Treat it as a valid
+                // middle element like TypeVarTuple.
+                Type::Unpack(ty @ box Type::UntypedAlias(_)) => {
+                    has_unpack = true;
+                    if middle.is_none() {
+                        middle = Some(*ty)
+                    } else {
+                        self.extra_unpack_error(errors, value.range());
+                        return None;
+                    }
+                }
                 Type::Unpack(ty) => {
                     self.error(
                         errors,

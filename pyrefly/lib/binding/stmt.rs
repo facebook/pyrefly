@@ -50,6 +50,7 @@ use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::RaisedException;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::bindings::NameLookupResult;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOp;
@@ -57,7 +58,6 @@ use crate::binding::narrow::NarrowOps;
 use crate::binding::narrow::NarrowingSubject;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
-use crate::binding::scope::NameReadInfo;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
@@ -254,7 +254,11 @@ impl<'a> BindingsBuilder<'a> {
         })
     }
 
-    fn ensure_type_alias_type_args(&mut self, call: &mut ExprCall) {
+    fn ensure_type_alias_type_args(
+        &mut self,
+        call: &mut ExprCall,
+        tparams_builder: &mut Option<LegacyTParamCollector>,
+    ) {
         // Type var declarations are static types only; skip them for first-usage type inference.
         let static_type_usage = &mut Usage::StaticTypeInformation;
         self.ensure_expr(&mut call.func, static_type_usage);
@@ -265,7 +269,7 @@ impl<'a> BindingsBuilder<'a> {
         }
         // The second argument is the type
         if let Some(expr) = iargs.next() {
-            self.ensure_type(expr, &mut None);
+            self.ensure_type_with_usage(expr, tparams_builder, &mut Usage::TypeAliasRhs);
         }
         // There shouldn't be any other positional arguments
         for arg in iargs {
@@ -279,6 +283,14 @@ impl<'a> BindingsBuilder<'a> {
                 for type_param in type_params.elts.iter_mut() {
                     self.ensure_type(type_param, &mut None);
                 }
+            } else if let Some(id) = &kw.arg
+                && id.id == "value"
+            {
+                self.ensure_type_with_usage(
+                    &mut kw.value,
+                    tparams_builder,
+                    &mut Usage::TypeAliasRhs,
+                );
             } else {
                 self.ensure_expr(&mut kw.value, static_type_usage);
             }
@@ -398,7 +410,8 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn assign_type_alias_type(&mut self, name: &ExprName, call: &mut ExprCall) {
-        self.ensure_type_alias_type_args(call);
+        let mut collector = Some(LegacyTParamCollector::new(false));
+        self.ensure_type_alias_type_args(call, &mut collector);
         let assigned = self.declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
         let ann = self.bind_current(&name.id, &assigned, FlowStyle::Other);
         let (value, type_params) = self.typealiastype_from_call(&name.id, call);
@@ -411,7 +424,10 @@ impl<'a> BindingsBuilder<'a> {
         let idx_type_alias = self.insert_binding(key_type_alias, binding_type_alias);
         let binding = Binding::TypeAlias {
             name: name.id.clone(),
-            tparams: TypeAliasParams::TypeAliasType(type_params),
+            tparams: TypeAliasParams::TypeAliasType {
+                declared_params: type_params,
+                legacy_params: collector.unwrap().lookup_keys().into_boxed_slice(),
+            },
             key_type_alias: idx_type_alias,
             range: call.range(),
         };
@@ -586,12 +602,13 @@ impl<'a> BindingsBuilder<'a> {
                                 if let Some((arg_name, members)) =
                                     call.arguments.args.split_first_mut()
                                 {
+                                    self.check_functional_definition_name(&name.id, arg_name);
                                     self.synthesize_typing_named_tuple_def(
-                                        name,
+                                        Ast::expr_name_identifier(name.clone()),
                                         parent,
                                         &mut call.func,
-                                        arg_name,
                                         members,
+                                        true,
                                     );
                                     return;
                                 }
@@ -600,13 +617,14 @@ impl<'a> BindingsBuilder<'a> {
                                 if let Some((arg_name, members)) =
                                     call.arguments.args.split_first_mut()
                                 {
+                                    self.check_functional_definition_name(&name.id, arg_name);
                                     self.synthesize_collections_named_tuple_def(
-                                        name,
+                                        Ast::expr_name_identifier(name.clone()),
                                         parent,
                                         &mut call.func,
-                                        arg_name,
                                         members,
                                         &mut call.arguments.keywords,
+                                        true,
                                     );
                                     return;
                                 }
@@ -816,25 +834,12 @@ impl<'a> BindingsBuilder<'a> {
                     );
                 }
                 if let Expr::Name(name) = *x.name {
-                    if let NameReadInfo::Flow { .. } = self
-                        .scopes
-                        .look_up_name_for_read(Hashed::new(&name.id), &Usage::StaticTypeInformation)
-                    {
-                        self.error(
-                            name.range(),
-                            ErrorInfo::Kind(ErrorKind::Redefinition),
-                            format!(
-                                "Cannot redefine existing name `{}` as a type alias",
-                                name.id
-                            ),
-                        );
-                    }
                     // Create a new scope for the type alias type parameters
                     self.scopes.push(Scope::type_alias(x.range));
                     if let Some(params) = &mut x.type_params {
                         self.type_params(params);
                     }
-                    self.ensure_type(&mut x.value, &mut None);
+                    self.ensure_type_with_usage(&mut x.value, &mut None, &mut Usage::TypeAliasRhs);
                     // Pop the type alias scope before binding the definition
                     self.scopes.pop();
                     let range = x.value.range();

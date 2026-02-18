@@ -9,18 +9,9 @@
     "Line 117: Expected 1 errors"
   ],
   "aliases_newtype.py": [],
-  "aliases_recursive.py": [
-    "Line 63: Expected 1 errors",
-    "Line 69: Expected 1 errors"
-  ],
-  "aliases_type_statement.py": [
-    "Line 84: Expected 1 errors"
-  ],
-  "aliases_typealiastype.py": [
-    "Line 47: Expected 1 errors",
-    "Line 48: Expected 1 errors",
-    "Line 66: Expected 1 errors"
-  ],
+  "aliases_recursive.py": [],
+  "aliases_type_statement.py": [],
+  "aliases_typealiastype.py": [],
   "aliases_variance.py": [],
   "annotations_coroutines.py": [],
   "annotations_forward_refs.py": [
@@ -31,8 +22,8 @@
   "annotations_methods.py": [],
   "annotations_typeexpr.py": [],
   "callables_annotation.py": [
-    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`\\n  `Proto4[Ellipsis].__call__` has type `BoundMethod[Proto4[Ellipsis], (Proto4[Ellipsis], int, ...) -> None]`, which is not assignable to `BoundMethod[Proto4[Ellipsis], (self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None]`, the type of `Proto3.__call__`']",
-    "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`\\n  `Proto7.__call__` has type `BoundMethod[Proto7, (self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None]`, which is not assignable to `BoundMethod[Proto7, (self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None]`, the type of `Proto6.__call__`']"
+    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`\\n  `Proto4[Ellipsis].__call__` has type `(Proto4[Ellipsis], int, ...) -> None`, which is not assignable to `(self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None`, the type of `Proto3.__call__`']",
+    "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`\\n  `Proto7.__call__` has type `(self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None`, which is not assignable to `(self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None`, the type of `Proto6.__call__`']"
   ],
   "callables_kwargs.py": [],
   "callables_protocol.py": [],
@@ -42,19 +33,10 @@
   "constructors_call_init.py": [],
   "constructors_call_metaclass.py": [],
   "constructors_call_new.py": [],
-  "constructors_call_type.py": [
-    "Line 64: Expected 1 errors",
-    "Line 72: Expected 1 errors",
-    "Line 81: Expected 1 errors",
-    "Line 82: Expected 1 errors"
-  ],
+  "constructors_call_type.py": [],
   "constructors_callable.py": [
-    "Line 65: Expected 1 errors",
-    "Line 66: Expected 1 errors",
-    "Line 67: Expected 1 errors",
     "Line 184: Expected 1 errors",
     "Line 195: Expected 1 errors",
-    "Line 62: Unexpected errors ['Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`']",
     "Line 165: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
     "Line 183: Unexpected errors ['assert_type(Class8[Any], Class8[str]) failed']"
   ],
@@ -105,9 +87,7 @@
     "Line 50: Unexpected errors ['assert_type(str, int | str) failed']",
     "Line 57: Unexpected errors ['assert_type(str, int | str) failed']"
   ],
-  "generics_base_class.py": [
-    "Line 98: Expected 1 errors"
-  ],
+  "generics_base_class.py": [],
   "generics_basic.py": [
     "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\\n  Protocol `Buffer` requires attribute `__buffer__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__` called with arguments: (AnyStr)\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]']",
     "Line 67: Unexpected errors ['assert_type(MyStr, str) failed']",
@@ -142,16 +122,8 @@
   ],
   "generics_self_protocols.py": [],
   "generics_self_usage.py": [
-    "Line 73: Expected 1 errors",
-    "Line 76: Expected 1 errors",
     "Line 82: Expected 1 errors",
-    "Line 86: Expected 1 errors",
-    "Line 101: Expected 1 errors",
-    "Line 106: Expected 1 errors",
-    "Line 111: Expected 1 errors",
-    "Line 116: Expected 1 errors",
-    "Line 121: Expected 1 errors",
-    "Line 125: Expected 1 errors"
+    "Line 86: Expected 1 errors"
   ],
   "generics_syntax_compatibility.py": [],
   "generics_syntax_declarations.py": [],
@@ -190,17 +162,8 @@
   "overloads_consistency.py": [],
   "overloads_definitions.py": [],
   "overloads_evaluation.py": [],
-  "protocols_class_objects.py": [
-    "Line 104: Expected 1 errors",
-    "Line 106: Expected 1 errors",
-    "Line 107: Expected 1 errors",
-    "Line 108: Expected 1 errors"
-  ],
-  "protocols_definition.py": [
-    "Line 116: Expected 1 errors",
-    "Line 117: Expected 1 errors",
-    "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`\\n  Protocol `Template` requires attribute `temp`']"
-  ],
+  "protocols_class_objects.py": [],
+  "protocols_definition.py": [],
   "protocols_explicit.py": [],
   "protocols_generic.py": [],
   "protocols_merging.py": [],
@@ -212,13 +175,8 @@
   "protocols_self.py": [],
   "protocols_subtyping.py": [],
   "protocols_variance.py": [
-    "Line 21: Expected 1 errors",
-    "Line 40: Expected 1 errors",
-    "Line 56: Expected 1 errors",
     "Line 61: Expected 1 errors",
-    "Line 66: Expected 1 errors",
-    "Line 71: Expected 1 errors",
-    "Line 104: Expected 1 errors"
+    "Line 71: Expected 1 errors"
   ],
   "qualifiers_annotated.py": [
     "Line 71: Expected 1 errors",
@@ -232,8 +190,6 @@
     "Line 34: Expected 1 errors",
     "Line 38: Expected 1 errors",
     "Line 107: Expected 1 errors",
-    "Line 166: Expected 1 errors",
-    "Line 170: Expected 1 errors",
     "Line 131: Unexpected errors ['Expected first item to be a string literal', 'Expected first item to be a string literal']",
     "Line 133: Unexpected errors ['Unexpected keyword argument `x` in function `N.__new__`', 'Unexpected keyword argument `y` in function `N.__new__`']"
   ],

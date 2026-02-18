@@ -485,7 +485,7 @@ impl<'a> BindingsBuilder<'a> {
         let mut tparams = None;
         if is_definitely_type_alias {
             let mut legacy = Some(LegacyTParamCollector::new(false));
-            self.ensure_type(&mut value, &mut legacy);
+            self.ensure_type_with_usage(&mut value, &mut legacy, &mut Usage::TypeAliasRhs);
             if let Some(collector) = legacy {
                 tparams = Some(collector.lookup_keys().into_boxed_slice());
             }

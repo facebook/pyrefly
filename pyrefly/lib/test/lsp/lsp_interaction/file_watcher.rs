@@ -12,8 +12,10 @@ use lsp_types::Url;
 use lsp_types::request::RegisterCapability;
 use lsp_types::request::Request as _;
 use serde::Deserialize;
+use serde_json::json;
 use tempfile::TempDir;
 
+use crate::commands::lsp::IndexingMode;
 use crate::lsp::non_wasm::protocol::Message;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -113,5 +115,60 @@ fn test_incremental_pattern_addition() {
     assert!(new_builtins_watched.is_empty());
 
     // The test passes if shutdown succeeds without seeing unregister requests
+    interaction.shutdown().unwrap();
+}
+
+/// Test that multiple consecutive DidChangeWatchedFiles notifications are
+/// eventually processed. This simulates a burst of file system events (e.g., git
+/// checkout) where many files change at once. The first two notifications are
+/// for files that didn't change on disk (noise).
+#[test]
+fn test_consecutive_file_watcher_events() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("streaming");
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            workspace_folders: Some(vec![(
+                "streaming".to_owned(),
+                Url::from_file_path(root_path.clone()).unwrap(),
+            )]),
+            file_watch: true,
+            ..Default::default()
+        })
+        .unwrap();
+
+    let b_path = root_path.join("b.py");
+    let c_path = root_path.join("c.py");
+
+    interaction.client.did_open("c.py");
+    interaction.client.did_open("b.py");
+    interaction
+        .client
+        .expect_file_watcher_register()
+        .expect("Register file watcher for b");
+
+    std::fs::write(&b_path, "").unwrap();
+
+    // Send multiple DidChangeWatchedFiles notifications in rapid succession.
+    // The first few are noise (those files didn't change on disk); only the
+    // last notification (b.py) carries a real change.
+    interaction.client.file_modified("a.py");
+    interaction.client.file_modified("a.py");
+    interaction.client.file_modified("a.py");
+    interaction.client.file_modified("a.py");
+    interaction.client.file_modified("a.py");
+    interaction.client.file_modified("b.py");
+
+    // Verify that b.py was re-read from disk and d now shows the type error.
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(c_path.clone(), 1)
+        .expect("Failed to receive diagnostics after file watcher events");
+
     interaction.shutdown().unwrap();
 }
