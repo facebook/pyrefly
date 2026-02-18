@@ -37,6 +37,23 @@ use crate::types::callable::Param;
 use crate::types::callable::Params;
 use crate::types::types::Type;
 
+/// Information about a call site at the cursor position, returned by
+/// [`Transaction::get_callables_from_call`].
+pub(crate) struct CallInfo {
+    /// All callable signatures at this call site (one per overload, or just one).
+    pub callables: Vec<Type>,
+    /// Which overload the type-checker resolved, if any.
+    /// `None` when overloads were expanded from a type without call-site analysis.
+    pub chosen_overload_index: Option<usize>,
+    /// Which argument position the cursor is in.
+    pub active_argument: ActiveArgument,
+    /// Source range of the callee expression (used to look up documentation).
+    pub callee_range: TextRange,
+    /// Ranges of positional arguments already fully provided before the cursor.
+    /// Used to filter compatible overloads during completion.
+    pub provided_arg_ranges: Vec<TextRange>,
+}
+
 pub(crate) fn is_constructor_call(callee_type: Type) -> bool {
     matches!(callee_type, Type::ClassDef(_))
         || matches!(callee_type, Type::Type(box Type::ClassType(_)))
@@ -197,20 +214,12 @@ impl Transaction<'_> {
     }
 
     /// Finds the callable(s) (multiple if overloads exist) at position in document.
-    /// Returns (callables, chosen_overload_index, active_argument, callee_range, provided_arg_ranges).
-    /// `chosen_overload_index` is `Some` when a specific overload was matched,
-    /// `None` when overloads were expanded from a type without call-site analysis.
+    /// Returns `None` when the cursor is not inside a call expression.
     pub(crate) fn get_callables_from_call(
         &self,
         handle: &Handle,
         position: TextSize,
-    ) -> Option<(
-        Vec<Type>,
-        Option<usize>,
-        ActiveArgument,
-        TextRange,
-        Vec<TextRange>,
-    )> {
+    ) -> Option<CallInfo> {
         let mod_module = self.get_ast(handle)?;
         let mut res = None;
         mod_module.visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut res));
@@ -229,13 +238,13 @@ impl Transaction<'_> {
             answers.get_all_overload_trace(call_args_range)
         {
             let callables = overloads.into_map(|callable| Type::Callable(Box::new(callable)));
-            Some((
+            Some(CallInfo {
                 callables,
                 chosen_overload_index,
                 active_argument,
                 callee_range,
                 provided_arg_ranges,
-            ))
+            })
         } else {
             answers.get_type_trace(callee_range).map(|t| {
                 let coerced = self.coerce_type_to_callable(handle, t);
@@ -247,21 +256,21 @@ impl Transaction<'_> {
                         .into_iter()
                         .map(|s| s.as_type())
                         .collect();
-                    (
+                    CallInfo {
                         callables,
-                        None,
+                        chosen_overload_index: None,
                         active_argument,
                         callee_range,
                         provided_arg_ranges,
-                    )
+                    }
                 } else {
-                    (
-                        vec![coerced],
-                        Some(0),
+                    CallInfo {
+                        callables: vec![coerced],
+                        chosen_overload_index: Some(0),
                         active_argument,
                         callee_range,
                         provided_arg_ranges,
-                    )
+                    }
                 }
             })
         }
@@ -476,7 +485,13 @@ impl Transaction<'_> {
         position: TextSize,
     ) -> Option<SignatureHelp> {
         self.get_callables_from_call(handle, position).map(
-            |(callables, chosen_overload_index, active_argument, callee_range, _)| {
+            |CallInfo {
+                 callables,
+                 chosen_overload_index,
+                 active_argument,
+                 callee_range,
+                 ..
+             }| {
                 let parameter_docs = self.parameter_documentation_for_callee(handle, callee_range);
                 let function_docstring = self.function_docstring_for_callee(handle, callee_range);
 

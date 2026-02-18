@@ -46,6 +46,7 @@ use crate::state::lsp::IdentifierContext;
 use crate::state::lsp::IdentifierWithContext;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::MIN_CHARACTERS_TYPED_AUTOIMPORT;
+use crate::lsp::wasm::signature_help::CallInfo;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::types::Type;
@@ -377,8 +378,11 @@ impl Transaction<'_> {
         position: TextSize,
         completions: &mut Vec<RankedCompletion>,
     ) {
-        if let Some((callables, _, _, _, provided_arg_ranges)) =
-            self.get_callables_from_call(handle, position)
+        if let Some(CallInfo {
+            callables,
+            provided_arg_ranges,
+            ..
+        }) = self.get_callables_from_call(handle, position)
         {
             let callables =
                 self.filter_compatible_overloads(handle, callables, &provided_arg_ranges);
@@ -483,8 +487,12 @@ impl Transaction<'_> {
     }
 
     fn expected_call_argument_type(&self, handle: &Handle, position: TextSize) -> Option<Type> {
-        let (callables, chosen_overload_index, active_argument, _, _) =
-            self.get_callables_from_call(handle, position)?;
+        let CallInfo {
+            callables,
+            chosen_overload_index,
+            active_argument,
+            ..
+        } = self.get_callables_from_call(handle, position)?;
         let callable = callables.get(chosen_overload_index.unwrap_or(0))?.clone();
         let params = Self::normalize_singleton_function_type_into_params(callable)?;
         let arg_index = Self::active_parameter_index(&params, &active_argument)?;
@@ -602,8 +610,12 @@ impl Transaction<'_> {
         completions: &mut Vec<RankedCompletion>,
         in_string_literal: bool,
     ) {
-        if let Some((callables, _, active_argument, _, provided_arg_ranges)) =
-            self.get_callables_from_call(handle, position)
+        if let Some(CallInfo {
+            callables,
+            active_argument,
+            provided_arg_ranges,
+            ..
+        }) = self.get_callables_from_call(handle, position)
         {
             let callables =
                 self.filter_compatible_overloads(handle, callables, &provided_arg_ranges);
