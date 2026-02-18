@@ -357,7 +357,9 @@ impl Value {
         match op {
             CmpOp::In | CmpOp::NotIn => {
                 let contains = match other {
-                    Value::Tuple(values) => values.iter().any(|value| value == self),
+                    Value::Tuple(values) => values
+                        .iter()
+                        .any(|value| self.compare(CmpOp::Eq, value) == Some(true)),
                     _ => return None,
                 };
                 return Some(if matches!(op, CmpOp::In) {
@@ -397,9 +399,49 @@ impl Value {
 }
 
 fn compare_versions(left: &PythonVersion, right: &PythonVersion, op: CmpOp) -> Option<bool> {
-    let left_tuple = [left.major as i64, left.minor as i64, left.micro as i64];
-    let right_tuple = [right.major as i64, right.minor as i64, right.micro as i64];
-    let ordering = lexicographic_cmp(&left_tuple, &right_tuple);
+    ordering_matches(left.cmp(right), op)
+}
+
+fn compare_version_with_tuple(version: &PythonVersion, tuple: &[Value], op: CmpOp) -> Option<bool> {
+    let tuple = tuple_as_ints(tuple)?;
+    compare_version_tuple(version, &tuple, op, true)
+}
+
+fn compare_tuple_with_version(tuple: &[Value], version: &PythonVersion, op: CmpOp) -> Option<bool> {
+    let tuple = tuple_as_ints(tuple)?;
+    compare_version_tuple(version, &tuple, op, false)
+}
+
+fn compare_version_tuple(
+    version: &PythonVersion,
+    tuple: &[i64],
+    op: CmpOp,
+    version_on_left: bool,
+) -> Option<bool> {
+    if tuple.is_empty() || tuple.len() > 3 {
+        return None;
+    }
+    let version_tuple = [
+        version.major as i64,
+        version.minor as i64,
+        version.micro as i64,
+    ];
+    match op {
+        CmpOp::Eq => Some(version_tuple[..tuple.len()] == tuple[..]),
+        CmpOp::NotEq => Some(version_tuple[..tuple.len()] != tuple[..]),
+        CmpOp::Lt | CmpOp::LtE | CmpOp::Gt | CmpOp::GtE => {
+            let ordering = if version_on_left {
+                lexicographic_cmp(&version_tuple, tuple)
+            } else {
+                lexicographic_cmp(tuple, &version_tuple)
+            };
+            ordering_matches(ordering, op)
+        }
+        _ => None,
+    }
+}
+
+fn ordering_matches(ordering: Ordering, op: CmpOp) -> Option<bool> {
     Some(match op {
         CmpOp::Eq => ordering == Ordering::Equal,
         CmpOp::NotEq => ordering != Ordering::Equal,
@@ -409,60 +451,6 @@ fn compare_versions(left: &PythonVersion, right: &PythonVersion, op: CmpOp) -> O
         CmpOp::GtE => ordering != Ordering::Less,
         _ => return None,
     })
-}
-
-fn compare_version_with_tuple(version: &PythonVersion, tuple: &[Value], op: CmpOp) -> Option<bool> {
-    let right = tuple_as_ints(tuple)?;
-    if right.is_empty() || right.len() > 3 {
-        return None;
-    }
-    let left = [
-        version.major as i64,
-        version.minor as i64,
-        version.micro as i64,
-    ];
-    match op {
-        CmpOp::Eq => Some(left[..right.len()] == right[..]),
-        CmpOp::NotEq => Some(left[..right.len()] != right[..]),
-        CmpOp::Lt | CmpOp::LtE | CmpOp::Gt | CmpOp::GtE => {
-            let ordering = lexicographic_cmp(&left, &right);
-            Some(match op {
-                CmpOp::Lt => ordering == Ordering::Less,
-                CmpOp::LtE => ordering != Ordering::Greater,
-                CmpOp::Gt => ordering == Ordering::Greater,
-                CmpOp::GtE => ordering != Ordering::Less,
-                _ => return None,
-            })
-        }
-        _ => None,
-    }
-}
-
-fn compare_tuple_with_version(tuple: &[Value], version: &PythonVersion, op: CmpOp) -> Option<bool> {
-    let left = tuple_as_ints(tuple)?;
-    if left.is_empty() || left.len() > 3 {
-        return None;
-    }
-    let right = [
-        version.major as i64,
-        version.minor as i64,
-        version.micro as i64,
-    ];
-    match op {
-        CmpOp::Eq => Some(right[..left.len()] == left[..]),
-        CmpOp::NotEq => Some(right[..left.len()] != left[..]),
-        CmpOp::Lt | CmpOp::LtE | CmpOp::Gt | CmpOp::GtE => {
-            let ordering = lexicographic_cmp(&left, &right);
-            Some(match op {
-                CmpOp::Lt => ordering == Ordering::Less,
-                CmpOp::LtE => ordering != Ordering::Greater,
-                CmpOp::Gt => ordering == Ordering::Greater,
-                CmpOp::GtE => ordering != Ordering::Less,
-                _ => return None,
-            })
-        }
-        _ => None,
-    }
 }
 
 fn lexicographic_cmp(left: &[i64], right: &[i64]) -> Ordering {

@@ -215,6 +215,18 @@ if sys.version_info == (3, 13, 0):
 else:
     W = int
 assert_type(W(), str)
+
+if sys.version_info in ((3, 13), (3, 12)):
+    V = str
+else:
+    V = int
+assert_type(V(), str)
+
+if sys.version_info not in {(3, 12), (3, 11)}:
+    U = str
+else:
+    U = int
+assert_type(U(), str)
 "#,
 );
 
