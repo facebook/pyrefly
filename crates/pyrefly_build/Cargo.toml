@@ -23,7 +23,7 @@ tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 vec1 = { version = "1.12.1", features = ["serde"] }
 
 [dev-dependencies]
-pretty_assertions = { version = "1.2", features = ["alloc"], default-features = false }
+pretty_assertions = { version = "1.4.1", features = ["alloc"], default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 which = "4.2.4"

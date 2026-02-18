@@ -36,7 +36,7 @@ walkdir = "2.3"
 yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 
 [dev-dependencies]
-pretty_assertions = { version = "1.2", features = ["alloc"], default-features = false }
+pretty_assertions = { version = "1.4.1", features = ["alloc"], default-features = false }
 pulldown-cmark = "0.13.0"
 tempfile = "3.22"
 

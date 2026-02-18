@@ -2038,12 +2038,12 @@ dependencies = [
 
 [[package]]
 name = "pretty_assertions"
-version = "1.4.0"
+version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af7cee1a6c8a5b9208b3cb1061f10c0cb689087b3d8ce85fb9d2dd7a29b6ba66"
+checksum = "3ae130e2f271fbc2ac3a40fb1d07180839cdbbe443c7a27e1e3c13c5cac0116d"
 dependencies = [
  "diff",
- "yansi 0.5.1",
+ "yansi",
 ]
 
 [[package]]
@@ -2173,7 +2173,7 @@ dependencies = [
  "uuid",
  "vec1",
  "web-time",
- "yansi 1.0.1",
+ "yansi",
 ]
 
 [[package]]
@@ -2239,7 +2239,7 @@ dependencies = [
  "tracing",
  "walkdir",
  "which",
- "yansi 1.0.1",
+ "yansi",
 ]
 
 [[package]]
@@ -2351,7 +2351,7 @@ dependencies = [
  "uuid",
  "vec1",
  "watchman_client",
- "yansi 1.0.1",
+ "yansi",
 ]
 
 [[package]]
@@ -4137,12 +4137,6 @@ dependencies = [
  "libc",
  "rustix 1.1.3",
 ]
-
-[[package]]
-name = "yansi"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09041cd90cf85f7f8b2df60c646f853b7f535ce68f85244eb6731cf89fa498ec"
 
 [[package]]
 name = "yansi"
