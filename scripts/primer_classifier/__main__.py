@@ -14,7 +14,7 @@ Options:
     --fetch-code         Fetch source code from GitHub (default: True with LLM)
     --no-fetch-code      Skip fetching source code
     --output-format FMT  Output format: "json" or "markdown" (default: markdown)
-    --model MODEL        LLM model to use (default: claude-sonnet-4-20250514)
+    --model MODEL        LLM model to use (default: depends on backend)
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def main() -> int:
     parser.add_argument(
         "--model",
         default=None,
-        help="LLM model to use (default: claude-sonnet-4-20250514)",
+        help="LLM model to use (default: depends on backend)",
     )
 
     args = parser.parse_args()
@@ -99,6 +99,7 @@ def main() -> int:
         projects,
         fetch_code=fetch_code,
         use_llm=use_llm,
+        model=args.model,
     )
 
     # Output

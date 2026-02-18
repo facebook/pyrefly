@@ -59,14 +59,8 @@ jobs:
             --output-format markdown \
             | tee classification.md
         env:
-          LLAMA_API_KEY: ${{ secrets.LLAMA_API_KEY }}
           CLASSIFIER_API_KEY: ${{ secrets.PRIMER_CLASSIFIER_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Read PR number
-        id: pr-number
-        run: |
-          echo "pr_number=$(cat pr_number.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Post classification comment
         if: ${{ hashFiles('classification.md') != '' }}

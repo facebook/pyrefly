@@ -16,35 +16,13 @@ from __future__ import annotations
 import json
 import os
 import re
-import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
 from .parser import ErrorEntry, ProjectDiff
-
-
-def _get_ssl_context() -> ssl.SSLContext:
-    """Get an SSL context that works on macOS (certifi or system certs)."""
-    try:
-        import certifi
-        return ssl.create_default_context(cafile=certifi.where())
-    except ImportError:
-        pass
-    ctx = ssl.create_default_context()
-    try:
-        urllib.request.urlopen("https://raw.githubusercontent.com", timeout=5, context=ctx)
-    except urllib.error.URLError:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-    except Exception:
-        pass
-    return ctx
-
-
-_ssl_ctx = _get_ssl_context()
+from .ssl_utils import get_ssl_context
 
 
 @dataclass
@@ -58,7 +36,7 @@ class SourceContext:
     error_line: int  # 1-based line of the error within the file
 
 
-MAX_FILE_LINES = 1000
+MAX_FILE_LINES = 10000
 
 
 def _extract_context(content: str, error_line: int) -> tuple[str, int, int]:
@@ -120,7 +98,7 @@ def _fetch_file_from_github(
         req.add_header("Authorization", f"token {token}")
 
     try:
-        with urllib.request.urlopen(req, timeout=15, context=_ssl_ctx) as resp:
+        with urllib.request.urlopen(req, timeout=15, context=get_ssl_context()) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError:
         return None
@@ -137,7 +115,7 @@ def _resolve_project_ref(owner: str, repo: str) -> str:
     if token:
         req.add_header("Authorization", f"token {token}")
     try:
-        with urllib.request.urlopen(req, timeout=10, context=_ssl_ctx) as resp:
+        with urllib.request.urlopen(req, timeout=10, context=get_ssl_context()) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return data.get("default_branch", "main")
     except (urllib.error.HTTPError, urllib.error.URLError):
@@ -237,3 +215,39 @@ def fetch_source_context(
 def clear_cache() -> None:
     """Clear the file fetch cache."""
     _file_cache.clear()
+
+
+def fetch_files_by_path(
+    project: ProjectDiff,
+    file_paths: list[str],
+) -> Optional[str]:
+    """Fetch specific files by path from a project's GitHub repo.
+
+    Used for the two-pass LLM flow: the LLM requests files it needs
+    to see (e.g., parent class definitions), and we fetch them here.
+
+    Returns a combined snippet of all successfully fetched files,
+    or None if the project URL is invalid or no files were fetched.
+    """
+    if not project.url:
+        return None
+
+    parsed = _github_url_to_owner_repo(project.url)
+    if not parsed:
+        return None
+
+    owner, repo = parsed
+    ref = _resolve_project_ref(owner, repo)
+
+    snippets: list[str] = []
+    for file_path in file_paths[:3]:  # limit to 3 files
+        content = _fetch_and_cache(owner, repo, file_path, ref)
+        if content:
+            lines = content.splitlines()
+            if len(lines) <= MAX_FILE_LINES:
+                numbered = "\n".join(
+                    f"{i + 1:5d}     {line}" for i, line in enumerate(lines)
+                )
+                snippets.append(f"--- Requested file: {file_path} ---\n{numbered}")
+
+    return "\n\n".join(snippets) if snippets else None

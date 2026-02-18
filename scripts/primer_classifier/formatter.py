@@ -63,7 +63,16 @@ def format_markdown(result: ClassificationResult) -> str:
         for c in group:
             change_summary = _format_change_counts(c.added_count, c.removed_count)
             lines.append(f"**{c.project_name}** ({change_summary})")
-            lines.append(f"> {c.reason}\n")
+            if c.categories:
+                for cat in c.categories:
+                    cat_emoji = _VERDICT_EMOJI.get(cat.verdict, "")
+                    lines.append(f"> {cat_emoji} **{cat.category}**: {cat.reason}")
+                if c.reason:
+                    lines.append(f">\n> *Overall:* {c.reason}\n")
+                else:
+                    lines.append("")
+            else:
+                lines.append(f"> {c.reason}\n")
 
     # Footer
     lines.append("---")
@@ -115,6 +124,14 @@ def format_json(result: ClassificationResult) -> str:
                 "added_count": c.added_count,
                 "removed_count": c.removed_count,
                 "method": c.method,
+                "categories": [
+                    {
+                        "category": cat.category,
+                        "verdict": cat.verdict,
+                        "reason": cat.reason,
+                    }
+                    for cat in c.categories
+                ] if c.categories else [],
             }
             for c in result.classifications
         ],
