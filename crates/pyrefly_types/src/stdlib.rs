@@ -28,7 +28,7 @@ use crate::types::Type;
 /// Names of special forms that should be clickable in type hints.
 /// These are defined as annotated assignments in typing.pyi (e.g., `Literal: _SpecialForm`)
 /// rather than as classes, so they require special handling.
-const SPECIAL_FORM_NAMES: &[&str] = &["Literal", "LiteralString", "Never", "NoReturn"];
+const SPECIAL_FORM_NAMES: &[&str] = &["Literal", "LiteralString", "Never", "NoReturn", "TypeGuard"];
 
 #[derive(Debug, Clone)]
 struct StdlibError {

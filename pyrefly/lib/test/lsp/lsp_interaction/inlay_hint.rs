@@ -714,3 +714,54 @@ fn test_inlay_hint_literal_string_has_location() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn test_inlay_hint_type_guard_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("type_guard_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("type_guard_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 12 || hint.position.character != 7 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (": ", false),
+                    ("(", false),
+                    ("val", false),
+                    (": ", false),
+                    ("object", true),
+                    (") -> ", false),
+                    ("TypeGuard", true),
+                    ("[", false),
+                    ("str", true),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
