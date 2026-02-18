@@ -50,6 +50,7 @@ use crate::binding::binding::FirstUse;
 use crate::binding::binding::Key;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::FacetSubject;
 use crate::binding::narrow::NarrowOp;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
@@ -331,7 +332,27 @@ fn identifier_text_at(
 }
 
 fn format_type_source_location(module: &Module, range: TextRange) -> String {
-    format!("{}", module.display_pos(range.start()))
+    let display_pos = module.display_pos(range.start());
+    let location = display_pos.to_string();
+    let Ok(mut url) = Url::from_file_path(module.path().as_path()) else {
+        return location;
+    };
+    let fragment = if let Some(cell) = display_pos.cell() {
+        format!(
+            "{},L{},{}",
+            cell.get(),
+            display_pos.line_within_cell().get(),
+            display_pos.column()
+        )
+    } else {
+        format!(
+            "L{},{}",
+            display_pos.line_within_file().get(),
+            display_pos.column()
+        )
+    };
+    url.set_fragment(Some(&fragment));
+    format!("[{}]({})", location, url)
 }
 
 fn format_code_snippet(module: &Module, range: TextRange) -> Option<String> {
@@ -350,7 +371,7 @@ fn format_code_snippet(module: &Module, range: TextRange) -> Option<String> {
     }
     const MAX_LEN: usize = 80;
     let mut truncated = cleaned;
-    if truncated.len() > MAX_LEN {
+    if truncated.chars().count() > MAX_LEN {
         let max_chars = MAX_LEN.saturating_sub(3);
         let end_byte = truncated
             .char_indices()
@@ -363,15 +384,8 @@ fn format_code_snippet(module: &Module, range: TextRange) -> Option<String> {
     Some(truncated)
 }
 
-fn format_inline_code(snippet: &str) -> String {
-    format!("`{snippet}`")
-}
-
 fn format_narrow_op(module: &Module, base_name: &Name, op: &NarrowOp) -> Option<String> {
-    fn subject_with_facet(
-        base_name: &Name,
-        facet: Option<&crate::binding::narrow::FacetSubject>,
-    ) -> String {
+    fn subject_with_facet(base_name: &Name, facet: Option<&FacetSubject>) -> String {
         match facet {
             Some(facet) => format!("{base_name}{}", facet.chain),
             None => base_name.to_string(),
@@ -563,7 +577,7 @@ fn narrow_source_for_key(
                 if let Some(snippet) = format_narrow_op(module, name, op)
                     .or_else(|| format_code_snippet(module, *op_range))
                 {
-                    msg.push_str(&format!(": {}", format_inline_code(&snippet)));
+                    msg.push_str(&format!(": `{snippet}`"));
                 }
                 return Some(msg);
             }
@@ -621,7 +635,7 @@ fn first_use_source_for_key(
             let location = format_type_source_location(module, use_range);
             let mut msg = format!("Inferred from first use at {location}");
             if let Some(snippet) = format_code_snippet(module, use_range) {
-                msg.push_str(&format!(": {}", format_inline_code(&snippet)));
+                msg.push_str(&format!(": `{snippet}`"));
             }
             Some(msg)
         }

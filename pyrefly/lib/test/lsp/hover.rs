@@ -245,26 +245,56 @@ def f(x: int | None) -> None:
 #   ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
-    assert!(
-        report.contains("**Type source**"),
-        "Expected type source section, got: {report}"
+    let report = normalize_typeshed_paths(&report);
+    assert_eq!(
+        r#"
+# main.py
+7 |     x
+        ^
+```python
+(parameter) x: int
+```
+---
+**Type source**
+- Narrowed by condition at 3:13: `x is not None`
+
+
+Go to [int](file:///tmp/pyrefly_bundled_typeshed/builtins.pyi#L420,7)
+
+9 |     y
+        ^
+```python
+(variable) y: list[int]
+```
+---
+**Type source**
+- Inferred from first use at 6:5: `y.append(1)`
+
+
+Go to [int](file:///tmp/pyrefly_bundled_typeshed/builtins.pyi#L420,7) | [list](file:///tmp/pyrefly_bundled_typeshed/builtins.pyi#L3351,7)
+"#
+        .trim(),
+        report.trim(),
     );
-    assert!(
-        report.contains("Narrowed by condition"),
-        "Expected narrowing source in hover, got: {report}"
-    );
-    assert!(
-        report.contains("`x is not None`"),
-        "Expected narrowing condition snippet in hover, got: {report}"
-    );
-    assert!(
-        report.contains("Inferred from first use"),
-        "Expected inference source in hover, got: {report}"
-    );
-    assert!(
-        report.contains("`y.append(1)`"),
-        "Expected first-use snippet in hover, got: {report}"
-    );
+}
+
+fn normalize_typeshed_paths(report: &str) -> String {
+    const PREFIX: &str = "file:///tmp/pyrefly_bundled_typeshed_";
+    let mut normalized = String::with_capacity(report.len());
+    let mut rest = report;
+    while let Some(idx) = rest.find(PREFIX) {
+        normalized.push_str(&rest[..idx]);
+        rest = &rest[idx + PREFIX.len()..];
+        let Some(slash_idx) = rest.find('/') else {
+            normalized.push_str(PREFIX);
+            normalized.push_str(rest);
+            return normalized;
+        };
+        normalized.push_str("file:///tmp/pyrefly_bundled_typeshed");
+        rest = &rest[slash_idx..];
+    }
+    normalized.push_str(rest);
+    normalized
 }
 
 #[test]
