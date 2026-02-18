@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_graph"
-version = "0.52.0"
+version = "0.53.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -10,6 +10,5 @@ license = "MIT"
 
 [dependencies]
 dupe = "0.9.1"
-itertools = "0.14.0"
 pyrefly_util = { path = "../pyrefly_util" }
 starlark_map = "0.13.0"

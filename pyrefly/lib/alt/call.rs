@@ -122,13 +122,17 @@ pub enum CallTargetLookup {
     /// When a type is not callable, still collect what can be called in callable "subcases". This is
     /// for example used for a union type that is not callable, but some of its "subcases" are callable.
     Error(Vec<CallTarget>),
+    /// `__call__` resolves back to the same class, creating infinite recursion
+    /// through descriptor resolution. This is distinct from `Error` because
+    /// the type *has* a `__call__`, it just can't be resolved to a concrete target.
+    CircularCall,
 }
 
 impl CallTargetLookup {
     pub fn is_error(&self) -> bool {
         match self {
             CallTargetLookup::Ok(..) => false,
-            CallTargetLookup::Error(..) => true,
+            CallTargetLookup::Error(..) | CallTargetLookup::CircularCall => true,
         }
     }
 }
@@ -309,7 +313,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .filter_map(|x| {
                         match self.as_call_target_impl(x, quantified.clone(), dunder_call) {
                             CallTargetLookup::Ok(target) => Some(*target),
-                            CallTargetLookup::Error(..) => None,
+                            CallTargetLookup::Error(..) | CallTargetLookup::CircularCall => None,
                         }
                     })
                     .collect::<Vec<_>>();
@@ -337,11 +341,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(quantified) = quantified {
                     self.quantified_instance_as_dunder_call(quantified.clone(), &cls)
                         .map_or(CallTargetLookup::Error(vec![]), |ty| {
-                            self.as_call_target_impl(ty, Some(quantified), dunder_call)
+                            let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
+                                || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
+                            if is_self_recursive {
+                                CallTargetLookup::CircularCall
+                            } else {
+                                self.as_call_target_impl(ty, Some(quantified), dunder_call)
+                            }
                         })
                 } else if dunder_call {
-                    // Avoid infinite recursion
-                    CallTargetLookup::Error(vec![])
+                    self.instance_as_dunder_call(&cls).map_or(
+                        CallTargetLookup::Error(vec![]),
+                        |ty| {
+                            let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
+                                || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
+                            if is_self_recursive {
+                                CallTargetLookup::CircularCall
+                            } else {
+                                self.as_call_target_impl(ty, quantified, /* dunder_call */ true)
+                            }
+                        },
+                    )
                 } else {
                     self.instance_as_dunder_call(&cls).map_or(
                         CallTargetLookup::Error(vec![]),
@@ -473,6 +493,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     context,
                 )
             }
+            CallTargetLookup::CircularCall => self.error_call_target(
+                errors,
+                range,
+                format!(
+                    "`__call__` on `{}` resolves back to the same type, creating infinite recursion at runtime",
+                    self.for_display(ty),
+                ),
+                ErrorKind::NotCallable,
+                context,
+            ),
         }
     }
 
@@ -1030,7 +1060,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             CallTarget::FunctionOverload(overloads, metadata) => {
                 self.call_overloads(
                     overloads,
-                    metadata,
+                    &metadata,
                     None,
                     args,
                     keywords,
@@ -1045,7 +1075,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             CallTarget::BoundMethodOverload(obj, overloads, meta) => {
                 self.call_overloads(
                     overloads,
-                    meta,
+                    &meta,
                     Some(obj),
                     args,
                     keywords,
@@ -1307,9 +1337,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (default_constructor(), false)
         };
         // Check the __init__ method and whether it comes from object or has been overridden
-        let (init_attr_ty, overrides_init) = if let Some(mut t) = self.get_dunder_init(cls, false) {
-            // Replace the return type with Self (the current class)
-            t.set_callable_return_type_for_constructor(class_type.clone());
+        let (init_attr_ty, overrides_init) = if let Some(t) = self.get_dunder_init(cls, false) {
+            // Try to strip self param and set return type (for generic handling)
+            let t = if let Type::BoundMethod(ref method) = t
+                && let Some(bound) = self.bind_dunder_init_for_callable(method)
+            {
+                bound
+            } else {
+                // Fallback: just set the return type without stripping self
+                let ret_type = t
+                    .callable_first_param(self.heap)
+                    .unwrap_or_else(|| class_type.clone());
+                let mut t = t;
+                t.visit_toplevel_callable_mut(&mut |c: &mut Callable| c.ret = ret_type.clone());
+                t
+            };
             (t, true)
         } else {
             (default_constructor(), false)
@@ -1334,6 +1376,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
+        // nn.Module call forwarding: when calling an nn.Module instance (or Self in a Module subclass),
+        // redirect to the `forward` method. This models PyTorch's `nn.Module.__call__` behavior.
+        // TODO: Consider modeling this via a stub for `nn.Module.__call__` that delegates to `forward`.
+        if let Some(forward_ty) = self.try_nn_module_forward_dispatch(&callee_ty, x.range, errors) {
+            return self.expr_call_infer(x, forward_ty, hint, errors);
+        }
+
         if matches!(&callee_ty, Type::ClassDef(cls) if cls.is_builtin("super")) {
             // Because we have to construct a binding for super in order to fill in implicit arguments,
             // we can't handle things like local aliases to super. If we hit a case where the binding

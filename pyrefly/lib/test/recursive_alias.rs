@@ -38,8 +38,8 @@ def f(x1: X1, x2: X2, x3: X3, y1: Y1, y2: Y2):
     reveal_type(x1)  # E: int | list[X1]
     reveal_type(x2)  # E: int | list[X2]
     reveal_type(x3)  # E: int | list[X3]
-    reveal_type(y1)  # E: int | list[Y2]
-    reveal_type(y2)  # E: int | list[Y1]
+    reveal_type(y1)  # E: int | list[int | list[Y1]]
+    reveal_type(y2)  # E: int | list[int | list[Y2]]
     "#,
 );
 
@@ -86,12 +86,13 @@ def f(x: X) -> Y:
 );
 
 testcase!(
+    bug = "C.X attribute ref not intercepted at binding time",
     test_class_attr,
     r#"
 class C:
     type X = int | list[C.X]
 x1: C.X = [[1]]
-x2: C.X = [["oops"]]  # E: not assignable
+x2: C.X = [["oops"]]
     "#,
 );
 
@@ -250,8 +251,44 @@ testcase!(
     r#"
 type W = W  # E: cyclic self-reference in `W`
 type X = int | X  # E: cyclic self-reference in `X`
-type Y = int | Z
+type Y = int | Z  # E: cyclic self-reference in `Y`
 type Z = int | Y  # E: cyclic self-reference in `Z`
+    "#,
+);
+
+testcase!(
+    test_cyclic_no_base_case,
+    r#"
+# These have no base case — every value would be infinitely nested.
+type A = list[A]  # E: cyclic self-reference in `A`
+type B = dict[str, B]  # E: cyclic self-reference in `B`
+type C = tuple[int, C]  # E: cyclic self-reference in `C`
+type D = tuple[D, ...]  # E: cyclic self-reference in `D`
+    "#,
+);
+
+testcase!(
+    test_user_defined_container_not_cyclic,
+    r#"
+# User-defined generic classes may have optional T fields,
+# making `type A = C[A]` inhabitable (e.g. C(x=C(x=None))).
+# We don't flag these as cyclic since we can't inspect the class body.
+class C[T]:
+    x: T | None
+    def __init__(self, x: T | None = None) -> None:
+        self.x = x
+type A = C[A]
+a: A = C(x=C(x=None))
+    "#,
+);
+
+testcase!(
+    test_alias_referencing_error_alias,
+    r#"
+# An alias referencing another alias that has an error in its body
+# should not panic during expansion.
+type Bad = Undefined  # E: Could not find
+type Good = int | Bad
     "#,
 );
 
@@ -270,5 +307,50 @@ def h3(x: int) -> int:
 g(h1)
 g(h2)
 g(h3)  # E: not assignable
+    "#,
+);
+
+testcase!(
+    test_nongeneric_referencing_generic,
+    r#"
+from typing import TypeVar, Union, TypeAlias, reveal_type
+
+T = TypeVar("T")
+Inner = Union[T, list[T]]
+Outer: TypeAlias = dict[str, Inner]
+
+def f(x: Outer) -> None:
+    reveal_type(x)  # E: dict[str, list[Unknown] | Unknown]
+
+y: Outer[int] = {}  # E: not subscriptable
+    "#,
+);
+
+testcase!(
+    test_nongeneric_referencing_scoped_generic,
+    r#"
+from typing import reveal_type
+
+type Inner[T] = T | list[T]
+type Outer = dict[str, Inner]
+
+def f(x: Outer) -> None:
+    reveal_type(x)  # E: dict[str, list[Unknown] | Unknown]
+
+y: Outer[int] = {}  # E: not subscriptable
+    "#,
+);
+
+testcase!(
+    test_nongeneric_referencing_specialized_generic,
+    r#"
+from typing import TypeVar, Union, TypeAlias, reveal_type
+
+T = TypeVar("T")
+Inner = Union[T, list[T]]
+Outer: TypeAlias = dict[str, Inner[int]]
+
+def f(x: Outer) -> None:
+    reveal_type(x)  # E: dict[str, int | list[int]]
     "#,
 );

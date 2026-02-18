@@ -15,8 +15,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "`TypeAlias[GoodTypeAlias3, type[list[GoodTypeAlias2]]]` is not subscriptable",
-      "description": "`TypeAlias[GoodTypeAlias3, type[list[GoodTypeAlias2]]]` is not subscriptable",
+      "concise_description": "`TypeAlias[GoodTypeAlias3, type[list[int | None]]]` is not subscriptable",
+      "description": "`TypeAlias[GoodTypeAlias3, type[list[int | None]]]` is not subscriptable",
       "line": 68,
       "name": "unsupported-operation",
       "severity": "error",
@@ -721,6 +721,17 @@
       "severity": "error",
       "stop_column": 61,
       "stop_line": 75
+    },
+    {
+      "code": -2,
+      "column": 93,
+      "concise_description": "Found cyclic self-reference in `MutualReference2`",
+      "description": "Found cyclic self-reference in `MutualReference2`",
+      "line": 75,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 123,
+      "stop_line": 75
     }
   ],
   "aliases_type_statement.py": [
@@ -1035,6 +1046,17 @@
     {
       "code": -2,
       "column": 28,
+      "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias6`",
+      "description": "Found cyclic self-reference in `RecursiveTypeAlias6`",
+      "line": 88,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 47,
+      "stop_line": 88
+    },
+    {
+      "code": -2,
+      "column": 28,
       "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias7`",
       "description": "Found cyclic self-reference in `RecursiveTypeAlias7`",
       "line": 89,
@@ -1102,35 +1124,46 @@
     },
     {
       "code": -2,
-      "column": 41,
+      "column": 13,
       "concise_description": "Found cyclic self-reference in `BadAlias4`",
       "description": "Found cyclic self-reference in `BadAlias4`",
       "line": 46,
       "name": "invalid-type-alias",
       "severity": "error",
-      "stop_column": 50,
+      "stop_column": 52,
       "stop_line": 46
     },
     {
       "code": -2,
-      "column": 40,
+      "column": 13,
       "concise_description": "Found cyclic self-reference in `BadAlias5`",
       "description": "Found cyclic self-reference in `BadAlias5`",
       "line": 47,
       "name": "invalid-type-alias",
       "severity": "error",
-      "stop_column": 60,
+      "stop_column": 79,
       "stop_line": 47
     },
     {
       "code": -2,
-      "column": 40,
+      "column": 13,
+      "concise_description": "Found cyclic self-reference in `BadAlias6`",
+      "description": "Found cyclic self-reference in `BadAlias6`",
+      "line": 48,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 52,
+      "stop_line": 48
+    },
+    {
+      "code": -2,
+      "column": 13,
       "concise_description": "Found cyclic self-reference in `BadAlias7`",
       "description": "Found cyclic self-reference in `BadAlias7`",
       "line": 49,
       "name": "invalid-type-alias",
       "severity": "error",
-      "stop_column": 49,
+      "stop_column": 50,
       "stop_line": 49
     },
     {
@@ -1297,6 +1330,17 @@
       "severity": "error",
       "stop_column": 52,
       "stop_line": 64
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Found cyclic self-reference in `BadAlias21`",
+      "description": "Found cyclic self-reference in `BadAlias21`",
+      "line": 66,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 59,
+      "stop_line": 66
     }
   ],
   "aliases_variance.py": [
@@ -3061,7 +3105,7 @@
       "code": -2,
       "column": 13,
       "concise_description": "`ProtoAImpl` is not assignable to `ProtoA`",
-      "description": "`ProtoAImpl` is not assignable to `ProtoA`\n  Protocol `ProtoA` requires attribute `z`",
+      "description": "`ProtoAImpl` is not assignable to `ProtoA`\n  `ProtoAImpl.x` is not a ClassVar, but `ProtoA.x` is",
       "line": 140,
       "name": "bad-assignment",
       "severity": "error",
@@ -3434,25 +3478,58 @@
     },
     {
       "code": -2,
-      "column": 23,
-      "concise_description": "Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`",
-      "description": "Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`",
-      "line": 62,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 29,
-      "stop_line": 62
-    },
-    {
-      "code": -2,
       "column": 12,
-      "concise_description": "revealed type: (*args: Unknown, **kwargs: Unknown) -> Class3",
-      "description": "revealed type: (*args: Unknown, **kwargs: Unknown) -> Class3",
+      "concise_description": "revealed type: (x: int) -> Class3",
+      "description": "revealed type: (x: int) -> Class3",
       "line": 63,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 16,
       "stop_line": 63
+    },
+    {
+      "code": -2,
+      "column": 3,
+      "concise_description": "Missing argument `x`",
+      "description": "Missing argument `x`",
+      "line": 65,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 5,
+      "stop_line": 65
+    },
+    {
+      "code": -2,
+      "column": 3,
+      "concise_description": "Missing argument `x`",
+      "description": "Missing argument `x`",
+      "line": 66,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 8,
+      "stop_line": 66
+    },
+    {
+      "code": -2,
+      "column": 4,
+      "concise_description": "Unexpected keyword argument `y`",
+      "description": "Unexpected keyword argument `y`",
+      "line": 66,
+      "name": "unexpected-keyword",
+      "severity": "error",
+      "stop_column": 5,
+      "stop_line": 66
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected 1 positional argument, got 2",
+      "description": "Expected 1 positional argument, got 2",
+      "line": 67,
+      "name": "bad-argument-count",
+      "severity": "error",
+      "stop_column": 8,
+      "stop_line": 67
     },
     {
       "code": -2,
@@ -6298,6 +6375,61 @@
   "generics_self_usage.py": [
     {
       "code": -2,
+      "column": 14,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 73,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 73
+    },
+    {
+      "code": -2,
+      "column": 23,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 73,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 27,
+      "stop_line": 73
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 76,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 10,
+      "stop_line": 76
+    },
+    {
+      "code": -2,
+      "column": 15,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 101,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 19,
+      "stop_line": 101
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 103,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 16,
+      "stop_line": 103
+    },
+    {
+      "code": -2,
       "column": 12,
       "concise_description": "Invalid base class: `Self`",
       "description": "Invalid base class: `Self`",
@@ -6306,6 +6438,61 @@
       "severity": "error",
       "stop_column": 16,
       "stop_line": 103
+    },
+    {
+      "code": -2,
+      "column": 30,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 106,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 34,
+      "stop_line": 106
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`Self` cannot be used in a static method",
+      "description": "`Self` cannot be used in a static method",
+      "line": 111,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 13,
+      "stop_line": 111
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`Self` cannot be used in a static method",
+      "description": "`Self` cannot be used in a static method",
+      "line": 116,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 25,
+      "stop_line": 116
+    },
+    {
+      "code": -2,
+      "column": 37,
+      "concise_description": "`Self` cannot be used in a metaclass",
+      "description": "`Self` cannot be used in a metaclass",
+      "line": 121,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 41,
+      "stop_line": 121
+    },
+    {
+      "code": -2,
+      "column": 42,
+      "concise_description": "`Self` cannot be used in a metaclass",
+      "description": "`Self` cannot be used in a metaclass",
+      "line": 125,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 46,
+      "stop_line": 125
     }
   ],
   "generics_syntax_compatibility.py": [
@@ -8951,6 +9138,50 @@
       "severity": "error",
       "stop_column": 25,
       "stop_line": 74
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "`type[ConcreteC1]` is not assignable to `ProtoC1`",
+      "description": "`type[ConcreteC1]` is not assignable to `ProtoC1`\n  `type[ConcreteC1].attr1` is not a ClassVar, but `ProtoC1.attr1` is",
+      "line": 104,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 104
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "`type[ConcreteC2]` is not assignable to `ProtoC1`",
+      "description": "`type[ConcreteC2]` is not assignable to `ProtoC1`\n  `type[ConcreteC2].attr1` or `ProtoC1.attr1` uses `__getattr__`, which cannot be checked for override compatibility",
+      "line": 106,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 106
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "`type[ConcreteC2]` is not assignable to `ProtoC2`",
+      "description": "`type[ConcreteC2]` is not assignable to `ProtoC2`\n  `type[ConcreteC2].attr1` or `ProtoC2.attr1` uses `__getattr__`, which cannot be checked for override compatibility",
+      "line": 107,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 107
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "`type[ConcreteC3]` is not assignable to `ProtoC1`",
+      "description": "`type[ConcreteC3]` is not assignable to `ProtoC1`\n  `type[ConcreteC3].attr1` is not a ClassVar, but `ProtoC1.attr1` is",
+      "line": 108,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 108
     }
   ],
   "protocols_definition.py": [
@@ -8978,17 +9209,6 @@
     },
     {
       "code": -2,
-      "column": 17,
-      "concise_description": "`Concrete` is not assignable to `Template`",
-      "description": "`Concrete` is not assignable to `Template`\n  Protocol `Template` requires attribute `temp`",
-      "line": 79,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 38,
-      "stop_line": 79
-    },
-    {
-      "code": -2,
       "column": 22,
       "concise_description": "`Concrete2_Bad1` is not assignable to `Template2`",
       "description": "`Concrete2_Bad1` is not assignable to `Template2`\n  Protocol `Template2` requires attribute `val1`",
@@ -9002,12 +9222,34 @@
       "code": -2,
       "column": 22,
       "concise_description": "`Concrete2_Bad2` is not assignable to `Template2`",
-      "description": "`Concrete2_Bad2` is not assignable to `Template2`\n  `Concrete2_Bad2.val1` has type `Sequence[float]`, which is not assignable to `Sequence[int]`, the type of `Template2.val1`",
+      "description": "`Concrete2_Bad2` is not assignable to `Template2`\n  `Concrete2_Bad2.val1` is not a ClassVar, but `Template2.val1` is",
       "line": 115,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 38,
       "stop_line": 115
+    },
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "`Concrete2_Bad3` is not assignable to `Template2`",
+      "description": "`Concrete2_Bad3` is not assignable to `Template2`\n  `Concrete2_Bad3.val1` is not a ClassVar, but `Template2.val1` is",
+      "line": 116,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 38,
+      "stop_line": 116
+    },
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "`Concrete2_Bad4` is not assignable to `Template2`",
+      "description": "`Concrete2_Bad4` is not assignable to `Template2`\n  `Concrete2_Bad4.val1` is not a ClassVar, but `Template2.val1` is",
+      "line": 117,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 38,
+      "stop_line": 117
     },
     {
       "code": -2,
@@ -9024,7 +9266,7 @@
       "code": -2,
       "column": 22,
       "concise_description": "`Concrete3_Bad2` is not assignable to `Template3`",
-      "description": "`Concrete3_Bad2` is not assignable to `Template3`\n  `Concrete3_Bad2.val1` is read-only, but `Template3.val1` is read-write",
+      "description": "`Concrete3_Bad2` is not assignable to `Template3`\n  `Concrete3_Bad2.val1` is a ClassVar, but `Template3.val1` is not",
       "line": 157,
       "name": "bad-assignment",
       "severity": "error",
@@ -10183,6 +10425,28 @@
       "severity": "error",
       "stop_column": 11,
       "stop_line": 155
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Cannot assign to `TEN` because it is imported as final",
+      "description": "Cannot assign to `TEN` because it is imported as final",
+      "line": 166,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 4,
+      "stop_line": 166
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Cannot assign to `PI` because it is imported as final",
+      "description": "Cannot assign to `PI` because it is imported as final",
+      "line": 170,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 3,
+      "stop_line": 170
     }
   ],
   "qualifiers_final_decorator.py": [

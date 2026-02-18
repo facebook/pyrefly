@@ -48,6 +48,7 @@ class TestFlags:
     run_lint: bool
     run_test: bool
     run_conformance: bool
+    run_jsonschema: bool
 
 
 def print_running(msg: str) -> None:
@@ -119,6 +120,10 @@ class Executor(abc.ABC):
     def conformance(self) -> None:
         raise NotImplementedError()
 
+    @abc.abstractmethod
+    def jsonschema(self) -> None:
+        raise NotImplementedError()
+
 
 @final
 class CargoExecutor(Executor):
@@ -150,6 +155,7 @@ class CargoExecutor(Executor):
                     "JQ": jq_path if jq_path else "",
                     "TEST_PY": str(script_dir / "test.py"),
                     "PYREFLY_PY": str(script_dir / "pyrefly" / "python"),
+                    "TENSOR_TEST_ROOT": str(script_dir / "test" / "tensor_shapes"),
                     "PATH": os.environ.get("PATH", ""),
                 },
             )
@@ -171,6 +177,9 @@ class CargoExecutor(Executor):
                 f"{cargo_target_dir}/debug/pyrefly",
             ]
         )
+
+    def jsonschema(self) -> None:
+        run(["python3", "schemas/validate_schemas.py"])
 
 
 @final
@@ -222,6 +231,16 @@ class BuckExecutor(Executor):
             ]
         )
 
+    def jsonschema(self) -> None:
+        run(
+            [
+                "buck2",
+                "test",
+                "--reuse-current-config",
+                "schemas:test",
+            ]
+        )
+
 
 def run_tests(executor: Executor, test_flags: TestFlags) -> None:
     if test_flags.run_fmt:
@@ -243,6 +262,11 @@ def run_tests(executor: Executor, test_flags: TestFlags) -> None:
         print_running("conformance tests")
         with timing():
             executor.conformance()
+
+    if test_flags.run_jsonschema:
+        print_running("jsonschema tests")
+        with timing():
+            executor.jsonschema()
 
 
 def get_executor(mode: str) -> Executor:
@@ -294,6 +318,12 @@ def invoke_main() -> None:
         default=True,
         help="Whether to run conformance test or not",
     )
+    parser.add_argument(
+        "--jsonschema",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to run jsonschema test or not",
+    )
     args = parser.parse_args()
     try:
         main(
@@ -303,6 +333,7 @@ def invoke_main() -> None:
                 run_lint=args.lint,
                 run_test=args.test,
                 run_conformance=args.conformance,
+                run_jsonschema=args.jsonschema,
             ),
         )
     except KeyboardInterrupt:

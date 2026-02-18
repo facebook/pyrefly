@@ -20,11 +20,17 @@ use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::dimension::simplify;
 use pyrefly_types::literal::LitStyle;
+use pyrefly_types::tensor::IndexOp;
+use pyrefly_types::tensor::TensorShape;
+use pyrefly_types::tensor::TensorType;
+use pyrefly_types::tensor::index_shape_int;
+use pyrefly_types::tensor::index_shape_multi;
+use pyrefly_types::tensor::index_shape_slice;
+use pyrefly_types::tensor::index_shape_tensor;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
-use pyrefly_types::types::AnyStyle;
 use pyrefly_types::types::Union;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
@@ -40,6 +46,7 @@ use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprGenerator;
 use ruff_python_ast::ExprNumberLiteral;
+use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprStarred;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::ExprTuple;
@@ -58,6 +65,7 @@ use vec1::vec1;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
+use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::Hint;
 use crate::alt::unwrap::HintRef;
@@ -87,6 +95,7 @@ use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::type_var::TypeVar;
 use crate::types::type_var_tuple::TypeVarTuple;
+use crate::types::types::AnyStyle;
 use crate::types::types::Type;
 
 #[derive(Debug, Clone, Copy)]
@@ -244,23 +253,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         self.expr_infer_type_info_with_hint(x, hint, errors)
             .into_ty()
-    }
-
-    /// Check whether a type corresponds to a deprecated function or method, and if so, log a deprecation warning.
-    pub fn check_for_deprecated_call(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
-        let Some(deprecation) = ty.function_deprecation() else {
-            return;
-        };
-        let deprecated_function = ty
-            .to_func_kind()
-            .map(|func_kind| func_kind.format(self.module().name()));
-        if let Some(deprecated_function) = deprecated_function {
-            errors.add(
-                range,
-                ErrorInfo::Kind(ErrorKind::Deprecated),
-                deprecation.as_error_message(format!("`{deprecated_function}` is deprecated")),
-            );
-        }
     }
 
     /// Like expr_infer_with_hint(), but returns a TypeInfo that includes narrowing information.
@@ -437,6 +429,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return_hint.as_ref().map(|hint| hint.as_ref()),
                     errors,
                 );
+                let (yield_keys, yield_from_keys) = self.bindings().lambda_yield_keys(lambda.range);
+                let ret = if !(yield_keys.is_empty() && yield_from_keys.is_empty()) {
+                    let yield_ty = self.unions(
+                        yield_keys
+                            .iter()
+                            .map(|idx| self.get_idx(*idx).yield_ty.clone())
+                            .chain(
+                                yield_from_keys
+                                    .iter()
+                                    .map(|idx| self.get_idx(*idx).yield_ty.clone()),
+                            )
+                            .collect(),
+                    );
+                    self.stdlib
+                        .generator(yield_ty, self.heap.mk_any_implicit(), ret)
+                        .to_type()
+                } else {
+                    ret
+                };
                 self.heap.mk_callable(params, ret)
             }
             Expr::Tuple(x) => self.tuple_infer(x, hint, errors),
@@ -489,7 +500,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Expr::SetComp(x) => {
                 let elem_hint = hint.and_then(|ty| self.decompose_set(ty));
-                self.ifs_infer(&x.generators, errors);
                 self.ifs_infer(&x.generators, errors);
                 let elem_ty = self.expr_infer_with_hint_promote(
                     &x.elt,
@@ -647,6 +657,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             want.ty().clone()
         } else {
             ty.promote_implicit_literals(self.stdlib)
+        }
+    }
+
+    /// Check whether a type corresponds to a deprecated function or method, and if so, log a deprecation warning.
+    fn check_for_deprecated_call(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
+        let Some(deprecation) = ty.function_deprecation() else {
+            return;
+        };
+        let deprecated_function = ty
+            .to_func_kind()
+            .map(|func_kind| func_kind.format(self.module().name()));
+        if let Some(deprecated_function) = deprecated_function {
+            errors.add(
+                range,
+                ErrorInfo::Kind(ErrorKind::Deprecated),
+                deprecation.as_error_message(format!("`{deprecated_function}` is deprecated")),
+            );
         }
     }
 
@@ -1337,6 +1364,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else if cls.has_toplevel_qname("typing", "Any") {
                     *ty = self.heap.mk_type_form(self.heap.mk_any_explicit())
                 } else {
+                    // All other classes (including Tensor) get promoted and wrapped in type_form
                     *ty = self.heap.mk_type_form(self.promote(cls, range, errors));
                 }
             }
@@ -1890,6 +1918,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                     }
                 }
+                // Tensor type parsing: Tensor[2, 3] syntax
+                Type::ClassDef(ref cls) if self.is_tensor_class(cls) => {
+                    Type::type_form(self.parse_tensor_type(cls, xs, errors))
+                }
                 // Dim type parsing: Dim[3], Dim[N], Dim[N+1] syntax
                 Type::ClassDef(ref cls) if self.is_symint_class(cls) => {
                     self.parse_symint_type(xs, range, errors)
@@ -1930,10 +1962,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::ClassDef(cls) => {
                     let metadata = self.get_metadata_for_class(&cls);
-                    let class_getitem_result = if self.get_class_tparams(&cls).is_empty()
+                    let class_ty = Type::ClassDef(cls.dupe());
+                    let allow_dunder_lookup = self.get_class_tparams(&cls).is_empty()
                         && !metadata.has_base_any()
-                        && !metadata.is_new_type()
-                    {
+                        && !metadata.is_new_type();
+                    let class_getitem_result = if allow_dunder_lookup {
                         let class_ty = self.heap.mk_class_def(cls.dupe());
                         // TODO(stroxler): Add a new API, similar to `type_of_attr_get` but returning a
                         // LookupResult or an Optional type, that we could use here to avoid the double lookup.
@@ -1955,7 +1988,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         None
                     };
-                    if let Some(result) = class_getitem_result {
+                    let metaclass_getitem_result =
+                        if class_getitem_result.is_none() && allow_dunder_lookup {
+                            self.call_magic_dunder_method(
+                                &class_ty,
+                                &dunder::GETITEM,
+                                range,
+                                &[CallArg::expr(slice)],
+                                &[],
+                                errors,
+                                Some(&|| ErrorContext::Index(self.for_display(class_ty.clone()))),
+                            )
+                        } else {
+                            None
+                        };
+                    if let Some(result) = class_getitem_result.or(metaclass_getitem_result) {
                         result
                     } else {
                         self.heap.mk_type_form(self.specialize(
@@ -2080,6 +2127,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                     )
                 }
+                // Tensor indexing: tensor[0] reduces dimensionality
+                Type::Tensor(ref tensor_type) => {
+                    self.infer_tensor_index(tensor_type, slice, range, errors)
+                }
+                // Shapeless tensor as ClassType: use tensor indexing logic
+                // e.g., x: Tensor then x[0] should still work
+                Type::ClassType(ref cls) if self.is_tensor_class(cls.class_object()) => {
+                    // Extract shape dimensions from the ClassType's type arguments
+                    // E.g., Tensor[10, 20] has targs [10, 20]
+                    let targs = cls.targs().as_slice();
+
+                    match targs {
+                        [] | [Type::Tuple(Tuple::Unbounded(box Type::Any(_)))] => {
+                            // Shapeless tensor class - create shapeless TensorType and use tensor indexing
+                            let tensor_type = TensorType::shapeless(cls.clone());
+                            self.infer_tensor_index(&tensor_type, slice, range, errors)
+                        }
+                        _ => {
+                            // Build TensorShape from type arguments
+                            let shape_dims: Vec<Type> = targs.to_vec();
+                            let tensor_shape = TensorShape::from_types(shape_dims);
+
+                            // Create TensorType with the class as base_class
+                            let tensor_type = TensorType::new(cls.clone(), tensor_shape);
+                            self.infer_tensor_index(&tensor_type, slice, range, errors)
+                        }
+                    }
+                }
                 Type::ClassType(ref cls) | Type::SelfType(ref cls)
                     if let Some(tuple) = self.as_tuple(cls) =>
                 {
@@ -2090,6 +2165,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                         Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                     )
+                }
+                // Special handling for nn.ModuleDict with TypedDict type argument
+                Type::ClassType(ref cls) if is_nn_module_dict(cls) => {
+                    self.try_nn_module_dict_index(cls, &base, slice, range, errors)
                 }
                 Type::ClassType(_) | Type::SelfType(_) => self.call_method_or_error(
                     &base,
@@ -2196,6 +2275,173 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
+    /// Handle tensor indexing operations
+    /// - Integer index: reduces dimensionality by 1 (removes first dimension)
+    /// - Slice: preserves dimensionality (keeps all dimensions)
+    fn infer_tensor_index(
+        &self,
+        tensor_type: &TensorType,
+        index: &Expr,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        // Convert a slice bound expression to a dimension type.
+        let to_dim = |expr: &Expr| -> Type {
+            let ty = self.expr_infer(expr, errors);
+            match ty {
+                Type::Literal(ref lit) if let Some(val) = lit.value.as_index_i64() => {
+                    self.heap.mk_size(SizeExpr::Literal(val))
+                }
+                Type::Dim(ref inner_ty) => (**inner_ty).clone(),
+                Type::Quantified(_) | Type::Size(_) => ty.clone(),
+                _ => Type::any_implicit(),
+            }
+        };
+
+        // Classify a non-slice, non-ellipsis index expression into an IndexOp.
+        // Returns None to bail to shapeless for unclassifiable indices.
+        let classify_index_expr = |expr: &Expr| -> Option<IndexOp> {
+            let idx_ty = self.expr_infer(expr, errors);
+            if let Type::Tuple(ref tuple) = idx_ty {
+                return match tuple {
+                    Tuple::Concrete(elems) => Some(IndexOp::Fancy(Some(elems.len() as i64))),
+                    _ => None,
+                };
+            }
+            if let Type::ClassType(ref cls) = idx_ty
+                && cls.has_qname("builtins", "list")
+            {
+                return Some(IndexOp::Fancy(None));
+            }
+            let is_int = matches!(&idx_ty, Type::Literal(lit) if lit.value.as_index_i64().is_some())
+                || matches!(&idx_ty, Type::ClassType(cls) if cls.is_builtin("int"))
+                || matches!(&idx_ty, Type::Dim(_));
+            if is_int { Some(IndexOp::Int) } else { None }
+        };
+
+        // Classify any index expression (including slices) into an IndexOp.
+        let classify = |expr: &Expr| -> Option<IndexOp> {
+            match expr {
+                Expr::Slice(ExprSlice { lower, upper, .. }) => {
+                    let start = lower.as_ref().map(|e| to_dim(e));
+                    let stop = upper.as_ref().map(|e| to_dim(e));
+                    Some(IndexOp::Slice { start, stop })
+                }
+                _ => classify_index_expr(expr),
+            }
+        };
+
+        match index {
+            // Slice operation: tensor[start:stop]
+            Expr::Slice(ExprSlice { lower, upper, .. }) => {
+                let start = lower.as_ref().map(|e| to_dim(e));
+                let stop = upper.as_ref().map(|e| to_dim(e));
+                match index_shape_slice(&tensor_type.shape, start, stop) {
+                    Ok(shape) => TensorType::new(tensor_type.base_class.clone(), shape).to_type(),
+                    Err(err) => self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::BadIndex),
+                        err.to_string(),
+                    ),
+                }
+            }
+            // Bare ellipsis: tensor[...] - preserves entire shape
+            Expr::EllipsisLiteral(_) => tensor_type.clone().to_type(),
+            // Tuple index: tensor[:, -1, :] - apply each index to corresponding dimension
+            Expr::Tuple(ExprTuple { elts, .. }) => {
+                // Check for ellipsis and validate at most one
+                let mut ellipsis_pos: Option<usize> = None;
+                for (i, elt) in elts.iter().enumerate() {
+                    if matches!(elt, Expr::EllipsisLiteral(_)) {
+                        if ellipsis_pos.is_some() {
+                            return self.error(
+                                errors,
+                                range,
+                                ErrorInfo::Kind(ErrorKind::BadIndex),
+                                "Multiple ellipsis not allowed in tensor index".to_owned(),
+                            );
+                        }
+                        ellipsis_pos = Some(i);
+                    }
+                }
+
+                // Split indices at ellipsis into pre and post groups
+                let (pre_exprs, post_exprs) = match ellipsis_pos {
+                    Some(pos) => (&elts[..pos], &elts[pos + 1..]),
+                    None => (&elts[..], &elts[0..0]),
+                };
+
+                // Classify all index expressions into IndexOps
+                let pre_ops: Option<Vec<IndexOp>> = pre_exprs.iter().map(&classify).collect();
+                let post_ops: Option<Vec<IndexOp>> = post_exprs.iter().map(classify).collect();
+                let (Some(pre_ops), Some(post_ops)) = (pre_ops, post_ops) else {
+                    return TensorType::shapeless(tensor_type.base_class.clone()).to_type();
+                };
+
+                match index_shape_multi(
+                    &tensor_type.shape,
+                    &pre_ops,
+                    &post_ops,
+                    ellipsis_pos.is_some(),
+                ) {
+                    Ok(shape) => TensorType::new(tensor_type.base_class.clone(), shape).to_type(),
+                    Err(err) => self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::BadIndex),
+                        err.to_string(),
+                    ),
+                }
+            }
+            // Integer index, tensor index, or other
+            _ => {
+                let idx_type = self.expr_infer(index, errors);
+                let is_int_index = matches!(&idx_type, Type::Literal(lit) if lit.value.as_index_i64().is_some())
+                    || matches!(&idx_type, Type::ClassType(cls) if cls.is_builtin("int"));
+
+                if is_int_index {
+                    match index_shape_int(&tensor_type.shape) {
+                        Ok(shape) => {
+                            TensorType::new(tensor_type.base_class.clone(), shape).to_type()
+                        }
+                        Err(err) => self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::BadIndex),
+                            err.to_string(),
+                        ),
+                    }
+                } else if let Type::Tensor(ref idx_tensor) = idx_type {
+                    // Tensor indexing: tensor[index_tensor] replaces first dim with index shape
+                    let TensorShape::Concrete(idx_dims) = &idx_tensor.shape else {
+                        return TensorType::shapeless(tensor_type.base_class.clone()).to_type();
+                    };
+                    match index_shape_tensor(&tensor_type.shape, idx_dims) {
+                        Ok(shape) => {
+                            TensorType::new(tensor_type.base_class.clone(), shape).to_type()
+                        }
+                        Err(err) => self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::BadIndex),
+                            err.to_string(),
+                        ),
+                    }
+                } else {
+                    // Unknown index type - return shapeless
+                    TensorType::shapeless(tensor_type.base_class.clone()).to_type()
+                }
+            }
+        }
+    }
+
+    /// Check if a class is a tensor class (torch.Tensor)
+    fn is_tensor_class(&self, cls: &Class) -> bool {
+        cls.has_toplevel_qname("torch", "Tensor")
+    }
+
+    /// Check if a class is a Dim class (torch_shapes.Dim)
     fn is_symint_class(&self, cls: &Class) -> bool {
         cls.has_toplevel_qname("torch_shapes", "Dim")
     }
@@ -2340,13 +2586,94 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(dims)
     }
 
+    /// Check if a type is a valid TypeVarTuple (either directly or wrapped in Unpack).
+    /// Returns the unwrapped type if valid, None otherwise.
+    fn unwrap_type_var_tuple(ty: &Type) -> Option<Type> {
+        match ty {
+            Type::TypeVarTuple(_) => Some(ty.clone()),
+            Type::Quantified(q) if q.kind() == QuantifiedKind::TypeVarTuple => Some(ty.clone()),
+            Type::Unpack(inner) => Self::unwrap_type_var_tuple(inner),
+            _ => None,
+        }
+    }
+
+    /// Parse Tensor[2, 3] or Tensor["batch", 2, 3] or Tensor[N + M, K] or Tensor[2, *Shape, 4] into a TensorType
+    fn parse_tensor_type(&self, cls: &Class, shape_args: &[Expr], errors: &ErrorCollector) -> Type {
+        // Check if any argument is a starred expression (unpacked TypeVarTuple)
+        let star = shape_args
+            .iter()
+            .enumerate()
+            .find(|(_, arg)| matches!(arg, Expr::Starred(_)));
+
+        if let Some((star_idx, Expr::Starred(ExprStarred { value, .. }))) = star {
+            // Handle variadic shape: Tensor[2, *Shape, 4]
+            // Verify there's only one starred expression
+            if let Some(second) = shape_args[star_idx + 1..]
+                .iter()
+                .find(|arg| matches!(arg, Expr::Starred(_)))
+            {
+                self.error(
+                    errors,
+                    second.range(),
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    "Tensor shape can have at most one unpacked TypeVarTuple".to_owned(),
+                );
+                return Type::any_error();
+            }
+
+            // Parse prefix and suffix dimensions
+            let Some(prefix) = self.parse_dimension_list(&shape_args[..star_idx], errors) else {
+                return Type::any_error();
+            };
+            let Some(suffix) = self.parse_dimension_list(&shape_args[star_idx + 1..], errors)
+            else {
+                return Type::any_error();
+            };
+
+            // Parse the starred expression
+            let middle_ty = self.expr_untype(value, TypeFormContext::TypeArgument, errors);
+
+            // Verify and unwrap TypeVarTuple
+            let Some(middle_ty) = Self::unwrap_type_var_tuple(&middle_ty) else {
+                self.error(
+                    errors,
+                    value.range(),
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    format!(
+                        "Unpacked type in Tensor shape must be a TypeVarTuple, got `{}`",
+                        self.for_display(middle_ty)
+                    ),
+                );
+                return Type::any_error();
+            };
+
+            // Create the base class type
+            let base_class = self.promote_nontypeddict_silently_to_classtype(cls);
+
+            // Create variadic tensor shape
+            let tensor_shape = TensorShape::unpacked(prefix, middle_ty, suffix);
+            let tensor_type = TensorType::new(base_class, tensor_shape);
+
+            return tensor_type.to_type();
+        }
+
+        // No starred expression - parse as concrete shape
+        let Some(dims) = self.parse_dimension_list(shape_args, errors) else {
+            return Type::any_error();
+        };
+
+        // Create the base class type (with default type arguments if needed)
+        let base_class = self.promote_nontypeddict_silently_to_classtype(cls);
+
+        // Create the tensor type
+        let tensor_shape = TensorShape::from_types(dims);
+        let tensor_type = TensorType::new(base_class, tensor_shape);
+
+        tensor_type.to_type()
+    }
+
     /// Parse Dim[3], Dim[N], Dim[N+1] into Type::Dim(...)
-    fn parse_symint_type(
-        &self,
-        args: &[ruff_python_ast::Expr],
-        range: ruff_text_size::TextRange,
-        errors: &ErrorCollector,
-    ) -> Type {
+    fn parse_symint_type(&self, args: &[Expr], range: TextRange, errors: &ErrorCollector) -> Type {
         // Dim takes exactly one argument
         if args.len() != 1 {
             self.error(

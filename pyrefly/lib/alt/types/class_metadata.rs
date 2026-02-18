@@ -61,8 +61,11 @@ pub struct ClassMetadata {
     /// that were passed to the `dataclass_transform` call.
     dataclass_transform_metadata: Option<DataclassTransformMetadata>,
     pydantic_model_kind: Option<PydanticModelKind>,
+    is_attrs_class: bool,
     django_model_metadata: Option<DjangoModelMetadata>,
     is_marshmallow_schema: bool,
+    /// Whether this class is a metaclass (i.e., a subclass of `type`).
+    is_metaclass: bool,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -98,8 +101,10 @@ impl ClassMetadata {
         total_ordering_metadata: Option<TotalOrderingMetadata>,
         dataclass_transform_metadata: Option<DataclassTransformMetadata>,
         pydantic_model_kind: Option<PydanticModelKind>,
+        is_attrs_class: bool,
         django_model_metadata: Option<DjangoModelMetadata>,
         is_marshmallow_schema: bool,
+        is_metaclass: bool,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass,
@@ -120,8 +125,10 @@ impl ClassMetadata {
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
+            is_attrs_class,
             django_model_metadata,
             is_marshmallow_schema,
+            is_metaclass,
         }
     }
 
@@ -145,8 +152,10 @@ impl ClassMetadata {
             total_ordering_metadata: None,
             dataclass_transform_metadata: None,
             pydantic_model_kind: None,
+            is_attrs_class: false,
             django_model_metadata: None,
             is_marshmallow_schema: false,
+            is_metaclass: false,
         }
     }
 
@@ -185,6 +194,15 @@ impl ClassMetadata {
 
     pub fn is_marshmallow_schema(&self) -> bool {
         self.is_marshmallow_schema
+    }
+
+    /// Whether this class is a metaclass (i.e., a subclass of `type`).
+    pub fn is_metaclass(&self) -> bool {
+        self.is_metaclass
+    }
+
+    pub fn is_attrs_class(&self) -> bool {
+        self.is_attrs_class
     }
 
     pub fn pydantic_model_kind(&self) -> Option<PydanticModelKind> {
@@ -318,6 +336,12 @@ impl ClassSynthesizedField {
     pub fn new(ty: Type) -> Self {
         Self {
             inner: Arc::new(ClassField::new_synthesized(ty)),
+        }
+    }
+
+    pub fn new_classvar(ty: Type) -> Self {
+        Self {
+            inner: Arc::new(ClassField::new_synthesized_classvar(ty)),
         }
     }
 }

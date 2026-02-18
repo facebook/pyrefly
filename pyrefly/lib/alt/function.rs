@@ -572,6 +572,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
+        let contains_self_type = |ty: &Type| ty.any(|t| matches!(t, Type::SelfType(_)));
+
+        if def.metadata.flags.is_staticmethod && stmt.name.as_str() != dunder::NEW {
+            // For static methods, the use of `Self` is not allowed.
+            let signature_contains_self = contains_self_type(&ret)
+                || def.params.iter().any(|p| contains_self_type(p.as_type()));
+            if signature_contains_self {
+                self.error(
+                    errors,
+                    stmt.name.range,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    "`Self` cannot be used in a static method".to_owned(),
+                );
+            }
+        }
+
         let callable = if let Some(q) = &def.paramspec {
             Callable::concatenate(
                 def.params
@@ -1708,31 +1724,53 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         m: &BoundMethod,
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> Option<Type> {
-        self.bind_function(&m.func.clone().as_type(), &m.obj, is_subset)
+        self.bind_function(&m.func.clone().as_type(), &m.obj, false, is_subset)
     }
 
     pub fn bind_dunder_new(&self, t: &Type, cls: ClassType) -> Option<Type> {
         self.bind_function(
             t,
             &self.heap.mk_type_form(self.heap.mk_self_type(cls)),
+            false,
             &mut |a, b| self.is_subset_eq(a, b),
         )
     }
 
+    /// Bind a `__init__` method for constructor callable conversion.
+    /// Strips the first parameter and sets the return type to the first param's type.
+    /// Does not instantiate type variables (they should be inferred at the call site).
+    pub fn bind_dunder_init_for_callable(&self, m: &BoundMethod) -> Option<Type> {
+        let mut func_type = m.func.clone().as_type();
+        // For each callable, set its return type to its first param's type (i.e. `self`).
+        func_type.visit_toplevel_callable_mut(&mut |c: &mut Callable| {
+            if let Some(self_type) = c.get_first_param() {
+                c.ret = self_type;
+            }
+        });
+        self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)
+    }
+
     /// If this is an unbound callable (i.e., a callable that is not BoundMethod), strip the first parameter.
     /// If it is generic, we use the bound object to instantiate type variables in the first argument.
+    ///
+    /// If `skip_instantiation` is true, skip type variable instantiation (used for converting
+    /// constructors to callables, where type variables should be inferred at the call site).
     fn bind_function(
         &self,
         t: &Type,
         obj: &Type,
+        skip_instantiation: bool,
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> Option<Type> {
         let mut owner = Owner::new();
         match t {
             Type::Forall(forall) => match &forall.body {
                 Forallable::Callable(c) => c.split_first_param(&mut owner).map(|(param, c)| {
-                    let c =
-                        self.instantiate_callable_self(&forall.tparams, obj, param, c, is_subset);
+                    let c = if skip_instantiation {
+                        c
+                    } else {
+                        self.instantiate_callable_self(&forall.tparams, obj, param, c, is_subset)
+                    };
                     self.heap.mk_forall(Forall {
                         tparams: forall.tparams.clone(),
                         body: Forallable::Callable(c),
@@ -1740,13 +1778,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }),
                 Forallable::Function(f) => {
                     f.signature.split_first_param(&mut owner).map(|(param, c)| {
-                        let c = self.instantiate_callable_self(
-                            &forall.tparams,
-                            obj,
-                            param,
-                            c,
-                            is_subset,
-                        );
+                        let c = if skip_instantiation {
+                            c
+                        } else {
+                            self.instantiate_callable_self(
+                                &forall.tparams,
+                                obj,
+                                param,
+                                c,
+                                is_subset,
+                            )
+                        };
                         self.heap.mk_forall(Forall {
                             tparams: forall.tparams.clone(),
                             body: Forallable::Function(Function {
@@ -1785,13 +1827,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .signature
                         .split_first_param(&mut owner)
                         .map(|(param, c)| {
-                            let c = self.instantiate_callable_self(
-                                &forall.tparams,
-                                obj,
-                                param,
-                                c,
-                                is_subset,
-                            );
+                            let c = if skip_instantiation {
+                                c
+                            } else {
+                                self.instantiate_callable_self(
+                                    &forall.tparams,
+                                    obj,
+                                    param,
+                                    c,
+                                    is_subset,
+                                )
+                            };
                             OverloadType::Forall(Forall {
                                 tparams: forall.tparams.clone(),
                                 body: Function {

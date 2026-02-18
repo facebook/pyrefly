@@ -58,6 +58,7 @@ use crate::quantified::Quantified;
 use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
+use crate::tensor::TensorType;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
 use crate::type_var::TypeVar;
@@ -236,12 +237,14 @@ impl TArgs {
     }
 
     pub fn substitute_into_mut(&self, ty: &mut Type) {
-        if let Type::TypeAlias(box TypeAliasData::Ref(r)) = ty {
-            // We don't have the value of the type alias available to do the substitution, so store
-            // the targs so that we can apply them when the value is looked up.
-            r.args = Some(self.clone())
-        } else {
-            self.substitution().substitute_into_mut(ty)
+        match ty {
+            Type::TypeAlias(box TypeAliasData::Ref(r))
+            | Type::UntypedAlias(box TypeAliasData::Ref(r)) => {
+                // We don't have the value of the type alias available to do the substitution, so store
+                // the targs so that we can apply them when the value is looked up.
+                r.args = Some(self.clone())
+            }
+            _ => self.substitution().substitute_into_mut(ty),
         }
     }
 
@@ -589,6 +592,9 @@ pub enum Type {
     /// For a TypedDict type `C`, `Partial[C]` represents an object with any subset of read-write
     /// keys from `C`, where each present key has the same value type as in `C`.
     PartialTypedDict(TypedDict),
+    /// Tensor type with shape information
+    /// Example: Tensor[2, 3] represents a 2x3 tensor
+    Tensor(Box<TensorType>),
     /// Dimension value type - represents values that satisfy Dim bound
     /// Examples:
     ///   - Type::Size(SizeExpr::Literal(6)) for concrete dimension 6
@@ -694,6 +700,7 @@ impl Visit for Type {
             Type::ClassType(x) => x.visit(f),
             Type::TypedDict(x) => x.visit(f),
             Type::PartialTypedDict(x) => x.visit(f),
+            Type::Tensor(x) => x.visit(f),
             Type::Size(x) => x.visit(f),
             Type::Dim(x) => x.visit(f),
             Type::Tuple(x) => x.visit(f),
@@ -745,6 +752,7 @@ impl VisitMut for Type {
             Type::ClassType(x) => x.visit_mut(f),
             Type::TypedDict(x) => x.visit_mut(f),
             Type::PartialTypedDict(x) => x.visit_mut(f),
+            Type::Tensor(x) => x.visit_mut(f),
             Type::Size(x) => x.visit_mut(f),
             Type::Dim(x) => x.visit_mut(f),
             Type::Tuple(x) => x.visit_mut(f),
@@ -1403,29 +1411,6 @@ impl Type {
         }
     }
 
-    /// When a constructor is cast used as a callable, we need to set its return type to the instance type.
-    /// If a `self` type is in the callable, then this is set as the return type.
-    /// Otherwise, the return type is set to the class type.
-    /// This doesn't handle generics currently.
-    pub fn set_callable_return_type_for_constructor(&mut self, ret: Type) {
-        let mut set_ret = |callable: &mut Callable| {
-            match &callable.params {
-                Params::List(param_list)
-                    if let Some(first_param) = param_list.items().first()
-                        && let Param::Pos(_, ty, _) = first_param =>
-                {
-                    // Set the return type to the type of the first parameter
-                    // (i.e. `self`) if it exists and is positional.
-                    callable.ret = ty.clone();
-                }
-                _ => {
-                    callable.ret = ret.clone();
-                }
-            }
-        };
-        self.transform_toplevel_callable(&mut set_ret);
-    }
-
     pub fn callable_first_param(&self, heap: &TypeHeap) -> Option<Type> {
         let mut params = Vec::new();
         let mut get_param = |callable: &Callable| {
@@ -1494,14 +1479,6 @@ impl Type {
     /// This enables structural equality checking after canonicalization.
     pub fn canonicalize(self) -> Self {
         dimension::canonicalize(self)
-    }
-
-    /// Extract the literal value from a `SizeExpr::Literal`, if this is one.
-    pub fn as_shape_literal(&self) -> Option<i64> {
-        match self {
-            Type::Size(SizeExpr::Literal(n)) => Some(*n),
-            _ => None,
-        }
     }
 
     pub fn explicit_any(self) -> Self {
@@ -1647,6 +1624,14 @@ impl Type {
     pub fn as_quantified(&self) -> Option<Quantified> {
         match self {
             Type::Quantified(q) => Some((**q).clone()),
+            _ => None,
+        }
+    }
+
+    /// Extract the literal value from a `SizeExpr::Literal`, if this is one.
+    pub fn as_shape_literal(&self) -> Option<i64> {
+        match self {
+            Type::Size(SizeExpr::Literal(n)) => Some(*n),
             _ => None,
         }
     }

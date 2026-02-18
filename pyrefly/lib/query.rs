@@ -89,6 +89,7 @@ use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
+use crate::types::display::LspDisplayMode;
 use crate::types::display::TypeDisplayContext;
 
 const REPR: Name = Name::new_static("__repr__");
@@ -281,6 +282,7 @@ fn type_to_string(ty: &Type) -> String {
     let mut ctx = TypeDisplayContext::new(&[ty]);
     ctx.always_display_module_name();
     ctx.always_display_expanded_unions();
+    ctx.set_lsp_display_mode(LspDisplayMode::Query);
     if is_static_method(ty) {
         format!("typing.StaticMethod[{}]", ctx.display(ty))
     } else if let Some(bound) = bound_of_type_var(ty) {
@@ -1025,7 +1027,7 @@ impl Query {
                 Type::ClassType(c)
                     if c.name() == "classproperty" || c.name() == "cached_classproperty" =>
                 {
-                    let result_ty = c.targs().as_slice().get(1).unwrap();
+                    let result_ty = c.targs().as_slice().first().unwrap();
                     (Some(String::from("property")), result_ty)
                 }
                 _ => (None, ty),
@@ -1080,7 +1082,6 @@ impl Query {
                         }
                         _ => answers.get_idx(class_field_idx).map(|cf| cf.ty()),
                     };
-
                     let field_ty = field_ty?;
                     let (kind, field_ty) = get_kind_and_field_type(&field_ty);
 

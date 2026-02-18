@@ -1,0 +1,305 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pyrefly.org/schemas/pyrefly.json",
+  "title": "Pyrefly Configuration",
+  "description": "Configuration file for Pyrefly, a fast Python language server and type checker",
+  "type": "object",
+  "$defs": {
+    "errorSeverity": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "string", "enum": ["ignore", "info", "warn", "error"] }
+      ]
+    },
+    "configBase": {
+      "type": "object",
+      "properties": {
+        "errors": {
+          "description": "Configure the severity for each kind of error that Pyrefly emits. Set error code to true to enable (default severity), false to disable, or use a severity string ('ignore', 'info', 'warn', 'error'). Any valid Pyrefly error code can be used, not just the ones listed here.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/errorSeverity"
+          },
+          "properties": {
+            "bad-assignment": { "$ref": "#/$defs/errorSeverity" },
+            "bad-return": { "$ref": "#/$defs/errorSeverity" },
+            "missing-import": { "$ref": "#/$defs/errorSeverity" },
+            "invalid-argument": { "$ref": "#/$defs/errorSeverity" },
+            "assert-type": { "$ref": "#/$defs/errorSeverity" },
+            "bad-override": { "$ref": "#/$defs/errorSeverity" },
+            "incompatible-type": { "$ref": "#/$defs/errorSeverity" },
+            "unused-import": { "$ref": "#/$defs/errorSeverity" },
+            "undefined-variable": { "$ref": "#/$defs/errorSeverity" }
+          },
+          "default": {}
+        },
+        "disable-type-errors-in-ide": {
+          "description": "Disables type errors from showing up when running Pyrefly in an IDE. This is primarily used when Pyrefly is acting in a language-server-only mode.",
+          "type": "boolean",
+          "default": false
+        },
+        "replace-imports-with-any": {
+          "description": "Instruct Pyrefly to unconditionally replace the given module globs with typing.Any and ignore import errors for the module.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "ignore-missing-imports": {
+          "description": "Instruct Pyrefly to replace the given module globs with typing.Any and ignore import errors for the module only when the module can't be found.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "ignore-errors-in-generated-code": {
+          "description": "Whether to ignore type errors in generated code. If enabled, generated files will be treated as if they are included in project-excludes. The generated code status is determined by checking if the file contents contain the substring '@generated'.",
+          "type": "boolean",
+          "default": false
+        },
+        "infer-with-first-use": {
+          "description": "Whether to infer type variables not determined by a call or constructor based on their first usage. This includes empty containers like [] and {}. Default behavior is similar to Mypy.",
+          "type": "boolean",
+          "default": true
+        },
+        "untyped-def-behavior": {
+          "description": "How should Pyrefly treat function definitions with no parameter or return type annotations?",
+          "type": "string",
+          "enum": ["check-and-infer-return-type", "check-and-infer-return-any", "skip-and-infer-return-any"],
+          "default": "check-and-infer-return-type"
+        },
+        "permissive-ignores": {
+          "description": "Should Pyrefly ignore errors based on annotations from other tools, e.g. # pyre-ignore or # mypy: ignore? By default, respects # pyrefly: ignore and # type: ignore.",
+          "type": "boolean",
+          "default": false
+        },
+        "enabled-ignores": {
+          "description": "What set of tools should Pyrefly respect ignore directives from?",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["type", "pyrefly", "mypy", "pyright", "pyre", "ty"]
+          },
+          "default": ["type", "pyrefly"]
+        },
+        "tensor-shapes": {
+          "description": "Whether to enable tensor shape checking.",
+          "type": "boolean"
+        },
+        "recursion-depth-limit": {
+          "description": "Maximum recursion depth for type evaluation. Set to 0 to disable the limit.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "recursion-overflow-handler": {
+          "description": "How should Pyrefly handle recursion overflow during type evaluation?",
+          "type": "string",
+          "enum": ["break-with-placeholder", "panic-with-debug-info"],
+          "default": "break-with-placeholder"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "#/$defs/configBase"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "project-includes": {
+          "description": "The glob patterns used to describe which files to type check, typically understood as user-space files. This does not specify import resolution priority.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["**/*.py*", "**/*.ipynb"]
+        },
+        "project-excludes": {
+          "description": "The glob patterns used to describe which files to avoid type checking as a way to filter files that match project-includes.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["**/node_modules", "**/__pycache__", "**/venv/**", "**/.[!/.]*/**"]
+        },
+        "disable-project-excludes-heuristics": {
+          "description": "Disable automatic appending of default project-excludes patterns. When true, you have full control over project-excludes.",
+          "type": "boolean",
+          "default": false
+        },
+        "search-path": {
+          "description": "A list of directory paths describing the roots from which imports should be found and imported from. This takes the highest precedence in import order, before typeshed and site-package-path.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["."]
+        },
+        "disable-search-path-heuristics": {
+          "description": "Disable any search path heuristics/additional search path behavior that Pyrefly will attempt to do for you.",
+          "type": "boolean",
+          "default": false
+        },
+        "site-package-path": {
+          "description": "A list of directory paths describing roots from which imports should be found and imported from. This takes the lowest priority in import resolution, after search-path and typeshed.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "python-platform": {
+          "description": "The value used with conditions based on type checking against sys.platform values. Common values include 'linux', 'darwin', 'win32', but any valid sys.platform string is accepted.",
+          "type": "string",
+          "default": "linux",
+          "examples": ["linux", "darwin", "win32", "cygwin", "freebsd", "openbsd", "netbsd", "aix"]
+        },
+        "python-version": {
+          "description": "The Python version to use for type checking. Format: <major>[.<minor>[.<micro>]]",
+          "type": "string",
+          "default": "3.13.0",
+          "pattern": "^\\d+(\\.\\d+)?(\\.\\d+)?$"
+        },
+        "conda-environment": {
+          "description": "The name of the Conda environment to query when attempting to autoconfigure Python environment values.",
+          "type": "string"
+        },
+        "python-interpreter-path": {
+          "description": "The Python interpreter to query when attempting to autoconfigure Python environment values (site-package-path, python-platform, python-version).",
+          "type": "string"
+        },
+        "fallback-python-interpreter-name": {
+          "description": "The Python interpreter, available on your $PATH, to use. Pyrefly will perform 'which <your command>', and automatically fill in python-interpreter-path for you with the found path.",
+          "type": "string"
+        },
+        "skip-interpreter-query": {
+          "description": "Skip querying any interpreters and do not do any environment autoconfiguration. This means that Pyrefly will take hard-coded defaults for python-version and python-platform, and will use an empty site-package-path.",
+          "type": "boolean",
+          "default": false
+        },
+        "typeshed-path": {
+          "description": "Override the version of typeshed that's being used for type checking. The provided path should point to the root of typeshed.",
+          "type": "string"
+        },
+        "use-ignore-files": {
+          "description": "Whether to allow Pyrefly to use ignore files in your project and automatically add excluded files and directories to your project-excludes.",
+          "type": "boolean",
+          "default": true
+        },
+        "skip-lsp-config-indexing": {
+          "description": "Should Pyrefly try to index the project's files? Disabling this may speed up LSP operations on large projects.",
+          "type": "boolean",
+          "default": false
+        },
+        "baseline": {
+          "description": "Path to a baseline file for suppressing existing errors.",
+          "type": "string"
+        },
+        "build-system": {
+          "description": "Pyrefly supports integrating into build systems to discover targets to type check and their dependencies. Currently supports Buck2 and custom queries.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "description": "The type of build system.",
+              "type": "string",
+              "enum": ["buck", "custom"]
+            },
+            "ignore-if-build-system-missing": {
+              "description": "Whether to silently ignore the build system configuration if the build system is not found.",
+              "type": "boolean",
+              "default": false
+            },
+            "search-path-prefix": {
+              "description": "Prefix paths to prepend to search paths discovered by the build system.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "isolation-dir": {
+              "description": "The isolation dir for Buck2 to use.",
+              "type": "string"
+            },
+            "extras": {
+              "description": "Extra flags passed to Buck2.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "command": {
+              "description": "The command executed to query the build system about available targets.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "repo-root": {
+              "description": "The root directory of the repository for the build system.",
+              "type": "string"
+            }
+          },
+          "required": ["type"],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "type": {"const": "buck"}
+                }
+              },
+              "then": {
+                "not": {
+                  "required": ["command"]
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "type": {"const": "custom"}
+                }
+              },
+              "then": {
+                "required": ["command"],
+                "not": {
+                  "anyOf": [
+                    {"required": ["isolation-dir"]},
+                    {"required": ["extras"]}
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "sub-config": {
+          "description": "Override specific config values for matched paths in your project. SubConfigs allow fine-grained configuration based on filepath glob matching.",
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/configBase"
+              },
+              {
+                "type": "object",
+                "required": ["matches"],
+                "properties": {
+                  "matches": {
+                    "description": "A filesystem glob pattern detailing which files the config applies to.",
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "default": []
+        }
+      }
+    }
+  ],
+  "additionalProperties": true
+}

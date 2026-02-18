@@ -63,10 +63,14 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
+use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
+use crate::binding::binding::KeyYield;
+use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::NarrowUseLocation;
+use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
@@ -181,6 +185,10 @@ struct BindingsInner {
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
     pytest_info: Option<PytestBindingInfo>,
+    /// Yield and yield-from indices for each lambda that contains yields,
+    /// keyed by the lambda's TextRange. Populated at binding time so the
+    /// solver can look up yield info without re-walking the AST.
+    lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
 }
 
 impl Display for Bindings {
@@ -242,6 +250,8 @@ pub struct BindingsBuilder<'a> {
     pytest_info: Option<crate::binding::pytest::PytestBindingInfo>,
     /// BoundName lookups deferred until after AST traversal
     deferred_bound_names: Vec<DeferredBoundName>,
+    /// Yield and yield-from indices for lambdas that contain yields.
+    lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -289,6 +299,7 @@ impl Bindings {
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
+            lambda_yield_keys: Vec::new(),
         }))
     }
 
@@ -317,6 +328,14 @@ impl Bindings {
 
     pub(crate) fn pytest_info(&self) -> Option<&PytestBindingInfo> {
         self.0.pytest_info.as_ref()
+    /// Returns the yield and yield-from indices for a lambda at the given range,
+    /// or empty slices if the lambda has no yields.
+    pub fn lambda_yield_keys(&self, range: TextRange) -> (&[Idx<KeyYield>], &[Idx<KeyYieldFrom>]) {
+        self.0
+            .lambda_yield_keys
+            .iter()
+            .find(|(r, _, _)| *r == range)
+            .map_or((&[], &[]), |(_, yields, yield_froms)| (yields, yield_froms))
     }
 
     pub fn available_definitions(&self, position: TextSize) -> SmallSet<Idx<Key>> {
@@ -537,6 +556,7 @@ impl Bindings {
             semantic_syntax_errors: RefCell::new(Vec::new()),
             pytest_info,
             deferred_bound_names: Vec::new(),
+            lambda_yield_keys: Vec::new(),
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -608,6 +628,7 @@ impl Bindings {
             unused_imports: builder.unused_imports,
             unused_variables: builder.unused_variables,
             pytest_info: builder.pytest_info,
+            lambda_yield_keys: builder.lambda_yield_keys,
         }))
     }
 
@@ -835,6 +856,17 @@ impl<'a> BindingsBuilder<'a> {
         self.unused_variables.extend(unused);
     }
 
+    /// Record the yield and yield-from binding indices for a lambda expression.
+    pub fn record_lambda_yield_keys(
+        &mut self,
+        range: TextRange,
+        yield_keys: Box<[Idx<KeyYield>]>,
+        yield_from_keys: Box<[Idx<KeyYieldFrom>]>,
+    ) {
+        self.lambda_yield_keys
+            .push((range, yield_keys, yield_from_keys));
+    }
+
     pub fn record_used_imports_from_dunder_all_names<T>(&mut self, dunder_all_names: T)
     where
         T: Iterator<Item = &'a Name>,
@@ -1052,6 +1084,28 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::NameAssign { expr: value, .. } => {
                     return self.as_special_export_inner(value, visited_names, visited_keys);
                 }
+                Binding::Import(module_name, name, _) => {
+                    return self.lookup.is_special_export(*module_name, name);
+                }
+                Binding::Phi(_, branches) => {
+                    // Check all branches for a consistent special export (e.g. try/except
+                    // importing Literal from typing vs typing_extensions).
+                    let mut result = None;
+                    for branch in branches {
+                        let branch_result = self.special_export_from_binding_idx(
+                            branch.value_key,
+                            visited_names,
+                            visited_keys,
+                        );
+                        match (&result, &branch_result) {
+                            (None, _) => result = branch_result,
+                            (_, None) => {}
+                            (Some(a), Some(b)) if a == b => {}
+                            _ => return None,
+                        }
+                    }
+                    return result;
+                }
                 _ => return None,
             }
         }
@@ -1204,6 +1258,26 @@ impl<'a> BindingsBuilder<'a> {
         def_to_upstreams: &SmallMap<Idx<Key>, Idx<Key>>,
         first_uses_to_add: &mut SmallMap<Idx<Key>, Vec<Idx<Key>>>,
     ) {
+        // For TypeAliasRhs usage, check if the name resolves to a type
+        // alias and produce a TypeAliasRef binding. This covers both
+        // self-references and cross-references to other aliases in the
+        // same module. The expansion step in wrap_type_alias inlines
+        // non-recursive Refs at solve time.
+        if matches!(deferred.usage, Usage::TypeAliasRhs)
+            && let Some((name, key_type_alias, tparams)) =
+                self.follow_to_type_alias(deferred.lookup_result_idx)
+        {
+            self.insert_binding_idx(
+                deferred.bound_name_idx,
+                Binding::TypeAliasRef {
+                    name,
+                    key_type_alias,
+                    tparams,
+                },
+            );
+            return;
+        }
+
         // Follow Forward chains to find any partial type
         let (default_idx, partial_type_info) =
             self.follow_to_partial_type(deferred.lookup_result_idx);
@@ -1211,7 +1285,10 @@ impl<'a> BindingsBuilder<'a> {
         if let Some((pinned_idx, unpinned_idx, first_use)) = partial_type_info {
             let is_narrowing = matches!(deferred.usage, Usage::Narrowing(_));
 
-            if matches!(deferred.usage, Usage::StaticTypeInformation) {
+            if matches!(
+                deferred.usage,
+                Usage::StaticTypeInformation | Usage::TypeAliasRhs
+            ) {
                 self.mark_does_not_pin_if_first_use(pinned_idx);
                 self.insert_binding_idx(deferred.bound_name_idx, Binding::Forward(pinned_idx));
                 return;
@@ -1332,6 +1409,54 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    /// Follow Forward chains to find a TypeAlias binding.
+    /// Returns `Some((name, key_type_alias, tparams))` if the chain ends at
+    /// a `Binding::TypeAlias`, or `None` otherwise.
+    fn follow_to_type_alias(
+        &self,
+        start_idx: Idx<Key>,
+    ) -> Option<(Name, Idx<KeyTypeAlias>, TypeAliasParams)> {
+        let mut current = start_idx;
+        let mut seen = SmallSet::new();
+        loop {
+            if seen.contains(&current) {
+                return None;
+            }
+            seen.insert(current);
+            match self.idx_to_binding(current) {
+                Some(Binding::Forward(target)) => {
+                    current = *target;
+                }
+                Some(Binding::TypeAlias {
+                    name,
+                    key_type_alias,
+                    tparams,
+                    ..
+                }) => {
+                    return Some((name.clone(), *key_type_alias, tparams.clone()));
+                }
+                Some(Binding::CompletedPartialType(target, _))
+                | Some(Binding::PartialTypeWithUpstreamsCompleted(target, _)) => {
+                    current = *target;
+                }
+                // In legacy type alias RHS processing, all names go through
+                // intercept_lookup which wraps them in PossibleLegacyTParam.
+                // By finalize time we can follow through to the original
+                // binding to check whether it's actually a type alias.
+                Some(Binding::PossibleLegacyTParam(tparam_idx, _)) => {
+                    if let Some(legacy_binding) = self.idx_to_binding(*tparam_idx) {
+                        current = legacy_binding.idx();
+                    } else {
+                        return None;
+                    }
+                }
+                _ => {
+                    return None;
+                }
+            }
+        }
+    }
+
     /// Mark a CompletedPartialType as used by a specific binding.
     fn mark_first_use(&mut self, partial_type_idx: Idx<Key>, user_idx: Idx<Key>) {
         if let Some(Binding::CompletedPartialType(_, first_use)) =
@@ -1404,6 +1529,7 @@ impl<'a> BindingsBuilder<'a> {
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
         self.check_for_type_alias_redefinition(name, idx);
+        self.check_for_imported_final_reassignment(name, idx);
         let name = Hashed::new(name);
         let write_info = self
             .scopes
@@ -1426,20 +1552,37 @@ impl<'a> BindingsBuilder<'a> {
         if let Some(prev_idx) = prev_idx {
             if matches!(
                 self.idx_to_binding(prev_idx),
-                Some(Binding::TypeAlias { .. })
+                Some(Binding::TypeAlias { .. } | Binding::TypeAliasRef { .. })
             ) {
                 self.error(
                     self.idx_to_key(idx).range(),
                     ErrorInfo::Kind(ErrorKind::Redefinition),
                     format!("Cannot redefine existing type alias `{name}`",),
                 )
-            } else if matches!(self.idx_to_binding(idx), Some(Binding::TypeAlias { .. })) {
+            } else if matches!(
+                self.idx_to_binding(idx),
+                Some(Binding::TypeAlias { .. } | Binding::TypeAliasRef { .. })
+            ) {
                 self.error(
                     self.idx_to_key(idx).range(),
                     ErrorInfo::Kind(ErrorKind::Redefinition),
                     format!("Cannot redefine existing name `{name}` as a type alias",),
                 );
             }
+        }
+    }
+
+    fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
+        let prev_idx = self.scopes.current_flow_idx(name);
+        if let Some(prev_idx) = prev_idx
+            && let Some(Binding::Import(module, original_name, _)) = self.idx_to_binding(prev_idx)
+            && self.lookup.is_final(*module, original_name)
+        {
+            self.error(
+                self.idx_to_key(idx).range(),
+                ErrorInfo::Kind(ErrorKind::BadAssignment),
+                format!("Cannot assign to `{name}` because it is imported as final"),
+            );
         }
     }
 

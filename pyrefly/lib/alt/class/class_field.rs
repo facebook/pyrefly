@@ -26,6 +26,7 @@ use pyrefly_types::literal::LitStyle;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::read_only::IsFinalVariableInitialized;
 use pyrefly_types::simplify::unions;
+use pyrefly_types::tensor::TensorType;
 use pyrefly_types::type_var::PreInferenceVariance;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDictInner;
@@ -67,6 +68,7 @@ use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::error::signature_diff::render_signature_diff;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
@@ -76,6 +78,8 @@ use crate::types::callable::Param;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::display::LspDisplayMode;
+use crate::types::display::TypeDisplayContext;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::literal::Lit;
 use crate::types::quantified::Quantified;
@@ -406,7 +410,17 @@ impl ClassField {
     }
 
     pub fn new_synthesized(ty: Type) -> Self {
-        // Detect if this is a property and construct the appropriate variant
+        Self::new_synthesized_inner(ty, false)
+    }
+
+    /// Like `new_synthesized`, but marks the field as a ClassVar.
+    pub fn new_synthesized_classvar(ty: Type) -> Self {
+        Self::new_synthesized_inner(ty, true)
+    }
+
+    fn new_synthesized_inner(ty: Type, is_classvar: bool) -> Self {
+        // Detect if this is a property and construct the appropriate variant.
+        // Properties and methods are never ClassVars.
         if ty.is_property_getter() || ty.is_property_setter_with_getter().is_some() {
             ClassField(
                 ClassFieldInner::Property {
@@ -432,7 +446,7 @@ impl ClassField {
                     annotation: None,
                     initialization: ClassFieldInitialization::ClassBody(None),
                     read_only_reason: None,
-                    is_classvar: false,
+                    is_classvar,
                     is_staticmethod: false,
                     is_foreign_key: false,
                     has_choices: false,
@@ -886,6 +900,22 @@ impl ClassField {
         }
     }
 
+    /// Returns true if this field is a non-ClassVar, non-staticmethod data attribute.
+    /// This includes both annotation-only declarations (`x: int`) and assignments (`x: int = 1`).
+    /// Such fields should not count as proper class-level attributes when checking a class object
+    /// against a protocol, because they are instance variables (or defaults for instance creation),
+    /// not attributes on the class object itself.
+    pub fn is_non_classvar_data_attribute(&self) -> bool {
+        matches!(
+            &self.0,
+            ClassFieldInner::ClassAttribute {
+                is_classvar: false,
+                is_staticmethod: false,
+                ..
+            }
+        )
+    }
+
     pub fn is_uninit_class_var(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { .. } => false,
@@ -1082,6 +1112,8 @@ enum InstanceKind {
     Protocol(Type),
     Metaclass(ClassBase),
     LiteralString,
+    /// Tensor instance: Self is substituted with the full tensor type (including shape).
+    Tensor(TensorType),
 }
 
 /// Wrapper to hold a specialized instance of a class , unifying ClassType and TypedDict.
@@ -1149,6 +1181,14 @@ impl<'a> Instance<'a> {
         }
     }
 
+    fn of_tensor(tensor: &'a TensorType) -> Self {
+        Self {
+            kind: InstanceKind::Tensor(tensor.clone()),
+            class: tensor.base_class.class_object(),
+            targs: tensor.base_class.targs(),
+        }
+    }
+
     /// Instantiate a type that is relative to the class type parameters
     /// by substituting in the type arguments.
     fn instantiate_member(&self, raw_member: &mut Type) {
@@ -1170,6 +1210,7 @@ impl<'a> Instance<'a> {
             InstanceKind::Protocol(self_type) => self_type.clone(),
             InstanceKind::Metaclass(cls) => cls.clone().to_type(heap),
             InstanceKind::LiteralString => heap.mk_literal_string(LitStyle::Implicit),
+            InstanceKind::Tensor(tensor) => tensor.clone().to_type(),
         }
     }
 
@@ -1202,7 +1243,8 @@ impl<'a> Instance<'a> {
             | InstanceKind::Protocol(..)
             | InstanceKind::Metaclass(..)
             | InstanceKind::TypeVar(..)
-            | InstanceKind::LiteralString => Some(DescriptorBase::Instance(ClassType::new(
+            | InstanceKind::LiteralString
+            | InstanceKind::Tensor(..) => Some(DescriptorBase::Instance(ClassType::new(
                 self.class.dupe(),
                 self.targs.clone(),
             ))),
@@ -1371,6 +1413,13 @@ fn is_method(
     }
 
     false
+}
+
+/// Error information for class member override inconsistencies.
+struct OverrideError {
+    kind: ErrorKind,
+    message: String,
+    diff_lines: Vec<String>,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -3026,38 +3075,103 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             let error = match attr_check {
                 Err(
-                    AttrSubsetError::Covariant {
+                    box (AttrSubsetError::Covariant {
                         subset_error: SubsetError::PosParamName(child, parent),
+                        ref got,
+                        ref want,
                         ..
                     }
                     | AttrSubsetError::Invariant {
                         subset_error: SubsetError::PosParamName(child, parent),
+                        ref got,
+                        ref want,
                         ..
                     }
                     | AttrSubsetError::Contravariant {
                         subset_error: SubsetError::PosParamName(child, parent),
+                        ref got,
+                        ref want,
                         ..
-                    },
-                ) => Some((
-                    ErrorKind::BadParamNameOverride,
-                    format!("Got parameter name `{child}`, expected `{parent}`"),
-                )),
-                Err(error) => Some((
-                    ErrorKind::BadOverride,
-                    error.to_error_msg(cls.name(), parent.name(), field_name),
-                )),
+                    }),
+                ) if {
+                    // Only use PosParamName when both signatures have the same
+                    // number of parameters. When the counts differ, the name
+                    // mismatch is an artifact of comparing misaligned parameter
+                    // lists (e.g., a lambda whose `self` wasn't stripped by
+                    // method binding). In that case, fall through to BadOverride
+                    // so we get the signature diff.
+                    let got_sigs = got.callable_signatures();
+                    let want_sigs = want.callable_signatures();
+                    got_sigs.len() == 1
+                        && want_sigs.len() == 1
+                        && got_sigs[0].arg_counts().positional.max
+                            == want_sigs[0].arg_counts().positional.max
+                } =>
+                {
+                    Some(OverrideError {
+                        kind: ErrorKind::BadParamNameOverride,
+                        message: format!("Got parameter name `{child}`, expected `{parent}`"),
+                        diff_lines: Vec::new(),
+                    })
+                }
+                Err(error) => {
+                    let mut diff_lines = Vec::new();
+                    if let AttrSubsetError::Covariant { got, want, .. }
+                    | AttrSubsetError::Invariant { got, want, .. }
+                    | AttrSubsetError::Contravariant { got, want, .. } = &*error
+                    {
+                        let got_sigs = got.callable_signatures();
+                        let want_sigs = want.callable_signatures();
+                        if got_sigs.len() == 1 && want_sigs.len() == 1 {
+                            let mut ctx = TypeDisplayContext::new(&[got, want]);
+                            ctx.set_lsp_display_mode(LspDisplayMode::SignatureHelp);
+                            let got_sig = ctx.display(got).to_string();
+                            let want_sig = ctx.display(want).to_string();
+
+                            // Normalize function names so both lines show the
+                            // attribute name, not the original function name
+                            // (e.g., when `method = helper`).
+                            let normalize_name = |sig: &str| -> String {
+                                if let Some(rest) = sig.strip_prefix("def ")
+                                    && let Some(paren) = rest.find('(')
+                                {
+                                    return format!("def {field_name}{}", &rest[paren..]);
+                                }
+                                sig.to_owned()
+                            };
+                            let got_sig = normalize_name(&got_sig);
+                            let want_sig = normalize_name(&want_sig);
+
+                            if let Some(lines) = render_signature_diff(&want_sig, &got_sig) {
+                                diff_lines = lines;
+                            }
+                        }
+                    }
+
+                    Some(OverrideError {
+                        kind: ErrorKind::BadOverride,
+                        message: error.to_error_msg(cls.name(), parent.name(), field_name),
+                        diff_lines,
+                    })
+                }
                 Ok(()) => None,
             };
-            if let Some((kind, error)) = error {
-                let msg = vec1![
+            if let Some(OverrideError {
+                kind,
+                message,
+                diff_lines: extra_lines,
+            }) = error
+            {
+                let mut msg = vec1![
                     format!(
                         "Class member `{}.{}` overrides parent class `{}` in an inconsistent manner",
                         cls.name(),
                         field_name,
                         parent.name()
                     ),
-                    error,
+                    message,
                 ];
+                msg.extend(extra_lines);
                 errors.add(range, ErrorInfo::Kind(kind), msg);
             }
         }
@@ -3411,11 +3525,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub(in crate::alt::class) fn get_class_member(
-        &self,
-        cls: &Class,
-        name: &Name,
-    ) -> Option<Arc<ClassField>> {
+    pub(crate) fn get_class_member(&self, cls: &Class, name: &Name) -> Option<Arc<ClassField>> {
         self.get_class_member_with_defining_class(cls, name)
             .map(|member| member.value)
     }
@@ -3428,6 +3538,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_self_attribute(&self, cls: &ClassType, name: &Name) -> Option<ClassAttribute> {
         self.get_class_member(cls.class_object(), name)
             .map(|field| self.as_instance_attribute(name, &field, &Instance::of_self_type(cls)))
+    }
+
+    /// Look up an attribute on a tensor instance, substituting Self with the full tensor type.
+    pub fn get_tensor_attribute(&self, tensor: &TensorType, name: &Name) -> Option<ClassAttribute> {
+        self.get_class_member(tensor.base_class.class_object(), name)
+            .map(|field| self.as_instance_attribute(name, &field, &Instance::of_tensor(tensor)))
     }
 
     pub fn get_protocol_attribute(
@@ -4003,41 +4119,57 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         got: &ClassAttribute,
         want: &ClassAttribute,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
-    ) -> Result<(), AttrSubsetError> {
+    ) -> Result<(), Box<AttrSubsetError>> {
         match (got, want) {
-            (_, ClassAttribute::NoAccess(_)) => Ok(()),
-            (ClassAttribute::NoAccess(_), _) => Err(AttrSubsetError::NoAccess),
+            (_, ClassAttribute::NoAccess(_)) => return Ok(()),
+            (ClassAttribute::NoAccess(_), _) => return Err(Box::new(AttrSubsetError::NoAccess)),
+            _ => {}
+        }
+        let got_is_classvar = matches!(got, ClassAttribute::ReadOnly(_, ReadOnlyReason::ClassVar));
+        let want_is_classvar =
+            matches!(want, ClassAttribute::ReadOnly(_, ReadOnlyReason::ClassVar));
+        if got_is_classvar != want_is_classvar {
+            return Err(Box::new(AttrSubsetError::ClassVarMismatch {
+                got_is_classvar,
+            }));
+        }
+        match (got, want) {
+            (_, ClassAttribute::NoAccess(_)) | (ClassAttribute::NoAccess(_), _) => {
+                unreachable!("handled above")
+            }
             (
                 ClassAttribute::Property(_, _, _),
                 ClassAttribute::ReadOnly(..) | ClassAttribute::ReadWrite(..),
-            ) => Err(AttrSubsetError::Property),
+            ) => Err(Box::new(AttrSubsetError::Property)),
             (
                 ClassAttribute::ReadOnly(..),
                 ClassAttribute::Property(_, Some(_), _) | ClassAttribute::ReadWrite(_),
-            ) => Err(AttrSubsetError::ReadOnly),
+            ) => Err(Box::new(AttrSubsetError::ReadOnly)),
             (
                 // TODO(stroxler): Investigate this case more: methods should be ReadOnly, but
                 // in some cases for unknown reasons they wind up being ReadWrite.
                 ClassAttribute::ReadWrite(got),
                 ClassAttribute::ReadWrite(want),
             ) if got.has_toplevel_func_metadata() && want.has_toplevel_func_metadata() => {
-                is_subset(got, want).map_err(|subset_error| AttrSubsetError::Covariant {
-                    got: got.clone(),
-                    want: want.clone(),
-                    got_is_property: false,
-                    want_is_property: false,
-                    subset_error,
+                is_subset(got, want).map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got: got.clone(),
+                        want: want.clone(),
+                        got_is_property: false,
+                        want_is_property: false,
+                        subset_error,
+                    })
                 })
             }
             (ClassAttribute::ReadWrite(got), ClassAttribute::ReadWrite(want)) => {
                 let subset_error = is_subset(got, want)
                     .map_or_else(Some, |_| is_subset(want, got).map_or_else(Some, |_| None));
                 if let Some(subset_error) = subset_error {
-                    Err(AttrSubsetError::Invariant {
+                    Err(Box::new(AttrSubsetError::Invariant {
                         got: got.clone(),
                         want: want.clone(),
                         subset_error,
-                    })
+                    }))
                 } else {
                     Ok(())
                 }
@@ -4045,12 +4177,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (
                 ClassAttribute::ReadWrite(got) | ClassAttribute::ReadOnly(got, ..),
                 ClassAttribute::ReadOnly(want, _),
-            ) => is_subset(got, want).map_err(|subset_error| AttrSubsetError::Covariant {
-                got: got.clone(),
-                want: want.clone(),
-                got_is_property: false,
-                want_is_property: false,
-                subset_error,
+            ) => is_subset(got, want).map_err(|subset_error| {
+                Box::new(AttrSubsetError::Covariant {
+                    got: got.clone(),
+                    want: want.clone(),
+                    got_is_property: false,
+                    want_is_property: false,
+                    subset_error,
+                })
             }),
             (ClassAttribute::ReadOnly(got, _), ClassAttribute::Property(want, _, _)) => {
                 is_subset(
@@ -4058,12 +4192,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &self.heap.mk_callable_ellipsis(got.clone()),
                     want,
                 )
-                .map_err(|subset_error| AttrSubsetError::Covariant {
-                    got: got.clone(),
-                    want: want.clone(),
-                    got_is_property: false,
-                    want_is_property: true,
-                    subset_error,
+                .map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got: got.clone(),
+                        want: want.clone(),
+                        got_is_property: false,
+                        want_is_property: true,
+                        subset_error,
+                    })
                 })
             }
             (ClassAttribute::ReadWrite(got), ClassAttribute::Property(want, want_setter, _)) => {
@@ -4088,11 +4224,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.heap.mk_none(),
                         ),
                     )
-                    .map_err(|subset_error| AttrSubsetError::Contravariant {
-                        want: want_setter.clone(),
-                        got: got.clone(),
-                        got_is_property: true,
-                        subset_error,
+                    .map_err(|subset_error| {
+                        Box::new(AttrSubsetError::Contravariant {
+                            want: want_setter.clone(),
+                            got: got.clone(),
+                            got_is_property: true,
+                            subset_error,
+                        })
                     })
                 } else {
                     Ok(())
@@ -4103,23 +4241,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ClassAttribute::Property(want_getter, want_setter, _),
             ) => {
                 is_subset(got_getter, want_getter).map_err(|subset_error| {
-                    AttrSubsetError::Covariant {
+                    Box::new(AttrSubsetError::Covariant {
                         got: got_getter.clone(),
                         want: want_getter.clone(),
                         got_is_property: true,
                         want_is_property: true,
                         subset_error,
-                    }
+                    })
                 })?;
                 match (got_setter, want_setter) {
                     (Some(got_setter), Some(want_setter)) => is_subset(got_setter, want_setter)
-                        .map_err(|subset_error| AttrSubsetError::Contravariant {
-                            want: want_setter.clone(),
-                            got: got_setter.clone(),
-                            got_is_property: true,
-                            subset_error,
+                        .map_err(|subset_error| {
+                            Box::new(AttrSubsetError::Contravariant {
+                                want: want_setter.clone(),
+                                got: got_setter.clone(),
+                                got_is_property: true,
+                                subset_error,
+                            })
                         }),
-                    (None, Some(_)) => Err(AttrSubsetError::ReadOnly),
+                    (None, Some(_)) => Err(Box::new(AttrSubsetError::ReadOnly)),
                     (_, None) => Ok(()),
                 }
             }
@@ -4129,16 +4269,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ) => {
                 let got_ty = self.heap.mk_class_type(got_cls.clone());
                 let want_ty = self.heap.mk_class_type(want_cls.clone());
-                is_subset(&got_ty, &want_ty).map_err(|subset_error| AttrSubsetError::Covariant {
-                    got: got_ty,
-                    want: want_ty,
-                    got_is_property: false,
-                    want_is_property: false,
-                    subset_error,
+                is_subset(&got_ty, &want_ty).map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got: got_ty,
+                        want: want_ty,
+                        got_is_property: false,
+                        want_is_property: false,
+                        subset_error,
+                    })
                 })
             }
             (ClassAttribute::Descriptor(..), _) | (_, ClassAttribute::Descriptor(..)) => {
-                Err(AttrSubsetError::Descriptor)
+                Err(Box::new(AttrSubsetError::Descriptor))
             }
         }
     }
@@ -4230,14 +4372,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Return `__call__` as a bound method if instances of `cls` have `__call__`.
     /// This is what the runtime automatically does when we try to call an instance.
     pub fn instance_as_dunder_call(&self, cls: &ClassType) -> Option<Type> {
-        self.get_instance_attribute(cls, &dunder::CALL)
-            .and_then(|attr| attr.as_instance_method())
+        let attr = self.get_instance_attribute(cls, &dunder::CALL)?;
+        self.resolve_dunder_call_attr(attr)
     }
 
     /// Return `__call__` as bound method when called on `Self`.
     pub fn self_as_dunder_call(&self, cls: &ClassType) -> Option<Type> {
-        self.get_self_attribute(cls, &dunder::CALL)
-            .and_then(|attr| attr.as_instance_method())
+        let attr = self.get_self_attribute(cls, &dunder::CALL)?;
+        self.resolve_dunder_call_attr(attr)
     }
 
     /// Return `__call__` as a bound method if instances of `type_var` have `__call__`.
@@ -4248,8 +4390,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         quantified: Quantified,
         upper_bound: &ClassType,
     ) -> Option<Type> {
-        self.get_bounded_quantified_attribute(quantified, upper_bound, &dunder::CALL)
-            .and_then(|attr| attr.as_instance_method())
+        let attr = self.get_bounded_quantified_attribute(quantified, upper_bound, &dunder::CALL)?;
+        self.resolve_dunder_call_attr(attr)
     }
 
     fn callable_params_and_flags(mut ty: Type) -> Option<(ParamList, FuncFlags)> {
@@ -4265,5 +4407,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => None,
         }?;
         Some((params, flags))
+    }
+
+    fn resolve_dunder_call_attr(&self, attr: ClassAttribute) -> Option<Type> {
+        let errors = self.error_swallower();
+        // The range is only used for error reporting, and the error swallower
+        // discards all errors, so a default range is fine here.
+        let fake_range = TextRange::default();
+        self.resolve_get_class_attr(&dunder::CALL, attr, fake_range, &errors, None)
+            .ok()
     }
 }

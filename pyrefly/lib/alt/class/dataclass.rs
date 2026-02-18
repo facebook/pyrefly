@@ -154,7 +154,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         fields.insert(
             dunder::DATACLASS_FIELDS,
-            ClassSynthesizedField::new(self.heap.mk_class_type(dataclass_fields_type)),
+            ClassSynthesizedField::new_classvar(self.heap.mk_class_type(dataclass_fields_type)),
         );
 
         if dataclass.kws.order {
@@ -619,7 +619,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }))
                 .unwrap(),
-                (*overload.metadata).clone(),
+                &overload.metadata,
                 None,
                 &args.args.map(CallArg::expr_maybe_starred),
                 &args.keywords.map(CallKeyword::new),

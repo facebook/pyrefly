@@ -12,7 +12,6 @@ use std::cell::RefMut;
 use std::fmt;
 use std::fmt::Display;
 use std::mem;
-use std::sync::Arc;
 
 use pyrefly_types::dimension::ShapeError;
 use pyrefly_types::dimension::simplify;
@@ -20,9 +19,8 @@ use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
-use pyrefly_types::type_alias::TypeAliasData;
-use pyrefly_types::type_alias::TypeAliasRef;
-use pyrefly_types::types::Forallable;
+use pyrefly_types::tensor::TensorShape;
+use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -100,13 +98,6 @@ enum Variable {
     /// A loop-recursive variable, e.g. `x = None; while x is None: x = f()`
     /// The Variable tracks the prior type bound to this name before the loop.
     LoopRecursive(Type, LoopBound),
-    /// A reference to a recursive type alias, like `type X = int | list[X]`.
-    ///
-    /// These are created when, in the process of inferring a type for the RHS of a type alias,
-    /// we encounter the name of the same alias. Unlike most other variables, AliasRecursive
-    /// represents a known, fixed type and exists so that we can reference the type before we've
-    /// finished computing it.
-    AliasRecursive(TypeAliasRef, Arc<TParams>),
     /// A variable that used to decompose a type, e.g. getting T from Awaitable[T]
     Unwrap,
     /// A variable used for a parameter type (either a function or lambda parameter).
@@ -161,7 +152,6 @@ impl Display for Variable {
                 }
             }
             Variable::LoopRecursive(t, _) => write!(f, "LoopRecursive(prior={t}, _)"),
-            Variable::AliasRecursive(r, _) => write!(f, "AliasRecursive({})", r.name),
             Variable::Recursive => write!(f, "Recursive"),
             Variable::Parameter => write!(f, "Parameter"),
             Variable::Unwrap => write!(f, "Unwrap"),
@@ -372,13 +362,13 @@ impl Solver {
                 None
             }
             Variable::Quantified(q) => {
-                let unfinished_quantified = q.clone();
-                *variable = Variable::Answer(q.as_gradual_type());
                 // A Variable::Quantified should always be finished (see `finish_quantified`) by
                 // the code that creates it, because we need to know when we're done collecting
                 // constraints. If we see a Quantified while pinning other placeholder types, that
                 // means we forgot to finish it.
-                Some(PinError::UnfinishedQuantified(unfinished_quantified))
+                let result = Some(PinError::UnfinishedQuantified(q.clone()));
+                *variable = Variable::Answer(q.as_gradual_type());
+                result
             }
             Variable::PartialQuantified(q) => {
                 if pin_partial_types {
@@ -394,10 +384,6 @@ impl Solver {
             Variable::PartialContained(_) => None,
             Variable::Unwrap => {
                 *variable = Variable::Answer(self.heap.mk_any_implicit());
-                None
-            }
-            Variable::AliasRecursive(r, tparams) => {
-                *variable = Variable::Answer(Self::finish_alias_recursive(r, tparams));
                 None
             }
             Variable::Parameter => {
@@ -460,6 +446,8 @@ impl Solver {
         }
     }
 
+    /// Public wrapper to expand a dimension type by resolving bound Vars.
+    /// Used by subset checking to expand Vars before comparing dimension expressions.
     pub fn expand_dimension(&self, dim_ty: &mut Type) {
         self.expand_with_limit(dim_ty, TYPE_LIMIT, &VarRecurser::new());
     }
@@ -480,9 +468,6 @@ impl Solver {
                 let ty = match &mut *e {
                     Variable::Quantified(q) => q.as_gradual_type(),
                     Variable::PartialQuantified(q) => q.as_gradual_type(),
-                    Variable::AliasRecursive(r, tparams) => {
-                        Self::finish_alias_recursive(r, tparams)
-                    }
                     _ => self.heap.mk_any_implicit(),
                 };
                 *e = Variable::Answer(ty.clone());
@@ -558,6 +543,32 @@ impl Solver {
                 *x = self
                     .heap
                     .mk_tuple(simplify_tuples(mem::take(tuple), &self.heap));
+            }
+            // Flatten Tensor[prefix, *tuple[...], suffix] after TypeVarTuple resolution
+            if let Type::Tensor(tensor) = x
+                && let TensorShape::Unpacked(box (prefix, middle, suffix)) = &mut tensor.shape
+                && let Type::Tuple(tuple_variant) = middle
+            {
+                match tuple_variant {
+                    Tuple::Concrete(elements) => {
+                        let mut new_dims = prefix.clone();
+                        new_dims.extend(elements.clone());
+                        new_dims.extend(suffix.clone());
+                        tensor.shape = TensorShape::Concrete(new_dims);
+                    }
+                    Tuple::Unpacked(box (tuple_prefix, tuple_middle, tuple_suffix)) => {
+                        let mut new_prefix = prefix.clone();
+                        new_prefix.extend(tuple_prefix.clone());
+                        let mut new_suffix = tuple_suffix.clone();
+                        new_suffix.extend(suffix.clone());
+                        tensor.shape = TensorShape::Unpacked(Box::new((
+                            new_prefix,
+                            tuple_middle.clone(),
+                            new_suffix,
+                        )));
+                    }
+                    _ => {}
+                }
             }
             // When a param spec is resolved, collapse any Concatenate and Callable types that use it
             if let Type::Concatenate(ts, box Type::ParamSpecValue(paramlist)) = x {
@@ -958,10 +969,6 @@ impl Solver {
             })
     }
 
-    fn finish_alias_recursive(r: &TypeAliasRef, tparams: &Arc<TParams>) -> Type {
-        Forallable::TypeAlias(TypeAliasData::Ref(r.clone())).forall(tparams.clone())
-    }
-
     /// Generate a fresh variable used to tie recursive bindings.
     pub fn fresh_recursive(&self, uniques: &UniqueFactory) -> Var {
         let v = Var::new(uniques);
@@ -975,19 +982,6 @@ impl Solver {
             v,
             Variable::LoopRecursive(prior_type, LoopBound::UpperBounds(vec![])),
         );
-        v
-    }
-
-    pub fn fresh_alias_recursive(
-        &self,
-        uniques: &UniqueFactory,
-        r: TypeAliasRef,
-        tparams: Arc<TParams>,
-    ) -> Var {
-        let v = Var::new(uniques);
-        self.variables
-            .lock()
-            .insert_fresh(v, Variable::AliasRecursive(r, tparams));
         v
     }
 
@@ -1382,6 +1376,8 @@ pub enum SubsetError {
     TypedDict(Box<TypedDictSubsetError>),
     /// Errors involving arbitrary unknown fields in open TypedDicts
     OpenTypedDict(Box<OpenTypedDictSubsetError>),
+    /// Tensor shape check failed
+    TensorShape(ShapeError),
     /// An invariant was violated - used for cases that should be unreachable when - if there is ever a bug - we
     /// would prefer to not panic and get a text location for reproducing rather than just a crash report.
     /// Note: always use `ErrorCollector::internal_error` to log internal errors.
@@ -1390,8 +1386,6 @@ pub enum SubsetError {
     TypeOfProtocolNeedsConcreteClass(Name),
     /// A `type` cannot accept special forms like `Callable`
     TypeCannotAcceptSpecialForms(SpecialForm),
-    /// Tensor shape or dimension error
-    TensorShape(ShapeError),
     // TODO(rechen): replace this with specific reasons
     Other,
 }
@@ -1418,6 +1412,7 @@ impl SubsetError {
             }
             SubsetError::TypedDict(err) => Some(err.to_error_msg()),
             SubsetError::OpenTypedDict(err) => Some(err.to_error_msg()),
+            SubsetError::TensorShape(err) => Some(err.to_string()),
             SubsetError::InternalError(msg) => Some(format!("Pyrefly internal error: {msg}")),
             SubsetError::TypeOfProtocolNeedsConcreteClass(want) => Some(format!(
                 "Only concrete classes may be assigned to `type[{want}]` because `{want}` is a protocol"
@@ -1426,7 +1421,6 @@ impl SubsetError {
                 "`type` cannot accept special form `{}` as an argument",
                 form
             )),
-            SubsetError::TensorShape(err) => Some(err.to_string()),
             SubsetError::Other => None,
         }
     }
@@ -1630,9 +1624,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Variable::Parameter => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
                     )),
-                    Variable::AliasRecursive(_, _) => Err(SubsetError::internal_error(
-                        "Did not expect a `Variable::AliasRecursive` to ever appear in is_subset_eq",
-                    )),
                     Variable::Answer(t1) => {
                         let t1 = t1.clone();
                         drop(v1_ref);
@@ -1647,6 +1638,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(v1_ref);
                         variables.update(*v1, Variable::Answer(t2.clone()));
                         drop(variables);
+
                         if let Err(e) = self.is_subset_eq(t2, &bound) {
                             self.solver.instantiation_errors.write().insert(
                                 *v1,
@@ -1728,9 +1720,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Variable::Parameter => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
                     )),
-                    Variable::AliasRecursive(_, _) => Err(SubsetError::internal_error(
-                        "Did not expect a `Variable::AliasRecursive` to ever appear in is_subset_eq",
-                    )),
                     Variable::Answer(t2) => {
                         let t2 = t2.clone();
                         drop(v2_ref);
@@ -1748,6 +1737,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(v2_ref);
                         variables.update(*v2, Variable::Answer(t1_p.clone()));
                         drop(variables);
+
                         if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
                             // If the promoted type fails, try again with the original type, in case the bound itself is literal.
                             // This could be more optimized, but errors are rare, so this code path should not be hot.

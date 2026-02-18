@@ -19,6 +19,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::keywords::get_keywords;
+use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::literal::Lit;
@@ -26,15 +27,18 @@ use pyrefly_types::types::Union;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::ModModule;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
+use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::lsp::FindPreference;
@@ -79,39 +83,67 @@ impl RankedCompletion {
 }
 
 /// All completion ranking logic lives here. Assigns `sort_text` to each item
-/// based on its source classification, name prefix, and compatibility.
-fn assign_sort_text(ranked: &mut RankedCompletion) {
+/// based on its source classification, name prefix, compatibility, and MRU rank.
+///
+/// `mru_rank` uses two levels of `Option`:
+/// - `None` means the MRU system is not active (e.g. wasm path). sort_text uses
+///   the compact base format (`"0"`, `"1"`, etc.).
+/// - `Some(None)` means the MRU system is active but the item was not found in
+///   the MRU list. sort_text uses the extended format with rank 9999 so it sorts
+///   after MRU-matched items.
+/// - `Some(Some(rank))` means the item was found at position `rank` in the MRU.
+fn assign_sort_text(ranked: &mut RankedCompletion, mru_rank: Option<Option<usize>>) {
     let is_deprecated = ranked
         .item
         .tags
         .as_ref()
         .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED));
 
-    if is_deprecated {
-        ranked.item.sort_text = Some("9".to_owned());
-        return;
-    }
-
-    let base = match ranked.source {
-        CompletionSource::AutoimportPrivate => "4b",
-        CompletionSource::AutoimportPublic => "4a",
-        CompletionSource::Reexport => "1",
-        CompletionSource::Local => {
-            if ranked.item.label.starts_with("__") {
-                "3"
-            } else if ranked.item.label.starts_with('_') {
-                "2"
-            } else {
-                "0"
+    let base = if is_deprecated {
+        "9".to_owned()
+    } else {
+        let base = match ranked.source {
+            CompletionSource::AutoimportPrivate => "4b",
+            CompletionSource::AutoimportPublic => "4a",
+            CompletionSource::Reexport => "1",
+            CompletionSource::Local => {
+                if ranked.item.label.starts_with("__") {
+                    "3"
+                } else if ranked.item.label.starts_with('_') {
+                    "2"
+                } else {
+                    "0"
+                }
             }
+        };
+        if ranked.is_incompatible {
+            format!("{base}z")
+        } else {
+            base.to_owned()
         }
     };
 
-    ranked.item.sort_text = Some(if ranked.is_incompatible {
-        format!("{base}z")
+    match mru_rank {
+        Some(Some(rank)) => {
+            let rank = rank.min(9999);
+            ranked.item.sort_text = Some(format!("{base}.{rank:04}.{}", ranked.item.label));
+            ranked.item.preselect = if rank == 0 { Some(true) } else { None };
+        }
+        Some(None) => {
+            ranked.item.sort_text = Some(format!("{base}.9999.{}", ranked.item.label));
+        }
+        None => {
+            ranked.item.sort_text = Some(base);
+        }
+    }
+}
+
+fn autoimport_source(module_name: &str) -> CompletionSource {
+    if module_name.split('.').any(|part| part.starts_with('_')) {
+        CompletionSource::AutoimportPrivate
     } else {
-        base.to_owned()
-    });
+        CompletionSource::AutoimportPublic
+    }
 }
 
 /// Options that influence completion item formatting and behavior.
@@ -134,6 +166,51 @@ pub(crate) fn supports_snippet_completions(capabilities: &lsp_types::ClientCapab
 }
 
 impl Transaction<'_> {
+    /// Adds a common alias auto-import completion (e.g. `np` -> `numpy`).
+    /// Returns the module name that was aliased when a completion was added.
+    fn add_common_alias_autoimport_completion(
+        &self,
+        handle: &Handle,
+        ast: &ModModule,
+        module_info: &Module,
+        identifier_text: &str,
+        supports_completion_item_details: bool,
+        completions: &mut Vec<RankedCompletion>,
+    ) -> Option<ModuleName> {
+        let module_name_str = common_alias_target_module(identifier_text)?;
+        let module_name = ModuleName::from_str(module_name_str);
+        if module_name == handle.module() {
+            return None;
+        }
+        let module_handle = self.import_handle(handle, module_name, None).finding()?;
+        let (position, import_text, completion_label) =
+            import_regular_import_edit(ast, module_handle, Some(identifier_text));
+        let import_text_edit = TextEdit {
+            range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
+            new_text: import_text.clone(),
+        };
+        let auto_import_label_detail = format!(" (import {module_name_str} as {identifier_text})");
+        completions.push(RankedCompletion {
+            item: CompletionItem {
+                label: completion_label.clone(),
+                detail: Some(import_text),
+                kind: Some(CompletionItemKind::MODULE),
+                additional_text_edits: Some(vec![import_text_edit]),
+                label_details: supports_completion_item_details.then_some(
+                    CompletionItemLabelDetails {
+                        detail: Some(auto_import_label_detail),
+                        description: Some(module_name_str.to_owned()),
+                    },
+                ),
+                insert_text: Some(completion_label),
+                ..Default::default()
+            },
+            source: autoimport_source(module_name_str),
+            is_incompatible: false,
+        });
+        Some(module_name)
+    }
+
     /// Adds completion items for literal types (e.g., `Literal["foo", "bar"]`).
     pub(crate) fn add_literal_completions_from_type(
         param_type: &Type,
@@ -497,19 +574,26 @@ impl Transaction<'_> {
         // results for now. TODO: re-enable it once we no longer have perf issues.
         // We should not try to generate autoimport when the user has typed very few
         // characters. It's unhelpful to narrow down suggestions.
-        if identifier.as_str().len() >= MIN_CHARACTERS_TYPED_AUTOIMPORT
-            && let Some(ast) = self.get_ast(handle)
+        if let Some(ast) = self.get_ast(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
-            let autoimport_source = |module_name: &str| {
-                if module_name.split('.').any(|part| part.starts_with('_')) {
-                    CompletionSource::AutoimportPrivate
-                } else {
-                    CompletionSource::AutoimportPublic
-                }
-            };
-            for (handle_to_import_from, name, export) in
-                self.search_exports_fuzzy(identifier.as_str())
+            let identifier_text = identifier.as_str();
+            let mut aliased_modules = SmallSet::new();
+            if let Some(module_name) = self.add_common_alias_autoimport_completion(
+                handle,
+                &ast,
+                &module_info,
+                identifier_text,
+                supports_completion_item_details,
+                completions,
+            ) {
+                aliased_modules.insert(module_name);
+            }
+
+            if identifier_text.len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
+                return;
+            }
+            for (handle_to_import_from, name, export) in self.search_exports_fuzzy(identifier_text)
             {
                 // Using handle itself doesn't always work because handles can be made separately and have different hashes
                 if handle_to_import_from.module() == handle.module()
@@ -563,30 +647,33 @@ impl Transaction<'_> {
                 });
             }
 
-            for module_name in self.search_modules_fuzzy(identifier.as_str()) {
+            for module_name in self.search_modules_fuzzy(identifier_text) {
                 if module_name == handle.module() {
+                    continue;
+                }
+                if aliased_modules.contains(&module_name) {
                     continue;
                 }
                 let module_name_str = module_name.as_str().to_owned();
                 let source = autoimport_source(&module_name_str);
                 if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
                 {
-                    let (insert_text, additional_text_edits) = {
-                        let (position, insert_text) =
-                            import_regular_import_edit(&ast, module_handle);
+                    let (import_text, additional_text_edits) = {
+                        let (position, import_text, _) =
+                            import_regular_import_edit(&ast, module_handle, None);
                         let import_text_edit = TextEdit {
                             range: module_info
                                 .to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                            new_text: insert_text.clone(),
+                            new_text: import_text.clone(),
                         };
-                        (insert_text, Some(vec![import_text_edit]))
+                        (import_text, Some(vec![import_text_edit]))
                     };
                     let auto_import_label_detail = format!(" (import {module_name_str})");
 
                     completions.push(RankedCompletion {
                         item: CompletionItem {
                             label: module_name_str.clone(),
-                            detail: Some(insert_text),
+                            detail: Some(import_text),
                             kind: Some(CompletionItemKind::MODULE),
                             additional_text_edits,
                             label_details: supports_completion_item_details.then_some(
@@ -647,13 +734,17 @@ impl Transaction<'_> {
     }
 
     /// Core completion implementation returning items and incomplete flag.
-    pub(crate) fn completion_sorted_opt_with_incomplete(
+    pub(crate) fn completion_sorted_opt_with_incomplete<F>(
         &self,
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
         options: CompletionOptions,
-    ) -> (Vec<CompletionItem>, bool) {
+        mut mru_index: Option<F>,
+    ) -> (Vec<CompletionItem>, bool)
+    where
+        F: FnMut(&CompletionItem) -> Option<usize>,
+    {
         let CompletionOptions {
             supports_completion_item_details,
             complete_function_parens,
@@ -873,7 +964,8 @@ impl Transaction<'_> {
             Self::add_function_call_parens(&mut result, supports_snippet_completions);
         }
         for ranked in &mut result {
-            assign_sort_text(ranked);
+            let mru_rank = mru_index.as_mut().map(|index| (*index)(&ranked.item));
+            assign_sort_text(ranked, mru_rank);
         }
         (result.into_iter().map(|r| r.item).collect(), is_incomplete)
     }

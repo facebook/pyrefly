@@ -908,7 +908,7 @@ zoo(partial(bar, b=99))
 );
 
 testcase!(
-    bug = "Self in Metaclass should be error, treated as Any. Any in metaclass call should act like no annot.",
+    bug = "Self in Metaclass should be treated as Any. Any in metaclass call should act like no annot.",
     test_callable_class_substitute_self,
     r#"
 from typing import Any, Callable, Self, assert_type
@@ -916,7 +916,7 @@ from typing import Any, Callable, Self, assert_type
 def ret[T](f: Callable[[], T]) -> T: ...
 
 class Meta(type):
-    def __call__(self, *args, **kwargs) -> Self: ... # TODO: Error here and treat `Self` as `Any`
+    def __call__(self, *args, **kwargs) -> Self: ... # E: `Self` cannot be used in a metaclass
 
 # metaclass __call__
 class A(metaclass=Meta):
@@ -1315,7 +1315,7 @@ def test(p4: Proto4[...], p7: Proto7):
 );
 
 testcase!(
-    bug = "conformance: Constructor to Callable conversion should work with __new__ and __init__ together",
+    bug = "conformance: Constructor to Callable conversion issues with overloads and __new__",
     test_constructor_callable_conversion,
     r#"
 from typing import Callable, ParamSpec, TypeVar, Self, assert_type, overload, Generic
@@ -1331,8 +1331,7 @@ class Class3:
     def __new__(cls, *args, **kwargs) -> Self: ...
     def __init__(self, x: int) -> None: ...
 
-# pyrefly incorrectly errors on this line - should be OK
-r3 = accepts_callable(Class3)  # E: `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3`
+r3 = accepts_callable(Class3)
 
 class Class7(Generic[T]):
     @overload
