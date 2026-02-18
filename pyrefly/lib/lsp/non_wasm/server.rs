@@ -3506,6 +3506,10 @@ impl Server {
         if let Some(refactors) = transaction.extract_field_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
+        if let Some(refactors) = transaction.implement_abstract_members_code_actions(&handle, range)
+        {
+            push_refactor_actions(refactors);
+        }
         if let Some(refactors) = transaction.extract_variable_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
