@@ -228,14 +228,34 @@ impl CalcStack {
             SccState::NotInScc | SccState::RevisitingInProgress => {
                 match calculation.propose_calculation() {
                     ProposalResult::Calculated(v) => BindingAction::Calculated(v),
-                    ProposalResult::CycleDetected => {
-                        let current_cycle = self.current_cycle().unwrap();
-                        match self.on_scc_detected(current_cycle) {
-                            SccDetectedResult::BreakHere => BindingAction::Unwind,
-                            SccDetectedResult::Continue => BindingAction::Calculate,
+                    // Use the thread-local stack as the source of truth for
+                    // cycle detection: `position_of` tells us definitively
+                    // whether this CalcId has a live frame on the current stack.
+                    ProposalResult::Calculatable | ProposalResult::CycleDetected => {
+                        if let Some(current_cycle) = self.current_cycle() {
+                            match self.on_scc_detected(current_cycle) {
+                                SccDetectedResult::BreakHere => BindingAction::Unwind,
+                                SccDetectedResult::Continue => BindingAction::Calculate,
+                            }
+                        } else {
+                            // No cycle on the stack, proceed
+                            //
+                            // TODO: Note that the `CycleDetected` case is surprising: it means
+                            // the current thread *started* a calculation but never saved an answer,
+                            // and the stack frame that did this is gone.
+                            //
+                            // That shouldn't happen - a computation isn't supposed to be interruptible
+                            // with a persistent Answers value, and the SCC merging + batch commit
+                            // should make it so that we always get some other state whenever we're
+                            // at the point where a preliminary answer has been saved.
+                            //
+                            // It seems likely that this may indicate some bug in Scc merging, state
+                            // transition tracking, or batch commit (a bug in any of these could lead to
+                            // invalid states). As of this comment being written, we've only observed
+                            // this occur in LSP (not full check).
+                            BindingAction::Calculate
                         }
                     }
-                    ProposalResult::Calculatable => BindingAction::Calculate,
                 }
             }
             SccState::RevisitingDone => {
@@ -2225,5 +2245,32 @@ mod scc_tests {
 
         // Should keep the minimum anchor_pos
         assert_eq!(merged.anchor_pos, 2);
+    }
+
+    #[test]
+    fn test_stale_calculation_panic() {
+        // Reproduces the panic where Calculation has stale state but CalcStack is fresh.
+        let calc_id = CalcId::for_test("m", 0);
+        let calculation: Calculation<usize> = Calculation::new();
+
+        // 1. Simulate stale state: propose calculation on this thread.
+        // This sets the thread bit in calculation.
+        match calculation.propose_calculation() {
+            ProposalResult::Calculatable => {}
+            _ => panic!("Expected Calculatable"),
+        }
+
+        // 2. Create a fresh stack (simulating a new request/thread reuse).
+        let stack = CalcStack::new();
+
+        // 3. Push the same calculation.
+        // This should NOT panic.
+        let action = stack.push(calc_id, &calculation);
+
+        // 4. Expect Calculate action (to recover).
+        match action {
+            BindingAction::Calculate => {}
+            _ => panic!("Expected Calculate action to recover from stale state"),
+        }
     }
 }
