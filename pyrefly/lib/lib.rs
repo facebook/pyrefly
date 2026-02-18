@@ -64,6 +64,8 @@ pub mod library {
                 pub use crate::commands::config_finder::default_config_finder;
                 pub use crate::commands::config_finder::default_config_finder_with_overrides;
                 pub use crate::commands::util;
+                pub use crate::lsp::non_wasm::external_references::ExternalReferences;
+                pub use crate::lsp::non_wasm::external_references::NoExternalReferences;
                 pub use crate::lsp::non_wasm::module_helpers::PathRemapper;
             }
         }

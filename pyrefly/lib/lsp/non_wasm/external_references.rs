@@ -10,8 +10,7 @@ use std::time::Duration;
 use lsp_types::Range;
 use lsp_types::Url;
 
-#[expect(dead_code)]
-pub trait ExternalReferences {
+pub trait ExternalReferences: Send + Sync {
     fn find_references(
         &self,
         qualified_name: &str,
@@ -20,7 +19,6 @@ pub trait ExternalReferences {
     ) -> Vec<(Url, Vec<Range>)>;
 }
 
-#[expect(dead_code)]
 pub struct NoExternalReferences;
 
 /// This struct will be used when we have no source of external references.

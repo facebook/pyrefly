@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::Arc;
+
 use clap::Subcommand;
 use pyrefly_util::telemetry::Telemetry;
 
@@ -19,6 +21,7 @@ use crate::commands::report::ReportArgs;
 use crate::commands::suppress::SuppressArgs;
 use crate::commands::tsp::TspArgs;
 use crate::commands::util::CommandExitStatus;
+use crate::lsp::non_wasm::external_references::NoExternalReferences;
 
 /// Subcommands to run Pyrefly with.
 #[deny(clippy::missing_docs_in_private_items)]
@@ -63,7 +66,9 @@ impl Command {
             Command::Check(args) => args.run().await,
             Command::Snippet(args) => args.run().await,
             Command::BuckCheck(args) => args.run(),
-            Command::Lsp(args) => args.run(version, None, telemetry),
+            Command::Lsp(args) => {
+                args.run(version, None, telemetry, Arc::new(NoExternalReferences))
+            }
             Command::Tsp(args) => args.run(telemetry),
             Command::Init(args) => args.run(),
             Command::Infer(args) => args.run(),

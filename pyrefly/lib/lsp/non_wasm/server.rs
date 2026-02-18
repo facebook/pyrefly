@@ -240,6 +240,7 @@ use crate::lsp::non_wasm::call_hierarchy::prepare_call_hierarchy_item;
 use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
 use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
 use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_actions;
+use crate::lsp::non_wasm::external_references::ExternalReferences;
 use crate::lsp::non_wasm::lsp::apply_change_events;
 use crate::lsp::non_wasm::lsp::as_notification;
 use crate::lsp::non_wasm::lsp::as_request;
@@ -580,6 +581,9 @@ pub struct Server {
     path_remapper: Option<PathRemapper>,
     /// Accumulated file watcher events waiting to be processed as a batch.
     pending_watched_file_changes: Mutex<Vec<FileEvent>>,
+    /// An external source which may be included to assist in finding global references
+    #[expect(dead_code)]
+    external_references: Arc<dyn ExternalReferences>,
 }
 
 pub fn shutdown_finish(connection: &Connection, id: RequestId) {
@@ -1015,6 +1019,7 @@ pub fn lsp_loop(
     build_system_blocking: bool,
     path_remapper: Option<PathRemapper>,
     telemetry: &impl Telemetry,
+    external_references: Arc<dyn ExternalReferences>,
 ) -> anyhow::Result<()> {
     info!("Reading messages");
     let lsp_queue = LspQueue::new();
@@ -1028,6 +1033,7 @@ pub fn lsp_loop(
         build_system_blocking,
         from,
         path_remapper,
+        external_references,
     );
     std::thread::scope(|scope| {
         scope.spawn(|| {
@@ -1878,6 +1884,7 @@ impl Server {
         build_system_blocking: bool,
         surface: Option<String>,
         path_remapper: Option<PathRemapper>,
+        external_references: Arc<dyn ExternalReferences>,
     ) -> Self {
         let folders = if let Some(capability) = &initialize_params.capabilities.workspace
             && let Some(true) = capability.workspace_folders
@@ -1954,6 +1961,7 @@ impl Server {
             awaiting_initial_workspace_config: AtomicBool::new(should_request_workspace_settings),
             path_remapper,
             pending_watched_file_changes: Mutex::new(Vec::new()),
+            external_references,
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
