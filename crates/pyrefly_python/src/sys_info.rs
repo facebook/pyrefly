@@ -25,6 +25,7 @@ use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprNumberLiteral;
+use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtIf;
 use ruff_python_ast::UnaryOp;
@@ -458,6 +459,22 @@ impl SysInfo {
                 }
                 _ => None,
             },
+            Expr::Subscript(ExprSubscript { value, slice, .. }) => {
+                let value = self.evaluate(value)?;
+                let index = self.evaluate(slice)?;
+                match (value, index) {
+                    (Value::Tuple(elts), Value::Int(i)) => {
+                        if i >= 0
+                            && let Ok(i) = usize::try_from(i)
+                        {
+                            elts.into_iter().nth(i)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }

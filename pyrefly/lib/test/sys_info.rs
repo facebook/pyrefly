@@ -32,6 +32,24 @@ if sys.version_info < (3, 0, 0):
 else:
     Z = int
 assert_type(Z(), int)
+
+if sys.version_info[0] == 3:
+    A = str
+else:
+    A = int
+assert_type(A(), str)
+
+if sys.version_info[0] == 2:
+    B = str
+else:
+    B = int
+assert_type(B(), int)
+
+if sys.version_info[1] >= 6:
+    C = str
+else:
+    C = int
+assert_type(C(), str)
 "#,
 );
 
