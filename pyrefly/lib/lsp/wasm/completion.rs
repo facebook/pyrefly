@@ -261,12 +261,8 @@ impl Transaction<'_> {
                 let label = lit.value.to_string_escaped(true);
                 let detail = format!("{param_type}");
                 if seen.insert((label.clone(), Some(detail.clone()))) {
-                    let insert_text = if in_string_literal {
-                        if let Lit::Str(s) = &lit.value {
-                            s.to_string()
-                        } else {
-                            label.clone()
-                        }
+                    let insert_text = if in_string_literal && let Lit::Str(s) = &lit.value {
+                        s.to_string()
                     } else {
                         label.clone()
                     };
