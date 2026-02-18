@@ -1015,13 +1015,20 @@ impl Transaction<'_> {
                         &mut result,
                         in_string_literal,
                     );
-                    self.add_literal_completions(handle, position, &mut result, in_string_literal);
-                    self.add_dict_key_completions(
+                    let dict_key_claimed = self.add_dict_key_completions(
                         handle,
                         mod_module.as_ref(),
                         position,
                         &mut result,
                     );
+                    if !dict_key_claimed {
+                        self.add_literal_completions(
+                            handle,
+                            position,
+                            &mut result,
+                            in_string_literal,
+                        );
+                    }
                     // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
                     // in foo(<>), the first containing node is AnyNodeRef::ExprCall
                     if let Some(first) = nodes.first()

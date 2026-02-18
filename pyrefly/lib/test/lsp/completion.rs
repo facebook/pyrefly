@@ -290,9 +290,6 @@ dim.get("")
         report.contains(
             r#"
 Completion Results:
-- (Value) 'x': Literal['x'] inserting `x`
-- (Value) 'y': Literal['y'] inserting `y`
-- (Value) 'z': Literal['z'] inserting `z`
 - (Field) x: int
 - (Field) y: int
 - (Field) z: int
@@ -324,9 +321,6 @@ dim.get(key="")
         report.contains(
             r#"
 Completion Results:
-- (Value) 'x': Literal['x'] inserting `x`
-- (Value) 'y': Literal['y'] inserting `y`
-- (Value) 'z': Literal['z'] inserting `z`
 - (Field) x: int
 - (Field) y: int
 - (Field) z: int
