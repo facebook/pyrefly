@@ -1376,6 +1376,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
+        // nn.Module call forwarding: when calling an nn.Module instance (or Self in a Module subclass),
+        // redirect to the `forward` method. This models PyTorch's `nn.Module.__call__` behavior.
+        // TODO: Consider modeling this via a stub for `nn.Module.__call__` that delegates to `forward`.
+        if let Some(forward_ty) = self.try_nn_module_forward_dispatch(&callee_ty, x.range, errors) {
+            return self.expr_call_infer(x, forward_ty, hint, errors);
+        }
+
         if matches!(&callee_ty, Type::ClassDef(cls) if cls.is_builtin("super")) {
             // Because we have to construct a binding for super in order to fill in implicit arguments,
             // we can't handle things like local aliases to super. If we hit a case where the binding
