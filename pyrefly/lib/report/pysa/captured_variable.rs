@@ -74,6 +74,10 @@ pub struct ModuleCapturedVariables<Function: FunctionTrait>(
 );
 
 impl<Function: FunctionTrait> ModuleCapturedVariables<Function> {
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
     #[cfg(test)]
     pub fn into_iter(
         self,
@@ -94,10 +98,6 @@ pub struct WholeProgramCapturedVariables(
 );
 
 impl WholeProgramCapturedVariables {
-    pub fn new() -> Self {
-        WholeProgramCapturedVariables(dashmap::DashMap::new().into_read_only())
-    }
-
     pub fn get_for_module(
         &self,
         module_id: ModuleId,

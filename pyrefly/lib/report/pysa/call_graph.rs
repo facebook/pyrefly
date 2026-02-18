@@ -70,6 +70,7 @@ use crate::report::pysa::ast_visitor::Scopes;
 use crate::report::pysa::ast_visitor::visit_module_ast;
 use crate::report::pysa::captured_variable::CaptureKind;
 use crate::report::pysa::captured_variable::CapturedVariableRef;
+use crate::report::pysa::captured_variable::ModuleCapturedVariables;
 use crate::report::pysa::captured_variable::WholeProgramCapturedVariables;
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::class::get_class_field_from_current_class_only;
@@ -1552,7 +1553,7 @@ struct CallGraphVisitor<'a> {
     function_base_definitions: &'a WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
     override_graph: &'a OverrideGraph,
     global_variables: &'a WholeProgramGlobalVariables,
-    captured_variables: &'a WholeProgramCapturedVariables,
+    captured_variables: &'a ModuleCapturedVariables<FunctionRef>,
     current_function: Option<FunctionRef>, // The current function, if it is exported.
     debug: bool,                           // Enable logging for the current function or class body.
     debug_scopes: Vec<bool>,               // The value of the debug flag for each scope.
@@ -2483,10 +2484,8 @@ impl<'a> CallGraphVisitor<'a> {
             }) {
             (Some(global), None)
         } else if let Some(current_function) = self.current_function.as_ref()
-            && let Some(current_module_captured_variables) = self
+            && let Some(captured_variable) = self
                 .captured_variables
-                .get_for_module(self.module_context.module_id)
-            && let Some(captured_variable) = current_module_captured_variables
                 .get(current_function)
                 .and_then(|captured_variables| captured_variables.get(name.id()))
         {
@@ -4296,7 +4295,7 @@ fn resolve_call(
         debug_scopes: Vec::new(),
         override_graph,
         global_variables: &WholeProgramGlobalVariables::new(),
-        captured_variables: &WholeProgramCapturedVariables::new(),
+        captured_variables: &ModuleCapturedVariables::new(),
         error_collector: ErrorCollector::new(module_context.module_info.dupe(), ErrorStyle::Never),
         matching_graphql_decorators: Vec::new(),
     };
@@ -4344,7 +4343,7 @@ fn resolve_expression(
         debug_scopes: Vec::new(),
         override_graph,
         global_variables: &WholeProgramGlobalVariables::new(),
-        captured_variables: &WholeProgramCapturedVariables::new(),
+        captured_variables: &ModuleCapturedVariables::new(),
         error_collector: ErrorCollector::new(module_context.module_info.dupe(), ErrorStyle::Never),
         matching_graphql_decorators: Vec::new(),
     };
@@ -4447,6 +4446,7 @@ pub fn export_call_graphs(
 ) -> CallGraphs<ExpressionIdentifier, FunctionRef> {
     let mut call_graphs = CallGraphs::new();
 
+    let empty_captured_variables = ModuleCapturedVariables::new();
     let mut visitor = CallGraphVisitor {
         call_graphs: &mut call_graphs,
         module_context: context,
@@ -4458,7 +4458,9 @@ pub fn export_call_graphs(
         debug_scopes: Vec::new(),
         override_graph,
         global_variables,
-        captured_variables,
+        captured_variables: captured_variables
+            .get_for_module(context.module_id)
+            .unwrap_or(&empty_captured_variables),
         error_collector: ErrorCollector::new(context.module_info.dupe(), ErrorStyle::Never),
         matching_graphql_decorators: Vec::new(),
     };
