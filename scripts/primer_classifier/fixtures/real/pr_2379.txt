@@ -1,0 +1,8 @@
+core (https://github.com/home-assistant/core)
++ ERROR homeassistant/components/tesla_fleet/entity.py:180:7-36: Class `TeslaFleetWallConnectorEntity` has inconsistent type arguments for base class `CoordinatorEntity`: `CoordinatorEntity[TeslaFleetEnergySiteHistoryCoordinator | TeslaFleetEnergySiteInfoCoordinator | TeslaFleetEnergySiteLiveCoordinator | TeslaFleetVehicleDataCoordinator]` and `CoordinatorEntity[TeslaFleetEnergySiteLiveCoordinator]` [invalid-inheritance]
++ ::error file=homeassistant/components/tesla_fleet/entity.py,line=180,col=7,endLine=180,endColumn=36,title=Pyrefly invalid-inheritance::Class `TeslaFleetWallConnectorEntity` has inconsistent type arguments for base class `CoordinatorEntity`: `CoordinatorEntity[TeslaFleetEnergySiteHistoryCoordinator | TeslaFleetEnergySiteInfoCoordinator | TeslaFleetEnergySiteLiveCoordinator | TeslaFleetVehicleDataCoordinator]` and `CoordinatorEntity[TeslaFleetEnergySiteLiveCoordinator]`
+
+mkdocs (https://github.com/mkdocs/mkdocs)
++ ERROR mkdocs/plugins.py:493:7-23: Class `PluginCollection` has inconsistent type arguments for base class `MutableMapping`: `MutableMapping[Unknown, Unknown]` and `MutableMapping[str, BasePlugin[Unknown]]` [invalid-inheritance]
++ ::error file=mkdocs/plugins.py,line=493,col=7,endLine=493,endColumn=23,title=Pyrefly invalid-inheritance::Class `PluginCollection` has inconsistent type arguments for base class `MutableMapping`: `MutableMapping[Unknown, Unknown]` and `MutableMapping[str, BasePlugin[Unknown]]`
+

@@ -1,0 +1,32 @@
+openlibrary (https://github.com/internetarchive/openlibrary)
++ ERROR openlibrary/plugins/openlibrary/lists.py:811:43-813:18: Cannot set item in `dict[str, list[dict[Unknown, Unknown]]]` [unsupported-operation]
++ ERROR openlibrary/plugins/openlibrary/lists.py:818:40-88: Cannot set item in `dict[str, list[dict[Unknown, Unknown]]]` [unsupported-operation]
++ ERROR openlibrary/plugins/openlibrary/lists.py:823:42-825:18: Cannot set item in `dict[str, list[dict[Unknown, Unknown]]]` [unsupported-operation]
++ ERROR openlibrary/plugins/upstream/tests/test_merge_authors.py:152:12-52: Object of class `NoneType` has no attribute `key` [missing-attribute]
++ ::error file=openlibrary/plugins/openlibrary/lists.py,line=811,col=43,endLine=813,endColumn=18,title=Pyrefly unsupported-operation::Cannot set item in `dict[str, list[dict[Unknown, Unknown]]]`%0A  Argument `list[Thing | Unknown]` is not assignable to parameter `value` with type `list[dict[Unknown, Unknown]]` in function `dict.__setitem__`
++ ::error file=openlibrary/plugins/openlibrary/lists.py,line=818,col=40,endLine=818,endColumn=88,title=Pyrefly unsupported-operation::Cannot set item in `dict[str, list[dict[Unknown, Unknown]]]`%0A  Argument `list[Thing | Unknown]` is not assignable to parameter `value` with type `list[dict[Unknown, Unknown]]` in function `dict.__setitem__`
++ ::error file=openlibrary/plugins/openlibrary/lists.py,line=823,col=42,endLine=825,endColumn=18,title=Pyrefly unsupported-operation::Cannot set item in `dict[str, list[dict[Unknown, Unknown]]]`%0A  Argument `list[Thing | Unknown]` is not assignable to parameter `value` with type `list[dict[Unknown, Unknown]]` in function `dict.__setitem__`
+- ::error file=openlibrary/plugins/upstream/tests/test_merge_authors.py,line=37,col=9,endLine=37,endColumn=12,title=Pyrefly bad-override::Class member `MockSite.get` overrides parent class `Site` in an inconsistent manner%0A  `MockSite.get` has type `BoundMethod[MockSite, (self: MockSite, key: Unknown) -> Unknown]`, which is not assignable to `BoundMethod[MockSite, (self: MockSite, key: Unknown, revision: Unknown | None = None, lazy: bool | Unknown = False) -> Unknown | None]`, the type of `Site.get`
++ ::error file=openlibrary/plugins/upstream/tests/test_merge_authors.py,line=37,col=9,endLine=37,endColumn=12,title=Pyrefly bad-override::Class member `MockSite.get` overrides parent class `Site` in an inconsistent manner%0A  `MockSite.get` has type `BoundMethod[MockSite, (self: MockSite, key: Unknown) -> Thing | Unknown]`, which is not assignable to `BoundMethod[MockSite, (self: MockSite, key: Unknown, revision: Unknown | None = None, lazy: bool | Unknown = False) -> Thing | Unknown | None]`, the type of `Site.get`
++ ::error file=openlibrary/plugins/upstream/tests/test_merge_authors.py,line=152,col=12,endLine=152,endColumn=52,title=Pyrefly missing-attribute::Object of class `NoneType` has no attribute `key`
+
+streamlit (https://github.com/streamlit/streamlit)
+- ERROR lib/streamlit/hello/dataframe_demo.py:40:13-30: `/=` is not supported between `DataFrame` and `float` [unsupported-operation]
+- ::error file=lib/streamlit/hello/dataframe_demo.py,line=40,col=13,endLine=40,endColumn=30,title=Pyrefly unsupported-operation::`/=` is not supported between `DataFrame` and `float`%0A  Expected `__itruediv__` to be a callable, got `Series[Any]`
+
+xarray (https://github.com/pydata/xarray)
++ ERROR xarray/coding/times.py:743:22-67: `%` is not supported between `PandasExtensionArray[ExtensionArray]` and `timedelta` [unsupported-operation]
++ ERROR xarray/coding/times.py:743:22-67: `%` is not supported between `PandasExtensionArray[ExtensionArray]` and `timedelta64[int | timedelta | None]` [unsupported-operation]
++ ::error file=xarray/coding/times.py,line=743,col=22,endLine=743,endColumn=67,title=Pyrefly unsupported-operation::`%25` is not supported between `PandasExtensionArray[ExtensionArray]` and `timedelta`%0A  Cannot find `__mod__` or `__rmod__`
++ ::error file=xarray/coding/times.py,line=743,col=22,endLine=743,endColumn=67,title=Pyrefly unsupported-operation::`%25` is not supported between `PandasExtensionArray[ExtensionArray]` and `timedelta64[int | timedelta | None]`%0A  No matching overload found for function `numpy.timedelta64.__rmod__` called with arguments: (PandasExtensionArray[ExtensionArray])%0A  Possible overloads:%0A  (x: timedelta64[None], /) -> timedelta64[None] [closest match]%0A  (x: timedelta64[int | timedelta | None], /) -> timedelta64[None]%0A  (x: timedelta64[int | timedelta], /) -> timedelta64[int | None]%0A  (x: timedelta64[_AnyTD64Item], /) -> timedelta64[_AnyTD64Item | None]%0A  (x: timedelta, /) -> timedelta%0A  (x: timedelta64[int], /) -> timedelta64[int | None]%0A  (x: timedelta64[int | timedelta | None], /) -> timedelta64[int | timedelta | None]
+
+pandera (https://github.com/pandera-dev/pandera)
+- ERROR pandera/engines/pandas_engine.py:541:9-44: `&=` is not supported between `Series[bool]` and `Series[bool]` [unsupported-operation]
+- ERROR pandera/engines/pandas_engine.py:543:9-36: `&=` is not supported between `Series[bool]` and `Series[bool]` [unsupported-operation]
+- ::error file=pandera/engines/pandas_engine.py,line=541,col=9,endLine=541,endColumn=44,title=Pyrefly unsupported-operation::`&=` is not supported between `Series[bool]` and `Series[bool]`%0A  Expected `__iand__` to be a callable, got `bool`
+- ::error file=pandera/engines/pandas_engine.py,line=543,col=9,endLine=543,endColumn=36,title=Pyrefly unsupported-operation::`&=` is not supported between `Series[bool]` and `Series[bool]`%0A  Expected `__iand__` to be a callable, got `bool`
+
+pip (https://github.com/pypa/pip)
+- ::error file=src/pip/_vendor/pygments/token.py,line=44,col=16,endLine=44,endColumn=46,title=Pyrefly unsupported-operation::`+` is not supported between `Literal['Token']` and `Self@_TokenType`%0A  Expected `__radd__` to be a callable, got `_TokenType | Any`
++ ::error file=src/pip/_vendor/pygments/token.py,line=44,col=16,endLine=44,endColumn=46,title=Pyrefly unsupported-operation::`+` is not supported between `Literal['Token']` and `Self@_TokenType`%0A  No matching overload found for function `str.__add__` called with arguments: (Self@_TokenType)%0A  Possible overloads:%0A  (value: LiteralString, /) -> LiteralString [closest match]%0A  (value: str, /) -> str
+

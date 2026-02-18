@@ -1,0 +1,16 @@
+zulip (https://github.com/zulip/zulip)
++ ERROR zerver/lib/bulk_create.py:199:40-57: Argument `set[Stream | UserProfile]` is not assignable to parameter `objs` with type `Iterable[Stream]` in function `django.db.models.manager.Manager.bulk_update` [bad-argument-type]
++ ERROR zerver/lib/bulk_create.py:199:40-57: Argument `set[Stream | UserProfile]` is not assignable to parameter `objs` with type `Iterable[UserProfile]` in function `django.db.models.manager.Manager.bulk_update` [bad-argument-type]
++ ::error file=zerver/lib/bulk_create.py,line=199,col=40,endLine=199,endColumn=57,title=Pyrefly bad-argument-type::Argument `set[Stream | UserProfile]` is not assignable to parameter `objs` with type `Iterable[Stream]` in function `django.db.models.manager.Manager.bulk_update`
++ ::error file=zerver/lib/bulk_create.py,line=199,col=40,endLine=199,endColumn=57,title=Pyrefly bad-argument-type::Argument `set[Stream | UserProfile]` is not assignable to parameter `objs` with type `Iterable[UserProfile]` in function `django.db.models.manager.Manager.bulk_update`
+
+asynq (https://github.com/quora/asynq)
+- ERROR asynq/decorators.py:272:18-27: Expected a callable, got `object` [not-callable]
++ ERROR asynq/decorators.py:279:11-13: Argument `classmethod[Unknown, Ellipsis, Unknown] | staticmethod[Ellipsis, Unknown] | Unknown` is not assignable to parameter with type `(...) -> Unknown` [bad-argument-type]
+- ::error file=asynq/decorators.py,line=272,col=18,endLine=272,endColumn=27,title=Pyrefly not-callable::Expected a callable, got `object`
++ ::error file=asynq/decorators.py,line=279,col=11,endLine=279,endColumn=13,title=Pyrefly bad-argument-type::Argument `classmethod[Unknown, Ellipsis, Unknown] | staticmethod[Ellipsis, Unknown] | Unknown` is not assignable to parameter with type `(...) -> Unknown`
+
+hydra-zen (https://github.com/mit-ll-responsible-ai/hydra-zen)
++ ERROR src/hydra_zen/structured_configs/_implementations.py:1315:20-1323:14: Returned type `list[Unknown] | tuple[Unknown, ...]` is not assignable to declared return type `_T` [bad-return]
++ ::error file=src/hydra_zen/structured_configs/_implementations.py,line=1315,col=20,endLine=1323,endColumn=14,title=Pyrefly bad-return::Returned type `list[Unknown] | tuple[Unknown, ...]` is not assignable to declared return type `_T`
+

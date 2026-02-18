@@ -1,0 +1,38 @@
+meson (https://github.com/mesonbuild/meson)
++ ERROR mesonbuild/interpreter/interpreter.py:2304:22-25: Argument `CustomTarget | CustomTargetIndex | Executable | ExternalProgram | Jar | Program` is not assignable to parameter `exe` with type `CustomTarget | CustomTargetIndex | Executable | ExternalProgram` in function `mesonbuild.interpreter.interpreterobjects.Test.__init__` [bad-argument-type]
++ ERROR mesonbuild/interpreter/interpreter.py:2306:22-54: Argument `bool | object` is not assignable to parameter `is_parallel` with type `bool` in function `mesonbuild.interpreter.interpreterobjects.Test.__init__` [bad-argument-type]
++ ::error file=mesonbuild/interpreter/interpreter.py,line=2304,col=22,endLine=2304,endColumn=25,title=Pyrefly bad-argument-type::Argument `CustomTarget | CustomTargetIndex | Executable | ExternalProgram | Jar | Program` is not assignable to parameter `exe` with type `CustomTarget | CustomTargetIndex | Executable | ExternalProgram` in function `mesonbuild.interpreter.interpreterobjects.Test.__init__`
++ ::error file=mesonbuild/interpreter/interpreter.py,line=2306,col=22,endLine=2306,endColumn=54,title=Pyrefly bad-argument-type::Argument `bool | object` is not assignable to parameter `is_parallel` with type `bool` in function `mesonbuild.interpreter.interpreterobjects.Test.__init__`
+
+psycopg (https://github.com/psycopg/psycopg)
++ ERROR psycopg/psycopg/rows.py:162:38-53: No matching overload found for function `zip.__new__` called with arguments: (type[zip[_T_co]], list[str] | None, Sequence[Any]) [no-matching-overload]
++ ::error file=psycopg/psycopg/rows.py,line=162,col=38,endLine=162,endColumn=53,title=Pyrefly no-matching-overload::No matching overload found for function `zip.__new__` called with arguments: (type[zip[_T_co]], list[str] | None, Sequence[Any])%0A  Possible overloads:%0A  (cls: type[zip[_T_co]], *, strict: bool = False) -> zip[Any]%0A  (cls: type[zip[_T_co]], iter1: Iterable[_T1], /, *, strict: bool = False) -> zip[tuple[_T1]]%0A  (cls: type[zip[_T_co]], iter1: Iterable[_T1], iter2: Iterable[_T2], /, *, strict: bool = False) -> zip[tuple[_T1, _T2]] [closest match]%0A  (cls: type[zip[_T_co]], iter1: Iterable[_T1], iter2: Iterable[_T2], iter3: Iterable[_T3], /, *, strict: bool = False) -> zip[tuple[_T1, _T2, _T3]]%0A  (cls: type[zip[_T_co]], iter1: Iterable[_T1], iter2: Iterable[_T2], iter3: Iterable[_T3], iter4: Iterable[_T4], /, *, strict: bool = False) -> zip[tuple[_T1, _T2, _T3, _T4]]%0A  (cls: type[zip[_T_co]], iter1: Iterable[_T1], iter2: Iterable[_T2], iter3: Iterable[_T3], iter4: Iterable[_T4], iter5: Iterable[_T5], /, *, strict: bool = False) -> zip[tuple[_T1, _T2, _T3, _T4, _T5]]%0A  (cls: type[zip[_T_co]], iter1: Iterable[Any], iter2: Iterable[Any], iter3: Iterable[Any], iter4: Iterable[Any], iter5: Iterable[Any], iter6: Iterable[Any], /, *iterables: Iterable[Any], *, strict: bool = False) -> zip[tuple[Any, ...]]
+
+artigraph (https://github.com/artigraph/artigraph)
++ ERROR src/arti/storage/__init__.py:221:13-27: Unpacked keyword argument `str | Any` is not assignable to parameter `_arti_fingerprint_fields_` with type `tuple[str, ...]` in function `StoragePartition.__init__` [bad-argument-type]
++ ::error file=src/arti/storage/__init__.py,line=221,col=13,endLine=221,endColumn=27,title=Pyrefly bad-argument-type::Unpacked keyword argument `str | Any` is not assignable to parameter `_arti_fingerprint_fields_` with type `tuple[str, ...]` in function `StoragePartition.__init__`
+
+pydantic (https://github.com/pydantic/pydantic)
++ ERROR pydantic/v1/validators.py:615:30-55: No matching overload found for function `typing.NamedTuple.__init__` called with arguments: (**dict[str, Any]) [no-matching-overload]
++ ::error file=pydantic/v1/validators.py,line=615,col=30,endLine=615,endColumn=55,title=Pyrefly no-matching-overload::No matching overload found for function `typing.NamedTuple.__init__` called with arguments: (**dict[str, Any])%0A  Possible overloads:%0A  (typename: str, fields: Iterable[tuple[str, Any]], /) -> None%0A  (typename: str, fields: None = None, /, **kwargs: Any) -> None [closest match]
+
+static-frame (https://github.com/static-frame/static-frame)
++ ERROR static_frame/core/index_datetime.py:284:25-51: Expected a callable, got `Literal[SortStatus.from_range_step]` [not-callable]
++ ERROR static_frame/core/index_datetime.py:310:25-51: Expected a callable, got `Literal[SortStatus.from_range_step]` [not-callable]
++ ERROR static_frame/core/index_datetime.py:334:25-51: Expected a callable, got `Literal[SortStatus.from_range_step]` [not-callable]
++ ERROR static_frame/core/index_datetime.py:418:25-51: Expected a callable, got `Literal[SortStatus.from_range_step]` [not-callable]
++ ERROR static_frame/core/index_datetime.py:444:25-51: Expected a callable, got `Literal[SortStatus.from_range_step]` [not-callable]
++ ERROR static_frame/core/index_datetime.py:469:25-51: Expected a callable, got `Literal[SortStatus.from_range_step]` [not-callable]
++ ERROR static_frame/core/index_datetime.py:518:25-51: Expected a callable, got `Literal[SortStatus.from_range_step]` [not-callable]
++ ERROR static_frame/core/index_datetime.py:543:25-51: Expected a callable, got `Literal[SortStatus.from_range_step]` [not-callable]
++ ERROR static_frame/core/index_datetime.py:568:25-51: Expected a callable, got `Literal[SortStatus.from_range_step]` [not-callable]
++ ::error file=static_frame/core/index_datetime.py,line=284,col=25,endLine=284,endColumn=51,title=Pyrefly not-callable::Expected a callable, got `Literal[SortStatus.from_range_step]`
++ ::error file=static_frame/core/index_datetime.py,line=310,col=25,endLine=310,endColumn=51,title=Pyrefly not-callable::Expected a callable, got `Literal[SortStatus.from_range_step]`
++ ::error file=static_frame/core/index_datetime.py,line=334,col=25,endLine=334,endColumn=51,title=Pyrefly not-callable::Expected a callable, got `Literal[SortStatus.from_range_step]`
++ ::error file=static_frame/core/index_datetime.py,line=418,col=25,endLine=418,endColumn=51,title=Pyrefly not-callable::Expected a callable, got `Literal[SortStatus.from_range_step]`
++ ::error file=static_frame/core/index_datetime.py,line=444,col=25,endLine=444,endColumn=51,title=Pyrefly not-callable::Expected a callable, got `Literal[SortStatus.from_range_step]`
++ ::error file=static_frame/core/index_datetime.py,line=469,col=25,endLine=469,endColumn=51,title=Pyrefly not-callable::Expected a callable, got `Literal[SortStatus.from_range_step]`
++ ::error file=static_frame/core/index_datetime.py,line=518,col=25,endLine=518,endColumn=51,title=Pyrefly not-callable::Expected a callable, got `Literal[SortStatus.from_range_step]`
++ ::error file=static_frame/core/index_datetime.py,line=543,col=25,endLine=543,endColumn=51,title=Pyrefly not-callable::Expected a callable, got `Literal[SortStatus.from_range_step]`
++ ::error file=static_frame/core/index_datetime.py,line=568,col=25,endLine=568,endColumn=51,title=Pyrefly not-callable::Expected a callable, got `Literal[SortStatus.from_range_step]`
+

@@ -21,6 +21,13 @@ from .code_fetcher import fetch_files_by_path, fetch_source_context
 from .llm_client import CategoryVerdict, LLMError, classify_with_llm
 from .parser import ErrorEntry, ProjectDiff
 
+# Rough token estimation: ~3 chars per token (conservative for code, which
+# tokenizes into shorter tokens than English prose). We target 170K tokens
+# to leave headroom below Anthropic's 200K limit.
+_CHARS_PER_TOKEN = 3
+_MAX_PROMPT_TOKENS = 170_000
+_MAX_PROMPT_CHARS = _MAX_PROMPT_TOKENS * _CHARS_PER_TOKEN
+
 
 @dataclass
 class Classification:
@@ -76,6 +83,53 @@ def _is_wording_change(project: ProjectDiff) -> bool:
     added_keys = {(e.file_path, e.line_number, e.error_kind) for e in project.added}
     removed_keys = {(e.file_path, e.line_number, e.error_kind) for e in project.removed}
     return added_keys == removed_keys
+
+
+def _is_near_wording_change(project: ProjectDiff) -> bool:
+    """Check if the diff is mostly wording changes with minor residual noise.
+
+    Catches cases where most added/removed errors share the same location+kind
+    (indicating type inference changes in the message text), with at most a
+    few unmatched entries that don't alter the overall picture.
+
+    Returns True when >= 80% of entries on each side match a counterpart,
+    and the unmatched count is <= 2 on each side.
+    """
+    if not project.added or not project.removed:
+        return False
+
+    added_keys = [(e.file_path, e.line_number, e.error_kind) for e in project.added]
+    removed_keys = [(e.file_path, e.line_number, e.error_kind) for e in project.removed]
+
+    # Count how many added entries have a matching removed entry
+    removed_multiset: dict[tuple[str, int, str], int] = {}
+    for k in removed_keys:
+        removed_multiset[k] = removed_multiset.get(k, 0) + 1
+
+    matched_added = 0
+    remaining = dict(removed_multiset)
+    for k in added_keys:
+        if remaining.get(k, 0) > 0:
+            matched_added += 1
+            remaining[k] -= 1
+
+    matched_removed = sum(removed_multiset[k] - remaining.get(k, 0) for k in removed_multiset)
+
+    unmatched_added = len(project.added) - matched_added
+    unmatched_removed = len(project.removed) - matched_removed
+
+    if unmatched_added > 2 or unmatched_removed > 2:
+        return False
+
+    # At least 80% of each side must be matched
+    added_ratio = matched_added / len(project.added) if project.added else 0
+    removed_ratio = matched_removed / len(project.removed) if project.removed else 0
+    return added_ratio >= 0.8 and removed_ratio >= 0.8
+
+
+def _is_stubs_project(project: ProjectDiff) -> bool:
+    """Check if this is a type stubs project (e.g. django-stubs, boto3-stubs)."""
+    return project.name.endswith("-stubs")
 
 
 _CATEGORY_THRESHOLD = 5  # Use categories instead of individual errors above this
@@ -201,6 +255,47 @@ def _format_errors_for_llm(project: ProjectDiff) -> str:
     return "\n".join(parts)
 
 
+def _truncate_source_context(
+    source_context: Optional[str],
+    errors_text: str,
+) -> Optional[str]:
+    """Truncate source context if the combined prompt would exceed API limits.
+
+    The errors text is kept intact (it's essential and already categorized).
+    Source context is progressively truncated if needed.
+    """
+    if source_context is None:
+        return None
+
+    # Budget for source context = total limit - errors - system prompt overhead
+    overhead_chars = 4000 * _CHARS_PER_TOKEN  # system prompt + formatting
+    available_chars = _MAX_PROMPT_CHARS - len(errors_text) - overhead_chars
+
+    if available_chars <= 0:
+        print(
+            f"Warning: errors text alone is ~{len(errors_text) // _CHARS_PER_TOKEN} tokens, "
+            "skipping source context to stay within API limits.",
+            file=sys.stderr,
+        )
+        return None
+
+    if len(source_context) <= available_chars:
+        return source_context
+
+    # Truncate to budget, cutting at a line boundary when possible
+    truncated = source_context[:available_chars]
+    last_newline = truncated.rfind("\n")
+    if last_newline > available_chars // 2:
+        truncated = truncated[:last_newline]
+
+    print(
+        f"Warning: truncated source context from ~{len(source_context) // _CHARS_PER_TOKEN} "
+        f"to ~{len(truncated) // _CHARS_PER_TOKEN} tokens to stay within API limits.",
+        file=sys.stderr,
+    )
+    return truncated + "\n\n[... source context truncated due to token limit ...]"
+
+
 def _determine_change_type(project: ProjectDiff) -> str:
     """Describe the type of change for the LLM prompt."""
     if project.added and not project.removed:
@@ -209,6 +304,69 @@ def _determine_change_type(project: ProjectDiff) -> str:
         return "removals only (errors fixed on PR branch)"
     else:
         return "mixed (some errors added, some removed)"
+
+
+def _compute_structural_signals(project: ProjectDiff) -> str:
+    """Compute structural signals about the project and errors for the LLM.
+
+    Returns a string of signals to append to the user prompt, helping the
+    LLM make better decisions about test files, stubs projects, inference
+    failures, and net direction.
+    """
+    signals: list[str] = []
+
+    # Stubs project flag
+    if _is_stubs_project(project):
+        signals.append(
+            "STRUCTURAL SIGNAL: This is a type STUBS project (provides type annotations "
+            "for another library). New errors here are almost always regressions — the stubs "
+            "are extensively tested against mypy/pyright."
+        )
+
+    # Test file ratio — advisory only, not deterministic.
+    # Test code CAN have real type issues (e.g., wrong fixture types),
+    # so this is a soft signal, not a hard rule.
+    all_entries = project.added + project.removed
+    test_entries = [
+        e for e in all_entries
+        if any(p in e.file_path for p in ("/tests/", "/test_", "_test.py", "conftest.py", "/testing/"))
+    ]
+    if test_entries and len(test_entries) == len(all_entries) and len(all_entries) >= 10:
+        signals.append(
+            "STRUCTURAL SIGNAL: All errors are in test files. Consider whether these are "
+            "genuine type issues (e.g., wrong fixture return types, missing attributes on real objects) "
+            "or false positives from patterns the type checker can't model (mocking, parametrize, etc.)."
+        )
+
+    # Never/@_ inference failure detection — only count Never and @_ as strong
+    # signals. Unknown on its own is ambiguous: it can indicate untyped code
+    # that is *correctly* flagged as incompatible with a typed API.
+    never_count = sum(
+        1 for e in project.added
+        if any(marker in e.message for marker in ("Never", "@_"))
+    )
+    if never_count > 0:
+        signals.append(
+            f"STRUCTURAL SIGNAL: {never_count}/{len(project.added)} new error(s) contain "
+            "`Never` or `@_` types — these strongly suggest type inference failures, not real bugs."
+        )
+
+    # Net direction signal
+    if project.added and project.removed:
+        ratio = len(project.removed) / len(project.added) if project.added else 0
+        if ratio >= 3:
+            signals.append(
+                f"STRUCTURAL SIGNAL: Net direction is strongly toward improvement "
+                f"({len(project.removed)} removed vs {len(project.added)} added). "
+                f"The PR fixed many more problems than it introduced."
+            )
+        elif len(project.added) >= 3 * len(project.removed) and len(project.added) >= 5:
+            signals.append(
+                f"STRUCTURAL SIGNAL: Net direction is strongly toward regression "
+                f"({len(project.added)} added vs {len(project.removed)} removed)."
+            )
+
+    return "\n".join(signals)
 
 
 def _get_best_source_context(
@@ -291,6 +449,16 @@ def classify_project(
         base.method = "heuristic"
         return base
 
+    # Heuristic 4: Near-wording change (>= 80% matched locations, <= 2 unmatched)
+    if _is_near_wording_change(project):
+        base.verdict = "neutral"
+        base.reason = (
+            f"Most errors at same locations with same error kinds — "
+            "message wording changed with minor residual noise, no significant behavioral impact."
+        )
+        base.method = "heuristic"
+        return base
+
     # Non-trivial case: use LLM if available
     if not use_llm:
         base.verdict = "ambiguous"
@@ -303,7 +471,9 @@ def classify_project(
 
     errors_text = _format_errors_for_llm(project)
     source_context = _get_best_source_context(project, fetch_code)
+    source_context = _truncate_source_context(source_context, errors_text)
     change_type = _determine_change_type(project)
+    structural_signals = _compute_structural_signals(project)
 
     try:
         llm_result = classify_with_llm(
@@ -311,28 +481,36 @@ def classify_project(
             source_context=source_context,
             change_type=change_type,
             model=model,
+            structural_signals=structural_signals,
         )
 
-        # Two-pass: if the LLM requests additional files, fetch and retry
-        if llm_result.needs_files and fetch_code:
+        # Multi-pass: if the LLM requests additional files, fetch and retry
+        # Allow up to 2 extra rounds (3 total) so the LLM can chase
+        # parent class → type definition chains.
+        combined_context = source_context or ""
+        for _pass in range(2):
+            if not llm_result.needs_files or not fetch_code:
+                break
             print(
                 f"  LLM requested files: {llm_result.needs_files}",
                 file=sys.stderr,
             )
             extra_context = fetch_files_by_path(project, llm_result.needs_files)
-            if extra_context:
-                combined_context = source_context or ""
-                if combined_context:
-                    combined_context += "\n\n"
-                combined_context += extra_context
-                llm_result = classify_with_llm(
-                    errors_text=errors_text,
-                    source_context=combined_context,
-                    change_type=change_type,
-                    model=model,
-                )
+            if not extra_context:
+                break
+            if combined_context:
+                combined_context += "\n\n"
+            combined_context += extra_context
+            truncated = _truncate_source_context(combined_context, errors_text)
+            llm_result = classify_with_llm(
+                errors_text=errors_text,
+                source_context=truncated,
+                change_type=change_type,
+                model=model,
+                structural_signals=structural_signals,
+            )
 
-        # If the LLM still wants files after the second pass, give up
+        # If the LLM still wants files after all passes, give up
         if llm_result.needs_files:
             base.verdict = "ambiguous"
             base.reason = (

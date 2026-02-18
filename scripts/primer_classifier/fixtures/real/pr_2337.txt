@@ -1,0 +1,6 @@
+cloud-init (https://github.com/canonical/cloud-init)
+- ERROR cloudinit/distros/ug_util.py:40:45-52: No matching overload found for function `typing.MutableMapping.setdefault` called with arguments: (Unknown, list[@_]) [no-matching-overload]
++ ERROR cloudinit/distros/ug_util.py:40:25-59: Object of class `NoneType` has no attribute `extend` [missing-attribute]
+- ::error file=cloudinit/distros/ug_util.py,line=40,col=45,endLine=40,endColumn=52,title=Pyrefly no-matching-overload::No matching overload found for function `typing.MutableMapping.setdefault` called with arguments: (Unknown, list[@_])%0A  Possible overloads:%0A  (key: Unknown, default: None = None, /) -> _T | None [closest match]%0A  (key: Unknown, default: Unknown | None, /) -> Unknown | None
++ ::error file=cloudinit/distros/ug_util.py,line=40,col=25,endLine=40,endColumn=59,title=Pyrefly missing-attribute::Object of class `NoneType` has no attribute `extend`
+

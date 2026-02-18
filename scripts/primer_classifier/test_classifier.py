@@ -25,6 +25,7 @@ from .classifier import (
     _is_all_internal_errors,
     _is_all_removals,
     _is_wording_change,
+    _truncate_source_context,
     classify_all,
     classify_project,
 )
@@ -38,7 +39,7 @@ from .llm_client import (
 )
 from .parser import ErrorEntry, ProjectDiff, parse_error_line, parse_primer_diff
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures"
+FIXTURES_DIR = Path(__file__).parent / "fixtures" / "unit"
 
 
 def _load_fixture(name: str) -> str:
@@ -363,6 +364,27 @@ class TestCategorization:
         text = _format_errors_for_llm(p)
         assert "Error summary" in text
         assert "[missing-attribute]" in text
+
+    def test_truncate_source_context_none(self):
+        assert _truncate_source_context(None, "some errors") is None
+
+    def test_truncate_source_context_fits(self):
+        """Small context should pass through unchanged."""
+        ctx = "def foo():\n    return 42\n"
+        result = _truncate_source_context(ctx, "errors")
+        assert result == ctx
+
+    def test_truncate_source_context_too_large(self):
+        """Oversized context should be truncated with a marker."""
+        # Create context that is larger than the budget allows
+        from .classifier import _CHARS_PER_TOKEN, _MAX_PROMPT_CHARS
+
+        # Make errors text consume most of the budget
+        huge_errors = "x" * (_MAX_PROMPT_CHARS - 100)
+        ctx = "line\n" * 1000
+        result = _truncate_source_context(ctx, huge_errors)
+        # Should be truncated or None due to budget exhaustion
+        assert result is None or "[... source context truncated" in result
 
 
 # ---------------------------------------------------------------------------
