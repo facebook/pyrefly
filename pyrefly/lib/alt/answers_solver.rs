@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::env;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -1114,6 +1115,18 @@ pub struct ThreadState {
     debug: RefCell<bool>,
     /// Configuration for recursion depth limiting. None means disabled.
     recursion_limit_config: Option<RecursionLimitConfig>,
+    /// How SCC participants store answers during solving.
+    scc_solving_mode: SccSolvingMode,
+}
+
+/// Internal SCC-solving modes controlled via `PYREFLY_SCC_SOLVING_MODE`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SccSolvingMode {
+    /// Thread-local SCC solving with batch commits to Calculation.
+    #[default]
+    CyclesThreadLocal,
+    /// Write SCC participant answers to Calculation immediately.
+    CyclesDualWrite,
 }
 
 impl ThreadState {
@@ -1122,6 +1135,27 @@ impl ThreadState {
             stack: CalcStack::new(),
             debug: RefCell::new(false),
             recursion_limit_config,
+            scc_solving_mode: SccSolvingMode::from_env(),
+        }
+    }
+
+    fn scc_solving_mode(&self) -> SccSolvingMode {
+        self.scc_solving_mode
+    }
+}
+
+impl SccSolvingMode {
+    fn from_env() -> Self {
+        match env::var("PYREFLY_SCC_SOLVING_MODE") {
+            Ok(value) => match value.as_str() {
+                "cycles-thread-local" => Self::CyclesThreadLocal,
+                "cycles-dual-write" => Self::CyclesDualWrite,
+                _ => panic!(
+                    "$PYREFLY_SCC_SOLVING_MODE must be one of \
+                     `cycles-thread-local` or `cycles-dual-write`, got `{value}`"
+                ),
+            },
+            Err(_) => Self::default(),
         }
     }
 }
@@ -1306,7 +1340,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         if self.stack().is_scc_participant(&current) {
-            // SCC path: store in NodeState::Done, defer Calculation write to batch commit.
+            // SCC path: store in NodeState::Done and (optionally) write to Calculation.
             //
             // If this is a break_at node (has a placeholder Var), we must finalize
             // the recursive answer now, before storing. Finalization mutates solver
@@ -1316,12 +1350,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 raw_answer
             };
-            let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(answer.dupe());
-            let canonical_erased = self.stack().on_calculation_finished(
-                &current,
-                Some(answer_erased),
-                Some(Arc::new(local_errors)),
-            );
+            let (calc_answer, errors) =
+                if self.thread_state.scc_solving_mode() == SccSolvingMode::CyclesDualWrite {
+                    // Write to Calculation immediately for cross-thread visibility.
+                    // Without this, the Calculation stays in Calculating status during
+                    // SCC processing, allowing other threads to independently re-compute
+                    // this binding via propose_calculation() → Calculatable. Since
+                    // cycle-oriented solving is not entrypoint-invariant, independent
+                    // re-computation can produce different results depending on thread
+                    // scheduling, causing non-determinism.
+                    let (calc_answer, did_write) = calculation.record_value(answer.dupe());
+                    if did_write {
+                        self.base_errors.extend(local_errors);
+                    }
+                    (calc_answer, None)
+                } else {
+                    (answer, Some(Arc::new(local_errors)))
+                };
+            // Also store in NodeState::Done for SCC-local isolation (the SCC
+            // uses these answers via SccLocalAnswer without touching Calculation).
+            let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(calc_answer.dupe());
+            let canonical_erased =
+                self.stack()
+                    .on_calculation_finished(&current, Some(answer_erased), errors);
             // Use the canonical answer from thread-local state, mirroring how
             // Calculation::record_value returns the first-written answer.
             match canonical_erased {
@@ -1330,7 +1381,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .downcast::<Arc<K::Answer>>()
                         .expect("on_calculation_finished canonical answer downcast failed"),
                 ),
-                None => answer,
+                None => calc_answer,
             }
         } else {
             // Non-SCC path: write directly to Calculation as before.
