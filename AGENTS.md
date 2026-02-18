@@ -58,6 +58,14 @@ Coding style: All code must be clean, documented and minimal. That means:
 - Code should have comments, and functions should have docstrings. The best
   comments are ones that introduce invariants, or prove that invariants are
   being upheld, or indicate which invariants the code relies upon.
+- **Unreachable states must panic, not silently degrade.** Do not use defensive
+  programming to handle states that should be impossible. If a match arm, Option,
+  or Result should never occur given the surrounding invariants, use
+  `unreachable!("explanation")` or `.expect("explanation")` — never
+  `_ => default`, `.unwrap_or_default()`, or silent fallbacks. A type checker
+  that silently produces wrong results is far worse than one that crashes with a
+  clear message. Silent fallbacks hide bugs and confuse maintainers by making
+  unreachable states look reachable.
 - Check for existing helpers in the `pyrefly_types` crate before manually
   creating or destructuring a `Type`.
 - Minimize the number of places `Expr` nodes are passed around and the number of
