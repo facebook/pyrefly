@@ -1122,11 +1122,11 @@ pub struct ThreadState {
 /// Internal SCC-solving modes controlled via `PYREFLY_SCC_SOLVING_MODE`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum SccSolvingMode {
-    /// Thread-local SCC solving with batch commits to Calculation.
-    #[default]
-    CyclesThreadLocal,
     /// Write SCC participant answers to Calculation immediately.
+    #[default]
     CyclesDualWrite,
+    /// Thread-local SCC solving with batch commits to Calculation.
+    CyclesThreadLocal,
 }
 
 impl ThreadState {
