@@ -17,6 +17,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit as _;
 use ruff_python_ast::Arguments;
@@ -33,6 +34,8 @@ use ruff_text_size::TextRange;
 
 use crate::binding::binding::Key;
 
+const SELF_PARAMETER_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("selfParameter");
+
 /// Adds the DEFAULT_LIBRARY modifier if the module is a standard library module
 /// (builtins, typing, typing_extensions).
 fn maybe_add_default_library_modifier(
@@ -41,6 +44,12 @@ fn maybe_add_default_library_modifier(
 ) {
     if ["builtins", "typing", "typing_extensions"].contains(&module.as_str()) {
         modifiers.push(SemanticTokenModifier::DEFAULT_LIBRARY);
+    }
+}
+
+fn maybe_add_self_parameter_modifier(name: &str, modifiers: &mut Vec<SemanticTokenModifier>) {
+    if name == "self" || name == "cls" {
+        modifiers.push(SELF_PARAMETER_MODIFIER.clone());
     }
 }
 
@@ -88,6 +97,7 @@ impl SemanticTokensLegends {
                 SemanticTokenModifier::MODIFICATION,
                 SemanticTokenModifier::DOCUMENTATION,
                 SemanticTokenModifier::DEFAULT_LIBRARY,
+                SELF_PARAMETER_MODIFIER.clone(),
             ],
         }
     }
@@ -263,6 +273,9 @@ impl SemanticTokenBuilder {
                 if let Some((def_module, symbol_kind)) = get_symbol_kind(&key) {
                     let (token_type, mut token_modifiers) =
                         symbol_kind.to_lsp_semantic_token_type_with_modifiers();
+                    if symbol_kind == SymbolKind::Parameter {
+                        maybe_add_self_parameter_modifier(name.id.as_str(), &mut token_modifiers);
+                    }
                     maybe_add_default_library_modifier(def_module, &mut token_modifiers);
                     self.push_if_in_range(name.range, token_type, token_modifiers);
                 } else if name.ctx == ExprContext::Store {
@@ -278,11 +291,20 @@ impl SemanticTokenBuilder {
             Expr::Attribute(attr) => {
                 // todo(samzhou19815): if the class's base is Enum, it should be ENUM_MEMBER
                 let kind = match get_type_of_attribute(attr.range()) {
-                    Some(Type::BoundMethod(_)) => SemanticTokenType::METHOD,
-                    Some(Type::Function(_) | Type::Callable(_) | Type::Overload(_)) => {
-                        SemanticTokenType::FUNCTION
+                    Some(ty) if ty.is_toplevel_callable() => {
+                        let is_method = ty.visit_toplevel_func_metadata(&|meta| {
+                            matches!(&meta.kind, FunctionKind::Def(func) if func.cls.is_some())
+                        });
+                        if is_method {
+                            SemanticTokenType::METHOD
+                        } else {
+                            SemanticTokenType::FUNCTION
+                        }
                     }
-                    Some(Type::ClassDef(_)) => SemanticTokenType::CLASS,
+                    Some(Type::ClassDef(_) | Type::Type(_)) => SemanticTokenType::CLASS,
+                    Some(Type::TypeAlias(_) | Type::UntypedAlias(_)) => {
+                        SemanticTokenType::INTERFACE
+                    }
                     Some(Type::Module(_)) => SemanticTokenType::NAMESPACE,
                     _ => SemanticTokenType::PROPERTY,
                 };
@@ -367,24 +389,33 @@ impl SemanticTokenBuilder {
                 }
                 // Highlight all parameters as PARAMETER
                 for param in function_def.parameters.iter_non_variadic_params() {
+                    let mut modifiers = Vec::new();
+                    maybe_add_self_parameter_modifier(
+                        param.parameter.name.as_str(),
+                        &mut modifiers,
+                    );
                     self.push_if_in_range(
                         param.parameter.name.range(),
                         SemanticTokenType::PARAMETER,
-                        Vec::new(),
+                        modifiers,
                     );
                 }
                 if let Some(vararg) = &function_def.parameters.vararg {
+                    let mut modifiers = Vec::new();
+                    maybe_add_self_parameter_modifier(vararg.name.as_str(), &mut modifiers);
                     self.push_if_in_range(
                         vararg.name.range(),
                         SemanticTokenType::PARAMETER,
-                        Vec::new(),
+                        modifiers,
                     );
                 }
                 if let Some(kwarg) = &function_def.parameters.kwarg {
+                    let mut modifiers = Vec::new();
+                    maybe_add_self_parameter_modifier(kwarg.name.as_str(), &mut modifiers);
                     self.push_if_in_range(
                         kwarg.name.range(),
                         SemanticTokenType::PARAMETER,
-                        Vec::new(),
+                        modifiers,
                     );
                 }
                 x.recurse(&mut |x| self.process_stmt(x, false, get_symbol_kind));
