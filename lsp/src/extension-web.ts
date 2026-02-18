@@ -83,9 +83,18 @@ export async function activate(
   }
 
   const worker = createWorker(context);
+  const wasmUri = await vscode.env.asExternalUri(
+    vscode.Uri.joinPath(context.extensionUri, 'dist', 'pyrefly_wasm_bg.wasm'),
+  );
+  outputChannel.appendLine(
+    `Pyrefly web: using wasm URI ${wasmUri.toString(true)}`,
+  );
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{language: 'python'}],
     outputChannel,
+    initializationOptions: {
+      wasmUri: wasmUri.toString(true),
+    },
   };
 
   client = new LanguageClient(
@@ -95,8 +104,13 @@ export async function activate(
     worker,
   );
 
-  context.subscriptions.push(client.start());
-  await client.onReady();
+  const startPromise = client.start();
+  context.subscriptions.push({
+    dispose: () => {
+      void client?.stop();
+    },
+  });
+  await startPromise;
 
   try {
     await indexWorkspaceFiles(client);

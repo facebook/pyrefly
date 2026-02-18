@@ -90,9 +90,10 @@ type PyreflyInlayHint = {
   position: PyreflyPosition;
 };
 
+const workerScope = self as unknown as DedicatedWorkerGlobalScope;
 const connection = createProtocolConnection(
-  new BrowserMessageReader(self),
-  new BrowserMessageWriter(self),
+  new BrowserMessageReader(workerScope),
+  new BrowserMessageWriter(workerScope),
 );
 
 const files = new Map<string, string>();
@@ -100,13 +101,16 @@ let workspaceRoots: Array<{uri: string; path: string}> = [];
 const wasmModule = pyreflyWasm as unknown as PyreflyWasmModule;
 let wasmState: PyreflyState | null = null;
 let wasmLoadNotified = false;
+let wasmResourceUri: string | undefined;
 
 async function ensureWasmState(): Promise<PyreflyState | null> {
   if (wasmState) {
     return wasmState;
   }
   try {
-    const wasmUrl = new URL('pyrefly_wasm_bg.wasm', self.location.href);
+    const wasmUrl = wasmResourceUri
+      ? new URL(wasmResourceUri)
+      : new URL('pyrefly_wasm_bg.wasm', self.location.href);
     await wasmModule.default(wasmUrl);
     wasmState = new wasmModule.State('3.12');
     return wasmState;
@@ -115,8 +119,9 @@ async function ensureWasmState(): Promise<PyreflyState | null> {
       wasmLoadNotified = true;
       connection.sendNotification('window/showMessage', {
         type: MessageType.Error,
-        message:
-          'Pyrefly web failed to load the WASM bundle. Run pyrefly_wasm/build.sh and rebuild the extension.',
+        message: `Pyrefly web failed to load the WASM bundle: ${String(
+          error,
+        )}. Run pyrefly_wasm/build.sh and rebuild the extension.`,
       });
     }
     console.error(String(error));
@@ -150,7 +155,6 @@ function getPathFromUri(uri: string): string {
 }
 
 function uriToFilename(uri: string): string {
-  const parsed = URI.parse(uri);
   const parsedPath = getPathFromUri(uri);
   for (const root of workspaceRoots) {
     if (parsedPath.startsWith(root.path)) {
@@ -258,6 +262,12 @@ connection.onRequest(
   'initialize',
   async (params: InitializeParams): Promise<InitializeResult> => {
     setWorkspaceRoots(params);
+    const initOptions = params.initializationOptions as
+      | {wasmUri?: string}
+      | undefined;
+    if (initOptions?.wasmUri) {
+      wasmResourceUri = initOptions.wasmUri;
+    }
     const state = await ensureWasmState();
     const legend = state
       ? state.semanticTokensLegend()
