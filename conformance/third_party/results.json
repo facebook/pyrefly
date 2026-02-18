@@ -1,9 +1,9 @@
 {
   "total": 138,
-  "pass": 118,
-  "fail": 20,
-  "pass_rate": 0.86,
-  "differences": 60,
+  "pass": 121,
+  "fail": 17,
+  "pass_rate": 0.88,
+  "differences": 56,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -56,6 +56,7 @@
     "enums_member_values.py",
     "enums_members.py",
     "generics_base_class.py",
+    "generics_defaults.py",
     "generics_defaults_referential.py",
     "generics_defaults_specialization.py",
     "generics_paramspec_basic.py",
@@ -101,8 +102,10 @@
     "protocols_runtime_checkable.py",
     "protocols_self.py",
     "protocols_subtyping.py",
+    "protocols_variance.py",
     "qualifiers_final_decorator.py",
     "specialtypes_any.py",
+    "specialtypes_never.py",
     "specialtypes_none.py",
     "specialtypes_promotions.py",
     "specialtypes_type.py",
@@ -133,7 +136,6 @@
     "dataclasses_slots.py": 2,
     "exceptions_context_managers.py": 2,
     "generics_basic.py": 3,
-    "generics_defaults.py": 1,
     "generics_paramspec_components.py": 1,
     "generics_scoping.py": 8,
     "generics_self_basic.py": 2,
@@ -141,10 +143,8 @@
     "generics_typevartuple_basic.py": 1,
     "generics_typevartuple_specialization.py": 4,
     "protocols_modules.py": 1,
-    "protocols_variance.py": 2,
     "qualifiers_annotated.py": 6,
-    "qualifiers_final_annotation.py": 5,
-    "specialtypes_never.py": 1
+    "qualifiers_final_annotation.py": 5
   },
   "comment": "@generated"
 }

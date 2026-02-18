@@ -35,10 +35,10 @@
   "constructors_call_new.py": [],
   "constructors_call_type.py": [],
   "constructors_callable.py": [
-    "Line 184: Expected 1 errors",
-    "Line 195: Expected 1 errors",
-    "Line 165: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
-    "Line 183: Unexpected errors ['assert_type(Class8[Any], Class8[str]) failed']"
+    "Line 186: Expected 1 errors",
+    "Line 197: Expected 1 errors",
+    "Line 167: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
+    "Line 185: Unexpected errors ['assert_type(Class8[Any], Class8[str]) failed']"
   ],
   "constructors_consistency.py": [],
   "dataclasses_descriptors.py": [
@@ -93,9 +93,7 @@
     "Line 67: Unexpected errors ['assert_type(MyStr, str) failed']",
     "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
   ],
-  "generics_defaults.py": [
-    "Line 170: Unexpected errors ['assert_type([DefaultIntT = int](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']"
-  ],
+  "generics_defaults.py": [],
   "generics_defaults_referential.py": [],
   "generics_defaults_specialization.py": [],
   "generics_paramspec_basic.py": [],
@@ -123,7 +121,7 @@
   "generics_self_protocols.py": [],
   "generics_self_usage.py": [
     "Line 82: Expected 1 errors",
-    "Line 86: Expected 1 errors"
+    "Line 87: Expected 1 errors"
   ],
   "generics_syntax_compatibility.py": [],
   "generics_syntax_declarations.py": [],
@@ -174,10 +172,7 @@
   "protocols_runtime_checkable.py": [],
   "protocols_self.py": [],
   "protocols_subtyping.py": [],
-  "protocols_variance.py": [
-    "Line 61: Expected 1 errors",
-    "Line 71: Expected 1 errors"
-  ],
+  "protocols_variance.py": [],
   "qualifiers_annotated.py": [
     "Line 71: Expected 1 errors",
     "Line 72: Expected 1 errors",
@@ -195,9 +190,7 @@
   ],
   "qualifiers_final_decorator.py": [],
   "specialtypes_any.py": [],
-  "specialtypes_never.py": [
-    "Line 32: Unexpected errors [\"Returned type `Literal['whatever works']` is not assignable to declared return type `int`\"]"
-  ],
+  "specialtypes_never.py": [],
   "specialtypes_none.py": [],
   "specialtypes_promotions.py": [],
   "specialtypes_type.py": [],
