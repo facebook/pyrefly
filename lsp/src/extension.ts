@@ -63,11 +63,14 @@ function requireSetting<T>(path: string): T {
  * corresponding to the sections described in configurationItems
  */
 async function overridePythonPath(
-  pythonExtension: PythonExtension,
+  pythonExtension: PythonExtension | undefined,
   configurationItems: ConfigurationItem[],
   configuration: (object | null)[],
 ): Promise<(object | null)[]> {
   const getPythonPathForConfigurationItem = async (index: number) => {
+    if (!pythonExtension) {
+      return undefined;
+    }
     if (
       configurationItems.length <= index ||
       configurationItems[index].section !== 'python'
@@ -117,7 +120,14 @@ export async function activate(context: ExtensionContext) {
     process.platform === 'win32' ? 'pyrefly.exe' : 'pyrefly',
   );
 
-  let pythonExtension = await PythonExtension.api();
+  let pythonExtension: PythonExtension | undefined;
+  try {
+    pythonExtension = await PythonExtension.api();
+  } catch (error) {
+    vscode.window.showWarningMessage(
+      'Pyrefly: Python extension not available. Python interpreter detection will be limited.',
+    );
+  }
 
   // Otherwise to spawn the server
   let serverOptions: ServerOptions = {
@@ -187,13 +197,15 @@ export async function activate(context: ExtensionContext) {
     }),
   );
 
-  context.subscriptions.push(
-    pythonExtension.environments.onDidChangeActiveEnvironmentPath(() => {
-      client.sendNotification(DidChangeConfigurationNotification.type, {
-        settings: {},
-      });
-    }),
-  );
+  if (pythonExtension) {
+    context.subscriptions.push(
+      pythonExtension.environments.onDidChangeActiveEnvironmentPath(() => {
+        client.sendNotification(DidChangeConfigurationNotification.type, {
+          settings: {},
+        });
+      }),
+    );
+  }
 
   context.subscriptions.push(
     workspace.onDidChangeConfiguration(async event => {
@@ -236,10 +248,15 @@ export async function activate(context: ExtensionContext) {
 
   // When our extension is activated, make sure ms-python knows
   // TODO(kylei): remove this hack once ms-python has this behavior
-  await triggerMsPythonRefreshLanguageServers();
+  if (pythonExtension) {
+    await triggerMsPythonRefreshLanguageServers();
+  }
 
   vscode.workspace.onDidChangeConfiguration(async e => {
-    if (e.affectsConfiguration(`python.pyrefly.disableLanguageServices`)) {
+    if (
+      pythonExtension &&
+      e.affectsConfiguration(`python.pyrefly.disableLanguageServices`)
+    ) {
       // TODO(kylei): remove this hack once ms-python has this behavior
       await triggerMsPythonRefreshLanguageServers();
     }

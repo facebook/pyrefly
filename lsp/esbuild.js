@@ -64,6 +64,9 @@ async function main() {
     outfile: 'dist/pyrefly-web-worker.js',
     external: ['vscode'],
     logLevel: 'warning',
+    define: {
+      'import.meta.url': 'self.location.href'
+    },
     plugins: [
       /* add to the end of plugins array */
       esbuildProblemMatcherPlugin

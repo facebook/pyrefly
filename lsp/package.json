@@ -4,7 +4,8 @@
     "description": "Python autocomplete, typechecking, code navigation and more! Powered by Pyrefly, an open-source language server",
     "icon": "images/pyrefly-symbol.png",
     "extensionKind": [
-        "workspace"
+        "workspace",
+        "ui"
     ],
     "author": "Facebook",
     "license": "Apache2",
@@ -261,7 +262,7 @@
         "vsce": "^2.15.0",
         "vscode-languageclient": "9.0.1"
     },
-    "extensionDependencies": [
+    "extensionPack": [
         "ms-python.python"
     ]
 }
