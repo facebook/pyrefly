@@ -83,16 +83,21 @@ export async function activate(
   }
 
   const worker = createWorker(context);
-  const wasmUri = await vscode.env.asExternalUri(
-    vscode.Uri.joinPath(context.extensionUri, 'dist', 'pyrefly_wasm_bg.wasm'),
+  const wasmFileUri = vscode.Uri.joinPath(
+    context.extensionUri,
+    'dist',
+    'pyrefly_wasm_bg.wasm',
   );
-  outputChannel.appendLine(
-    `Pyrefly web: using wasm URI ${wasmUri.toString(true)}`,
-  );
+  const wasmUri = await vscode.env.asExternalUri(wasmFileUri);
+  const wasmBytes = await vscode.workspace.fs.readFile(wasmFileUri);
+
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{language: 'python'}],
     outputChannel,
     initializationOptions: {
+      // Prefer bytes so the worker doesn't need to `fetch(...)` with a custom URL scheme.
+      wasmBytes,
+      // Keep URI as a fallback / for debugging.
       wasmUri: wasmUri.toString(true),
     },
   };

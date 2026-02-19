@@ -67,7 +67,7 @@ type PyreflyState = {
   setActiveFile: (filename: string) => void;
   getErrors: () => PyreflyDiagnostic[];
   hover: (line: number, column: number) => PyreflyHover | null;
-  semanticTokens: (range: PyreflyRange | null) => SemanticTokens | null;
+  semanticTokens: (range: PyreflyRange | null) => unknown | null;
   semanticTokensLegend: () => SemanticTokensLegend;
   gotoDefinition: (line: number, column: number) => PyreflyRange[];
   gotoDefinitionLocations: (
@@ -128,16 +128,63 @@ const wasmModule = pyreflyWasm as unknown as PyreflyWasmModule;
 let wasmState: PyreflyState | null = null;
 let wasmLoadNotified = false;
 let wasmResourceUri: string | undefined;
+let wasmResourceBytes: Uint8Array | undefined;
+
+const DEFAULT_SEMANTIC_TOKENS_LEGEND: SemanticTokensLegend = {
+  // Keep in sync with `pyrefly/lib/state/semantic_tokens.rs` legends.
+  tokenTypes: [
+    'namespace',
+    'type',
+    'class',
+    'enum',
+    'interface',
+    'struct',
+    'typeParameter',
+    'parameter',
+    'variable',
+    'property',
+    'enumMember',
+    'event',
+    'function',
+    'method',
+    'macro',
+    'keyword',
+    'modifier',
+    'comment',
+    'string',
+    'number',
+    'regexp',
+    'operator',
+    'decorator',
+  ],
+  tokenModifiers: [
+    'declaration',
+    'definition',
+    'readonly',
+    'static',
+    'deprecated',
+    'abstract',
+    'async',
+    'modification',
+    'documentation',
+    'defaultLibrary',
+    'selfParameter',
+  ],
+};
 
 async function ensureWasmState(): Promise<PyreflyState | null> {
   if (wasmState) {
     return wasmState;
   }
   try {
-    const wasmUrl = wasmResourceUri
-      ? new URL(wasmResourceUri)
-      : new URL('pyrefly_wasm_bg.wasm', self.location.href);
-    await wasmModule.default(wasmUrl);
+    if (wasmResourceBytes) {
+      await wasmModule.default(wasmResourceBytes);
+    } else {
+      const wasmUrl = wasmResourceUri
+        ? new URL(wasmResourceUri)
+        : new URL('pyrefly_wasm_bg.wasm', self.location.href);
+      await wasmModule.default(wasmUrl);
+    }
     wasmState = new wasmModule.State('3.12');
     return wasmState;
   } catch (error) {
@@ -229,6 +276,41 @@ function toPyreflyRange(range: LspRange): PyreflyRange {
   };
 }
 
+function normalizeSemanticTokens(value: unknown): SemanticTokens | null {
+  if (value == null || typeof value !== 'object') {
+    return null;
+  }
+  const anyValue = value as Record<string, unknown>;
+  // `lsp_types::SemanticTokens` serializes as `{ data: number[], resultId?: string }`.
+  if (Array.isArray(anyValue.data)) {
+    return value as SemanticTokens;
+  }
+  // Some runtimes may surface `data` as a typed array.
+  if (ArrayBuffer.isView(anyValue.data)) {
+    const v = value as SemanticTokens & {data: ArrayLike<number>};
+    return {
+      ...v,
+      data: Array.from(v.data),
+    };
+  }
+  // Be robust to enum-wrapped shapes such as `{ Tokens: { data: [...] } }`.
+  const tokens = anyValue.Tokens ?? anyValue.tokens;
+  if (tokens && typeof tokens === 'object') {
+    const anyTokens = tokens as Record<string, unknown>;
+    if (Array.isArray(anyTokens.data)) {
+      return tokens as SemanticTokens;
+    }
+    if (ArrayBuffer.isView(anyTokens.data)) {
+      const t = tokens as SemanticTokens & {data: ArrayLike<number>};
+      return {
+        ...t,
+        data: Array.from(t.data),
+      };
+    }
+  }
+  return null;
+}
+
 function toDiagnosticSeverity(severity: number): DiagnosticSeverity {
   // Pyrefly's WASM playground reports Monaco MarkerSeverity numeric values:
   // - 8: Error
@@ -295,15 +377,18 @@ connection.onRequest(
   async (params: InitializeParams): Promise<InitializeResult> => {
     setWorkspaceRoots(params);
     const initOptions = params.initializationOptions as
-      | {wasmUri?: string}
+      | {wasmUri?: string; wasmBytes?: Uint8Array}
       | undefined;
     if (initOptions?.wasmUri) {
       wasmResourceUri = initOptions.wasmUri;
     }
+    if (initOptions?.wasmBytes) {
+      wasmResourceBytes = initOptions.wasmBytes;
+    }
     const state = await ensureWasmState();
     const legend = state
       ? state.semanticTokensLegend()
-      : {tokenTypes: [], tokenModifiers: []};
+      : DEFAULT_SEMANTIC_TOKENS_LEGEND;
 
     return {
       capabilities: {
@@ -474,7 +559,7 @@ connection.onRequest(
     }
     const filename = uriToFilename(fullParams.textDocument.uri);
     state.setActiveFile(filename);
-    return state.semanticTokens(null);
+    return normalizeSemanticTokens(state.semanticTokens(null));
   },
 );
 
@@ -487,7 +572,9 @@ connection.onRequest(
     }
     const filename = uriToFilename(rangeParams.textDocument.uri);
     state.setActiveFile(filename);
-    return state.semanticTokens(toPyreflyRange(rangeParams.range));
+    return normalizeSemanticTokens(
+      state.semanticTokens(toPyreflyRange(rangeParams.range)),
+    );
   },
 );
 
