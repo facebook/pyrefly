@@ -692,7 +692,6 @@ f(({"x": 0},))
 );
 
 testcase!(
-    bug = "`TD` should be used as a hint when typing `{'x': 0}`",
     test_typed_dict_hint_in_typevar_bound,
     r#"
 from typing import TypedDict
