@@ -2174,7 +2174,7 @@ impl Scopes {
                             }
                         }
                         ClassFieldDefinition::AssignedInBody {
-                            value: ExprOrBinding::Expr(e.clone()),
+                            value: Box::new(ExprOrBinding::Expr(e.clone())),
                             annotation: static_info.annotation(),
                             alias_of,
                         }
@@ -2200,7 +2200,7 @@ impl Scopes {
                         name,
                         (
                             ClassFieldDefinition::DefinedInMethod {
-                                value,
+                                value: Box::new(value),
                                 annotation,
                                 method,
                             },

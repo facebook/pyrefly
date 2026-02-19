@@ -1536,7 +1536,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             } => {
                 let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
-                let initialization = if let ExprOrBinding::Expr(e) = value
+                let initialization = if let ExprOrBinding::Expr(e) = value.as_ref()
                     && let Some(dm) = metadata.dataclass_metadata()
                     && let Expr::Call(call) = e
                 {
@@ -1776,10 +1776,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && matches!(&ty, Type::ClassType(cls) if self.is_foreign_key_field(cls.class_object()));
 
         // Check if this is a Django field with choices
-        let has_choices = if let ClassFieldDefinition::AssignedInBody {
-            value: ExprOrBinding::Expr(expr),
-            ..
-        } = field_definition
+        let has_choices = if let ClassFieldDefinition::AssignedInBody { value, .. } =
+            field_definition
+            && let ExprOrBinding::Expr(expr) = value.as_ref()
             && let Some(call_expr) = expr.as_call_expr()
         {
             metadata.is_django_model() && self.has_django_field_choices(call_expr)
@@ -2030,10 +2029,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         .or_else(|| self.get_pydantic_root_model_class_field_type(class, name))
         .or_else(|| {
             let initial_value_expr = match field_definition {
-                ClassFieldDefinition::AssignedInBody {
-                    value: ExprOrBinding::Expr(expr),
-                    ..
-                } => Some(expr),
+                ClassFieldDefinition::AssignedInBody { value, .. } => {
+                    if let ExprOrBinding::Expr(expr) = value.as_ref() {
+                        Some(expr)
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             };
             self.get_django_field_type(ty, class, Some(name), initial_value_expr)

@@ -117,7 +117,7 @@ assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 9);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
-assert_words!(BindingClassField, 20);
+assert_words!(BindingClassField, 11);
 assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
@@ -2684,7 +2684,7 @@ pub enum ClassFieldDefinition {
     /// `alias_of` is set when the value is a simple name referring to another
     /// field in the same class (used for enum alias detection).
     AssignedInBody {
-        value: ExprOrBinding,
+        value: Box<ExprOrBinding>,
         annotation: Option<Idx<KeyAnnotation>>,
         alias_of: Option<Name>,
     },
@@ -2703,7 +2703,7 @@ pub enum ClassFieldDefinition {
     /// Implicitly defined in a method, without any explicit reference
     /// in the class body.
     DefinedInMethod {
-        value: ExprOrBinding,
+        value: Box<ExprOrBinding>,
         annotation: Option<Idx<KeyAnnotation>>,
         method: MethodThatSetsAttr,
     },

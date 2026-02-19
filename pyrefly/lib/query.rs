@@ -1071,7 +1071,7 @@ impl Query {
                                 .and_then(|a| a.annotation.ty.clone())
                                 // Fall back to expression type trace
                                 .or_else(|| {
-                                    if let ExprOrBinding::Expr(expr) = value {
+                                    if let ExprOrBinding::Expr(expr) = value.as_ref() {
                                         answers.get_type_trace(expr.range())
                                     } else {
                                         None
