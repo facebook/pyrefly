@@ -100,7 +100,7 @@ pub enum TypedDict {
 // When we get the name of a class-based typed dict we borrow the class's name, so we need
 // a name that we can borrow for anonymous typed dicts
 // This is a lazily initialized value, Name::new normally can't be used as the RHS of a static
-static ANONYMOUS_TYPED_DICT: LazyLock<Name> = LazyLock::new(|| Name::new("<anonymous>"));
+pub static ANONYMOUS_TYPED_DICT: LazyLock<Name> = LazyLock::new(|| Name::new("<anonymous>"));
 
 impl TypedDict {
     pub fn new(class: Class, args: TArgs) -> Self {

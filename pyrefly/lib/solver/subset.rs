@@ -23,6 +23,8 @@ use pyrefly_types::read_only::ReadOnlyReason;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tensor::TensorShape;
 use pyrefly_types::tensor::TensorType;
+use pyrefly_types::typed_dict::ANONYMOUS_TYPED_DICT;
+use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -957,6 +959,52 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         }
     }
 
+    /// Check an anonymous TypedDict (inferred from a dict literal) against a regular TypedDict.
+    fn is_subset_anonymous_typed_dict(
+        &mut self,
+        got: &AnonymousTypedDictInner,
+        want: &TypedDict,
+    ) -> Result<(), SubsetError> {
+        let got_fields = got.fields.clone().into_iter().collect::<SmallMap<_, _>>();
+        let want_fields = self.type_order.typed_dict_fields(want);
+        let want_extra_items = self.type_order.typed_dict_extra_items(want);
+        let want_extra_ty = match &want_extra_items {
+            ExtraItems::Extra(extra) => Some(&extra.ty),
+            _ => None,
+        };
+        // 1. Make sure all items in `got` are present in `want` with the right types.
+        all(got_fields.iter(), |(k, got_v)| {
+            let want_ty = want_fields.get(k).map(|field| &field.ty).or(want_extra_ty);
+            if let Some(want_ty) = want_ty {
+                self.is_subset_eq(&got_v.ty, want_ty)
+            } else {
+                // Note that we intentionally flip `got` and `want` in the error, because it is
+                // `want` that is missing the field.
+                Err(SubsetError::TypedDict(Box::new(
+                    TypedDictSubsetError::MissingField {
+                        got: want.name().clone(),
+                        want: ANONYMOUS_TYPED_DICT.clone(),
+                        field: k.clone(),
+                    },
+                )))
+            }
+        })?;
+        // (2) Make sure all required items in `want` are present in `got`.
+        all(want_fields.iter(), |(k, want_v)| {
+            if want_v.required && !got_fields.contains_key(k) {
+                Err(SubsetError::TypedDict(Box::new(
+                    TypedDictSubsetError::MissingField {
+                        got: ANONYMOUS_TYPED_DICT.clone(),
+                        want: want.name().clone(),
+                        field: k.clone(),
+                    },
+                )))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
     fn is_subset_overload(&mut self, overload: &Overload, want: &Type) -> Result<(), SubsetError> {
         if any(overload.signatures.iter(), |l| {
             self.is_subset_eq(&l.as_type(), want)
@@ -1315,6 +1363,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             ) => {
                 self.is_subset_params(&l.params, &u.params)?;
                 self.is_subset_eq(&l.ret, &u.ret)
+            }
+            (Type::TypedDict(TypedDict::Anonymous(got)), Type::TypedDict(want)) => {
+                self.is_subset_anonymous_typed_dict(got, want)
             }
             (Type::TypedDict(got), Type::TypedDict(want)) => self.is_subset_typed_dict(got, want),
             (Type::TypedDict(got), Type::PartialTypedDict(want)) => {
