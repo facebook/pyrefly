@@ -2226,3 +2226,116 @@ def f() -> dict: ...
 X = TypedDict("X", {"k1": int, **f()})  # E: Unpacking is not supported
     "#,
 );
+
+testcase!(
+    bug = "False positive about item 'a', does not warn about missing item 'b'",
+    test_anonymous_typed_dict_missing_required_key,
+    r#"
+from typing import TypedDict
+
+class TD(TypedDict):
+    a: int
+    b: bool
+
+def f(td: TD) -> None: ...
+
+td = {"a": 1000}
+f(td=td)  # E: `a` is required in `TD` but is `NotRequired` in `<anonymous>`
+    "#,
+);
+
+testcase!(
+    bug = "False positive",
+    test_anonymous_typed_dict_missing_not_required_key_ok,
+    r#"
+from typing import TypedDict
+
+class TD(TypedDict, total=False):
+    a: int
+    b: bool
+
+def f(td: TD) -> None: ...
+
+td = {"a": 1000}
+f(td=td)  # E: `b` in `<anonymous>` has type `int`, which is not consistent with `bool` in `TD`
+    "#,
+);
+
+testcase!(
+    bug = "False positive",
+    test_anonymous_typed_dict_any_requiredness_ok,
+    r#"
+from typing import NotRequired, Required, TypedDict
+
+class TD1(TypedDict):
+    a: Required[int]
+
+class TD2(TypedDict):
+    a: NotRequired[int]
+
+def f(td1: TD1, td2: TD2) -> None: ...
+
+td = {"a": 1000}
+f(td1=td, td2=td)  # E: `a` is required in `TD1` but is `NotRequired` in `<anonymous>`
+    "#,
+);
+
+testcase!(
+    bug = "False positives",
+    test_anonymous_typed_dict_any_extra_items_ok,
+    r#"
+from typing import ReadOnly, TypedDict
+
+class TD1(TypedDict, closed=True):
+    a: int
+
+class TD2(TypedDict, extra_items=str):
+    a: int
+
+class TD3(TypedDict, extra_items=ReadOnly[str]):
+    a: int
+
+def f(td1: TD1, td2: TD2, td3: TD3) -> None: ...
+
+td = {"a": 1000}
+f(td1=td, td2=td, td3=td)  # E: `a` is required in `TD1` but is `NotRequired` in `<anonymous>`  # E: `a` is required in `TD2`  # E: `a` is required in `TD3`
+    "#,
+);
+
+testcase!(
+    bug = "False positive",
+    test_anonymous_typed_dict_value_subtype,
+    r#"
+from typing import TypedDict
+
+class TD(TypedDict):
+    a: int
+
+def f(td: TD) -> None: ...
+
+td = {"a": True}
+f(td=td)  # E: `a` in `<anonymous>` has type `bool`, which is not consistent with `int`
+    "#,
+);
+
+testcase!(
+    bug = "False positives, does not catch extra 'b' key in `td1=td`",
+    test_anonymous_typed_dict_check_extra_items,
+    r#"
+from typing import TypedDict
+
+class TD1(TypedDict):
+    a: int
+
+class TD2(TypedDict, extra_items=str):
+    a: int
+
+def f(td1: TD1, td2: TD2) -> None: ...
+
+td = {"a": 0, "b": "hi"}
+f(
+    td1=td,  # E: `a` is required in `TD1` but is `NotRequired` in `<anonymous>`
+    td2=td,  # E: `a` is required in `TD2` but is `NotRequired` in `<anonymous>`
+)
+    "#,
+);
