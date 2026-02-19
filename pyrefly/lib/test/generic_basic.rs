@@ -627,6 +627,27 @@ class I(G, H): ...  # E: Class `I` has inconsistent type arguments for base clas
 );
 
 testcase!(
+    bug = "Union of T | type[T] fails to match the type[T] branch when passed a class",
+    test_typevar_union_with_type_of_typevar,
+    r#"
+from typing import TypeVar, assert_type
+
+class Base: ...
+class Sub(Base): ...
+
+T = TypeVar("T", bound=Base)
+
+# type[T] alone works
+def good(x: type[T]) -> T: ...
+assert_type(good(Sub), Sub)
+
+# T | type[T] should also work — pyrefly should check the type[T] branch
+def bad(x: T | type[T]) -> T: ...
+assert_type(bad(Sub), Sub)  # E: assert_type(type[Sub], Sub) failed  # E: `type[Sub]` is not assignable to upper bound `Base` of type variable `T`
+"#,
+);
+
+testcase!(
     test_generic_alias_fields,
     r#"
 from typing import assert_type
