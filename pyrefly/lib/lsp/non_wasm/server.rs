@@ -202,6 +202,7 @@ use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
+use pyrefly_util::telemetry::ActivityKey;
 use pyrefly_util::telemetry::SubTaskTelemetry;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryDidChangeWatchedFilesStats;
@@ -1095,6 +1096,29 @@ pub fn lsp_loop(
     Ok(())
 }
 
+/// Records a telemetry event for an individual code action sub-operation.
+/// Called after each code action block with the `Instant` captured before the block.
+fn record_code_action_telemetry(
+    name: &str,
+    start: Instant,
+    server_state: &TelemetryServerState,
+    telemetry: &dyn Telemetry,
+    activity_key: Option<&ActivityKey>,
+    file_stats: Option<&TelemetryFileStats>,
+) {
+    let mut event = TelemetryEvent::new_task(
+        TelemetryEventKind::CodeAction(name.to_owned()),
+        server_state.clone(),
+        None,
+        start,
+    );
+    event.set_activity_key(activity_key.cloned());
+    if let Some(stats) = file_stats {
+        event.set_file_stats(stats.clone());
+    }
+    event.finish_and_record(telemetry, None);
+}
+
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
 
@@ -1471,9 +1495,19 @@ impl Server {
                         )
                     {
                         self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
+                        let activity_key = telemetry_event.activity_key.as_ref();
+                        let file_stats = telemetry_event.file_stats.as_ref();
                         self.send_response(new_response(
                             x.id,
-                            Ok(self.code_action(&transaction, params).unwrap_or_default()),
+                            Ok(self
+                                .code_action(
+                                    &transaction,
+                                    params,
+                                    telemetry,
+                                    activity_key,
+                                    file_stats,
+                                )
+                                .unwrap_or_default()),
                         ));
                     }
                 } else if let Some(params) = as_request::<Completion>(&x) {
@@ -3403,6 +3437,9 @@ impl Server {
         &self,
         transaction: &Transaction<'_>,
         params: CodeActionParams,
+        telemetry: &dyn Telemetry,
+        activity_key: Option<&ActivityKey>,
+        file_stats: Option<&TelemetryFileStats>,
     ) -> Option<CodeActionResponse> {
         let uri = &params.text_document.uri;
         let (handle, lsp_config) = self.make_handle_with_lsp_analysis_config_if_enabled(
@@ -3421,6 +3458,8 @@ impl Server {
                 .any(|kind| kind == &CodeActionKind::SOURCE_FIX_ALL)
         });
         let mut actions = Vec::new();
+        let server_state = self.telemetry_state();
+        let start = Instant::now();
         if allow_quickfix
             && let Some(quickfixes) =
                 transaction.local_quickfix_code_actions_sorted(&handle, range, import_format)
@@ -3448,7 +3487,16 @@ impl Server {
                     }))
                 },
             ));
+            record_code_action_telemetry(
+                "quickfix",
+                start,
+                &server_state,
+                telemetry,
+                activity_key,
+                file_stats,
+            );
         }
+        let start = Instant::now();
         if allow_fix_all && let Some(edits) = transaction.redundant_cast_fix_all_edits(&handle) {
             let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
             for (module, edit_range, new_text) in edits {
@@ -3474,6 +3522,14 @@ impl Server {
                     ..Default::default()
                 }));
             }
+            record_code_action_telemetry(
+                "fix_all",
+                start,
+                &server_state,
+                telemetry,
+                activity_key,
+                file_stats,
+            );
         }
         // Optimization: do not calculate refactors for automated codeactions since they're expensive
         // If we had lazy code actions, we could keep them.
@@ -3511,52 +3567,78 @@ impl Server {
                 }));
             }
         };
-        if let Some(refactors) = transaction.extract_field_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
+        macro_rules! timed_refactor_action {
+            ($name:expr, $call:expr) => {{
+                let start = Instant::now();
+                if let Some(refactors) = $call {
+                    push_refactor_actions(refactors);
+                    record_code_action_telemetry(
+                        $name,
+                        start,
+                        &server_state,
+                        telemetry,
+                        activity_key,
+                        file_stats,
+                    );
+                }
+            }};
         }
-        if let Some(refactors) = transaction.extract_variable_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.invert_boolean_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.extract_superclass_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.inline_variable_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.inline_method_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.inline_parameter_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.pull_members_up_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.push_members_down_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) =
+        timed_refactor_action!(
+            "extract_field",
+            transaction.extract_field_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "extract_variable",
+            transaction.extract_variable_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "invert_boolean",
+            transaction.invert_boolean_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "extract_function",
+            transaction.extract_function_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "extract_superclass",
+            transaction.extract_superclass_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "inline_variable",
+            transaction.inline_variable_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "inline_method",
+            transaction.inline_method_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "inline_parameter",
+            transaction.inline_parameter_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "pull_members_up",
+            transaction.pull_members_up_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "push_members_down",
+            transaction.push_members_down_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "move_module_member",
             transaction.move_module_member_code_actions(&handle, range, import_format)
-        {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) =
+        );
+        timed_refactor_action!(
+            "make_local_function_top_level",
             transaction.make_local_function_top_level_code_actions(&handle, range, import_format)
-        {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.introduce_parameter_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.convert_star_import_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
+        );
+        timed_refactor_action!(
+            "introduce_parameter",
+            transaction.introduce_parameter_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "convert_star_import",
+            transaction.convert_star_import_code_actions(&handle, range)
+        );
         if let Some(action) =
             convert_module_package_code_actions(&self.initialize_params.capabilities, uri)
         {
