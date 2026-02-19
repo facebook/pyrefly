@@ -1496,7 +1496,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn find_definition_for_imported_module(
+    pub(crate) fn find_definition_for_imported_module(
         &self,
         handle: &Handle,
         module_name: ModuleName,
