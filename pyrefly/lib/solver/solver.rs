@@ -14,7 +14,7 @@ use std::fmt::Display;
 use std::mem;
 
 use pyrefly_types::dimension::ShapeError;
-use pyrefly_types::dimension::simplify;
+use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::intersect;
@@ -483,7 +483,7 @@ impl Solver {
     fn simplify_forced_type(&self, mut ty: Type) -> Type {
         // Use transform_mut to visit every Type node and simplify dimensions
         ty.transform_mut(&mut |t| {
-            let simplified = simplify(t.clone());
+            let simplified = canonicalize(t.clone());
             if &simplified != t {
                 *t = simplified;
             }
@@ -507,7 +507,7 @@ impl Solver {
             t.recurse_mut(&mut |t| self.deep_force_mut_with_limit(t, limit - 1, recurser));
             // After forcing all Vars recursively, simplify dimension expressions
             // This handles cases like Tensor[(10 * 20)] after Vars are forced to 10 and 20
-            let simplified = simplify(t.clone());
+            let simplified = canonicalize(t.clone());
             if &simplified != t {
                 *t = simplified;
             }

@@ -1093,10 +1093,6 @@ impl Type {
             } else {
                 ty.recurse_mut(&mut |x| f(x, mp));
             }
-            // After substitution, simplify Size expressions (constant folding).
-            if let Type::Size(_) = ty {
-                *ty = dimension::simplify(ty.clone());
-            }
         }
         f(self, mp);
     }

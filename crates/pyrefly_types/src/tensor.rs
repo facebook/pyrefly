@@ -18,7 +18,6 @@ pub use crate::dimension::ShapeError;
 pub use crate::dimension::SizeExpr;
 use crate::dimension::canonicalize;
 pub use crate::dimension::contains_var_in_type;
-use crate::dimension::simplify;
 use crate::tuple::Tuple;
 use crate::types::Type;
 
@@ -98,22 +97,26 @@ pub enum TensorShape {
 
 impl TensorShape {
     pub fn new(dims: Vec<SizeExpr>) -> Self {
-        Self::Concrete(dims.into_iter().map(|d| simplify(Type::Size(d))).collect())
+        Self::Concrete(
+            dims.into_iter()
+                .map(|d| canonicalize(Type::Size(d)))
+                .collect(),
+        )
     }
 
     /// Create from Vec<Type> directly (for when dims are already wrapped)
     /// Automatically normalizes dimensions to canonical form:
-    /// - Simplifies SizeExpr expressions (e.g., 2+3 -> 5, N+0 -> N)
+    /// - Canonicalizes SizeExpr expressions (e.g., 2+3 -> 5, N+0 -> N)
     /// - Leaves Quantified, Var, and Any as-is (already canonical)
     pub fn from_types(dims: Vec<Type>) -> Self {
-        Self::Concrete(dims.into_iter().map(simplify).collect())
+        Self::Concrete(dims.into_iter().map(canonicalize).collect())
     }
 
     /// Create variadic shape with unpacked TypeVarTuple: Tensor[2, *Shape, 4]
     pub fn unpacked(prefix: Vec<Type>, middle: Type, suffix: Vec<Type>) -> Self {
-        // Simplify all dimensions
-        let prefix: Vec<Type> = prefix.into_iter().map(simplify).collect();
-        let suffix: Vec<Type> = suffix.into_iter().map(simplify).collect();
+        // Canonicalize all dimensions
+        let prefix: Vec<Type> = prefix.into_iter().map(canonicalize).collect();
+        let suffix: Vec<Type> = suffix.into_iter().map(canonicalize).collect();
 
         Self::Unpacked(Box::new((prefix, middle, suffix)))
     }

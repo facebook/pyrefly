@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-use crate::dimension::simplify;
+use crate::dimension::canonicalize;
 use crate::literal::Lit;
 use crate::literal::Literal;
 use crate::tensor::ShapeError;
@@ -872,7 +872,7 @@ impl MetaShapeFunction for ReshapeMetaShape {
         }
 
         // Simplify and try to extract a concrete element count
-        let input_numel_type = simplify(input_numel_type);
+        let input_numel_type = canonicalize(input_numel_type);
         let input_size_opt = input_numel_type.as_shape_literal();
 
         // Validate dimension values (check for invalid values like -2, -3, etc.)
@@ -1073,7 +1073,7 @@ impl MetaShapeFunction for ConcatMetaShape {
                 for shape in &inputs[1..] {
                     sum_dim = Type::Size(SizeExpr::add(sum_dim, shape.get_dim(d)));
                 }
-                output_dims.push(simplify(sum_dim));
+                output_dims.push(canonicalize(sum_dim));
             } else {
                 // All other dims must match (we'll validate with shapes_compatible later)
                 output_dims.push(first_shape.get_dim(d));
@@ -2389,7 +2389,7 @@ impl MetaShapeFunction for FlattenMetaShape {
         for i in start..=end {
             flattened = SizeExpr::mul(Type::Size(flattened), input_shape.get_dim(i));
         }
-        output_dims.push(simplify(Type::Size(flattened)));
+        output_dims.push(canonicalize(Type::Size(flattened)));
 
         // Dims after end_dim
         for i in (end + 1)..input_shape.rank() {
@@ -2579,7 +2579,7 @@ impl MetaShapeFunction for TileMetaShape {
                 .skip(reps.len() - input_shape.rank())
                 .enumerate()
             {
-                output_dims.push(simplify(Type::Size(SizeExpr::mul(
+                output_dims.push(canonicalize(Type::Size(SizeExpr::mul(
                     input_shape.get_dim(i),
                     Type::Size(SizeExpr::Literal(rep)),
                 ))));
@@ -2587,7 +2587,7 @@ impl MetaShapeFunction for TileMetaShape {
         } else {
             // Multiply each dimension
             for (i, &rep) in reps.iter().enumerate() {
-                output_dims.push(simplify(Type::Size(SizeExpr::mul(
+                output_dims.push(canonicalize(Type::Size(SizeExpr::mul(
                     input_shape.get_dim(i),
                     Type::Size(SizeExpr::Literal(rep)),
                 ))));
@@ -3143,7 +3143,7 @@ impl MetaShapeFunction for RepeatMetaShape {
             .zip(repeats.iter())
             .map(|(dim, repeat)| {
                 // Multiply dimension by repeat factor
-                simplify(Type::Size(SizeExpr::mul(dim.clone(), repeat.clone())))
+                canonicalize(Type::Size(SizeExpr::mul(dim.clone(), repeat.clone())))
             })
             .collect();
 
@@ -3550,7 +3550,7 @@ impl MetaShapeFunction for UnfoldMetaShape {
             Type::Size(dim_minus_size),
             Type::Size(SizeExpr::Literal(step)),
         );
-        let new_size_ty = simplify(Type::Size(SizeExpr::add(
+        let new_size_ty = canonicalize(Type::Size(SizeExpr::add(
             Type::Size(quotient),
             Type::Size(SizeExpr::Literal(1)),
         )));
@@ -4356,7 +4356,7 @@ impl MetaShapeFunction for ConvMetaShape {
                 Type::Size(numerator),
                 Type::Size(SizeExpr::Literal(stride_val)),
             );
-            let output_size_ty = simplify(Type::Size(SizeExpr::add(
+            let output_size_ty = canonicalize(Type::Size(SizeExpr::add(
                 Type::Size(quotient),
                 Type::Size(SizeExpr::Literal(1)),
             )));
@@ -4509,7 +4509,7 @@ impl MetaShapeFunction for ConvTransposeMetaShape {
                 Type::Size(after_dilation),
                 Type::Size(SizeExpr::Literal(output_padding_val)),
             );
-            let output_size_ty = simplify(Type::Size(SizeExpr::add(
+            let output_size_ty = canonicalize(Type::Size(SizeExpr::add(
                 Type::Size(after_output_pad),
                 Type::Size(SizeExpr::Literal(1)),
             )));
@@ -4656,7 +4656,7 @@ impl MetaShapeFunction for PoolMetaShape {
                 Type::Size(numerator),
                 Type::Size(SizeExpr::Literal(stride_val)),
             );
-            let output_size_ty = simplify(Type::Size(SizeExpr::add(
+            let output_size_ty = canonicalize(Type::Size(SizeExpr::add(
                 Type::Size(quotient),
                 Type::Size(SizeExpr::Literal(1)),
             )));
@@ -5687,7 +5687,7 @@ impl MetaShapeFunction for PadMetaShape {
                     Type::Size(with_left),
                     Type::Size(SizeExpr::Literal(right_pad)),
                 );
-                output_dims[dim_idx] = simplify(Type::Size(with_both));
+                output_dims[dim_idx] = canonicalize(Type::Size(with_both));
             }
 
             Ok(MetaShapeResult::Tensors(vec![TensorShape::from_types(
@@ -5938,7 +5938,7 @@ impl MetaShapeFunction for NumelIntMetaShape {
         // Compute product of all dimensions (symbolic or literal)
         let mut numel_ty = Type::Size(SizeExpr::Literal(1));
         for dim in input_shape.dims() {
-            numel_ty = simplify(Type::Size(SizeExpr::mul(numel_ty, dim.clone())));
+            numel_ty = canonicalize(Type::Size(SizeExpr::mul(numel_ty, dim.clone())));
         }
 
         // Return result based on whether it's concrete or symbolic
@@ -6111,7 +6111,7 @@ impl FftMetaShape {
                     // Compute (input_dim // 2) + 1 symbolically
                     let div_result =
                         SizeExpr::floor_div(input_dim.clone(), Type::Size(SizeExpr::Literal(2)));
-                    simplify(Type::Size(SizeExpr::add(
+                    canonicalize(Type::Size(SizeExpr::add(
                         Type::Size(div_result),
                         Type::Size(SizeExpr::Literal(1)),
                     )))
@@ -6133,7 +6133,7 @@ impl FftMetaShape {
                     // Compute 2 * (input_dim - 1) symbolically
                     let minus_one =
                         SizeExpr::sub(input_dim.clone(), Type::Size(SizeExpr::Literal(1)));
-                    simplify(Type::Size(SizeExpr::mul(
+                    canonicalize(Type::Size(SizeExpr::mul(
                         Type::Size(SizeExpr::Literal(2)),
                         Type::Size(minus_one),
                     )))
