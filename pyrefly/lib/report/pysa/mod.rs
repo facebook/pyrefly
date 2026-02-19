@@ -25,6 +25,7 @@ pub mod types;
 
 use core::panic;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::BufWriter;
 use std::ops::Not;
@@ -100,6 +101,8 @@ struct PysaProjectModule {
     is_interface: bool, // Is this a .pyi file?
     #[serde(skip_serializing_if = "<&bool>::not")]
     is_init: bool, // Is this a __init__.py(i) file?
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    is_internal: bool, // Is this a module from the project (as opposed to a dependency)?
 }
 
 /// Format of the index file `pyrefly.pysa.json`
@@ -208,9 +211,13 @@ pub fn export_module_call_graphs(
 
 fn build_module_mapping(
     handles: &Vec<Handle>,
+    project_handles: &[Handle],
     module_ids: &ModuleIds,
 ) -> HashMap<ModuleId, PysaProjectModule> {
     let step = StepLogger::start("Building module list", "Built module list");
+
+    // Set of handles from the "project-includes", i.e only handles that are typed checked.
+    let project_handles: HashSet<&Handle> = project_handles.iter().collect();
 
     let mut project_modules = HashMap::new();
     for handle in handles {
@@ -268,6 +275,7 @@ fn build_module_mapping(
                         is_test: false,
                         is_interface: handle.path().is_interface(),
                         is_init: handle.path().is_init(),
+                        is_internal: project_handles.contains(handle),
                     }
                 )
                 .is_none(),
@@ -554,6 +562,7 @@ fn write_errors_file(
 pub fn write_results(
     results_directory: &Path,
     transaction: &Transaction,
+    project_handles: &[Handle],
     errors: &[TypeError],
 ) -> anyhow::Result<()> {
     let step = StepLogger::start(
@@ -571,7 +580,7 @@ pub fn write_results(
 
     let handles = transaction.handles();
     let module_ids = ModuleIds::new(&handles);
-    let project_modules = build_module_mapping(&handles, &module_ids);
+    let project_modules = build_module_mapping(&handles, project_handles, &module_ids);
     let module_work_list = make_module_work_list(&project_modules);
 
     let reversed_override_graph = build_reversed_override_graph(&handles, transaction, &module_ids);

@@ -965,7 +965,7 @@ impl CheckArgs {
             }
         }
         if let Some(pysa_directory) = &self.output.report_pysa {
-            report::pysa::write_results(pysa_directory, transaction, &shown_errors)?;
+            report::pysa::write_results(pysa_directory, transaction, handles, &shown_errors)?;
         }
         if let Some(path) = &self.output.report_binding_memory {
             fs_anyhow::write(path, report::binding_memory::binding_memory(transaction))?;
