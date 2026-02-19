@@ -573,9 +573,11 @@ impl<'a> BindingsBuilder<'a> {
             }
             Expr::If(x) => {
                 // Ternary operation. We treat it like an if/else statement.
-                self.start_fork_and_branch(x.range);
+                // Process the test before forking so walrus-defined names are
+                // in the base flow and visible to both branches.
                 self.ensure_expr(&mut x.test, &mut Usage::narrowing_from(usage));
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
+                self.start_fork_and_branch(x.range);
                 self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(x.body.range()), usage);
                 self.ensure_expr(&mut x.body, usage);
                 // Negate the narrow ops for the `orelse`, then merge the Flows.

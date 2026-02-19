@@ -1125,6 +1125,82 @@ def f(v):
     "#,
 );
 
+// Regression tests for https://github.com/facebook/pyrefly/issues/2382
+// Walrus operator in ternary test expression
+
+testcase!(
+    test_walrus_in_ternary_else_branch,
+    r#"
+def f(i: float) -> int:
+    return a if (a := round(i)) - 1 else a + 1
+    "#,
+);
+
+testcase!(
+    test_walrus_in_ternary_only_in_else,
+    r#"
+def f(x: int) -> int:
+    return 0 if (y := x) > 0 else y
+    "#,
+);
+
+// After fix, x should be narrowed to int in the body (is not None) and
+// the else branch returns 0 (int), so the return type is int. No error.
+// Before the fix, this works because narrowing finds x through static scope.
+testcase!(
+    test_walrus_in_ternary_with_narrowing,
+    r#"
+from typing import assert_type
+def get() -> int | None: ...
+def f() -> int:
+    return x if (x := get()) is not None else 0
+    "#,
+);
+
+testcase!(
+    test_walrus_ternary_truthiness_narrowing,
+    r#"
+from typing import assert_type
+def get() -> str | None: ...
+def f() -> str:
+    return x if (x := get()) else "default"
+    "#,
+);
+
+// After the fix, short-circuit prevents walrus execution — walrus may not run.
+// The BoolOp merge uses lax handling, so `x` is treated as defined even though
+// it may not execute. This is a known false negative from BoolOp laxness.
+testcase!(
+    test_walrus_in_ternary_short_circuit,
+    r#"
+def condition() -> bool: ...
+def get() -> int: ...
+def f() -> int:
+    return x if condition() and (x := get()) else 0
+    "#,
+);
+
+// Walrus in outer ternary test: `a` should be visible in both branches.
+// Currently this works because truthiness narrowing on `a` adds it to the
+// else flow, masking the uninitialized status.
+testcase!(
+    test_walrus_in_nested_ternary_outer,
+    r#"
+def f(v: int) -> int:
+    return (a if a > 0 else -a) if (a := v) else -a
+    "#,
+);
+
+testcase!(
+    test_walrus_in_nested_ternary_inner,
+    r#"
+def condition() -> bool: ...
+def get() -> int: ...
+def f() -> int:
+    return (b if (b := get()) > 0 else 0) if condition() else -1
+    "#,
+);
+
 testcase!(
     test_trycatch_implicit_return,
     r#"
