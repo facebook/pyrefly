@@ -358,7 +358,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             if is_self_recursive {
                                 CallTargetLookup::CircularCall
                             } else {
-                                self.as_call_target_impl(ty, quantified, /* dunder_call */ true)
+                                self.as_call_target_impl(ty, quantified, dunder_call)
                             }
                         },
                     )
@@ -366,7 +366,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.instance_as_dunder_call(&cls).map_or(
                         CallTargetLookup::Error(vec![]),
                         |ty| {
-                            self.as_call_target_impl(ty, quantified, /* dunder_call */ true)
+                            // We set dunder_call to `true` here to avoid infinite recursion.
+                            self.as_call_target_impl(ty, quantified, true)
                         },
                     )
                 }
