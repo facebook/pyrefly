@@ -2504,6 +2504,27 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
                 target_load.errors.extend(errors);
             }
             true
+        } else if lock.steps.solutions.is_some() && lock.steps.last_step == Some(Step::Solutions) {
+            // The target module's Answers have been evicted, but Solutions
+            // exist. This is a benign race: another thread ran
+            // `demand(Step::Solutions)` on the target module concurrently
+            // with our SCC resolution. The sequence is:
+            //
+            //   1. Our thread duped the target's Arc<Answers> (in
+            //      `lookup_answer`) and dropped the module state lock.
+            //   2. While our thread was solving the SCC using that duped
+            //      Arc, another thread acquired the exclusive lock on the
+            //      target module and ran `step_solutions`, which solves
+            //      all keys independently (Calculation cells allow
+            //      multi-thread parallel compute via `propose_calculation`).
+            //   3. After computing Solutions, `demand` evicted the Answers
+            //      as a memory optimization (`steps.answers.take()`),
+            //      then released the exclusive lock.
+            //   4. Our batch commit now reads `steps.answers` and finds
+            //      None — but the Calculation cells were already filled
+            //      by the other thread's `step_solutions`, so no data is
+            //      lost. Our commit is redundant and can be safely skipped.
+            true
         } else {
             false
         }
