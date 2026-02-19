@@ -7,6 +7,23 @@
  * @format
  */
 
+/**
+ * Web-worker "server" used by the Pyrefly VS Code Web extension (vscode.dev / github.dev).
+ *
+ * Architecture:
+ * - `lsp/src/extension-web.ts` spins up this Worker.
+ * - This worker speaks LSP over `postMessage` using the browser JSON-RPC transport from
+ *   `vscode-languageserver-protocol/browser`.
+ * - Typechecking is powered by the Pyrefly WASM playground (`pyrefly_wasm`), which exposes a
+ *   small, editor-oriented API (diagnostics, hover, completion, etc).
+ * - We keep an in-memory map of workspace file contents (`files`). On open/change we update the
+ *   WASM state, then publish diagnostics back to the client.
+ *
+ * Limitations:
+ * - Only files we have contents for (indexed or opened) can participate in cross-file features.
+ * - No subprocesses / interpreter probing in the browser sandbox.
+ */
+
 import {
   BrowserMessageReader,
   BrowserMessageWriter,
@@ -53,6 +70,10 @@ type PyreflyState = {
   semanticTokens: (range: PyreflyRange | null) => SemanticTokens | null;
   semanticTokensLegend: () => SemanticTokensLegend;
   gotoDefinition: (line: number, column: number) => PyreflyRange[];
+  gotoDefinitionLocations: (
+    line: number,
+    column: number,
+  ) => PyreflyDefinitionLocation[];
   autoComplete: (line: number, column: number) => CompletionItem[];
   inlayHint: () => PyreflyInlayHint[];
 };
@@ -78,6 +99,11 @@ type PyreflyRange = {
   startColumn: number;
   endLineNumber: number;
   endColumn: number;
+};
+
+type PyreflyDefinitionLocation = {
+  filename: string;
+  range: PyreflyRange;
 };
 
 type PyreflyPosition = {
@@ -204,6 +230,12 @@ function toPyreflyRange(range: LspRange): PyreflyRange {
 }
 
 function toDiagnosticSeverity(severity: number): DiagnosticSeverity {
+  // Pyrefly's WASM playground reports Monaco MarkerSeverity numeric values:
+  // - 8: Error
+  // - 4: Warning
+  // - 2: Info
+  // - 1: Hint
+  // See `pyrefly/lib/playground.rs` (and Monaco MarkerSeverity docs).
   switch (severity) {
     case 8:
       return DiagnosticSeverity.Error;
@@ -351,17 +383,19 @@ connection.onNotification(
 connection.onNotification(
   'textDocument/didClose',
   async (closeParams: DidCloseTextDocumentParams) => {
-  const state = await ensureWasmState();
-  if (!state) {
-    return;
-  }
-  const filename = uriToFilename(closeParams.textDocument.uri);
-  const content = files.get(filename);
-  if (!content) {
-    return;
-  }
-  state.updateSingleFile(filename, content);
-  await publishDiagnostics(state);
+    const state = await ensureWasmState();
+    if (!state) {
+      return;
+    }
+    const filename = uriToFilename(closeParams.textDocument.uri);
+    const content = files.get(filename);
+    if (!content) {
+      return;
+    }
+    // Intentionally keep `files` content even after close so we can continue to produce
+    // workspace-wide diagnostics and cross-file results for imports.
+    state.updateSingleFile(filename, content);
+    await publishDiagnostics(state);
   },
 );
 
@@ -409,17 +443,26 @@ connection.onRequest('textDocument/definition', async (params: DefinitionParams)
   }
   const filename = uriToFilename(params.textDocument.uri);
   state.setActiveFile(filename);
-  const ranges = state.gotoDefinition(
+  const results = state.gotoDefinitionLocations(
     params.position.line + 1,
     params.position.character + 1,
   );
-  if (!ranges.length) {
-    return null;
-  }
-  return ranges.map(range => ({
-    uri: params.textDocument.uri,
-    range: toLspRange(range),
-  }));
+
+  const locations = results
+    .filter(result => files.has(result.filename))
+    .map(result => {
+      const uri = filenameToUri(result.filename);
+      if (!uri) {
+        return null;
+      }
+      return {
+        uri,
+        range: toLspRange(result.range),
+      };
+    })
+    .filter((x): x is {uri: string; range: LspRange} => x != null);
+
+  return locations.length ? locations : null;
 });
 
 connection.onRequest(

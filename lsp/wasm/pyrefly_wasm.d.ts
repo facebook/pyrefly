@@ -31,6 +31,15 @@ export class State {
     endLineNumber: number;
     endColumn: number;
   }>;
+  gotoDefinitionLocations(line: number, column: number): Array<{
+    filename: string;
+    range: {
+      startLineNumber: number;
+      startColumn: number;
+      endLineNumber: number;
+      endColumn: number;
+    };
+  }>;
   autoComplete(line: number, column: number): Array<{
     label: string;
     detail?: string;

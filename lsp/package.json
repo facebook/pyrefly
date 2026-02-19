@@ -238,10 +238,11 @@
     },
     "scripts": {
         "compile": "npm run check-types && node esbuild.js",
-        "check-types": "tsc --noEmit",
+        "check-types": "tsc --noEmit --project tsconfig.json && tsc --noEmit --project tsconfig.web.json",
         "watch": "npm-run-all -p watch:*",
         "watch:esbuild": "node esbuild.js --watch",
-        "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+        "watch:tsc-node": "tsc --noEmit --watch --project tsconfig.json",
+        "watch:tsc-web": "tsc --noEmit --watch --project tsconfig.web.json",
         "vscode:prepublish": "npm run package",
         "package": "npm run check-types && node esbuild.js --production",
         "test": "vscode-test"

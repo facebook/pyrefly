@@ -124,9 +124,17 @@ export async function activate(context: ExtensionContext) {
   try {
     pythonExtension = await PythonExtension.api();
   } catch (error) {
-    vscode.window.showWarningMessage(
+    const installLabel = 'Install Python extension';
+    const result = await vscode.window.showWarningMessage(
       'Pyrefly: Python extension not available. Python interpreter detection will be limited.',
+      installLabel,
     );
+    if (result === installLabel) {
+      await vscode.commands.executeCommand(
+        'workbench.extensions.installExtension',
+        'ms-python.python',
+      );
+    }
   }
 
   // Otherwise to spawn the server
