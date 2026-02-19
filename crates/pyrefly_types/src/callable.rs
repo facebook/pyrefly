@@ -379,6 +379,8 @@ pub struct FuncFlags {
     pub deprecation: Option<Deprecation>,
     /// Metadata for `@property`, `@foo.setter`, and `@foo.deleter`.
     pub property_metadata: Option<PropertyMetadata>,
+    /// A function decorated with `functools.cached_property` or equivalent.
+    pub is_cached_property: bool,
     pub has_enum_member_decoration: bool,
     pub is_override: bool,
     pub has_final_decoration: bool,
