@@ -1479,27 +1479,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Nodes with `answer: None` are skipped (they were already committed by
     /// another thread via the Participant revisit path).
     fn batch_commit_scc(&self, completed_scc: Scc) {
-        // Validate invariant: no Fresh or InProgress nodes should remain.
-        debug_assert!(
-            completed_scc.node_state.values().all(|state| matches!(
-                state,
-                NodeState::Done { .. } | NodeState::HasPlaceholder(_)
-            )),
-            "batch_commit_scc: SCC has participants that are not Done or HasPlaceholder: {:?}",
-            completed_scc
-                .node_state
-                .iter()
-                .filter(|(_, s)| matches!(s, NodeState::Fresh | NodeState::InProgress))
-                .map(|(id, s)| format!("{}: {:?}", id, s))
-                .collect::<Vec<_>>(),
-        );
         for (calc_id, node_state) in completed_scc.node_state {
-            if let NodeState::Done {
-                answer: Some(answer),
-                errors,
-            } = node_state
-            {
-                self.commit_single_result(calc_id, answer, errors);
+            match node_state {
+                NodeState::Done {
+                    answer: Some(answer),
+                    errors,
+                } => {
+                    self.commit_single_result(calc_id, answer, errors);
+                }
+                NodeState::Done { answer: None, .. } => {
+                    // Already committed by another thread via the Participant revisit path.
+                }
+                NodeState::HasPlaceholder(_) => {
+                    panic!(
+                        "batch_commit_scc: node {} is still HasPlaceholder at commit time. \
+                         This means its calculate_and_record_answer never completed, \
+                         which would leave its Calculation cell stuck in Calculating state.",
+                        calc_id,
+                    );
+                }
+                NodeState::Fresh | NodeState::InProgress => {
+                    panic!(
+                        "batch_commit_scc: node {} is {:?} at commit time",
+                        calc_id, node_state,
+                    );
+                }
             }
         }
     }
