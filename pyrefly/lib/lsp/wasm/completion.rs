@@ -472,7 +472,7 @@ impl Transaction<'_> {
                 let key = bindings.idx_to_key(idx);
                 let label = match key {
                     Key::Definition(id) => module_info.code_at(id.range()),
-                    Key::Anywhere(id, _) => id,
+                    Key::Anywhere(x, ..) => &x.0,
                     _ => continue,
                 };
                 if let Some(identifier) = identifier

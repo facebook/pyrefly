@@ -457,7 +457,8 @@ impl SemanticTokenBuilder {
                     // but we can't easily extract that from the AST here, so skip the lookup.
                     let mut modifiers = vec![];
                     if !alias.name.id.contains('.') {
-                        let import_key = Key::Import(Name::new(&alias.name.id), alias.name.range);
+                        let import_key =
+                            Key::Import(Box::new((Name::new(&alias.name.id), alias.name.range)));
                         if let Some((def_module, _)) = get_symbol_kind(&import_key) {
                             maybe_add_default_library_modifier(def_module, &mut modifiers);
                         }

@@ -643,7 +643,7 @@ impl BindingTable {
     /// will take the phi of all values bound at different points). If necessary, we
     /// insert the Anywhere.
     fn record_bind_in_anywhere(&mut self, name: Name, range: TextRange, idx: Idx<Key>) {
-        let phi_idx = self.types.0.insert(Key::Anywhere(name, range));
+        let phi_idx = self.types.0.insert(Key::Anywhere(Box::new((name, range))));
         match self
             .types
             .1
@@ -907,7 +907,7 @@ impl<'a> BindingsBuilder<'a> {
 
     fn inject_globals(&mut self) {
         for global in ImplicitGlobal::implicit_globals(self.has_docstring) {
-            let key = Key::ImplicitGlobal(global.name().clone());
+            let key = Key::ImplicitGlobal(Box::new(global.name().clone()));
             let idx = self.insert_binding(key, Binding::Global(global.clone()));
             self.bind_name(global.name(), idx, FlowStyle::Other);
         }
@@ -922,7 +922,7 @@ impl<'a> BindingsBuilder<'a> {
             FindingOrError::Error(_) => (),
             FindingOrError::Finding(_) => {
                 for name in self.lookup.get_wildcard(builtins_module).unwrap().iter() {
-                    let key = Key::Import(name.clone(), TextRange::default());
+                    let key = Key::Import(Box::new((name.clone(), TextRange::default())));
                     let idx = self
                         .table
                         .insert(key, Binding::Import(builtins_module, name.clone(), None));
@@ -1588,7 +1588,7 @@ impl<'a> BindingsBuilder<'a> {
             if let Some(initial_idx) = self.lookup_name(name, &mut narrowing_usage).found() {
                 self.mark_does_not_pin_if_first_use(initial_idx);
                 let narrowed_idx = self.insert_binding(
-                    Key::Narrow(name.into_key().clone(), *op_range, use_location),
+                    Key::Narrow(Box::new((name.into_key().clone(), *op_range, use_location))),
                     Binding::Narrow(initial_idx, Box::new(op.clone()), use_location),
                 );
                 self.scopes.narrow_in_current_flow(name, narrowed_idx);

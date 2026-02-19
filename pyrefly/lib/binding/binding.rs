@@ -87,7 +87,7 @@ use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
-assert_words!(Key, 6);
+assert_words!(Key, 2);
 assert_bytes!(KeyExpect, 12);
 assert_bytes!(KeyTypeAlias, 4);
 assert_words!(KeyExport, 3);
@@ -699,9 +699,9 @@ pub enum Key {
     /// I am an `import` at this location with this name.
     /// Used for `import foo.x` (the `foo` might not be literally present with `.` modules),
     /// and `from foo import *` (the names are injected from the exports)
-    Import(Name, TextRange),
+    Import(Box<(Name, TextRange)>),
     /// I am an implicit module-level global variable like `__file__` or `__doc__`.
-    ImplicitGlobal(Name),
+    ImplicitGlobal(Box<Name>),
     /// I am defined in this module at this location.
     Definition(ShortIdentifier),
     /// I am a mutable capture (`global` or `nonlocal`) declared at this location.
@@ -733,7 +733,7 @@ pub enum Key {
     /// I am an expression that appears in a `with` context.
     ContextExpr(TextRange),
     /// I am the result of joining several branches.
-    Phi(Name, TextRange),
+    Phi(Box<(Name, TextRange)>),
     /// I am the result of narrowing a type. The two ranges are the range at which the operation is
     /// defined and the one at which it is used. For example, in:
     ///   if x is None:
@@ -742,9 +742,9 @@ pub enum Key {
     ///       pass
     /// The `x is None` operation is defined once in the `if` test but generates two key/binding
     /// pairs, when it is used to narrow `x` in the `if` and the `else`, respectively.
-    Narrow(Name, TextRange, NarrowUseLocation),
+    Narrow(Box<(Name, TextRange, NarrowUseLocation)>),
     /// The binding definition site, anywhere it occurs
-    Anywhere(Name, TextRange),
+    Anywhere(Box<(Name, TextRange)>),
     /// Result of a super() call
     SuperInstance(TextRange),
     /// The intermediate used in an unpacking assignment.
@@ -774,7 +774,7 @@ pub enum Key {
 impl Ranged for Key {
     fn range(&self) -> TextRange {
         match self {
-            Self::Import(_, r) => *r,
+            Self::Import(x) => x.1,
             Self::ImplicitGlobal(_) => TextRange::default(),
             Self::Definition(x) => x.range(),
             Self::MutableCapture(x) => x.range(),
@@ -788,9 +788,9 @@ impl Ranged for Key {
             Self::Anon(r) => *r,
             Self::StmtExpr(r) => *r,
             Self::ContextExpr(r) => *r,
-            Self::Phi(_, r) => *r,
-            Self::Narrow(_, r, _) => *r,
-            Self::Anywhere(_, r) => *r,
+            Self::Phi(x) => x.1,
+            Self::Narrow(x) => x.1,
+            Self::Anywhere(x) => x.1,
             Self::SuperInstance(r) => *r,
             Self::Unpack(r) => *r,
             Self::UsageLink(r) => *r,
@@ -809,7 +809,7 @@ impl DisplayWith<ModuleInfo> for Key {
         let short = |x: &ShortIdentifier| format!("{} {}", ctx.display(x), ctx.display(&x.range()));
 
         match self {
-            Self::Import(n, r) => write!(f, "Key::Import({n} {})", ctx.display(r)),
+            Self::Import(x) => write!(f, "Key::Import({} {})", x.0, ctx.display(&x.1)),
             Self::ImplicitGlobal(n) => write!(f, "Key::Global({n})"),
             Self::Definition(x) => write!(f, "Key::Definition({})", short(x)),
             Self::MutableCapture(x) => write!(f, "Key::MutableCapture({})", short(x)),
@@ -822,16 +822,17 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::Anon(r) => write!(f, "Key::Anon({})", ctx.display(r)),
             Self::StmtExpr(r) => write!(f, "Key::StmtExpr({})", ctx.display(r)),
             Self::ContextExpr(r) => write!(f, "Key::ContextExpr({})", ctx.display(r)),
-            Self::Phi(n, r) => write!(f, "Key::Phi({n} {})", ctx.display(r)),
-            Self::Narrow(n, r1, r2) => {
+            Self::Phi(x) => write!(f, "Key::Phi({} {})", x.0, ctx.display(&x.1)),
+            Self::Narrow(x) => {
                 write!(
                     f,
-                    "Key::Narrow({n} {} {})",
-                    ctx.display(r1),
-                    ctx.display(r2)
+                    "Key::Narrow({} {} {})",
+                    x.0,
+                    ctx.display(&x.1),
+                    ctx.display(&x.2)
                 )
             }
-            Self::Anywhere(n, r) => write!(f, "Key::Anywhere({n} {})", ctx.display(r)),
+            Self::Anywhere(x) => write!(f, "Key::Anywhere({} {})", x.0, ctx.display(&x.1)),
             Self::ReturnType(x) => write!(f, "Key::Return({})", short(x)),
             Self::ReturnExplicit(r) => write!(f, "Key::ReturnExplicit({})", ctx.display(r)),
             Self::ReturnImplicit(x) => write!(f, "Key::ReturnImplicit({})", short(x)),

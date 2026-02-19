@@ -1200,7 +1200,7 @@ impl<'a> BindingsBuilder<'a> {
                             let first = m.first_component();
                             let module_key = self.scopes.existing_module_import_at(&first);
                             let key = self.insert_binding(
-                                Key::Import(first.clone(), x.name.range),
+                                Key::Import(Box::new((first.clone(), x.name.range))),
                                 Binding::Module(m, vec![first.clone()], module_key),
                             );
                             // Register the import using the first component (e.g., "os" from "os.path")
@@ -1344,7 +1344,7 @@ impl<'a> BindingsBuilder<'a> {
                 && let Some(wildcards) = self.lookup.get_wildcard(m)
             {
                 for name in wildcards.iter_hashed() {
-                    let key = Key::Import(name.into_key().clone(), x.range);
+                    let key = Key::Import(Box::new((name.into_key().clone(), x.range)));
                     let val = if self.lookup.export_exists(m, &name) {
                         Binding::Import(m, name.into_key().clone(), None)
                     } else {
