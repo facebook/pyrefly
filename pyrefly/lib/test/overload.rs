@@ -417,6 +417,47 @@ foo_copy("42")
 );
 
 testcase!(
+    test_overload_constructor_through_generic_callable,
+    r#"
+from typing import Callable, overload, reveal_type
+
+class MyClass:
+    @overload
+    def __init__(self, x: int) -> None: ...
+    @overload
+    def __init__(self, x: str) -> None: ...
+    def __init__(self, x): ...
+
+def make[T](c: Callable[[T], MyClass]) -> Callable[[T], MyClass]: ...
+
+result = make(MyClass)
+reveal_type(result)  # E: revealed type: Overload[\n  (int) -> MyClass\n  (str) -> MyClass\n]
+result(1)
+result("hello")
+    "#,
+);
+
+testcase!(
+    test_overload_through_generic_callable_keyword,
+    r#"
+from typing import Callable, overload, reveal_type
+
+@overload
+def foo(x: int) -> int: ...
+@overload
+def foo(x: str) -> str: ...
+def foo(x: int | str) -> int | str: ...
+
+def copy_kw[A, B](*, c: Callable[[A], B]) -> Callable[[A], B]: ...
+
+foo_copy = copy_kw(c=foo)
+reveal_type(foo_copy)  # E: revealed type: Overload[\n  (int) -> int\n  (str) -> str\n]
+foo_copy(1)
+foo_copy("42")
+    "#,
+);
+
+testcase!(
     test_final_decoration_on_top_level_function,
     r#"
 from typing import assert_type, final, overload

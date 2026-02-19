@@ -851,14 +851,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// When a generic function is called with an overloaded function argument, apply the
-    /// call once per overload signature and return an overloaded result. This preserves
-    /// the overloaded type through the generic function rather than collapsing to one overload.
+    /// When a generic function is called with an overloaded function argument (positional or
+    /// keyword), apply the call once per overload signature and return an overloaded result.
+    /// This preserves the overloaded type through the generic function rather than collapsing
+    /// to one overload.
     ///
     /// Handles two cases:
     /// - An already-overloaded function (`Type::Overload`): e.g. `copy(foo)` where `foo` is overloaded.
     /// - A class with an overloaded constructor (`Type::ClassDef`): e.g. `accepts_callable(Class7)`
     ///   where `Class7.__init__` is overloaded.
+    ///
+    /// Scans positional args first, then keyword args, for the first overloaded callable.
+    /// Only the first overloaded argument is expanded; supporting multiple overloaded arguments
+    /// would require a cartesian product of expansions, which is not currently implemented.
     ///
     /// Returns `Some(Type::Overload(...))` if all signatures succeed without errors,
     /// `None` if expansion is not applicable or any signature fails.
@@ -873,29 +878,55 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         hint: Option<HintRef>,
     ) -> Option<Type> {
-        // Find the first argument that is, or can be converted to, an overloaded callable.
-        let (overload_idx, overload, arg_range) =
-            args.iter().enumerate().find_map(|(i, arg)| {
-                if let CallArg::Arg(TypeOrExpr::Type(ty, range)) = arg {
-                    match ty {
-                        // Already-overloaded function value.
-                        Type::Overload(overload) => Some((i, overload.clone(), *range)),
-                        // Class whose constructor is overloaded.
-                        Type::ClassDef(cls) => {
-                            let class_type = match self.instantiate(cls) {
-                                Type::ClassType(ct) => ct,
-                                _ => return None,
-                            };
-                            match self.constructor_to_callable(&class_type) {
-                                Type::Overload(overload) => Some((i, overload, *range)),
-                                _ => None,
-                            }
+        /// Identifies which argument (positional or keyword) contains the overloaded type.
+        #[derive(Clone, Copy)]
+        enum OverloadSource {
+            Arg(usize),
+            Keyword(usize),
+        }
+
+        // Helper to extract an Overload from a type, handling both already-overloaded
+        // functions and classes whose constructors are overloaded.
+        let find_overload_in_type =
+            |ty: &Type, range: TextRange| -> Option<(Overload, TextRange)> {
+                match ty {
+                    // Already-overloaded function value.
+                    Type::Overload(overload) => Some((overload.clone(), range)),
+                    // Class whose constructor is overloaded.
+                    Type::ClassDef(cls) => {
+                        let class_type = match self.instantiate(cls) {
+                            Type::ClassType(ct) => ct,
+                            _ => return None,
+                        };
+                        match self.constructor_to_callable(&class_type) {
+                            Type::Overload(overload) => Some((overload, range)),
+                            _ => None,
                         }
-                        _ => None,
                     }
+                    _ => None,
+                }
+            };
+
+        // Scan positional args first, then keyword args, for the first overloaded callable.
+        let (source, overload, arg_range) = args
+            .iter()
+            .enumerate()
+            .find_map(|(i, arg)| {
+                if let CallArg::Arg(TypeOrExpr::Type(ty, range)) = arg {
+                    find_overload_in_type(ty, *range).map(|(o, r)| (OverloadSource::Arg(i), o, r))
                 } else {
                     None
                 }
+            })
+            .or_else(|| {
+                keywords.iter().enumerate().find_map(|(i, kw)| {
+                    if let TypeOrExpr::Type(ty, range) = kw.value {
+                        find_overload_in_type(ty, range)
+                            .map(|(o, r)| (OverloadSource::Keyword(i), o, r))
+                    } else {
+                        None
+                    }
+                })
             })?;
 
         // For each overload signature, call the generic function with that specific type.
@@ -904,20 +935,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut results: Vec<OverloadType> = Vec::new();
         for sig in &overload.signatures {
             let sig_type = sig.as_type();
-            let modified_args: Vec<CallArg<'_>> = args
-                .iter()
-                .enumerate()
-                .map(|(i, arg)| {
-                    if i == overload_idx {
-                        CallArg::Arg(TypeOrExpr::Type(
-                            type_owner.push(sig_type.clone()),
-                            arg_range,
-                        ))
-                    } else {
-                        arg.clone()
-                    }
-                })
-                .collect();
+            let (modified_args, modified_kws): (Vec<CallArg<'_>>, Vec<CallKeyword<'_>>) =
+                match source {
+                    OverloadSource::Arg(idx) => (
+                        args.iter()
+                            .enumerate()
+                            .map(|(i, arg)| {
+                                if i == idx {
+                                    CallArg::Arg(TypeOrExpr::Type(
+                                        type_owner.push(sig_type.clone()),
+                                        arg_range,
+                                    ))
+                                } else {
+                                    arg.clone()
+                                }
+                            })
+                            .collect(),
+                        keywords.to_vec(),
+                    ),
+                    OverloadSource::Keyword(idx) => (
+                        args.to_vec(),
+                        keywords
+                            .iter()
+                            .enumerate()
+                            .map(|(i, kw)| {
+                                if i == idx {
+                                    CallKeyword {
+                                        range: kw.range,
+                                        arg: kw.arg,
+                                        value: TypeOrExpr::Type(
+                                            type_owner.push(sig_type.clone()),
+                                            arg_range,
+                                        ),
+                                    }
+                                } else {
+                                    kw.clone()
+                                }
+                            })
+                            .collect(),
+                    ),
+                };
 
             let call_errors = self.error_collector();
             let res = self.callable_infer(
@@ -926,7 +983,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 tparams,
                 None,
                 &modified_args,
-                keywords,
+                &modified_kws,
                 arguments_range,
                 errors,
                 &call_errors,
@@ -1123,6 +1180,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // For generic functions, check if any argument is an overloaded function.
                 // If so, apply the call once per overload signature and return an overloaded
                 // result, preserving the overloaded type through the generic function.
+                //
+                // We pre-evaluate all args to types here so that:
+                //   (1) call_generic_with_overloaded_arg can scan for TypeOrExpr::Type variants
+                //       (expression args have not been evaluated yet at this point), and
+                //   (2) if no overload expansion applies, the already-typed args are reused in
+                //       the fallback callable_infer without re-evaluating, which would emit
+                //       duplicate errors.
                 if tparams.is_some() {
                     let call = CallWithTypes::new();
                     let typed_args = call.vec_call_arg(args, self, errors);
