@@ -183,6 +183,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.as_call_target_impl(ty, None, /* dunder_call */ false)
     }
 
+    #[expect(clippy::only_used_in_recursion)]
     fn as_call_target_impl(
         &self,
         ty: Type,
@@ -338,42 +339,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 dunder_call,
             ),
             Type::ClassType(cls) => {
-                if let Some(quantified) = quantified {
+                let maybe_dunder_call = if let Some(quantified) = &quantified {
                     self.quantified_instance_as_dunder_call(quantified.clone(), &cls)
-                        .map_or(CallTargetLookup::Error(vec![]), |ty| {
-                            let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
-                                || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
-                            if is_self_recursive {
-                                CallTargetLookup::CircularCall
-                            } else {
-                                self.as_call_target_impl(ty, Some(quantified), dunder_call)
-                            }
-                        })
-                } else if dunder_call {
-                    self.instance_as_dunder_call(&cls).map_or(
-                        CallTargetLookup::Error(vec![]),
-                        |ty| {
-                            let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
-                                || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
-                            if is_self_recursive {
-                                CallTargetLookup::CircularCall
-                            } else {
-                                self.as_call_target_impl(ty, quantified, dunder_call)
-                            }
-                        },
-                    )
                 } else {
                     self.instance_as_dunder_call(&cls)
-                        .map_or(CallTargetLookup::Error(vec![]), |ty| {
-                            let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
-                                || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
-                            if is_self_recursive {
-                                CallTargetLookup::CircularCall
-                            } else {
-                                self.as_call_target_impl(ty, quantified, dunder_call)
-                            }
-                        })
-                }
+                };
+                maybe_dunder_call.map_or(CallTargetLookup::Error(vec![]), |ty| {
+                    let is_self_recursive = matches!(&ty, Type::ClassType(inner) if inner == &cls)
+                        || matches!(&ty, Type::SelfType(inner) if inner.class_object() == cls.class_object());
+                    if is_self_recursive {
+                        CallTargetLookup::CircularCall
+                    } else {
+                        self.as_call_target_impl(ty, quantified, dunder_call)
+                    }
+                })
             }
             Type::SelfType(cls) => {
                 // Ignoring `quantified` is okay here because Self is not a valid typevar bound.
