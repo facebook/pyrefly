@@ -584,7 +584,8 @@ my_export
 my_export
 # ^
 ## After:
-my_export  # pyrefly: ignore [unknown-name]
+# pyrefly: ignore [unknown-name]
+my_export
 # ^
 
 
@@ -659,7 +660,8 @@ BytesIO
 BytesIO
 # ^
 ## After:
-BytesIO  # pyrefly: ignore [unknown-name]
+# pyrefly: ignore [unknown-name]
+BytesIO
 # ^
 "#
         .trim(),
@@ -725,7 +727,8 @@ my_module
 my_module
 # ^
 ## After:
-my_module  # pyrefly: ignore [unknown-name]
+# pyrefly: ignore [unknown-name]
+my_module
 # ^
 "#
         .trim(),
@@ -838,7 +841,8 @@ my_export
 # ^
 ## After:
 # i am a comment
-my_export  # pyrefly: ignore [unknown-name]
+# pyrefly: ignore [unknown-name]
+my_export
 # ^
 "#
         .trim(),
@@ -864,7 +868,8 @@ Code Actions Results:
 x: int = "hello"
 #         ^
 ## After:
-x: int = "hello"  # pyrefly: ignore [bad-assignment]
+# pyrefly: ignore [bad-assignment]
+x: int = "hello"
 #         ^
 "#
         .trim(),
@@ -893,7 +898,8 @@ Code Actions Results:
 x: int = "hello" # intentional error
 #         ^
 ## After:
-x: int = "hello" # intentional error  pyrefly: ignore [bad-assignment]
+# pyrefly: ignore [bad-assignment]
+x: int = "hello" # intentional error
 #         ^
 "#
         .trim(),
@@ -1033,7 +1039,8 @@ my_export
 # ^
 ## After:
 from typing import List
-my_export  # pyrefly: ignore [unknown-name]
+# pyrefly: ignore [unknown-name]
+my_export
 # ^
 "#
         .trim(),
@@ -1114,7 +1121,8 @@ my_export
 # ^
 ## After:
 from a import another_thing
-my_export  # pyrefly: ignore [unknown-name]
+# pyrefly: ignore [unknown-name]
+my_export
 # ^
 "#
         .trim(),
@@ -1312,7 +1320,8 @@ TypeVar('T')
 TypeVar('T')
 # ^
 ## After:
-TypeVar('T')  # pyrefly: ignore [unknown-name]
+# pyrefly: ignore [unknown-name]
+TypeVar('T')
 # ^
 "#
         .trim(),
@@ -1396,7 +1405,8 @@ my_func()
 my_func()
 # ^
 ## After:
-my_func()  # pyrefly: ignore [unknown-name]
+# pyrefly: ignore [unknown-name]
+my_func()
 # ^
 "#
         .trim(),
@@ -1459,7 +1469,8 @@ def foo():
 #         ^
 ## After:
 def foo():
-    print(undef_var)  # pyrefly: ignore [unknown-name]
+    # pyrefly: ignore [unknown-name]
+    print(undef_var)
 #         ^
 "#
         .trim(),
