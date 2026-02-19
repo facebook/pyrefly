@@ -591,6 +591,13 @@ impl GleanState<'_> {
         })
     }
 
+    fn find_definition_for_literal_symbol(&self, name: &str) -> DefinitionLocation {
+        DefinitionLocation {
+            name: name.to_owned(),
+            file: None,
+        }
+    }
+
     fn get_xrefs_for_str_lit(
         &self,
         expr: &ExprStringLiteral,
@@ -616,10 +623,7 @@ impl GleanState<'_> {
             .flat_map(|range| {
                 let name = self.module.code_at(range);
                 let definitions = if name == "None" {
-                    vec![DefinitionLocation {
-                        name: "None".to_owned(),
-                        file: None,
-                    }]
+                    vec![self.find_definition_for_literal_symbol(name)]
                 } else {
                     self.find_definition_for_str_literal(range)
                 };
@@ -781,23 +785,11 @@ impl GleanState<'_> {
                 }
             }
             Expr::StringLiteral(str_lit) => self.get_xrefs_for_str_lit(str_lit),
-            Expr::BooleanLiteral(bool_lit) => {
-                let name = if bool_lit.value { "True" } else { "False" };
-                vec![(
-                    DefinitionLocation {
-                        name: name.to_owned(),
-                        file: None,
-                    },
-                    bool_lit.range(),
-                )]
+            Expr::BooleanLiteral(_) | Expr::NoneLiteral(_) => {
+                let range = expr.range();
+                let name = self.module.code_at(range);
+                vec![(self.find_definition_for_literal_symbol(name), range)]
             }
-            Expr::NoneLiteral(none) => vec![(
-                DefinitionLocation {
-                    name: "None".to_owned(),
-                    file: None,
-                },
-                none.range(),
-            )],
             _ => {
                 vec![]
             }
