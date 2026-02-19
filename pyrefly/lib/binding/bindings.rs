@@ -1349,44 +1349,24 @@ impl<'a> BindingsBuilder<'a> {
         &self,
         start_idx: Idx<Key>,
     ) -> Option<(Name, Idx<KeyTypeAlias>, TypeAliasParams)> {
-        let mut current = start_idx;
-        let mut seen = SmallSet::new();
-        loop {
-            if seen.contains(&current) {
-                return None;
+        let (_, orig_binding) = self.get_original_binding(start_idx)?;
+        match orig_binding? {
+            Binding::TypeAlias {
+                name,
+                key_type_alias,
+                tparams,
+                ..
+            } => Some((name.clone(), *key_type_alias, tparams.clone())),
+            // In legacy type alias RHS processing, all names go through
+            // intercept_lookup which wraps them in PossibleLegacyTParam.
+            // By finalize time we can follow through to the original
+            // binding to check whether it's actually a type alias.
+            Binding::PossibleLegacyTParam(tparam_idx, _)
+                if let Some(legacy_binding) = self.idx_to_binding(*tparam_idx) =>
+            {
+                self.follow_to_type_alias(legacy_binding.idx())
             }
-            seen.insert(current);
-            match self.idx_to_binding(current) {
-                Some(Binding::Forward(target)) => {
-                    current = *target;
-                }
-                Some(Binding::TypeAlias {
-                    name,
-                    key_type_alias,
-                    tparams,
-                    ..
-                }) => {
-                    return Some((name.clone(), *key_type_alias, tparams.clone()));
-                }
-                Some(Binding::CompletedPartialType(target, _))
-                | Some(Binding::PartialTypeWithUpstreamsCompleted(target, _)) => {
-                    current = *target;
-                }
-                // In legacy type alias RHS processing, all names go through
-                // intercept_lookup which wraps them in PossibleLegacyTParam.
-                // By finalize time we can follow through to the original
-                // binding to check whether it's actually a type alias.
-                Some(Binding::PossibleLegacyTParam(tparam_idx, _)) => {
-                    if let Some(legacy_binding) = self.idx_to_binding(*tparam_idx) {
-                        current = legacy_binding.idx();
-                    } else {
-                        return None;
-                    }
-                }
-                _ => {
-                    return None;
-                }
-            }
+            _ => None,
         }
     }
 
