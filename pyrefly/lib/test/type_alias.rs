@@ -130,6 +130,16 @@ def f(x: X[int]):
 );
 
 testcase!(
+    test_union_alias_display_in_callable,
+    r#"
+from typing import reveal_type
+ResponseReturnValue = int | str
+def f() -> ResponseReturnValue: ...
+reveal_type(f)  # E: revealed type: () -> ResponseReturnValue
+    "#,
+);
+
+testcase!(
     test_generic_alias_union_explicit,
     r#"
 from typing import TypeVar, assert_type, TypeAlias
