@@ -82,7 +82,13 @@ pub struct CalcId(pub Bindings, pub AnyIdx);
 
 impl Debug for CalcId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CalcId({}, {:?})", self.0.module().name(), self.1)
+        write!(
+            f,
+            "CalcId({}, {}, {:?})",
+            self.0.module().name(),
+            self.0.module().path(),
+            self.1,
+        )
     }
 }
 
@@ -90,8 +96,9 @@ impl Display for CalcId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "CalcId({}, {})",
+            "CalcId({}, {}, {})",
             self.0.module().name(),
+            self.0.module().path(),
             self.1.display_with(&self.0),
         )
     }
@@ -99,7 +106,8 @@ impl Display for CalcId {
 
 impl PartialEq for CalcId {
     fn eq(&self, other: &Self) -> bool {
-        (self.0.module().name(), &self.1) == (other.0.module().name(), &other.1)
+        (self.0.module().name(), self.0.module().path(), &self.1)
+            == (other.0.module().name(), other.0.module().path(), &other.1)
     }
 }
 
@@ -108,7 +116,10 @@ impl Eq for CalcId {}
 impl Ord for CalcId {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.1.cmp(&other.1) {
-            Ordering::Equal => self.0.module().name().cmp(&other.0.module().name()),
+            Ordering::Equal => match self.0.module().name().cmp(&other.0.module().name()) {
+                Ordering::Equal => self.0.module().path().cmp(other.0.module().path()),
+                not_equal => not_equal,
+            },
             not_equal => not_equal,
         }
     }
@@ -123,6 +134,7 @@ impl PartialOrd for CalcId {
 impl Hash for CalcId {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.module().name().hash(state);
+        self.0.module().path().hash(state);
         self.1.hash(state);
     }
 }
@@ -1448,7 +1460,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: Option<Arc<ErrorCollector>>,
     ) {
         let CalcId(ref bindings, ref any_idx) = calc_id;
-        if bindings.module().name() != self.bindings().module().name() {
+        if bindings.module().name() != self.bindings().module().name()
+            || bindings.module().path() != self.bindings().module().path()
+        {
             // Cross-module: delegate to the LookupAnswer trait to route
             // the commit to the correct module's Answers.
             self.answers.commit_to_module(calc_id, answer, errors);
