@@ -1433,7 +1433,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let BindingLegacyTypeParam::ParamKeyed(def_key) = self.bindings().get(*key)
                     && matches!(
                         self.bindings().get(*def_key),
-                        Binding::TypeAlias { .. } | Binding::TypeAliasRef { .. }
+                        Binding::TypeAlias(..) | Binding::TypeAliasRef(..)
                     )
                 {
                     // In the bindings phase, we were unable to determine whether this key
@@ -1882,7 +1882,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let pin_partial_types = !self.solver().infer_with_first_use
                 || !matches!(
                     binding,
-                    Binding::NameAssign { .. } | Binding::PartialTypeWithUpstreamsCompleted(..)
+                    Binding::NameAssign(..) | Binding::PartialTypeWithUpstreamsCompleted(..)
                 );
             self.pin_all_placeholder_types(ty, pin_partial_types, range, errors);
             self.expand_vars_mut(ty);
@@ -4066,25 +4066,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.binding_to_type_info_phi(join_style, branches)
             }
             Binding::LoopPhi(default, ks) => self.binding_to_type_info_loop_phi(*default, ks),
-            Binding::NameAssign {
-                name: _,
-                annotation: _,
-                expr,
-                legacy_tparams: _,
-                is_in_function_scope: _,
-            } => self.binding_to_type_info_name_assign(binding, expr.as_ref(), errors),
-            Binding::AssignToAttribute {
-                attr,
-                value: got,
-                allow_assign_to_final,
-            } => self.binding_to_type_info_assign_to_attribute(
-                attr,
-                got,
-                *allow_assign_to_final,
+            Binding::NameAssign(x) => {
+                self.binding_to_type_info_name_assign(binding, x.expr.as_ref(), errors)
+            }
+            Binding::AssignToAttribute(x) => self.binding_to_type_info_assign_to_attribute(
+                &x.attr,
+                &x.value,
+                x.allow_assign_to_final,
                 errors,
             ),
-            Binding::AssignToSubscript(subscript, value) => {
-                self.binding_to_type_info_assign_to_subscript(subscript, value, errors)
+            Binding::AssignToSubscript(x) => {
+                self.binding_to_type_info_assign_to_subscript(&x.0, &x.1, errors)
             }
             Binding::PossibleLegacyTParam(key, range_if_scoped_params_exist) => self
                 .binding_to_type_info_possible_legacy_tparam(
@@ -4467,7 +4459,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Binding::Phi(..)
             | Binding::LoopPhi(..)
             | Binding::Narrow(..)
-            | Binding::AssignToAttribute { .. }
+            | Binding::AssignToAttribute(..)
             | Binding::AssignToSubscript(..)
             | Binding::PossibleLegacyTParam(..) => {
                 // These forms require propagating attribute narrowing information, so they
@@ -4477,15 +4469,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::SelfTypeLiteral(class_key, r) => {
                 self.binding_to_type_self_type_literal(*class_key, *r, errors)
             }
-            Binding::ClassBodyUnknownName(class_key, name, suggestion) => {
-                self.binding_to_type_class_body_unknown_name(*class_key, name, suggestion, errors)
+            Binding::ClassBodyUnknownName(x) => {
+                self.binding_to_type_class_body_unknown_name(x.0, &x.1, &x.2, errors)
             }
-            Binding::Exhaustive {
-                subject_idx,
-                subject_range,
-                exhaustiveness_info,
-                ..
-            } => self.binding_to_type_exhaustive(*subject_idx, *subject_range, exhaustiveness_info),
+            Binding::Exhaustive(x) => self.binding_to_type_exhaustive(
+                x.subject_idx,
+                x.subject_range,
+                &x.exhaustiveness_info,
+            ),
             Binding::CompletedPartialType(unpinned_idx, first_use) => {
                 // Calculate the first use for its side-effects (it might pin `Var`s)
                 match first_use {
@@ -4530,30 +4521,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::PatternMatchClassPositional(_, idx, key, range) => {
                 self.binding_to_type_pattern_match_class_positional(*idx, *key, *range, errors)
             }
-            Binding::PatternMatchClassKeyword(_, attr, key) => {
+            Binding::PatternMatchClassKeyword(x) => {
                 // TODO: check that value matches class
                 // TODO: check against duplicate keys (optional)
-                let binding = self.get_idx(*key);
-                self.attr_infer(&binding, &attr.id, attr.range, errors, None)
+                let binding = self.get_idx(x.2);
+                self.attr_infer(&binding, &x.1.id, x.1.range, errors, None)
                     .into_ty()
             }
-            Binding::NameAssign {
-                name,
-                annotation: annot_key,
-                expr,
-                legacy_tparams,
-                is_in_function_scope,
-            } => self.binding_to_type_name_assign(
-                name,
-                *annot_key,
-                expr,
-                legacy_tparams,
-                *is_in_function_scope,
+            Binding::NameAssign(x) => self.binding_to_type_name_assign(
+                &x.name,
+                x.annotation,
+                &x.expr,
+                &x.legacy_tparams,
+                x.is_in_function_scope,
                 errors,
             ),
-            Binding::TypeVar(ann, name, x) => {
+            Binding::TypeVar(x) => {
+                let (ann, name, call) = x.as_ref();
                 let ty = self
-                    .typevar_from_call(name.clone(), x, errors)
+                    .typevar_from_call(name.clone(), call, errors)
                     .to_type(self.heap);
                 if let Some(k) = ann
                     && let AnnotationWithTarget {
@@ -4565,16 +4551,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             },
                     } = &*self.get_idx(*k)
                 {
-                    self.check_and_return_type(ty, want, x.range, errors, &|| {
+                    self.check_and_return_type(ty, want, call.range, errors, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(target))
                     })
                 } else {
                     ty
                 }
             }
-            Binding::ParamSpec(ann, name, x) => {
+            Binding::ParamSpec(x) => {
+                let (ann, name, call) = x.as_ref();
                 let ty = self
-                    .paramspec_from_call(name.clone(), x, errors)
+                    .paramspec_from_call(name.clone(), call, errors)
                     .to_type(self.heap);
                 if let Some(k) = ann
                     && let AnnotationWithTarget {
@@ -4586,15 +4573,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             },
                     } = &*self.get_idx(*k)
                 {
-                    self.check_and_return_type(ty, want, x.range, errors, &|| {
+                    self.check_and_return_type(ty, want, call.range, errors, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(target))
                     })
                 } else {
                     ty
                 }
             }
-            Binding::TypeVarTuple(ann, name, x) => {
-                self.binding_to_type_type_var_tuple(*ann, name, x, errors)
+            Binding::TypeVarTuple(x) => {
+                let (ann, name, call) = x.as_ref();
+                self.binding_to_type_type_var_tuple(*ann, name, call, errors)
             }
             Binding::ReturnType(x) => self.binding_to_type_return_type(x, errors),
             Binding::ReturnExplicit(x) => self.binding_to_type_return_explicit(x, errors),
@@ -4616,14 +4604,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let def = self.get_decorated_function(idx);
                 self.solve_function_binding(def, &mut pred, class_meta.as_ref(), errors)
             }
-            Binding::Import(m, name, _aliased) => self
-                .get_from_export(*m, None, &KeyExport(name.clone()))
+            Binding::Import(x) => self
+                .get_from_export(x.0, None, &KeyExport(x.1.clone()))
                 .arc_clone(),
-            Binding::ImportViaGetattr(m, _name) => {
+            Binding::ImportViaGetattr(x) => {
                 // Import via module-level __getattr__ for incomplete stubs.
                 // Get the return type of __getattr__.
                 let getattr_ty = self
-                    .get_from_export(*m, None, &KeyExport(dunder::GETATTR.clone()))
+                    .get_from_export(x.0, None, &KeyExport(dunder::GETATTR.clone()))
                     .arc_clone();
                 getattr_ty
                     .callable_return_type(self.heap)
@@ -4652,39 +4640,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::TypeParameter(tp) => {
                 self.quantified_from_type_parameter(tp, errors).to_value()
             }
-            Binding::Module(m, path, prev) => self.binding_to_type_module(*m, path, *prev),
-            Binding::TypeAlias {
-                name,
-                tparams,
-                key_type_alias,
-                range,
-            } => self.wrap_type_alias(
-                name,
-                (*self.get_idx(*key_type_alias)).clone(),
-                tparams,
-                Some(self.bindings().idx_to_key(*key_type_alias).0),
-                *range,
+            Binding::Module(x) => self.binding_to_type_module(x.0, &x.1, x.2),
+            Binding::TypeAlias(x) => self.wrap_type_alias(
+                &x.name,
+                (*self.get_idx(x.key_type_alias)).clone(),
+                &x.tparams,
+                Some(self.bindings().idx_to_key(x.key_type_alias).0),
+                x.range,
                 errors,
             ),
-            Binding::TypeAliasRef {
-                name,
-                key_type_alias,
-                tparams,
-            } => {
-                let index = self.bindings().idx_to_key(*key_type_alias).0;
+            Binding::TypeAliasRef(x) => {
+                let index = self.bindings().idx_to_key(x.key_type_alias).0;
                 let r = TypeAliasRef {
-                    name: name.clone(),
+                    name: x.name.clone(),
                     args: None,
                     module_name: self.module().name(),
                     module_path: self.module().path().clone(),
                     index,
                 };
-                let tparams = self.create_type_alias_params_recursive(tparams);
+                let tparams = self.create_type_alias_params_recursive(&x.tparams);
                 Forallable::TypeAlias(TypeAliasData::Ref(r)).forall(tparams)
             }
             Binding::LambdaParameter(var) => var.to_type(self.heap),
             Binding::FunctionParameter(param) => self.binding_to_type_function_parameter(param),
-            Binding::SuperInstance(style, range) => self.solve_super_binding(style, *range, errors),
+            Binding::SuperInstance(x) => self.solve_super_binding(&x.0, x.1, errors),
             // For first-usage-based type inference, we occasionally just want a way to force
             // some other `K::Value` type in order to deterministically pin `Var`s introduced by a definition.
             Binding::UsageLink(linked_key) => {

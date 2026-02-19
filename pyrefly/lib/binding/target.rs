@@ -20,6 +20,7 @@ use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 
 use crate::binding::binding::AnnotationStyle;
+use crate::binding::binding::AssignToAttribute;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingTypeAlias;
@@ -30,7 +31,9 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::MethodSelfKind;
+use crate::binding::binding::NameAssign;
 use crate::binding::binding::SizeExpectation;
+use crate::binding::binding::TypeAliasBinding;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
@@ -179,11 +182,11 @@ impl<'a> BindingsBuilder<'a> {
         let value = make_assigned_value(assigned.as_deref(), None);
         let idx = self.insert_binding_current(
             user,
-            Binding::AssignToAttribute {
+            Binding::AssignToAttribute(Box::new(AssignToAttribute {
                 attr,
                 value: Box::new(value.clone()),
                 allow_assign_to_final,
-            },
+            })),
         );
         if let Some(identifier) = narrowing_identifier {
             self.narrow_if_name_is_defined(identifier, idx);
@@ -228,8 +231,10 @@ impl<'a> BindingsBuilder<'a> {
             self.ensure_expr(assigned, user.usage());
         }
         let value = make_assigned_value(assigned.as_deref(), None);
-        let idx = self
-            .insert_binding_current(user, Binding::AssignToSubscript(subscript, Box::new(value)));
+        let idx = self.insert_binding_current(
+            user,
+            Binding::AssignToSubscript(Box::new((subscript, Box::new(value)))),
+        );
         if let Some(identifier) = narrowing_identifier {
             self.narrow_if_name_is_defined(identifier, idx);
         }
@@ -273,7 +278,7 @@ impl<'a> BindingsBuilder<'a> {
         ensure_assigned: bool,
     ) {
         let binding_of = |v, ann| match v {
-            ExprOrBinding::Expr(e) => Binding::Expr(ann, e),
+            ExprOrBinding::Expr(e) => Binding::Expr(ann, Box::new(e)),
             ExprOrBinding::Binding(b) => b,
         };
         match target {
@@ -392,7 +397,8 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 let mut user = self.declare_current_idx(Key::Anon(value.range()));
                 self.ensure_expr(value, user.usage());
-                let rhs_idx = self.insert_binding_current(user, Binding::Expr(None, value.clone()));
+                let rhs_idx =
+                    self.insert_binding_current(user, Binding::Expr(None, Box::new(value.clone())));
                 for target in targets.iter_mut() {
                     let range = target.range();
                     self.bind_target_impl(
@@ -464,7 +470,7 @@ impl<'a> BindingsBuilder<'a> {
             let range = value.range();
             let mut user = self.declare_current_idx(Key::Anon(range));
             self.ensure_expr(&mut value, user.usage());
-            self.insert_binding_current(user, Binding::Expr(None, *value));
+            self.insert_binding_current(user, Binding::Expr(None, Box::new(*value)));
             return None;
         }
         let identifier = ShortIdentifier::new(name);
@@ -515,20 +521,20 @@ impl<'a> BindingsBuilder<'a> {
                 is_explicit: has_type_alias_qualifier,
             };
             let idx_type_alias = self.insert_binding(key_type_alias, binding_type_alias);
-            Binding::TypeAlias {
+            Binding::TypeAlias(Box::new(TypeAliasBinding {
                 name: name.id.clone(),
                 tparams: TypeAliasParams::Legacy(tparams),
                 key_type_alias: idx_type_alias,
                 range,
-            }
+            }))
         } else {
-            Binding::NameAssign {
+            Binding::NameAssign(Box::new(NameAssign {
                 name: name.id.clone(),
                 annotation: ann,
                 expr: value,
                 legacy_tparams: tparams,
                 is_in_function_scope: self.scopes.in_function_scope(),
-            }
+            }))
         };
         // Record the raw assignment
         let def_idx = current.into_idx();

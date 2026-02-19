@@ -390,7 +390,7 @@ impl<'a> BindingsBuilder<'a> {
                 {
                     self.insert_binding(
                         key,
-                        Binding::ClassBodyUnknownName(cls, name.clone(), suggestion),
+                        Binding::ClassBodyUnknownName(Box::new((cls, name.clone(), suggestion))),
                     )
                 } else {
                     // Record a type error and fall back to `Any`.
@@ -433,7 +433,11 @@ impl<'a> BindingsBuilder<'a> {
             // for inner and outer loops. It is safe to overwrite it because it literally the same.
             let iterable_value_idx = self.insert_binding_overwrite(
                 Key::Anon(comp.iter.range()),
-                Binding::IterableValue(None, comp.iter.clone(), IsAsync::new(comp.is_async)),
+                Binding::IterableValue(
+                    None,
+                    Box::new(comp.iter.clone()),
+                    IsAsync::new(comp.is_async),
+                ),
             );
             self.scopes.add_lvalue_to_current_static(&comp.target);
             // A comprehension target cannot be annotated, so it is safe to ignore the
@@ -730,7 +734,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.ensure_expr(expr, usage);
                         self.insert_binding(
                             Key::Anon(expr.range()),
-                            Binding::Expr(None, expr.clone()),
+                            Binding::Expr(None, Box::new(expr.clone())),
                         )
                     };
                     let cls_key = bind(&mut posargs[0]);
@@ -753,7 +757,7 @@ impl<'a> BindingsBuilder<'a> {
                 };
                 self.insert_binding(
                     Key::SuperInstance(*range),
-                    Binding::SuperInstance(style, *range),
+                    Binding::SuperInstance(Box::new((style, *range))),
                 );
             }
             Expr::Call(ExprCall {
@@ -778,7 +782,7 @@ impl<'a> BindingsBuilder<'a> {
                 // we still need this for comprehensions, whose scope is defined on-the-fly.
                 self.scopes.add_lvalue_to_current_static(&x.target);
                 self.bind_target_with_expr(&mut x.target, &mut x.value, &|expr, ann| {
-                    Binding::Expr(ann, expr.clone())
+                    Binding::Expr(ann, Box::new(expr.clone()))
                 });
             }
             Expr::Lambda(x) => {
