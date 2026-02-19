@@ -3633,35 +3633,13 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "revealed type: (x: int) -> Class7[int]",
-      "description": "revealed type: (x: int) -> Class7[int]",
+      "concise_description": "revealed type: Overload[\n  (x: int) -> Class7[int]\n  (x: str) -> Class7[str]\n]",
+      "description": "revealed type: Overload[\n  (x: int) -> Class7[int]\n  (x: str) -> Class7[str]\n]",
       "line": 163,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 2,
       "stop_line": 165
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Class7[int], Class7[str]) failed",
-      "description": "assert_type(Class7[int], Class7[str]) failed",
-      "line": 167,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 33,
-      "stop_line": 167
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "Argument `Literal['']` is not assignable to parameter `x` with type `int`",
-      "description": "Argument `Literal['']` is not assignable to parameter `x` with type `int`",
-      "line": 167,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 18,
-      "stop_line": 167
     },
     {
       "code": -2,

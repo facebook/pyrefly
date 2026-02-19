@@ -131,7 +131,7 @@
     "aliases_implicit.py": 5,
     "annotations_forward_refs.py": 2,
     "callables_annotation.py": 2,
-    "constructors_callable.py": 4,
+    "constructors_callable.py": 3,
     "dataclasses_descriptors.py": 6,
     "dataclasses_slots.py": 2,
     "exceptions_context_managers.py": 2,

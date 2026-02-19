@@ -37,7 +37,6 @@
   "constructors_callable.py": [
     "Line 186: Expected 1 errors",
     "Line 197: Expected 1 errors",
-    "Line 167: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
     "Line 185: Unexpected errors ['assert_type(Class8[Any], Class8[str]) failed']"
   ],
   "constructors_consistency.py": [],

@@ -855,8 +855,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// call once per overload signature and return an overloaded result. This preserves
     /// the overloaded type through the generic function rather than collapsing to one overload.
     ///
-    /// For example, calling `copy[A, B](c: Callable[[A], B]) -> Callable[[A], B]` with
-    /// `foo: Overload[(int)->int, (str)->str]` should return `Overload[(int)->int, (str)->str]`.
+    /// Handles two cases:
+    /// - An already-overloaded function (`Type::Overload`): e.g. `copy(foo)` where `foo` is overloaded.
+    /// - A class with an overloaded constructor (`Type::ClassDef`): e.g. `accepts_callable(Class7)`
+    ///   where `Class7.__init__` is overloaded.
     ///
     /// Returns `Some(Type::Overload(...))` if all signatures succeed without errors,
     /// `None` if expansion is not applicable or any signature fails.
@@ -871,20 +873,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         hint: Option<HintRef>,
     ) -> Option<Type> {
-        // Find the first argument that is a pre-typed overloaded function.
-        let (overload_idx, overload) = args.iter().enumerate().find_map(|(i, arg)| {
-            if let CallArg::Arg(TypeOrExpr::Type(ty, _)) = arg
-                && let Type::Overload(overload) = ty
-            {
-                Some((i, overload))
-            } else {
-                None
-            }
-        })?;
-        let arg_range = match &args[overload_idx] {
-            CallArg::Arg(TypeOrExpr::Type(_, r)) => *r,
-            _ => unreachable!(),
-        };
+        // Find the first argument that is, or can be converted to, an overloaded callable.
+        let (overload_idx, overload, arg_range) =
+            args.iter().enumerate().find_map(|(i, arg)| {
+                if let CallArg::Arg(TypeOrExpr::Type(ty, range)) = arg {
+                    match ty {
+                        // Already-overloaded function value.
+                        Type::Overload(overload) => Some((i, overload.clone(), *range)),
+                        // Class whose constructor is overloaded.
+                        Type::ClassDef(cls) => {
+                            let class_type = match self.instantiate(cls) {
+                                Type::ClassType(ct) => ct,
+                                _ => return None,
+                            };
+                            match self.constructor_to_callable(&class_type) {
+                                Type::Overload(overload) => Some((i, overload, *range)),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })?;
 
         // For each overload signature, call the generic function with that specific type.
         // Store substituted types in an owner to give them a stable address.
