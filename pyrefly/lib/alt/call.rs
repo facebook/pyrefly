@@ -14,9 +14,11 @@ use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
+use pyrefly_types::types::Overload;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::Union;
+use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::Arguments;
@@ -34,6 +36,7 @@ use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
 use crate::alt::class::class_field::DescriptorBase;
+use crate::alt::expr::TypeOrExpr;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
@@ -848,6 +851,99 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// When a generic function is called with an overloaded function argument, apply the
+    /// call once per overload signature and return an overloaded result. This preserves
+    /// the overloaded type through the generic function rather than collapsing to one overload.
+    ///
+    /// For example, calling `copy[A, B](c: Callable[[A], B]) -> Callable[[A], B]` with
+    /// `foo: Overload[(int)->int, (str)->str]` should return `Overload[(int)->int, (str)->str]`.
+    ///
+    /// Returns `Some(Type::Overload(...))` if all signatures succeed without errors,
+    /// `None` if expansion is not applicable or any signature fails.
+    fn call_generic_with_overloaded_arg(
+        &self,
+        callable: Callable,
+        metadata: &FuncMetadata,
+        tparams: Option<&TParams>,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        arguments_range: TextRange,
+        errors: &ErrorCollector,
+        hint: Option<HintRef>,
+    ) -> Option<Type> {
+        // Find the first argument that is a pre-typed overloaded function.
+        let (overload_idx, overload) = args.iter().enumerate().find_map(|(i, arg)| {
+            if let CallArg::Arg(TypeOrExpr::Type(ty, _)) = arg
+                && let Type::Overload(overload) = ty
+            {
+                Some((i, overload))
+            } else {
+                None
+            }
+        })?;
+        let arg_range = match &args[overload_idx] {
+            CallArg::Arg(TypeOrExpr::Type(_, r)) => *r,
+            _ => unreachable!(),
+        };
+
+        // For each overload signature, call the generic function with that specific type.
+        // Store substituted types in an owner to give them a stable address.
+        let type_owner = Owner::<Type>::new();
+        let mut results: Vec<OverloadType> = Vec::new();
+        for sig in &overload.signatures {
+            let sig_type = sig.as_type();
+            let modified_args: Vec<CallArg<'_>> = args
+                .iter()
+                .enumerate()
+                .map(|(i, arg)| {
+                    if i == overload_idx {
+                        CallArg::Arg(TypeOrExpr::Type(
+                            type_owner.push(sig_type.clone()),
+                            arg_range,
+                        ))
+                    } else {
+                        arg.clone()
+                    }
+                })
+                .collect();
+
+            let call_errors = self.error_collector();
+            let res = self.callable_infer(
+                callable.clone(),
+                Some(&metadata.kind),
+                tparams,
+                None,
+                &modified_args,
+                keywords,
+                arguments_range,
+                errors,
+                &call_errors,
+                None,
+                hint,
+                None,
+            );
+            if !call_errors.is_empty() {
+                return None;
+            }
+            // The result must be a callable type to be included in the overloaded result.
+            match res {
+                Type::Callable(c) => results.push(OverloadType::Function(Function {
+                    signature: *c,
+                    metadata: overload.metadata.as_ref().clone(),
+                })),
+                Type::Function(f) => results.push(OverloadType::Function(*f)),
+                _ => return None,
+            }
+        }
+
+        Vec1::try_from_vec(results).ok().map(|signatures| {
+            Type::Overload(Overload {
+                signatures,
+                metadata: overload.metadata.clone(),
+            })
+        })
+    }
+
     fn call_infer_with_callee_range(
         &self,
         call_target: CallTarget,
@@ -1011,20 +1107,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     signature: callable,
                     metadata,
                 },
-            )) => self.callable_infer(
-                callable,
-                Some(&metadata.kind),
-                tparams.as_deref(),
-                None,
-                args,
-                keywords,
-                arguments_range,
-                errors,
-                errors,
-                context,
-                hint,
-                ctor_targs,
-            ),
+            )) => {
+                // For generic functions, check if any argument is an overloaded function.
+                // If so, apply the call once per overload signature and return an overloaded
+                // result, preserving the overloaded type through the generic function.
+                if tparams.is_some() {
+                    let call = CallWithTypes::new();
+                    let typed_args = call.vec_call_arg(args, self, errors);
+                    let typed_kws = call.vec_call_keyword(keywords, self, errors);
+                    if let Some(result) = self.call_generic_with_overloaded_arg(
+                        callable.clone(),
+                        &metadata,
+                        tparams.as_deref(),
+                        &typed_args,
+                        &typed_kws,
+                        arguments_range,
+                        errors,
+                        hint,
+                    ) {
+                        result
+                    } else {
+                        self.callable_infer(
+                            callable,
+                            Some(&metadata.kind),
+                            tparams.as_deref(),
+                            None,
+                            &typed_args,
+                            &typed_kws,
+                            arguments_range,
+                            errors,
+                            errors,
+                            context,
+                            hint,
+                            ctor_targs,
+                        )
+                    }
+                } else {
+                    self.callable_infer(
+                        callable,
+                        Some(&metadata.kind),
+                        tparams.as_deref(),
+                        None,
+                        args,
+                        keywords,
+                        arguments_range,
+                        errors,
+                        errors,
+                        context,
+                        hint,
+                        ctor_targs,
+                    )
+                }
+            }
             CallTarget::FunctionOverload(overloads, metadata) => {
                 self.call_overloads(
                     overloads,
