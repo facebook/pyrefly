@@ -182,6 +182,12 @@ impl Range {
     }
 }
 
+#[derive(Serialize)]
+pub struct DefinitionLocation {
+    pub filename: String,
+    pub range: Range,
+}
+
 #[derive(Serialize, Clone)]
 pub struct Diagnostic {
     #[serde(rename(serialize = "startLineNumber"))]
@@ -602,6 +608,26 @@ impl Playground {
             .unwrap_or_default()
             .into_iter()
             .map(|r| Range::new(r.module.display_range(r.range)))
+            .collect()
+    }
+
+    pub fn goto_definition_locations(&mut self, pos: Position) -> Vec<DefinitionLocation> {
+        let handle = match self.handles.get(&self.active_filename) {
+            Some(handle) => handle,
+            None => return Vec::new(),
+        };
+        let transaction = self.state.transaction();
+        let position = match self.to_text_size(&transaction, pos) {
+            Some(position) => position,
+            None => return Vec::new(),
+        };
+        transaction
+            .goto_definition(handle, position)
+            .into_iter()
+            .map(|r| DefinitionLocation {
+                filename: r.module.path().as_path().to_string_lossy().to_string(),
+                range: Range::new(r.module.display_range(r.range)),
+            })
             .collect()
     }
 
