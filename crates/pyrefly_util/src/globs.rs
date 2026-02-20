@@ -328,6 +328,30 @@ impl PartialEq for Glob {
     }
 }
 
+#[cfg(feature = "jsonschema")]
+impl schemars::JsonSchema for Glob {
+    fn schema_name() -> String {
+        "Glob".to_owned()
+    }
+
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        // Glob serializes as a simple string
+        generator.subschema_for::<String>()
+    }
+}
+
+#[cfg(feature = "jsonschema")]
+impl schemars::JsonSchema for Globs {
+    fn schema_name() -> String {
+        "Globs".to_owned()
+    }
+
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        // Globs serializes as an array of strings (Vec<Glob>)
+        generator.subschema_for::<Vec<String>>()
+    }
+}
+
 impl Glob {
     fn files(&self, filter: &GlobFilter, limit: Option<usize>) -> anyhow::Result<Vec<PathBuf>> {
         let pattern = &self.0;
