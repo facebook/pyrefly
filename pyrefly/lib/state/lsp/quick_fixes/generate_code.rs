@@ -20,6 +20,7 @@ use ruff_text_size::TextSize;
 
 use super::extract_shared::find_enclosing_statement_range;
 use super::extract_shared::line_indent_and_start;
+use super::extract_shared::unique_name;
 use crate::state::lsp::Transaction;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
@@ -37,20 +38,6 @@ fn param_name_from_expr(expr: &Expr) -> Option<String> {
         Expr::Name(name) => Some(name.id.to_string()),
         Expr::Attribute(attr) => Some(attr.attr.id.to_string()),
         _ => None,
-    }
-}
-
-fn unique_name(base: String, used: &mut HashSet<String>) -> String {
-    if used.insert(base.clone()) {
-        return base;
-    }
-    let mut i = 1;
-    loop {
-        let candidate = format!("{base}_{i}");
-        if used.insert(candidate.clone()) {
-            return candidate;
-        }
-        i += 1;
     }
 }
 
@@ -112,7 +99,8 @@ fn infer_params_from_call(
             counter += 1;
             name
         });
-        let name = unique_name(base_name, &mut used_names);
+        let name = unique_name(&base_name, |n| used_names.contains(n));
+        used_names.insert(name.clone());
         let annotation = infer_annotation(transaction, handle, expr.range())
             .and_then(|ty| type_to_annotation(ty, stdlib));
         params.push(InferredParam {
@@ -132,7 +120,8 @@ fn infer_params_from_call(
                 &keyword.value,
             ),
         };
-        let name = unique_name(base_name, &mut used_names);
+        let name = unique_name(&base_name, |n| used_names.contains(n));
+        used_names.insert(name.clone());
         let annotation = infer_annotation(transaction, handle, value.range())
             .and_then(|ty| type_to_annotation(ty, stdlib));
         let param = InferredParam {
