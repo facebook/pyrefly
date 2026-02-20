@@ -1287,11 +1287,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (l, Type::Intersect(u)) => all(u.0.iter(), |u| self.is_subset_eq(l, u)),
             (l, Type::Union(box Union { members: us, .. })) => {
                 // Check var and non-var elements separately, so that if we match a non-var, we
-                // don't pin the vars.
+                // don't pin the vars. Within var-containing members, try wrapped vars (e.g.
+                // `type[T]`) before bare vars (e.g. `T`), so that more specific patterns are
+                // tried first. This prevents cases like `T | type[T]` from incorrectly matching
+                // bare `T` when `type[T]` would produce a better (bound-satisfying) solution.
                 let (vars, nonvars): (Vec<_>, Vec<_>) =
                     us.iter().partition(|u| u.may_contain_quantified_var());
+                let (bare_vars, wrapped_vars): (Vec<_>, Vec<_>) =
+                    vars.into_iter().partition(|u| matches!(u, Type::Var(_)));
                 any(nonvars.iter(), |u| self.is_subset_eq(l, u))
-                    .or_else(|_| any(vars.iter(), |u| self.is_subset_eq(l, u)))
+                    .or_else(|_| any(wrapped_vars.iter(), |u| self.is_subset_eq(l, u)))
+                    .or_else(|_| any(bare_vars.iter(), |u| self.is_subset_eq(l, u)))
             }
             (l, Type::Overload(overload)) => all(overload.signatures.iter(), |u| {
                 self.is_subset_eq(l, &u.as_type())
