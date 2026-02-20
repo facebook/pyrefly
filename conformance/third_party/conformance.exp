@@ -6256,6 +6256,28 @@
     },
     {
       "code": -2,
+      "column": 8,
+      "concise_description": "Type variable `S` is not in scope",
+      "description": "Type variable `S` is not in scope",
+      "line": 50,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 50
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Type variable `S` is not in scope",
+      "description": "Type variable `S` is not in scope",
+      "line": 54,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 54
+    },
+    {
+      "code": -2,
       "column": 11,
       "concise_description": "Redundant type parameter declaration",
       "description": "Redundant type parameter declaration",
@@ -6264,6 +6286,28 @@
       "severity": "error",
       "stop_column": 20,
       "stop_line": 65
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Type variable `T` is not in scope",
+      "description": "Type variable `T` is not in scope",
+      "line": 94,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 94
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Type variable `T` is not in scope",
+      "description": "Type variable `T` is not in scope",
+      "line": 95,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 95
     }
   ],
   "generics_self_advanced.py": [],

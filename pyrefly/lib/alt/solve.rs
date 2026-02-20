@@ -396,6 +396,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ));
                     }
                 }
+                // Check for out-of-scope TypeVars in annotations.
+                // In-scope TypeVars are replaced with Quantified by LegacyTParamCollector,
+                // so any remaining raw TypeVars are out of scope.
+                if let Some(ty) = &ann.ty {
+                    // Consume TypeVars that are legitimately scoped inside Callables,
+                    // then check for remaining out-of-scope ones.
+                    let ty_with_callables_wrapped = self.wrap_callable_legacy_typevars(ty.clone());
+                    self.check_raw_legacy_type_variables(
+                        &ty_with_callables_wrapped,
+                        x.range(),
+                        errors,
+                    );
+                }
                 Arc::new(AnnotationWithTarget {
                     target: target.clone(),
                     annotation: ann,
@@ -4318,6 +4331,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             });
         });
         tparams
+    }
+
+    /// Check for raw legacy type variables in a resolved annotation type.
+    /// Raw legacy TypeVars in annotations indicate out-of-scope usage — in-scope
+    /// TypeVars are replaced with Quantified by LegacyTParamCollector.
+    fn check_raw_legacy_type_variables(
+        &self,
+        ty: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let mut names = Vec::new();
+        ty.collect_raw_legacy_type_variables(&mut names);
+        for name in names {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                format!("Type variable `{name}` is not in scope"),
+            );
+        }
     }
 
     fn check_implicit_return_against_annotation(
