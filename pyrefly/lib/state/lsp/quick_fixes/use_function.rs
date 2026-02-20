@@ -14,6 +14,7 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePathDetails;
+use pyrefly_util::absolutize::Absolutize;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Alias;
 use ruff_python_ast::Expr;
@@ -70,8 +71,8 @@ pub(crate) fn use_function_code_actions(
     if function_def.is_async || !function_def.decorator_list.is_empty() {
         return None;
     }
-    let params = collect_supported_params(&function_def)?;
-    let return_expr = extract_return_expr(&function_def)?;
+    let params = collect_supported_params(function_def)?;
+    let return_expr = extract_return_expr(function_def)?;
     let param_set = params.iter().cloned().collect::<HashSet<_>>();
     let mut param_counts = HashMap::new();
     if !validate_return_expr(return_expr, &param_set, &mut param_counts) {
@@ -112,12 +113,21 @@ pub(crate) fn use_function_code_actions(
             ModulePathDetails::FileSystem(_)
             | ModulePathDetails::Memory(_)
             | ModulePathDetails::Namespace(_) => {
-                function_config
-                    .project_includes
-                    .covers(target_path.as_path())
-                    && !function_config
-                        .project_excludes
-                        .covers(target_path.as_path())
+                if function_config.source.root().is_none() {
+                    true
+                } else {
+                    let path = target_path.as_path();
+                    let path_for_match = if path.is_absolute() {
+                        None
+                    } else if let Some(root) = function_config.source.root() {
+                        Some(path.absolutize_from(root))
+                    } else {
+                        Some(path.absolutize())
+                    };
+                    let path_for_match = path_for_match.as_deref().unwrap_or(path);
+                    function_config.project_includes.covers(path_for_match)
+                        && !function_config.project_excludes.covers(path_for_match)
+                }
             }
             _ => false,
         };

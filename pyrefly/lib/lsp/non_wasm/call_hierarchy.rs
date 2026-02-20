@@ -87,9 +87,7 @@ pub fn find_containing_function_for_call(
         if let Some(class_def) = containing.class_def {
             let name = format!(
                 "{}.{}.{}",
-                module_name,
-                class_def.name.id,
-                containing.function_def.name.id
+                module_name, class_def.name.id, containing.function_def.name.id
             );
             return (
                 name,
