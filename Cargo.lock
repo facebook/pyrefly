@@ -812,7 +812,7 @@ version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a19187fea3ac7e84da7dacf48de0c45d63c6a76f9490dae389aead16c243fce3"
 dependencies = [
- "log 0.4.29",
+ "log",
  "regex",
 ]
 
@@ -1103,7 +1103,7 @@ checksum = "52dfc19153a48bde0cbd630453615c8151bce3a5adfac7a0aebfbf0a1e1f57e3"
 dependencies = [
  "aho-corasick",
  "bstr",
- "log 0.4.29",
+ "log",
  "regex-automata",
  "regex-syntax 0.8.8",
 ]
@@ -1168,7 +1168,7 @@ dependencies = [
  "core-foundation-sys",
  "iana-time-zone-haiku",
  "js-sys",
- "log 0.4.29",
+ "log",
  "wasm-bindgen",
  "windows-core",
 ]
@@ -1336,7 +1336,7 @@ checksum = "d3d782a365a015e0f5c04902246139249abf769125006fbe7649e2ee88169b4a"
 dependencies = [
  "crossbeam-deque",
  "globset",
- "log 0.4.29",
+ "log",
  "memchr",
  "regex-automata",
  "same-file",
@@ -1604,15 +1604,6 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e19e8d5c34a3e0e2223db8e060f9e8264aeeb5c5fc64a4ee9965c062211c024b"
-dependencies = [
- "log 0.4.29",
-]
-
-[[package]]
-name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
@@ -1624,7 +1615,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6ada348dbc2703cbe7637b2dda05cff84d3da2819c24abcb305dd613e0ba2e"
 dependencies = [
  "crossbeam-channel",
- "log 0.4.29",
+ "log",
  "serde",
  "serde_derive",
  "serde_json",
@@ -1739,7 +1730,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69d83b0086dc8ecf3ce9ae2874b2d1290252e2a30720bea58a5c6639b0092873"
 dependencies = [
  "libc",
- "log 0.4.29",
+ "log",
  "wasi 0.11.0+wasi-snapshot-preview1",
  "windows-sys 0.61.2",
 ]
@@ -1768,7 +1759,7 @@ dependencies = [
  "inotify",
  "kqueue",
  "libc",
- "log 0.4.29",
+ "log",
  "mio",
  "notify-types",
  "walkdir",
@@ -2387,7 +2378,7 @@ version = "1.0.3"
 source = "git+https://github.com/jakoschiko/quickcheck?rev=6ecdf5bb4b0132ce66670b4d46453aa022ea892c#6ecdf5bb4b0132ce66670b4d46453aa022ea892c"
 dependencies = [
  "env_logger",
- "log 0.4.29",
+ "log",
  "rand 0.8.5",
 ]
 
@@ -3357,7 +3348,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
- "log 0.4.29",
+ "log",
  "pin-project-lite",
  "slab",
  "tokio",
@@ -3455,7 +3446,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
 dependencies = [
- "log 0.4.29",
+ "log",
  "once_cell",
  "tracing-core",
 ]
@@ -3575,7 +3566,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f444b8bba042fe3c1251ffaca35c603f2dc2ccc08d595c65a8c4f76f3e8426c0"
 dependencies = [
  "getopts",
- "log 0.3.9",
+ "log",
  "phf_codegen",
  "rand 0.8.5",
 ]
