@@ -910,7 +910,7 @@ class TD(TypedDict, Generic[_NBit1, _NBit2]):
 
 class A:
     x: ClassVar[TD[Any, Any]]
-    y: ClassVar[TD[_NBit1, Any]]  # E: `ClassVar` arguments may not contain any type variables
+    y: ClassVar[TD[_NBit1, Any]]  # E: Type variable `_NBit1` is not in scope  # E: `ClassVar` arguments may not contain any type variables
     "#,
 );
 
@@ -1042,7 +1042,8 @@ reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tu
 );
 
 testcase!(
-    bug = "conformance: Should error on unbound TypeVars in various scopes",
+    bug =
+        "conformance: Should error on unbound TypeVars in class bases, TypeAlias, and expressions",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias
@@ -1054,12 +1055,12 @@ S = TypeVar("S")
 # Unbound TypeVar S used in generic function body
 def fun_3(x: T) -> list[T]:
     y: list[T] = []  # OK
-    z: list[S] = []  # should error: S not in scope
+    z: list[S] = []  # E: Type variable `S` is not in scope
     return y
 
 # Unbound TypeVar S in class body (not in method)
 class Bar(Generic[T]):
-    an_attr: list[S] = []  # should error: S not in scope
+    an_attr: list[S] = []  # E: Type variable `S` is not in scope
 
 # Nested class using outer class's TypeVar
 class Outer(Generic[T]):
@@ -1071,8 +1072,8 @@ class Outer(Generic[T]):
     alias: TypeAlias = list[T]  # should error: T not allowed in TypeAlias here
 
 # Unbound TypeVars at global scope
-global_var1: T  # should error
-global_var2: list[T] = []  # should error
+global_var1: T  # E: Type variable `T` is not in scope
+global_var2: list[T] = []  # E: Type variable `T` is not in scope
 list[T]()  # should error
 "#,
 );

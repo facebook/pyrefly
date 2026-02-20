@@ -61,12 +61,15 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
+use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::NarrowUseLocation;
+use crate::binding::binding::TypeAliasParams;
+use crate::binding::binding::TypeAliasRefBinding;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
@@ -424,7 +427,7 @@ impl Bindings {
     pub fn get_function_param(&self, name: &Identifier) -> &FunctionParameter {
         let b = self.get(self.key_to_idx(&Key::Definition(ShortIdentifier::new(name))));
         if let Binding::FunctionParameter(p) = b {
-            p
+            p.as_ref()
         } else {
             panic!(
                 "Internal error: unexpected binding for parameter `{}` @  {:?}: {}, module={}, path={}",
@@ -641,17 +644,18 @@ impl BindingTable {
     /// will take the phi of all values bound at different points). If necessary, we
     /// insert the Anywhere.
     fn record_bind_in_anywhere(&mut self, name: Name, range: TextRange, idx: Idx<Key>) {
-        let phi_idx = self.types.0.insert(Key::Anywhere(name, range));
-        match self
-            .types
-            .1
-            .insert_if_missing(phi_idx, || Binding::Phi(JoinStyle::SimpleMerge, vec![]))
-        {
+        let phi_idx = self.types.0.insert(Key::Anywhere(Box::new((name, range))));
+        let new_branch = BranchInfo {
+            value_key: idx,
+            termination_key: None,
+        };
+        match self.types.1.insert_if_missing(phi_idx, || {
+            Binding::Phi(JoinStyle::SimpleMerge, Box::new([]))
+        }) {
             Binding::Phi(_, branches) => {
-                branches.push(BranchInfo {
-                    value_key: idx,
-                    termination_key: None,
-                });
+                let mut v = std::mem::take(branches).into_vec();
+                v.push(new_branch);
+                *branches = v.into_boxed_slice();
             }
             _ => unreachable!(),
         }
@@ -905,7 +909,7 @@ impl<'a> BindingsBuilder<'a> {
 
     fn inject_globals(&mut self) {
         for global in ImplicitGlobal::implicit_globals(self.has_docstring) {
-            let key = Key::ImplicitGlobal(global.name().clone());
+            let key = Key::ImplicitGlobal(Box::new(global.name().clone()));
             let idx = self.insert_binding(key, Binding::Global(global.clone()));
             self.bind_name(global.name(), idx, FlowStyle::Other);
         }
@@ -920,10 +924,11 @@ impl<'a> BindingsBuilder<'a> {
             FindingOrError::Error(_) => (),
             FindingOrError::Finding(_) => {
                 for name in self.lookup.get_wildcard(builtins_module).unwrap().iter() {
-                    let key = Key::Import(name.clone(), TextRange::default());
-                    let idx = self
-                        .table
-                        .insert(key, Binding::Import(builtins_module, name.clone(), None));
+                    let key = Key::Import(Box::new((name.clone(), TextRange::default())));
+                    let idx = self.table.insert(
+                        key,
+                        Binding::Import(Box::new((builtins_module, name.clone(), None))),
+                    );
                     self.bind_name(name, idx, FlowStyle::Import(builtins_module, name.clone()));
                 }
             }
@@ -1012,11 +1017,11 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::Forward(inner_idx) => {
                     idx = *inner_idx;
                 }
-                Binding::NameAssign { expr: value, .. } => {
-                    return self.as_special_export_inner(value, visited_names, visited_keys);
+                Binding::NameAssign(x) => {
+                    return self.as_special_export_inner(&x.expr, visited_names, visited_keys);
                 }
-                Binding::Import(module_name, name, _) => {
-                    return self.lookup.is_special_export(*module_name, name);
+                Binding::Import(x) => {
+                    return self.lookup.is_special_export(x.0, &x.1);
                 }
                 Binding::Phi(_, branches) => {
                     // Check all branches for a consistent special export (e.g. try/except
@@ -1189,6 +1194,26 @@ impl<'a> BindingsBuilder<'a> {
         def_to_upstreams: &SmallMap<Idx<Key>, Idx<Key>>,
         first_uses_to_add: &mut SmallMap<Idx<Key>, Vec<Idx<Key>>>,
     ) {
+        // For TypeAliasRhs usage, check if the name resolves to a type
+        // alias and produce a TypeAliasRef binding. This covers both
+        // self-references and cross-references to other aliases in the
+        // same module. The expansion step in wrap_type_alias inlines
+        // non-recursive Refs at solve time.
+        if matches!(deferred.usage, Usage::TypeAliasRhs)
+            && let Some((name, key_type_alias, tparams)) =
+                self.follow_to_type_alias(deferred.lookup_result_idx)
+        {
+            self.insert_binding_idx(
+                deferred.bound_name_idx,
+                Binding::TypeAliasRef(Box::new(TypeAliasRefBinding {
+                    name,
+                    key_type_alias,
+                    tparams,
+                })),
+            );
+            return;
+        }
+
         // Follow Forward chains to find any partial type
         let (default_idx, partial_type_info) =
             self.follow_to_partial_type(deferred.lookup_result_idx);
@@ -1196,7 +1221,10 @@ impl<'a> BindingsBuilder<'a> {
         if let Some((pinned_idx, unpinned_idx, first_use)) = partial_type_info {
             let is_narrowing = matches!(deferred.usage, Usage::Narrowing(_));
 
-            if matches!(deferred.usage, Usage::StaticTypeInformation) {
+            if matches!(
+                deferred.usage,
+                Usage::StaticTypeInformation | Usage::TypeAliasRhs
+            ) {
                 self.mark_does_not_pin_if_first_use(pinned_idx);
                 self.insert_binding_idx(deferred.bound_name_idx, Binding::Forward(pinned_idx));
                 return;
@@ -1317,6 +1345,29 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    /// Follow Forward chains to find a TypeAlias binding.
+    /// Returns `Some((name, key_type_alias, tparams))` if the chain ends at
+    /// a `Binding::TypeAlias`, or `None` otherwise.
+    fn follow_to_type_alias(
+        &self,
+        start_idx: Idx<Key>,
+    ) -> Option<(Name, Idx<KeyTypeAlias>, TypeAliasParams)> {
+        let (_, orig_binding) = self.get_original_binding(start_idx)?;
+        match orig_binding? {
+            Binding::TypeAlias(x) => Some((x.name.clone(), x.key_type_alias, x.tparams.clone())),
+            // In legacy type alias RHS processing, all names go through
+            // intercept_lookup which wraps them in PossibleLegacyTParam.
+            // By finalize time we can follow through to the original
+            // binding to check whether it's actually a type alias.
+            Binding::PossibleLegacyTParam(tparam_idx, _)
+                if let Some(legacy_binding) = self.idx_to_binding(*tparam_idx) =>
+            {
+                self.follow_to_type_alias(legacy_binding.idx())
+            }
+            _ => None,
+        }
+    }
+
     /// Mark a CompletedPartialType as used by a specific binding.
     fn mark_first_use(&mut self, partial_type_idx: Idx<Key>, user_idx: Idx<Key>) {
         if let Some(Binding::CompletedPartialType(_, first_use)) =
@@ -1412,14 +1463,17 @@ impl<'a> BindingsBuilder<'a> {
         if let Some(prev_idx) = prev_idx {
             if matches!(
                 self.idx_to_binding(prev_idx),
-                Some(Binding::TypeAlias { .. })
+                Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
             ) {
                 self.error(
                     self.idx_to_key(idx).range(),
                     ErrorInfo::Kind(ErrorKind::Redefinition),
                     format!("Cannot redefine existing type alias `{name}`",),
                 )
-            } else if matches!(self.idx_to_binding(idx), Some(Binding::TypeAlias { .. })) {
+            } else if matches!(
+                self.idx_to_binding(idx),
+                Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
+            ) {
                 self.error(
                     self.idx_to_key(idx).range(),
                     ErrorInfo::Kind(ErrorKind::Redefinition),
@@ -1432,8 +1486,8 @@ impl<'a> BindingsBuilder<'a> {
     fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
         let prev_idx = self.scopes.current_flow_idx(name);
         if let Some(prev_idx) = prev_idx
-            && let Some(Binding::Import(module, original_name, _)) = self.idx_to_binding(prev_idx)
-            && self.lookup.is_final(*module, original_name)
+            && let Some(Binding::Import(x)) = self.idx_to_binding(prev_idx)
+            && self.lookup.is_final(x.0, &x.1)
         {
             self.error(
                 self.idx_to_key(idx).range(),
@@ -1532,7 +1586,7 @@ impl<'a> BindingsBuilder<'a> {
             if let Some(initial_idx) = self.lookup_name(name, &mut narrowing_usage).found() {
                 self.mark_does_not_pin_if_first_use(initial_idx);
                 let narrowed_idx = self.insert_binding(
-                    Key::Narrow(name.into_key().clone(), *op_range, use_location),
+                    Key::Narrow(Box::new((name.into_key().clone(), *op_range, use_location))),
                     Binding::Narrow(initial_idx, Box::new(op.clone()), use_location),
                 );
                 self.scopes.narrow_in_current_flow(name, narrowed_idx);
@@ -1573,14 +1627,14 @@ impl<'a> BindingsBuilder<'a> {
         });
         let key = self.insert_binding(
             Key::Definition(ShortIdentifier::new(name)),
-            Binding::FunctionParameter(match annot {
+            Binding::FunctionParameter(Box::new(match annot {
                 Some(annot) => FunctionParameter::Annotated(annot),
                 None => FunctionParameter::Unannotated(
                     self.solver.fresh_parameter(self.uniques),
                     undecorated_idx,
                     target,
                 ),
-            }),
+            })),
         );
         self.scopes.add_parameter_to_current_static(name, annot);
         self.scopes.register_parameter(name, allow_unused);

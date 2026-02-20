@@ -1358,6 +1358,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             AttributeBase1::ClassInstance(class) => {
+                // Special handling for nn.ModuleDict with TypedDict type argument
+                if let Some(attr) = self.try_nn_module_dict_attr(class, attr_name) {
+                    acc.found_class_attribute(attr, base);
+                    return;
+                }
+
+                // Normal class instance attribute lookup
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let attr_lookup_result =
                     self.get_enum_or_instance_attribute(class, &metadata, attr_name);

@@ -69,6 +69,7 @@ use serde_json::json;
 use crate::commands::lsp::IndexingMode;
 use crate::commands::lsp::LspArgs;
 use crate::commands::lsp::run_lsp;
+use crate::lsp::non_wasm::external_references::NoExternalReferences;
 use crate::lsp::non_wasm::protocol::JsonRpcMessage;
 use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Notification;
@@ -1254,7 +1255,14 @@ impl LspInteraction {
                 workspace_indexing_limit: 50,
                 build_system_blocking: false,
             };
-            let _ = run_lsp(conn_server, args, None, None, &NoTelemetry);
+            let _ = run_lsp(
+                conn_server,
+                args,
+                None,
+                None,
+                &NoTelemetry,
+                Arc::new(NoExternalReferences),
+            );
             finish_server.notify_finished();
         });
 

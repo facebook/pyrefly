@@ -202,6 +202,7 @@ use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
+use pyrefly_util::telemetry::ActivityKey;
 use pyrefly_util::telemetry::SubTaskTelemetry;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryDidChangeWatchedFilesStats;
@@ -240,6 +241,7 @@ use crate::lsp::non_wasm::call_hierarchy::prepare_call_hierarchy_item;
 use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
 use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
 use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_actions;
+use crate::lsp::non_wasm::external_references::ExternalReferences;
 use crate::lsp::non_wasm::lsp::apply_change_events;
 use crate::lsp::non_wasm::lsp::as_notification;
 use crate::lsp::non_wasm::lsp::as_request;
@@ -566,9 +568,6 @@ pub struct Server {
     /// - Empty set means there is an ongoing recheck but all open files at the start of
     ///   the recheck were subsequently modified
     currently_streaming_diagnostics_for_handles: RwLock<Option<SmallSet<Handle>>>,
-    /// Whether to stream diagnostics as they become available during recheck.
-    /// Defaults to true. Set via `streamDiagnostics` initialization option.
-    stream_diagnostics: bool,
     /// Testing-only flag to prevent the next recheck from committing.
     /// When set, the recheck queue task will loop without committing the transaction.
     do_not_commit_recheck: AtomicBool,
@@ -580,6 +579,9 @@ pub struct Server {
     path_remapper: Option<PathRemapper>,
     /// Accumulated file watcher events waiting to be processed as a batch.
     pending_watched_file_changes: Mutex<Vec<FileEvent>>,
+    /// An external source which may be included to assist in finding global references
+    #[expect(dead_code)]
+    external_references: Arc<dyn ExternalReferences>,
 }
 
 pub fn shutdown_finish(connection: &Connection, id: RequestId) {
@@ -1015,6 +1017,7 @@ pub fn lsp_loop(
     build_system_blocking: bool,
     path_remapper: Option<PathRemapper>,
     telemetry: &impl Telemetry,
+    external_references: Arc<dyn ExternalReferences>,
 ) -> anyhow::Result<()> {
     info!("Reading messages");
     let lsp_queue = LspQueue::new();
@@ -1028,6 +1031,7 @@ pub fn lsp_loop(
         build_system_blocking,
         from,
         path_remapper,
+        external_references,
     );
     std::thread::scope(|scope| {
         scope.spawn(|| {
@@ -1087,6 +1091,29 @@ pub fn lsp_loop(
     });
     drop(server); // close connection
     Ok(())
+}
+
+/// Records a telemetry event for an individual code action sub-operation.
+/// Called after each code action block with the `Instant` captured before the block.
+fn record_code_action_telemetry(
+    name: &str,
+    start: Instant,
+    server_state: &TelemetryServerState,
+    telemetry: &dyn Telemetry,
+    activity_key: Option<&ActivityKey>,
+    file_stats: Option<&TelemetryFileStats>,
+) {
+    let mut event = TelemetryEvent::new_task(
+        TelemetryEventKind::CodeAction(name.to_owned()),
+        server_state.clone(),
+        None,
+        start,
+    );
+    event.set_activity_key(activity_key.cloned());
+    if let Some(stats) = file_stats {
+        event.set_file_stats(stats.clone());
+    }
+    event.finish_and_record(telemetry, None);
 }
 
 impl Server {
@@ -1465,9 +1492,19 @@ impl Server {
                         )
                     {
                         self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
+                        let activity_key = telemetry_event.activity_key.as_ref();
+                        let file_stats = telemetry_event.file_stats.as_ref();
                         self.send_response(new_response(
                             x.id,
-                            Ok(self.code_action(&transaction, params).unwrap_or_default()),
+                            Ok(self
+                                .code_action(
+                                    &transaction,
+                                    params,
+                                    telemetry,
+                                    activity_key,
+                                    file_stats,
+                                )
+                                .unwrap_or_default()),
                         ));
                     }
                 } else if let Some(params) = as_request::<Completion>(&x) {
@@ -1878,6 +1915,7 @@ impl Server {
         build_system_blocking: bool,
         surface: Option<String>,
         path_remapper: Option<PathRemapper>,
+        external_references: Arc<dyn ExternalReferences>,
     ) -> Self {
         let folders = if let Some(capability) = &initialize_params.capabilities.workspace
             && let Some(true) = capability.workspace_folders
@@ -1892,15 +1930,6 @@ impl Server {
         };
 
         let workspaces = Arc::new(Workspaces::new(Workspace::default(), &folders));
-
-        // Parse streamDiagnostics from initialization options, defaulting to true
-        let stream_diagnostics = initialize_params
-            .initialization_options
-            .as_ref()
-            .and_then(|opts| opts.get("pyrefly"))
-            .and_then(|pyrefly| pyrefly.get("streamDiagnostics"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
 
         let config_finder = Workspaces::config_finder(workspaces.dupe());
 
@@ -1948,12 +1977,12 @@ impl Server {
             surface,
             comment_folding_ranges,
             currently_streaming_diagnostics_for_handles: RwLock::new(None),
-            stream_diagnostics,
             do_not_commit_recheck: AtomicBool::new(false),
             // Will be set to true if we send a workspace/configuration request
             awaiting_initial_workspace_config: AtomicBool::new(should_request_workspace_settings),
             path_remapper,
             pending_watched_file_changes: Mutex::new(Vec::new()),
+            external_references,
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
@@ -2417,22 +2446,29 @@ impl Server {
         f: impl FnOnce(&mut Transaction) + Send + Sync + 'static,
     ) {
         let open_handles = self.get_open_file_handles();
-        let stream_diagnostics = self.stream_diagnostics;
         self.recheck_queue.queue_task(
             kind,
             Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
-                // Take a snapshot of the open files at the beginning of the transaction
-                // we'll stream diagnostics for those files as they become available
-                let open_handles_set: SmallSet<Handle> = open_handles.iter().cloned().collect();
+                // Filter to only include handles from workspaces with streaming enabled
+                let streaming_handles: SmallSet<Handle> = open_handles
+                    .iter()
+                    .filter(|h| {
+                        server
+                            .workspaces
+                            .should_stream_diagnostics(h.path().as_path())
+                    })
+                    .cloned()
+                    .collect();
                 // Store the snapshot so non-committable transactions know not to publish
                 // diagnostics for these files (they'll be streamed by this transaction)
-                if stream_diagnostics {
+                let has_streaming = !streaming_handles.is_empty();
+                if has_streaming {
                     *server.currently_streaming_diagnostics_for_handles.write() =
-                        Some(open_handles_set.clone());
+                        Some(streaming_handles.clone());
                 }
                 let publish_callback =
                     move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
-                        if stream_diagnostics && changed && open_handles_set.contains(handle) {
+                        if changed && streaming_handles.contains(handle) {
                             server.publish_for_handles(
                                 transaction,
                                 std::slice::from_ref(handle),
@@ -3395,6 +3431,9 @@ impl Server {
         &self,
         transaction: &Transaction<'_>,
         params: CodeActionParams,
+        telemetry: &dyn Telemetry,
+        activity_key: Option<&ActivityKey>,
+        file_stats: Option<&TelemetryFileStats>,
     ) -> Option<CodeActionResponse> {
         let uri = &params.text_document.uri;
         let (handle, lsp_config) = self.make_handle_with_lsp_analysis_config_if_enabled(
@@ -3413,6 +3452,8 @@ impl Server {
                 .any(|kind| kind == &CodeActionKind::SOURCE_FIX_ALL)
         });
         let mut actions = Vec::new();
+        let server_state = self.telemetry_state();
+        let start = Instant::now();
         if allow_quickfix
             && let Some(quickfixes) =
                 transaction.local_quickfix_code_actions_sorted(&handle, range, import_format)
@@ -3440,7 +3481,16 @@ impl Server {
                     }))
                 },
             ));
+            record_code_action_telemetry(
+                "quickfix",
+                start,
+                &server_state,
+                telemetry,
+                activity_key,
+                file_stats,
+            );
         }
+        let start = Instant::now();
         if allow_fix_all && let Some(edits) = transaction.redundant_cast_fix_all_edits(&handle) {
             let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
             for (module, edit_range, new_text) in edits {
@@ -3466,6 +3516,14 @@ impl Server {
                     ..Default::default()
                 }));
             }
+            record_code_action_telemetry(
+                "fix_all",
+                start,
+                &server_state,
+                telemetry,
+                activity_key,
+                file_stats,
+            );
         }
         // Optimization: do not calculate refactors for automated codeactions since they're expensive
         // If we had lazy code actions, we could keep them.
@@ -3503,55 +3561,82 @@ impl Server {
                 }));
             }
         };
-        if let Some(refactors) = transaction.extract_field_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
+        macro_rules! timed_refactor_action {
+            ($name:expr, $call:expr) => {{
+                let start = Instant::now();
+                if let Some(refactors) = $call {
+                    push_refactor_actions(refactors);
+                    record_code_action_telemetry(
+                        $name,
+                        start,
+                        &server_state,
+                        telemetry,
+                        activity_key,
+                        file_stats,
+                    );
+                }
+            }};
         }
-        if let Some(refactors) = transaction.extract_variable_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.invert_boolean_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.use_function_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.extract_superclass_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.inline_variable_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.inline_method_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.inline_parameter_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.pull_members_up_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.push_members_down_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) =
+        timed_refactor_action!(
+            "extract_field",
+            transaction.extract_field_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "extract_variable",
+            transaction.extract_variable_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "invert_boolean",
+            transaction.invert_boolean_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "use_function",
+            transaction.use_function_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "extract_function",
+            transaction.extract_function_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "extract_superclass",
+            transaction.extract_superclass_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "inline_variable",
+            transaction.inline_variable_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "inline_method",
+            transaction.inline_method_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "inline_parameter",
+            transaction.inline_parameter_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "pull_members_up",
+            transaction.pull_members_up_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "push_members_down",
+            transaction.push_members_down_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "move_module_member",
             transaction.move_module_member_code_actions(&handle, range, import_format)
-        {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) =
+        );
+        timed_refactor_action!(
+            "make_local_function_top_level",
             transaction.make_local_function_top_level_code_actions(&handle, range, import_format)
-        {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.introduce_parameter_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
-        if let Some(refactors) = transaction.convert_star_import_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
-        }
+        );
+        timed_refactor_action!(
+            "introduce_parameter",
+            transaction.introduce_parameter_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
+            "convert_star_import",
+            transaction.convert_star_import_code_actions(&handle, range)
+        );
         if let Some(action) =
             convert_module_package_code_actions(&self.initialize_params.capabilities, uri)
         {
@@ -4334,19 +4419,27 @@ impl Server {
     /// This ensures validate_in_memory() only runs after config invalidation completes
     fn invalidate_config_and_validate_in_memory(&self) {
         let open_handles = self.get_open_file_handles();
-        let stream_diagnostics = self.stream_diagnostics;
         self.recheck_queue.queue_task(
             TelemetryEventKind::InvalidateConfig,
             Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
-                let open_handles_set: SmallSet<Handle> = open_handles.iter().cloned().collect();
-                // Only set this if streaming is enabled
-                if stream_diagnostics {
+                // Filter to only include handles from workspaces with streaming enabled
+                let streaming_handles: SmallSet<Handle> = open_handles
+                    .iter()
+                    .filter(|h| {
+                        server
+                            .workspaces
+                            .should_stream_diagnostics(h.path().as_path())
+                    })
+                    .cloned()
+                    .collect();
+                let has_streaming = !streaming_handles.is_empty();
+                if has_streaming {
                     *server.currently_streaming_diagnostics_for_handles.write() =
-                        Some(open_handles_set.clone());
+                        Some(streaming_handles.clone());
                 }
                 let publish_callback =
                     move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
-                        if stream_diagnostics && changed && open_handles_set.contains(handle) {
+                        if changed && streaming_handles.contains(handle) {
                             server.publish_for_handles(
                                 transaction,
                                 std::slice::from_ref(handle),

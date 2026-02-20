@@ -9,7 +9,6 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
-    bug = "The results include over-eager pinning of vars in generic solving, see https://github.com/facebook/pyrefly/issues/105",
     test_loop_with_generic_pin,
     r#"
 def condition() -> bool: ...

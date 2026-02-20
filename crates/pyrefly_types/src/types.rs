@@ -237,12 +237,14 @@ impl TArgs {
     }
 
     pub fn substitute_into_mut(&self, ty: &mut Type) {
-        if let Type::TypeAlias(box TypeAliasData::Ref(r)) = ty {
-            // We don't have the value of the type alias available to do the substitution, so store
-            // the targs so that we can apply them when the value is looked up.
-            r.args = Some(self.clone())
-        } else {
-            self.substitution().substitute_into_mut(ty)
+        match ty {
+            Type::TypeAlias(box TypeAliasData::Ref(r))
+            | Type::UntypedAlias(box TypeAliasData::Ref(r)) => {
+                // We don't have the value of the type alias available to do the substitution, so store
+                // the targs so that we can apply them when the value is looked up.
+                r.args = Some(self.clone())
+            }
+            _ => self.substitution().substitute_into_mut(ty),
         }
     }
 
@@ -1090,10 +1092,6 @@ impl Type {
                 }
             } else {
                 ty.recurse_mut(&mut |x| f(x, mp));
-            }
-            // After substitution, simplify Size expressions (constant folding).
-            if let Type::Size(_) = ty {
-                *ty = dimension::simplify(ty.clone());
             }
         }
         f(self, mp);

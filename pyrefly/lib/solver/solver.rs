@@ -12,19 +12,15 @@ use std::cell::RefMut;
 use std::fmt;
 use std::fmt::Display;
 use std::mem;
-use std::sync::Arc;
 
 use pyrefly_types::dimension::ShapeError;
-use pyrefly_types::dimension::simplify;
+use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tensor::TensorShape;
 use pyrefly_types::tuple::Tuple;
-use pyrefly_types::type_alias::TypeAliasData;
-use pyrefly_types::type_alias::TypeAliasRef;
-use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -102,13 +98,6 @@ enum Variable {
     /// A loop-recursive variable, e.g. `x = None; while x is None: x = f()`
     /// The Variable tracks the prior type bound to this name before the loop.
     LoopRecursive(Type, LoopBound),
-    /// A reference to a recursive type alias, like `type X = int | list[X]`.
-    ///
-    /// These are created when, in the process of inferring a type for the RHS of a type alias,
-    /// we encounter the name of the same alias. Unlike most other variables, AliasRecursive
-    /// represents a known, fixed type and exists so that we can reference the type before we've
-    /// finished computing it.
-    AliasRecursive(TypeAliasRef, Arc<TParams>),
     /// A variable that used to decompose a type, e.g. getting T from Awaitable[T]
     Unwrap,
     /// A variable used for a parameter type (either a function or lambda parameter).
@@ -163,7 +152,6 @@ impl Display for Variable {
                 }
             }
             Variable::LoopRecursive(t, _) => write!(f, "LoopRecursive(prior={t}, _)"),
-            Variable::AliasRecursive(r, _) => write!(f, "AliasRecursive({})", r.name),
             Variable::Recursive => write!(f, "Recursive"),
             Variable::Parameter => write!(f, "Parameter"),
             Variable::Unwrap => write!(f, "Unwrap"),
@@ -398,10 +386,6 @@ impl Solver {
                 *variable = Variable::Answer(self.heap.mk_any_implicit());
                 None
             }
-            Variable::AliasRecursive(r, tparams) => {
-                *variable = Variable::Answer(Self::finish_alias_recursive(r, tparams));
-                None
-            }
             Variable::Parameter => {
                 unreachable!("Unexpected Variable::Parameter")
             }
@@ -484,9 +468,6 @@ impl Solver {
                 let ty = match &mut *e {
                     Variable::Quantified(q) => q.as_gradual_type(),
                     Variable::PartialQuantified(q) => q.as_gradual_type(),
-                    Variable::AliasRecursive(r, tparams) => {
-                        Self::finish_alias_recursive(r, tparams)
-                    }
                     _ => self.heap.mk_any_implicit(),
                 };
                 *e = Variable::Answer(ty.clone());
@@ -502,7 +483,7 @@ impl Solver {
     fn simplify_forced_type(&self, mut ty: Type) -> Type {
         // Use transform_mut to visit every Type node and simplify dimensions
         ty.transform_mut(&mut |t| {
-            let simplified = simplify(t.clone());
+            let simplified = canonicalize(t.clone());
             if &simplified != t {
                 *t = simplified;
             }
@@ -526,7 +507,7 @@ impl Solver {
             t.recurse_mut(&mut |t| self.deep_force_mut_with_limit(t, limit - 1, recurser));
             // After forcing all Vars recursively, simplify dimension expressions
             // This handles cases like Tensor[(10 * 20)] after Vars are forced to 10 and 20
-            let simplified = simplify(t.clone());
+            let simplified = canonicalize(t.clone());
             if &simplified != t {
                 *t = simplified;
             }
@@ -988,10 +969,6 @@ impl Solver {
             })
     }
 
-    fn finish_alias_recursive(r: &TypeAliasRef, tparams: &Arc<TParams>) -> Type {
-        Forallable::TypeAlias(TypeAliasData::Ref(r.clone())).forall(tparams.clone())
-    }
-
     /// Generate a fresh variable used to tie recursive bindings.
     pub fn fresh_recursive(&self, uniques: &UniqueFactory) -> Var {
         let v = Var::new(uniques);
@@ -1005,19 +982,6 @@ impl Solver {
             v,
             Variable::LoopRecursive(prior_type, LoopBound::UpperBounds(vec![])),
         );
-        v
-    }
-
-    pub fn fresh_alias_recursive(
-        &self,
-        uniques: &UniqueFactory,
-        r: TypeAliasRef,
-        tparams: Arc<TParams>,
-    ) -> Var {
-        let v = Var::new(uniques);
-        self.variables
-            .lock()
-            .insert_fresh(v, Variable::AliasRecursive(r, tparams));
         v
     }
 
@@ -1660,9 +1624,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Variable::Parameter => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
                     )),
-                    Variable::AliasRecursive(_, _) => Err(SubsetError::internal_error(
-                        "Did not expect a `Variable::AliasRecursive` to ever appear in is_subset_eq",
-                    )),
                     Variable::Answer(t1) => {
                         let t1 = t1.clone();
                         drop(v1_ref);
@@ -1758,9 +1719,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                     Variable::Parameter => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
-                    )),
-                    Variable::AliasRecursive(_, _) => Err(SubsetError::internal_error(
-                        "Did not expect a `Variable::AliasRecursive` to ever appear in is_subset_eq",
                     )),
                     Variable::Answer(t2) => {
                         let t2 = t2.clone();

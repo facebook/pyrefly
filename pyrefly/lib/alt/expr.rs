@@ -18,7 +18,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::dimension::SizeExpr;
-use pyrefly_types::dimension::simplify;
+use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::tensor::IndexOp;
 use pyrefly_types::tensor::TensorShape;
@@ -65,6 +65,7 @@ use vec1::vec1;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
+use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::Hint;
 use crate::alt::unwrap::HintRef;
@@ -2165,6 +2166,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                     )
                 }
+                // Special handling for nn.ModuleDict with TypedDict type argument
+                Type::ClassType(ref cls) if is_nn_module_dict(cls) => {
+                    self.try_nn_module_dict_index(cls, &base, slice, range, errors)
+                }
                 Type::ClassType(_) | Type::SelfType(_) => self.call_method_or_error(
                     &base,
                     &dunder::GETITEM,
@@ -2558,7 +2563,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut dims = Vec::new();
         for arg in args {
             if let Some(dim) = self.parse_dimension_expr(arg, errors) {
-                let simplified = simplify(dim);
+                let simplified = canonicalize(dim);
 
                 // Validate that literal dimensions are positive
                 if let Type::Size(SizeExpr::Literal(value)) = &simplified

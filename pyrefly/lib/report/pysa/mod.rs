@@ -25,6 +25,7 @@ pub mod types;
 
 use core::panic;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::BufWriter;
 use std::ops::Not;
@@ -48,6 +49,7 @@ use serde::Serialize;
 use crate::error::error::Error as TypeError;
 use crate::module::bundled::BundledStub;
 use crate::module::typeshed::typeshed;
+use crate::module::typeshed_third_party::typeshed_third_party;
 use crate::report::pysa::call_graph::CallGraph;
 use crate::report::pysa::call_graph::ExpressionIdentifier;
 use crate::report::pysa::call_graph::export_call_graphs;
@@ -99,6 +101,8 @@ struct PysaProjectModule {
     is_interface: bool, // Is this a .pyi file?
     #[serde(skip_serializing_if = "<&bool>::not")]
     is_init: bool, // Is this a __init__.py(i) file?
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    is_internal: bool, // Is this a module from the project (as opposed to a dependency)?
 }
 
 /// Format of the index file `pyrefly.pysa.json`
@@ -207,9 +211,13 @@ pub fn export_module_call_graphs(
 
 fn build_module_mapping(
     handles: &Vec<Handle>,
+    project_handles: &[Handle],
     module_ids: &ModuleIds,
 ) -> HashMap<ModuleId, PysaProjectModule> {
     let step = StepLogger::start("Building module list", "Built module list");
+
+    // Set of handles from the "project-includes", i.e only handles that are typed checked.
+    let project_handles: HashSet<&Handle> = project_handles.iter().collect();
 
     let mut project_modules = HashMap::new();
     for handle in handles {
@@ -267,6 +275,7 @@ fn build_module_mapping(
                         is_test: false,
                         is_interface: handle.path().is_interface(),
                         is_init: handle.path().is_init(),
+                        is_internal: project_handles.contains(handle),
                     }
                 )
                 .is_none(),
@@ -471,21 +480,35 @@ fn add_module_is_test_flags(
         .unwrap())
 }
 
+fn write_bundle_stubs(bundle: &impl BundledStub, directory: &Path) -> anyhow::Result<()> {
+    for module in bundle.modules() {
+        let module_path = bundle.find(module).unwrap();
+        let relative_path = match module_path.details() {
+            ModulePathDetails::BundledTypeshed(path) => &**path,
+            ModulePathDetails::BundledTypeshedThirdParty(path) => &**path,
+            _ => panic!("unexpected module path for typeshed module"),
+        };
+        let content = bundle.load(relative_path).unwrap();
+        let target_path = directory.join(relative_path);
+        fs_anyhow::create_dir_all(target_path.parent().unwrap())?;
+        fs_anyhow::write(&target_path, content.as_bytes())?;
+    }
+
+    Ok(())
+}
+
 // Dump all typeshed files, so we can parse them.
 fn write_typeshed_files(results_directory: &Path) -> anyhow::Result<()> {
     let step = StepLogger::start("Exporting typeshed files", "Exported typeshed files");
-    let typeshed = typeshed()?;
 
-    for typeshed_module in typeshed.modules() {
-        let module_path = typeshed.find(typeshed_module).unwrap();
-        let relative_path = match module_path.details() {
-            ModulePathDetails::BundledTypeshed(path) => &**path,
-            _ => panic!("unexpected module path for typeshed module"),
-        };
-        let content = typeshed.load(relative_path).unwrap();
-        let target_path = results_directory.join("typeshed").join(relative_path);
-        fs_anyhow::create_dir_all(target_path.parent().unwrap())?;
-        fs_anyhow::write(&target_path, content.as_bytes())?;
+    let typeshed = typeshed()?;
+    write_bundle_stubs(typeshed, &results_directory.join("typeshed"))?;
+
+    if let Ok(typeshed_third_party) = typeshed_third_party() {
+        write_bundle_stubs(
+            typeshed_third_party,
+            &results_directory.join("typeshed_third_party"),
+        )?;
     }
 
     step.finish();
@@ -539,6 +562,7 @@ fn write_errors_file(
 pub fn write_results(
     results_directory: &Path,
     transaction: &Transaction,
+    project_handles: &[Handle],
     errors: &[TypeError],
 ) -> anyhow::Result<()> {
     let step = StepLogger::start(
@@ -556,7 +580,7 @@ pub fn write_results(
 
     let handles = transaction.handles();
     let module_ids = ModuleIds::new(&handles);
-    let project_modules = build_module_mapping(&handles, &module_ids);
+    let project_modules = build_module_mapping(&handles, project_handles, &module_ids);
     let module_work_list = make_module_work_list(&project_modules);
 
     let reversed_override_graph = build_reversed_override_graph(&handles, transaction, &module_ids);

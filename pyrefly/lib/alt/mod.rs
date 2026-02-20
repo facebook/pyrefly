@@ -15,6 +15,7 @@ pub mod debugging;
 pub mod expr;
 pub mod function;
 pub mod narrow;
+pub mod nn_module_specials;
 pub mod operators;
 pub mod overload;
 pub mod solve;

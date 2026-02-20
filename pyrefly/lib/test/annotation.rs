@@ -31,12 +31,12 @@ from typing import assert_type, TypeVar, Generic
 T = TypeVar("T")
 class C(Generic[T]): ...
 bad1: int | "str" = "foo"  # E: `|` union syntax does not work with string literals
-bad2: int | "str" | T = "foo"  # E: `|` union syntax does not work with string literals
+bad2: int | "str" | T = "foo"  # E: `|` union syntax does not work with string literals  # E: Type variable `T` is not in scope
 bad3: "str" | int = "foo"  # E: `|` union syntax does not work with string literals
-bad4: "str" | int | T = "foo"  # E: `|` union syntax does not work with string literals
+bad4: "str" | int | T = "foo"  # E: `|` union syntax does not work with string literals  # E: Type variable `T` is not in scope
 bad5: C | "str" = "foo"  # E: `|` union syntax does not work with string literals
-ok1: T | "str" = "foo"
-ok2: "str" | T = "foo"
+ok1: T | "str" = "foo"  # E: Type variable `T` is not in scope
+ok2: "str" | T = "foo"  # E: Type variable `T` is not in scope
 ok3 = list["str" | T]
 ok4 = (int) | (str)
 ok5: "str" | C[int] = "foo"

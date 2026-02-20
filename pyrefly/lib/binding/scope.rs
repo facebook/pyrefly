@@ -297,11 +297,11 @@ impl StaticInfo {
             })
         };
         match self.style {
-            StaticStyle::Anywhere(..) => Key::Anywhere(name.clone(), self.range),
+            StaticStyle::Anywhere(..) => Key::Anywhere(Box::new((name.clone(), self.range))),
             StaticStyle::Delete => Key::Delete(self.range),
             StaticStyle::MutableCapture(..) => Key::MutableCapture(short_identifier()),
-            StaticStyle::MergeableImport => Key::Import(name.clone(), self.range),
-            StaticStyle::ImplicitGlobal => Key::ImplicitGlobal(name.clone()),
+            StaticStyle::MergeableImport => Key::Import(Box::new((name.clone(), self.range))),
+            StaticStyle::ImplicitGlobal => Key::ImplicitGlobal(Box::new(name.clone())),
             StaticStyle::SingleDef(..) => Key::Definition(short_identifier()),
             StaticStyle::PossibleLegacyTParam => Key::PossibleLegacyTParam(self.range),
         }
@@ -2174,7 +2174,7 @@ impl Scopes {
                             }
                         }
                         ClassFieldDefinition::AssignedInBody {
-                            value: ExprOrBinding::Expr(e.clone()),
+                            value: Box::new(ExprOrBinding::Expr(e.clone())),
                             annotation: static_info.annotation(),
                             alias_of,
                         }
@@ -2200,7 +2200,7 @@ impl Scopes {
                         name,
                         (
                             ClassFieldDefinition::DefinedInMethod {
-                                value,
+                                value: Box::new(value),
                                 annotation,
                                 method,
                             },
@@ -2369,7 +2369,7 @@ impl Scopes {
     /// - For other usages: Normal lookup behavior.
     pub fn look_up_name_for_read(&self, name: Hashed<&Name>, usage: &Usage) -> NameReadInfo {
         let skip_class_overload_function_definitions =
-            matches!(usage, Usage::StaticTypeInformation);
+            matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs);
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
 
@@ -2702,7 +2702,10 @@ impl<'a> BindingsBuilder<'a> {
             self.insert_binding_idx(phi_idx, Binding::LoopPhi(loop_prior, branch_idxs));
             phi_idx
         } else {
-            self.insert_binding_idx(phi_idx, Binding::Phi(join_style, branch_infos));
+            self.insert_binding_idx(
+                phi_idx,
+                Binding::Phi(join_style, branch_infos.into_boxed_slice()),
+            );
             phi_idx
         }
     }
@@ -3032,7 +3035,7 @@ impl<'a> BindingsBuilder<'a> {
         // For each name and merge item, produce the merged FlowInfo for our new Flow
         let mut merged_flow_infos = SmallMap::with_capacity(merge_items.len());
         for (name, merge_item) in merge_items.into_iter_hashed() {
-            let phi_idx = self.idx_for_promise(Key::Phi(name.key().clone(), range));
+            let phi_idx = self.idx_for_promise(Key::Phi(Box::new((name.key().clone(), range))));
             merged_flow_infos.insert_hashed(
                 name,
                 self.merged_flow_info(
@@ -3067,7 +3070,7 @@ impl<'a> BindingsBuilder<'a> {
                 continue;
             }
             // We are promising to insert a binding for this key when we merge the flow
-            let phi_idx = self.idx_for_promise(Key::Phi(name.clone(), range));
+            let phi_idx = self.idx_for_promise(Key::Phi(Box::new((name.clone(), range))));
             match &mut info.value {
                 Some(value) => {
                     value.idx = phi_idx;

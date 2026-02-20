@@ -226,30 +226,27 @@ x: PyO3Enum = PyO3Enum.Variant0()
 // dealing with C extensions.
 
 testcase!(
-    bug = "We probably need to be able to handle `type(...)` as a base class better than we do.",
     test_type_function_in_base_class_list_v0,
     r#"
 class A:
     pass
 a = A()
-class B(type(a)):  # E: Invalid expression form for base class: `type(a)`
+class B(type(a)):
     pass
     "#,
 );
 
 testcase!(
-    bug = "We probably need to be able to handle `type(...)` as a base class better than we do.",
     test_type_function_in_base_class_list_v1,
     r#"
 class A:
     pass
-class B(type(A)):  # E: Invalid expression form for base class: `type(A)`
+class B(type(A)):
     pass
     "#,
 );
 
 testcase!(
-    bug = "We probably need to be able to handle `type(...)` as a base class better than we do.",
     test_type_function_in_base_class_list_v2,
     r#"
 from typing import assert_type, ClassVar, Any
@@ -257,9 +254,32 @@ class M(type):
     x: ClassVar[int] = 42
 class A(metaclass=M):
     pass
-class B(type(A)):  # E: Invalid expression form for base class: `type(A)`
+class B(type(A)):
     pass
-assert_type(B.x, Any)
+assert_type(B.x, int)
+    "#,
+);
+
+testcase!(
+    test_type_function_in_base_class_list_self_cycle,
+    r#"
+from typing import assert_type
+class B(type(B)):
+    pass
+# B references itself in its base class via type(B).
+# The cycle is detected and resolved: type(B) degrades
+# to `type` (the default metaclass), so B inherits from `type`.
+x: type = B
+    "#,
+);
+
+testcase!(
+    test_type_function_in_base_class_list_mutual_cycle,
+    r#"
+class C(type(D)):
+    pass
+class D(type(C)):
+    pass
     "#,
 );
 

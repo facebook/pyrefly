@@ -30,6 +30,7 @@ impl Telemetry for NoTelemetry {
 
 pub enum TelemetryEventKind {
     LspEvent(String),
+    CodeAction(String),
     SetMemory,
     InvalidateDisk,
     InvalidateFind,
@@ -61,6 +62,7 @@ pub struct TelemetryEvent {
     pub canceled: bool,
 }
 
+#[derive(Clone)]
 pub struct TelemetryFileStats {
     pub uri: Url,
     pub config_root: Option<Url>,

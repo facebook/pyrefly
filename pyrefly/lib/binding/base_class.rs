@@ -100,6 +100,10 @@ pub enum BaseClass {
     /// A namedtuple class synthesized anonymously as a base class,
     /// e.g. `class Foo(namedtuple("Foo", ["a", "b"]))`.
     SynthesizedBase(Idx<KeyClass>, TextRange),
+    /// `type(X)` where X is a statically determinable expression.
+    /// At runtime, evaluates to the metaclass of X (if X is a class)
+    /// or the class of X (if X is an instance).
+    TypeOf(BaseClassExpr, TextRange),
 }
 
 impl BaseClass {
@@ -127,6 +131,7 @@ impl Ranged for BaseClass {
             BaseClass::InvalidExpr(expr) => expr.range(),
             BaseClass::NamedTuple(range) => *range,
             BaseClass::SynthesizedBase(_, range) => *range,
+            BaseClass::TypeOf(_, range) => *range,
         }
     }
 }
@@ -167,6 +172,14 @@ impl<'a> BindingsBuilder<'a> {
                         }
                         _ => {}
                     }
+                }
+                if let Expr::Call(call) = &base_expr
+                    && call.arguments.args.len() == 1
+                    && call.arguments.keywords.is_empty()
+                    && self.as_special_export(&call.func) == Some(SpecialExport::BuiltinsType)
+                    && let Some(inner) = BaseClassExpr::from_expr(&call.arguments.args[0])
+                {
+                    return BaseClass::TypeOf(inner, base_expr.range());
                 }
                 if let Some(valid_expr) = BaseClassExpr::from_expr(&base_expr) {
                     BaseClass::BaseClassExpr(valid_expr)

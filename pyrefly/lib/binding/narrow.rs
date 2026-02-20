@@ -852,13 +852,9 @@ impl NarrowOps {
                 } else {
                     // Look up the definition of `name`.
                     let original_expr = match Self::get_original_binding(builder, &name.id) {
-                        Some((
-                            _,
-                            Some(Binding::NameAssign {
-                                expr: original_expr,
-                                ..
-                            }),
-                        )) => Some(&**original_expr),
+                        Some((_, Some(Binding::NameAssign(name_assign)))) => {
+                            Some(&*name_assign.expr)
+                        }
                         _ => None,
                     };
                     let mut ops = Self::from_expr_helper(builder, original_expr, seen);

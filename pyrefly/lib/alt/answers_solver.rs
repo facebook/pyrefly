@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::env;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -29,7 +30,6 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasData;
-use pyrefly_types::type_alias::TypeAliasRef;
 use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::recurser::Guard;
@@ -82,7 +82,13 @@ pub struct CalcId(pub Bindings, pub AnyIdx);
 
 impl Debug for CalcId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CalcId({}, {:?})", self.0.module().name(), self.1)
+        write!(
+            f,
+            "CalcId({}, {}, {:?})",
+            self.0.module().name(),
+            self.0.module().path(),
+            self.1,
+        )
     }
 }
 
@@ -90,8 +96,9 @@ impl Display for CalcId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "CalcId({}, {})",
+            "CalcId({}, {}, {})",
             self.0.module().name(),
+            self.0.module().path(),
             self.1.display_with(&self.0),
         )
     }
@@ -99,7 +106,8 @@ impl Display for CalcId {
 
 impl PartialEq for CalcId {
     fn eq(&self, other: &Self) -> bool {
-        (self.0.module().name(), &self.1) == (other.0.module().name(), &other.1)
+        (self.0.module().name(), self.0.module().path(), &self.1)
+            == (other.0.module().name(), other.0.module().path(), &other.1)
     }
 }
 
@@ -108,7 +116,10 @@ impl Eq for CalcId {}
 impl Ord for CalcId {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.1.cmp(&other.1) {
-            Ordering::Equal => self.0.module().name().cmp(&other.0.module().name()),
+            Ordering::Equal => match self.0.module().name().cmp(&other.0.module().name()) {
+                Ordering::Equal => self.0.module().path().cmp(other.0.module().path()),
+                not_equal => not_equal,
+            },
             not_equal => not_equal,
         }
     }
@@ -123,6 +134,7 @@ impl PartialOrd for CalcId {
 impl Hash for CalcId {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.module().name().hash(state);
+        self.0.module().path().hash(state);
         self.1.hash(state);
     }
 }
@@ -229,14 +241,34 @@ impl CalcStack {
             SccState::NotInScc | SccState::RevisitingInProgress => {
                 match calculation.propose_calculation() {
                     ProposalResult::Calculated(v) => BindingAction::Calculated(v),
-                    ProposalResult::CycleDetected => {
-                        let current_cycle = self.current_cycle().unwrap();
-                        match self.on_scc_detected(current_cycle) {
-                            SccDetectedResult::BreakHere => BindingAction::Unwind,
-                            SccDetectedResult::Continue => BindingAction::Calculate,
+                    // Use the thread-local stack as the source of truth for
+                    // cycle detection: `position_of` tells us definitively
+                    // whether this CalcId has a live frame on the current stack.
+                    ProposalResult::Calculatable | ProposalResult::CycleDetected => {
+                        if let Some(current_cycle) = self.current_cycle() {
+                            match self.on_scc_detected(current_cycle) {
+                                SccDetectedResult::BreakHere => BindingAction::Unwind,
+                                SccDetectedResult::Continue => BindingAction::Calculate,
+                            }
+                        } else {
+                            // No cycle on the stack, proceed
+                            //
+                            // TODO: Note that the `CycleDetected` case is surprising: it means
+                            // the current thread *started* a calculation but never saved an answer,
+                            // and the stack frame that did this is gone.
+                            //
+                            // That shouldn't happen - a computation isn't supposed to be interruptible
+                            // with a persistent Answers value, and the SCC merging + batch commit
+                            // should make it so that we always get some other state whenever we're
+                            // at the point where a preliminary answer has been saved.
+                            //
+                            // It seems likely that this may indicate some bug in Scc merging, state
+                            // transition tracking, or batch commit (a bug in any of these could lead to
+                            // invalid states). As of this comment being written, we've only observed
+                            // this occur in LSP (not full check).
+                            BindingAction::Calculate
                         }
                     }
-                    ProposalResult::Calculatable => BindingAction::Calculate,
                 }
             }
             SccState::RevisitingDone => {
@@ -1095,6 +1127,18 @@ pub struct ThreadState {
     debug: RefCell<bool>,
     /// Configuration for recursion depth limiting. None means disabled.
     recursion_limit_config: Option<RecursionLimitConfig>,
+    /// How SCC participants store answers during solving.
+    scc_solving_mode: SccSolvingMode,
+}
+
+/// Internal SCC-solving modes controlled via `PYREFLY_SCC_SOLVING_MODE`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SccSolvingMode {
+    /// Write SCC participant answers to Calculation immediately.
+    #[default]
+    CyclesDualWrite,
+    /// Thread-local SCC solving with batch commits to Calculation.
+    CyclesThreadLocal,
 }
 
 impl ThreadState {
@@ -1103,6 +1147,27 @@ impl ThreadState {
             stack: CalcStack::new(),
             debug: RefCell::new(false),
             recursion_limit_config,
+            scc_solving_mode: SccSolvingMode::from_env(),
+        }
+    }
+
+    fn scc_solving_mode(&self) -> SccSolvingMode {
+        self.scc_solving_mode
+    }
+}
+
+impl SccSolvingMode {
+    fn from_env() -> Self {
+        match env::var("PYREFLY_SCC_SOLVING_MODE") {
+            Ok(value) => match value.as_str() {
+                "cycles-thread-local" => Self::CyclesThreadLocal,
+                "cycles-dual-write" => Self::CyclesDualWrite,
+                _ => panic!(
+                    "$PYREFLY_SCC_SOLVING_MODE must be one of \
+                     `cycles-thread-local` or `cycles-dual-write`, got `{value}`"
+                ),
+            },
+            Err(_) => Self::default(),
         }
     }
 }
@@ -1287,7 +1352,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         if self.stack().is_scc_participant(&current) {
-            // SCC path: store in NodeState::Done, defer Calculation write to batch commit.
+            // SCC path: store in NodeState::Done and (optionally) write to Calculation.
             //
             // If this is a break_at node (has a placeholder Var), we must finalize
             // the recursive answer now, before storing. Finalization mutates solver
@@ -1297,12 +1362,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 raw_answer
             };
-            let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(answer.dupe());
-            let canonical_erased = self.stack().on_calculation_finished(
-                &current,
-                Some(answer_erased),
-                Some(Arc::new(local_errors)),
-            );
+            let (calc_answer, errors) =
+                if self.thread_state.scc_solving_mode() == SccSolvingMode::CyclesDualWrite {
+                    // Write to Calculation immediately for cross-thread visibility.
+                    // Without this, the Calculation stays in Calculating status during
+                    // SCC processing, allowing other threads to independently re-compute
+                    // this binding via propose_calculation() → Calculatable. Since
+                    // cycle-oriented solving is not entrypoint-invariant, independent
+                    // re-computation can produce different results depending on thread
+                    // scheduling, causing non-determinism.
+                    let (calc_answer, did_write) = calculation.record_value(answer.dupe());
+                    if did_write {
+                        self.base_errors.extend(local_errors);
+                    }
+                    (calc_answer, None)
+                } else {
+                    (answer, Some(Arc::new(local_errors)))
+                };
+            // Also store in NodeState::Done for SCC-local isolation (the SCC
+            // uses these answers via SccLocalAnswer without touching Calculation).
+            let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(calc_answer.dupe());
+            let canonical_erased =
+                self.stack()
+                    .on_calculation_finished(&current, Some(answer_erased), errors);
             // Use the canonical answer from thread-local state, mirroring how
             // Calculation::record_value returns the first-written answer.
             match canonical_erased {
@@ -1311,7 +1393,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .downcast::<Arc<K::Answer>>()
                         .expect("on_calculation_finished canonical answer downcast failed"),
                 ),
-                None => answer,
+                None => calc_answer,
             }
         } else {
             // Non-SCC path: write directly to Calculation as before.
@@ -1378,10 +1460,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: Option<Arc<ErrorCollector>>,
     ) {
         let CalcId(ref bindings, ref any_idx) = calc_id;
-        if bindings.module().name() != self.bindings().module().name() {
+        if bindings.module().name() != self.bindings().module().name()
+            || bindings.module().path() != self.bindings().module().path()
+        {
             // Cross-module: delegate to the LookupAnswer trait to route
             // the commit to the correct module's Answers.
-            self.answers.commit_to_module(calc_id, answer, errors);
+            assert!(
+                self.answers
+                    .commit_to_module(calc_id.dupe(), answer, errors),
+                "commit_single_result: cross-module commit failed for {}. \
+                 The target module's Answers may not be loaded, which would \
+                 leave its Calculation cell stuck in Calculating state.",
+                calc_id,
+            );
             return;
         }
         dispatch_anyidx!(any_idx, self, commit_typed, answer, errors)
@@ -1395,27 +1486,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Nodes with `answer: None` are skipped (they were already committed by
     /// another thread via the Participant revisit path).
     fn batch_commit_scc(&self, completed_scc: Scc) {
-        // Validate invariant: no Fresh or InProgress nodes should remain.
-        debug_assert!(
-            completed_scc.node_state.values().all(|state| matches!(
-                state,
-                NodeState::Done { .. } | NodeState::HasPlaceholder(_)
-            )),
-            "batch_commit_scc: SCC has participants that are not Done or HasPlaceholder: {:?}",
-            completed_scc
-                .node_state
-                .iter()
-                .filter(|(_, s)| matches!(s, NodeState::Fresh | NodeState::InProgress))
-                .map(|(id, s)| format!("{}: {:?}", id, s))
-                .collect::<Vec<_>>(),
-        );
         for (calc_id, node_state) in completed_scc.node_state {
-            if let NodeState::Done {
-                answer: Some(answer),
-                errors,
-            } = node_state
-            {
-                self.commit_single_result(calc_id, answer, errors);
+            match node_state {
+                NodeState::Done {
+                    answer: Some(answer),
+                    errors,
+                } => {
+                    self.commit_single_result(calc_id, answer, errors);
+                }
+                NodeState::Done { answer: None, .. } => {
+                    // Already committed by another thread via the Participant revisit path.
+                }
+                NodeState::HasPlaceholder(_) => {
+                    panic!(
+                        "batch_commit_scc: node {} is still HasPlaceholder at commit time. \
+                         This means its calculate_and_record_answer never completed, \
+                         which would leave its Calculation cell stuck in Calculating state.",
+                        calc_id,
+                    );
+                }
+                NodeState::Fresh | NodeState::InProgress => {
+                    panic!(
+                        "batch_commit_scc: node {} is {:?} at commit time",
+                        calc_id, node_state,
+                    );
+                }
             }
         }
     }
@@ -1669,22 +1764,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.get_idx(*prior_idx)
                     .arc_clone_ty()
                     .promote_implicit_literals(self.stdlib),
-            ),
-            Binding::TypeAlias {
-                name,
-                tparams,
-                key_type_alias,
-                range: _,
-            } => self.solver().fresh_alias_recursive(
-                self.uniques,
-                TypeAliasRef {
-                    name: name.clone(),
-                    args: None,
-                    module_name: self.module().name(),
-                    module_path: self.module().path().clone(),
-                    index: self.bindings().idx_to_key(*key_type_alias).0,
-                },
-                self.create_type_alias_params_recursive(tparams),
             ),
             _ => self.solver().fresh_recursive(self.uniques),
         }
@@ -2242,5 +2321,32 @@ mod scc_tests {
 
         // Should keep the minimum anchor_pos
         assert_eq!(merged.anchor_pos, 2);
+    }
+
+    #[test]
+    fn test_stale_calculation_panic() {
+        // Reproduces the panic where Calculation has stale state but CalcStack is fresh.
+        let calc_id = CalcId::for_test("m", 0);
+        let calculation: Calculation<usize> = Calculation::new();
+
+        // 1. Simulate stale state: propose calculation on this thread.
+        // This sets the thread bit in calculation.
+        match calculation.propose_calculation() {
+            ProposalResult::Calculatable => {}
+            _ => panic!("Expected Calculatable"),
+        }
+
+        // 2. Create a fresh stack (simulating a new request/thread reuse).
+        let stack = CalcStack::new();
+
+        // 3. Push the same calculation.
+        // This should NOT panic.
+        let action = stack.push(calc_id, &calculation);
+
+        // 4. Expect Calculate action (to recover).
+        match action {
+            BindingAction::Calculate => {}
+            _ => panic!("Expected Calculate action to recover from stale state"),
+        }
     }
 }

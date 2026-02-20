@@ -1172,7 +1172,7 @@ TypeVar('T')
 TypeVar('T')
 # ^
 ## After:
-def TypeVar():
+def TypeVar(arg1: str):
     pass
 TypeVar('T')
 # ^
@@ -1183,8 +1183,477 @@ TypeVar('T')
 # ^
 ## After:
 class TypeVar:
-    pass
+    def __init__(self, arg1: str):
+        pass
 TypeVar('T')
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_infer_callsite_types() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "class UserId:\n    def __init__(self, value: int):\n        pass\n\nuser: UserId = UserId(1234)\nmyFunc(user)\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+6 | myFunc(user)
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc(user)
+# ^
+## After:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc = None
+myFunc(user)
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc(user)
+# ^
+## After:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+def myFunc(user: UserId):
+    pass
+myFunc(user)
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc(user)
+# ^
+## After:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+class myFunc:
+    def __init__(self, user: UserId):
+        pass
+myFunc(user)
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_mixed_param_types() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "x: int = 1\ny: str = \"hello\"\nz: float = 3.14\nmyFunc(x, y, z)\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+4 | myFunc(x, y, z)
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+myFunc(x, y, z)
+# ^
+## After:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+myFunc = None
+myFunc(x, y, z)
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+myFunc(x, y, z)
+# ^
+## After:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+def myFunc(x: int, y: str, z: float):
+    pass
+myFunc(x, y, z)
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+myFunc(x, y, z)
+# ^
+## After:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+class myFunc:
+    def __init__(self, x: int, y: str, z: float):
+        pass
+myFunc(x, y, z)
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_args_and_kwargs() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "x: int = 1\nargs: list[str] = [\"a\", \"b\"]\nkwargs: dict[str, int] = {\"a\": 1}\nmyFunc(x, *args, key=42, **kwargs)\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+4 | myFunc(x, *args, key=42, **kwargs)
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+myFunc(x, *args, key=42, **kwargs)
+# ^
+## After:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+myFunc = None
+myFunc(x, *args, key=42, **kwargs)
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+myFunc(x, *args, key=42, **kwargs)
+# ^
+## After:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+def myFunc(x: int, *args: list[str], key: int, **kwargs: dict[str, int]):
+    pass
+myFunc(x, *args, key=42, **kwargs)
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+myFunc(x, *args, key=42, **kwargs)
+# ^
+## After:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+class myFunc:
+    def __init__(self, x: int, *args: list[str], key: int, **kwargs: dict[str, int]):
+        pass
+myFunc(x, *args, key=42, **kwargs)
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_duplicate_param_names() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "class Obj:\n    val: int = 0\na: Obj = Obj()\nb: Obj = Obj()\nmyFunc(a.val, b.val)\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+5 | myFunc(a.val, b.val)
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+myFunc(a.val, b.val)
+# ^
+## After:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+myFunc = None
+myFunc(a.val, b.val)
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+myFunc(a.val, b.val)
+# ^
+## After:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+def myFunc(val: int, val_1: int):
+    pass
+myFunc(a.val, b.val)
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+myFunc(a.val, b.val)
+# ^
+## After:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+class myFunc:
+    def __init__(self, val: int, val_1: int):
+        pass
+myFunc(a.val, b.val)
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_complex_expressions() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "myFunc(42, len(\"test\"), [i for i in range(3)])\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+1 | myFunc(42, len("test"), [i for i in range(3)])
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+## After:
+myFunc = None
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+## After:
+def myFunc(arg1: int, arg2: int, arg3: list[int]):
+    pass
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+## After:
+class myFunc:
+    def __init__(self, arg1: int, arg2: int, arg3: list[int]):
+        pass
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_nested_call() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "def inner(x: int) -> str:\n    return str(x)\nouter(inner(42))\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | outer(inner(42))
+      ^
+Code Actions Results:
+# Title: Generate variable `outer`
+
+## Before:
+def inner(x: int) -> str:
+    return str(x)
+outer(inner(42))
+# ^
+## After:
+def inner(x: int) -> str:
+    return str(x)
+outer = None
+outer(inner(42))
+# ^
+# Title: Generate function `outer`
+
+## Before:
+def inner(x: int) -> str:
+    return str(x)
+outer(inner(42))
+# ^
+## After:
+def inner(x: int) -> str:
+    return str(x)
+def outer(arg1: str):
+    pass
+outer(inner(42))
+# ^
+# Title: Generate class `outer`
+
+## Before:
+def inner(x: int) -> str:
+    return str(x)
+outer(inner(42))
+# ^
+## After:
+def inner(x: int) -> str:
+    return str(x)
+class outer:
+    def __init__(self, arg1: str):
+        pass
+outer(inner(42))
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_any_type_no_annotation() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", "from typing import Any\nx: Any = 1\nmyFunc(x)\n# ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | myFunc(x)
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+from typing import Any
+x: Any = 1
+myFunc(x)
+# ^
+## After:
+from typing import Any
+x: Any = 1
+myFunc = None
+myFunc(x)
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+from typing import Any
+x: Any = 1
+myFunc(x)
+# ^
+## After:
+from typing import Any
+x: Any = 1
+def myFunc(x):
+    pass
+myFunc(x)
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+from typing import Any
+x: Any = 1
+myFunc(x)
+# ^
+## After:
+from typing import Any
+x: Any = 1
+class myFunc:
+    def __init__(self, x):
+        pass
+myFunc(x)
 # ^
 "#
         .trim(),

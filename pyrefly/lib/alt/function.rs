@@ -164,7 +164,17 @@ impl DecoratorParamHints {
                     .items()
                     .iter()
                     .filter_map(|param| match param {
-                        Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) => Some(ty.clone()),
+                        Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) => {
+                            let mut ty = ty.clone();
+                            // If the decorator is generic, its callable parameter types
+                            // may contain Type::Quantified from the decorator's Forall
+                            // scope. These are meaningless as hints for the decorated
+                            // function's unannotated parameters — they're unbound type
+                            // variables that would cause false positive errors at call
+                            // sites. Replace them with their gradual form (typically Any).
+                            ty.subst_mut_fn(&mut |q| Some(q.as_gradual_type()));
+                            Some(ty)
+                        }
                         _ => None,
                     })
                     .collect::<Vec<_>>();

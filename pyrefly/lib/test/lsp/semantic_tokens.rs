@@ -170,7 +170,7 @@ line: 4, column: 6, length: 3, text: bar
 token-type: method
 
 line: 4, column: 10, length: 4, text: self
-token-type: parameter
+token-type: parameter, token-modifiers: [selfParameter]
 
 line: 6, column: 0, length: 3, text: Bar
 token-type: class
@@ -309,7 +309,7 @@ line: 2, column: 8, length: 3, text: foo
 token-type: method
 
 line: 2, column: 12, length: 4, text: self
-token-type: parameter
+token-type: parameter, token-modifiers: [selfParameter]
 
 line: 2, column: 21, length: 3, text: int
 token-type: class, token-modifiers: [defaultLibrary]
@@ -318,7 +318,7 @@ line: 3, column: 8, length: 3, text: bar
 token-type: method
 
 line: 3, column: 12, length: 4, text: self
-token-type: parameter
+token-type: parameter, token-modifiers: [selfParameter]
 
 line: 3, column: 18, length: 1, text: x
 token-type: parameter
@@ -339,7 +339,7 @@ line: 5, column: 0, length: 4, text: Test
 token-type: class
 
 line: 5, column: 5, length: 3, text: foo
-token-type: function
+token-type: method
 
 line: 6, column: 0, length: 4, text: Test
 token-type: class
@@ -404,6 +404,42 @@ token-type: interface
 
 line: 5, column: 10, length: 1, text: A
 token-type: interface
+"#,
+    );
+}
+
+#[test]
+fn type_alias_attribute_test() {
+    let lib = r#"
+type MyAlias = int | str
+"#;
+    let code = r#"
+import lib
+lib.MyAlias
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code), ("lib", lib)],
+        r#"
+# main.py
+line: 1, column: 7, length: 3, text: lib
+token-type: namespace
+
+line: 2, column: 0, length: 3, text: lib
+token-type: namespace
+
+line: 2, column: 4, length: 7, text: MyAlias
+token-type: interface
+
+
+# lib.py
+line: 1, column: 5, length: 7, text: MyAlias
+token-type: interface
+
+line: 1, column: 15, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 1, column: 21, length: 3, text: str
+token-type: class, token-modifiers: [defaultLibrary]
 "#,
     );
 }
@@ -612,7 +648,7 @@ line: 2, column: 8, length: 3, text: foo
 token-type: method
 
 line: 2, column: 12, length: 4, text: self
-token-type: parameter
+token-type: parameter, token-modifiers: [selfParameter]
 
 line: 2, column: 18, length: 1, text: a
 token-type: parameter
@@ -1029,7 +1065,7 @@ line: 3, column: 12, length: 6, text: method
 token-type: method
 
 line: 3, column: 19, length: 4, text: self
-token-type: parameter
+token-type: parameter, token-modifiers: [selfParameter]
 
 line: 4, column: 7, length: 9, text: Exception
 token-type: class, token-modifiers: [defaultLibrary]

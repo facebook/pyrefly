@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly"
-version = "0.52.0"
+version = "0.53.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -17,7 +17,7 @@ path = "bin/main.rs"
 
 [dependencies]
 anstream = "0.6.11"
-anyhow = "1.0.98"
+anyhow = "1.0.101"
 blake3 = { version = "=1.8.2", features = ["mmap", "rayon", "traits-preview"] }
 clap = { version = "4.5.42", features = ["cargo", "derive", "env", "string", "unicode", "wrap_help"] }
 crossbeam-channel = "0.5.15"
@@ -44,7 +44,7 @@ pyrefly_python = { path = "../crates/pyrefly_python" }
 pyrefly_types = { path = "../crates/pyrefly_types" }
 pyrefly_util = { path = "../crates/pyrefly_util" }
 rayon = "1.11.0"
-regex = "1.12.2"
+regex = "1.12.3"
 ruff_annotate_snippets = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
 ruff_notebook = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
 ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511", features = ["serde"] }
@@ -67,7 +67,7 @@ web-time = "1.1.0"
 yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 
 [dev-dependencies]
-pretty_assertions = { version = "1.2", features = ["alloc"], default-features = false }
+pretty_assertions = { version = "1.4.1", features = ["alloc"], default-features = false }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 backtrace-on-stack-overflow = { version = "0.3", optional = true }

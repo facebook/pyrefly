@@ -298,7 +298,10 @@ impl<'a> BindingsBuilder<'a> {
             //
             // Also note that there's no risk of first-usage tracking issues here because `ensure_type` does not participate in first
             // usage tracking.
-            if matches!(base_class, BaseClass::BaseClassExpr(..)) {
+            if matches!(
+                base_class,
+                BaseClass::BaseClassExpr(..) | BaseClass::TypeOf(..)
+            ) {
                 self.insert_binding(
                     KeyExpect::TypeCheckBaseClassExpr(base.range()),
                     BindingExpect::TypeCheckBaseClassExpr(base),
@@ -373,10 +376,8 @@ impl<'a> BindingsBuilder<'a> {
         let mut django_fields_with_choices: Vec<Name> = Vec::new();
         let mut fields = SmallMap::with_capacity(field_definitions.len());
         for (name, (definition, range)) in field_definitions.into_iter_hashed() {
-            if let ClassFieldDefinition::AssignedInBody {
-                value: ExprOrBinding::Expr(e),
-                ..
-            } = &definition
+            if let ClassFieldDefinition::AssignedInBody { value, .. } = &definition
+                && let ExprOrBinding::Expr(e) = value.as_ref()
             {
                 self.extract_pydantic_config_dict(e, &name, &mut pydantic_config_dict);
 
@@ -812,12 +813,12 @@ impl<'a> BindingsBuilder<'a> {
             });
             let definition = match (member_value, force_class_initialization) {
                 (Some(value), _) => ClassFieldDefinition::AssignedInBody {
-                    value: ExprOrBinding::Expr(value),
+                    value: Box::new(ExprOrBinding::Expr(value)),
                     annotation,
                     alias_of: None,
                 },
                 (None, true) => ClassFieldDefinition::AssignedInBody {
-                    value: ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
+                    value: Box::new(ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit))),
                     annotation,
                     alias_of: None,
                 },

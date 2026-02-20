@@ -50,23 +50,6 @@ use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
 use crate::types::types::Type;
 
-trait UnwrapOrDefaultAndLog<T: Default> {
-    fn unwrap_or_default_and_log(self) -> T;
-}
-
-impl<T: Default> UnwrapOrDefaultAndLog<T> for Option<T> {
-    #[track_caller]
-    fn unwrap_or_default_and_log(self) -> T {
-        match self {
-            Some(x) => x,
-            None => {
-                tracing::warn!("unexpected None");
-                Default::default()
-            }
-        }
-    }
-}
-
 const TYPE_SEPARATORS: [char; 12] = [',', '|', '[', ']', '{', '}', '(', ')', '=', ':', '\'', '"'];
 
 #[derive(Clone, Debug)]
@@ -608,6 +591,13 @@ impl GleanState<'_> {
         })
     }
 
+    fn find_definition_for_literal_symbol(&self, name: &str) -> DefinitionLocation {
+        DefinitionLocation {
+            name: name.to_owned(),
+            file: None,
+        }
+    }
+
     fn get_xrefs_for_str_lit(
         &self,
         expr: &ExprStringLiteral,
@@ -633,10 +623,7 @@ impl GleanState<'_> {
             .flat_map(|range| {
                 let name = self.module.code_at(range);
                 let definitions = if name == "None" {
-                    vec![DefinitionLocation {
-                        name: "None".to_owned(),
-                        file: None,
-                    }]
+                    vec![self.find_definition_for_literal_symbol(name)]
                 } else {
                     self.find_definition_for_str_literal(range)
                 };
@@ -798,23 +785,11 @@ impl GleanState<'_> {
                 }
             }
             Expr::StringLiteral(str_lit) => self.get_xrefs_for_str_lit(str_lit),
-            Expr::BooleanLiteral(bool_lit) => {
-                let name = if bool_lit.value { "True" } else { "False" };
-                vec![(
-                    DefinitionLocation {
-                        name: name.to_owned(),
-                        file: None,
-                    },
-                    bool_lit.range(),
-                )]
+            Expr::BooleanLiteral(_) | Expr::NoneLiteral(_) => {
+                let range = expr.range();
+                let name = self.module.code_at(range);
+                vec![(self.find_definition_for_literal_symbol(name), range)]
             }
-            Expr::NoneLiteral(none) => vec![(
-                DefinitionLocation {
-                    name: "None".to_owned(),
-                    file: None,
-                },
-                none.range(),
-            )],
             _ => {
                 vec![]
             }
@@ -1090,6 +1065,25 @@ impl GleanState<'_> {
             .collect()
     }
 
+    fn find_definition_for_imported_module(&self, module: ModuleName) -> Vec<DefinitionLocation> {
+        let definition = self.transaction.find_definition_for_imported_module(
+            self.handle,
+            module,
+            FindPreference {
+                prefer_pyi: false, // Similar to Pyrefly behavior, we prefer py over pyi files
+                ..Default::default()
+            },
+        );
+
+        definition.map_or(
+            vec![DefinitionLocation {
+                name: module.to_string(),
+                file: None,
+            }],
+            |def| self.get_definition_location(def.definition_range, &def.module, None, vec![]),
+        )
+    }
+
     fn make_import_fact(
         &mut self,
         from_name: &Identifier,
@@ -1118,6 +1112,22 @@ impl GleanState<'_> {
         }
     }
 
+    fn add_xrefs_for_module(&mut self, module_name: ModuleName, position: TextSize) {
+        for (module, range) in all_modules_with_range(module_name, position) {
+            let mut defs = self.find_definition(range.start());
+            if defs.is_empty() {
+                defs = vec![DefinitionLocation {
+                    name: module,
+                    file: None,
+                }]
+            }
+            for def in defs {
+                self.record_name(def.name.clone());
+                self.add_xref(def, range);
+            }
+        }
+    }
+
     fn import_facts(
         &mut self,
         import: &StmtImport,
@@ -1130,18 +1140,7 @@ impl GleanState<'_> {
                 let from_name = &import.name;
                 let module_name = ModuleName::from_name(from_name.id());
                 let position = from_name.range.start();
-
-                for (module, range) in all_modules_with_range(module_name, position) {
-                    let defs = self.find_definition(range.start());
-                    self.record_name(module.clone());
-                    self.add_xref(
-                        DefinitionLocation {
-                            name: module,
-                            file: defs.first().and_then(|x| x.file.clone()),
-                        },
-                        range,
-                    );
-                }
+                self.add_xrefs_for_module(module_name, position);
 
                 if let Some(as_name) = &import.asname {
                     vec![self.make_import_fact(from_name, as_name, None, top_level_declaration)]
@@ -1159,19 +1158,25 @@ impl GleanState<'_> {
     }
 
     fn get_from_module(&mut self, import_from: &StmtImportFrom) -> Option<String> {
-        let from_module_name = import_from.module.as_ref().map(|x| x.id());
-
-        let (from_module, dots_range) = if import_from.level > 0 {
-            let module = self
-                .module_name
+        let module_name_id = import_from.module.as_ref().map(|x| x.id());
+        let module_name = module_name_id.map(ModuleName::from_name);
+        let resolved_module_name = if import_from.level > 0 {
+            self.module_name
                 .new_maybe_relative(
                     self.module.path().is_init(),
                     import_from.level,
-                    from_module_name,
+                    module_name_id,
                 )
-                .map(|x| x.to_string());
+                .or(module_name)
+        } else {
+            module_name
+        };
 
-            let range = self
+        if let Some(module) = &import_from.module {
+            let position = module.range.start();
+            self.add_xrefs_for_module(module_name.unwrap(), position);
+        } else {
+            let dots_range = self
                 .module
                 .code_at(import_from.range())
                 .match_indices(['.'])
@@ -1181,25 +1186,18 @@ impl GleanState<'_> {
                     let len = TextSize::from(import_from.level);
                     TextRange::at(import_from.range().start() + offset, len)
                 });
-            (module, range)
-        } else {
-            (from_module_name.map(|x| x.to_string()), None)
-        };
 
-        let from_module_range = import_from.module.as_ref().map(|id| id.range());
-        let range = from_module_range
-            .and_then(|x| dots_range.map(|y| x.cover(y)))
-            .or(from_module_range)
-            .or(dots_range);
+            if let Some(range) = dots_range {
+                let defs = resolved_module_name.map_or(vec![], |module| {
+                    self.find_definition_for_imported_module(module)
+                });
+                for def in defs {
+                    self.add_xref(def, range);
+                }
+            }
+        }
 
-        self.add_xref(
-            DefinitionLocation {
-                name: from_module.clone().unwrap_or_default_and_log(),
-                file: None,
-            },
-            range.unwrap_or_default_and_log(),
-        );
-        from_module
+        resolved_module_name.map(|name| name.to_string())
     }
 
     fn import_from_facts(
@@ -1240,7 +1238,7 @@ impl GleanState<'_> {
                     .cloned()
                     .unwrap_or(DefinitionLocation {
                         name: from_name_string.clone(),
-                        file: None,
+                        file: None, // TODO: default to module file
                     });
 
                 let from_name_id = Identifier::new(Name::new(from_name_string), from_name.range);

@@ -76,6 +76,11 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             _ => {}
         }
         match bindings.get(current_idx) {
+            // TypeAliasRef is a terminal binding — the name directly references
+            // another type alias. Treat it as a definition for IDE purposes.
+            Binding::TypeAliasRef(..) => {
+                return Some(current_key);
+            }
             Binding::Forward(k)
             | Binding::Narrow(k, _, _)
             | Binding::CompletedPartialType(k, ..)
@@ -90,15 +95,14 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
                 let binding = bindings.get(*k);
                 current_idx = binding.idx();
             }
-            Binding::AssignToSubscript(subscript, _)
-                if let Some(key) =
-                    base_key_of_assign_target(&Expr::Subscript(subscript.clone())) =>
+            Binding::AssignToSubscript(x)
+                if let Some(key) = base_key_of_assign_target(&Expr::Subscript(x.0.clone())) =>
             {
                 current_idx = bindings.key_to_idx(&key);
             }
-            Binding::AssignToAttribute {
-                attr: attribute, ..
-            } if let Some(key) = base_key_of_assign_target(&Expr::Attribute(attribute.clone())) => {
+            Binding::AssignToAttribute(x)
+                if let Some(key) = base_key_of_assign_target(&Expr::Attribute(x.attr.clone())) =>
+            {
                 current_idx = bindings.key_to_idx(&key);
             }
             _ => {
@@ -126,35 +130,35 @@ fn create_intermediate_definition_from(
                 let binding = bindings.get(*k);
                 current_binding = bindings.get(binding.idx());
             }
-            Binding::Import(m, name, original_name_range) => {
+            Binding::Import(x) => {
                 return Some(IntermediateDefinition::NamedImport(
                     def_key.range(),
-                    *m,
-                    name.clone(),
-                    *original_name_range,
+                    x.0,
+                    x.1.clone(),
+                    x.2,
                 ));
             }
-            Binding::ImportViaGetattr(m, _name) => {
+            Binding::ImportViaGetattr(x) => {
                 // For __getattr__ imports, the name doesn't exist directly in the module,
                 // so we point to __getattr__ instead.
                 return Some(IntermediateDefinition::NamedImport(
                     def_key.range(),
-                    *m,
+                    x.0,
                     pyrefly_python::dunder::GETATTR.clone(),
                     None,
                 ));
             }
-            Binding::Module(name, path, ..) => {
-                let imported_module_name = if path.len() == 1 {
+            Binding::Module(x) => {
+                let imported_module_name = if x.1.len() == 1 {
                     // This corresponds to the case for `import x.y` -- the corresponding key would
                     // always be `Key::Import(x)`, so the actual module that corresponds to the key
                     // should be `x` instead of `x.y`.
-                    ModuleName::from_name(&path[0])
+                    ModuleName::from_name(&x.1[0])
                 } else {
                     // This corresponds to all other cases (e.g. `import x.y as z` or `from x.y
                     // import z`) -- the corresponding key would be `Key::Definition(z)` so the
                     // actual module that corresponds to the key must be `x.y`.
-                    name.dupe()
+                    x.0.dupe()
                 };
                 return Some(IntermediateDefinition::Module(
                     def_key.range(),

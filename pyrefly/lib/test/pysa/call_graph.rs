@@ -5933,9 +5933,14 @@ def foo():
   global x
   x = "str"
 "#,
-    &|_context: &ModuleContext| {
-        // TODO: Handle keyword `global` in go-to-definitions
-        vec![("test.foo", vec![])]
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "5:3-5:4|identifier|x",
+                global_identifier_callees(vec![get_global_ref("test", "x", context)]),
+            )],
+        )]
     }
 );
 

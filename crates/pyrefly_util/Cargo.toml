@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_util"
-version = "0.52.0"
+version = "0.53.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -10,7 +10,7 @@ license = "MIT"
 
 [dependencies]
 anstream = "0.6.11"
-anyhow = "1.0.98"
+anyhow = "1.0.101"
 append-only-vec = "0.1.8"
 argfile = "0.2.1"
 bstr = { version = "1.10.0", features = ["serde", "std", "unicode"] }

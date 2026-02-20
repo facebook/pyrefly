@@ -1,9 +1,11 @@
 ---
 name: review-pyrefly-diff
-description: Reviews a pyrefly diff according to the pyrefly review best practices.
+description: Reviews a comma separated pyrefly diff according to the pyrefly review best practices.
 ---
 
 This skill is intended to be used by interal Meta employees to review code changes in phabricator. This should not be used to review Github pull requests.
+
+You will take in a comma separated list of Phabricator Diff numbers and review them according to the pyrefly review best practices. For each diff that is passed in, use a new subagent to perform the review in parallel.
 
 # Code Review Guidelines for Pyrefly
 
@@ -39,6 +41,7 @@ You are reviewing a Phabricator Diff for Pyrefly, a fast language server and typ
 - Naming conventions (Rust: snake_case for functions, CamelCase for types)
 - Consistency with existing codebase patterns
 - Unnecessary complexity or over-engineering
+- Check for missed opportunities for code reuse
 
 ### Architecture
 - Separation of concerns
