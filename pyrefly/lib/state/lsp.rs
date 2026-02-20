@@ -216,7 +216,7 @@ impl CompletionResolveData {
     }
 }
 
-fn completion_data_handle_path(handle: &Handle) -> String {
+pub(crate) fn completion_data_handle_path(handle: &Handle) -> String {
     handle.path().as_path().to_string_lossy().into_owned()
 }
 
