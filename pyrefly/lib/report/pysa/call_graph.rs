@@ -273,6 +273,13 @@ pub trait FunctionTrait:
 
 impl FunctionTrait for FunctionRef {}
 
+/// Maximum number of targets in an override subset before we collapse it into
+/// `OverrideSubsetThreshold`. Large subsets lead to very large call-graph JSON
+/// files and significant slowdowns during both serialization and Pysa's
+/// analysis. When the number of targets exceeds this threshold we fall back to
+/// recording only the base method.
+const OVERRIDE_SUBSET_THRESHOLD: usize = 500;
+
 #[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize, PartialOrd, Ord)]
 pub enum Target<Function: FunctionTrait> {
     Function(Function),     // Either a function or a method
@@ -280,6 +287,11 @@ pub enum Target<Function: FunctionTrait> {
     OverrideSubset {
         base_method: Function,
         subset: Vec1<Target<Function>>,
+    },
+    /// Like `OverrideSubset`, but used when the number of targets in the subset
+    /// exceeds `OVERRIDE_SUBSET_THRESHOLD`.
+    OverrideSubsetThreshold {
+        base_method: Function,
     },
     FormatString,
 }
@@ -303,6 +315,9 @@ impl<Function: FunctionTrait> Target<Function> {
                 base_method: map(base_method),
                 subset: Vec1::mapped(subset, |target| target.map_function(map)),
             },
+            Target::OverrideSubsetThreshold { base_method } => Target::OverrideSubsetThreshold {
+                base_method: map(base_method),
+            },
             Target::FormatString => Target::FormatString,
         }
     }
@@ -311,7 +326,8 @@ impl<Function: FunctionTrait> Target<Function> {
         match self {
             Target::Function(function) => Some(function),
             Target::AllOverrides(method) => Some(method),
-            Target::OverrideSubset { base_method, .. } => Some(base_method),
+            Target::OverrideSubset { base_method, .. }
+            | Target::OverrideSubsetThreshold { base_method } => Some(base_method),
             Target::FormatString => None,
         }
     }
@@ -1778,36 +1794,42 @@ impl<'a> CallGraphVisitor<'a> {
         } else if let Some(overriding_classes) = self.override_graph.get_overriding_classes(&callee)
         {
             // case c
-            let mut callees = overriding_classes
-                .iter()
-                .filter_map(|overriding_class| {
-                    if has_superclass(
-                        &overriding_class.class,
-                        &receiver_class.class,
-                        self.module_context,
-                    ) {
-                        self.function_ref_from_class_field(
-                            &overriding_class.class,
-                            &callee.function_name,
-                            /* exclude_object_methods */ false,
-                        )
-                        .ok()
-                        .map(get_actual_target)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            if callees.is_empty() {
-                Target::Function(callee)
-            } else if callees.len() == overriding_classes.len() {
-                Target::AllOverrides(callee)
-            } else {
-                callees.sort();
-                Target::OverrideSubset {
+            if overriding_classes.len() > OVERRIDE_SUBSET_THRESHOLD {
+                Target::OverrideSubsetThreshold {
                     base_method: callee,
-                    subset: Vec1::try_from_vec(callees).unwrap(),
+                }
+            } else {
+                let mut callees = overriding_classes
+                    .iter()
+                    .filter_map(|overriding_class| {
+                        if has_superclass(
+                            &overriding_class.class,
+                            &receiver_class.class,
+                            self.module_context,
+                        ) {
+                            self.function_ref_from_class_field(
+                                &overriding_class.class,
+                                &callee.function_name,
+                                /* exclude_object_methods */ false,
+                            )
+                            .ok()
+                            .map(get_actual_target)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                if callees.is_empty() {
+                    Target::Function(callee)
+                } else if callees.len() == overriding_classes.len() {
+                    Target::AllOverrides(callee)
+                } else {
+                    callees.sort();
+                    Target::OverrideSubset {
+                        base_method: callee,
+                        subset: Vec1::try_from_vec(callees).unwrap(),
+                    }
                 }
             }
         } else {
@@ -1903,15 +1925,16 @@ impl<'a> CallGraphVisitor<'a> {
                 function_ref,
             );
             match target {
-                Target::Function(_) | Target::AllOverrides(_) | Target::OverrideSubset { .. } => {
-                    self.call_target_from_function_target(
-                        target,
-                        return_type,
-                        receiver_type,
-                        callee_expr_suffix,
-                        override_implicit_receiver,
-                    )
-                }
+                Target::Function(_)
+                | Target::AllOverrides(_)
+                | Target::OverrideSubset { .. }
+                | Target::OverrideSubsetThreshold { .. } => self.call_target_from_function_target(
+                    target,
+                    return_type,
+                    receiver_type,
+                    callee_expr_suffix,
+                    override_implicit_receiver,
+                ),
                 Target::FormatString => CallTarget {
                     target,
                     implicit_receiver: ImplicitReceiver::False,
@@ -4383,6 +4406,9 @@ pub fn resolve_decorator_callees(
         | Target::OverrideSubset {
             base_method: function_ref,
             ..
+        }
+        | Target::OverrideSubsetThreshold {
+            base_method: function_ref,
         } => {
             function_ref.module_name == ModuleName::builtins()
                 && (function_ref.function_name == dunder::INIT
