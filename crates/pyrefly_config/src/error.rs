@@ -24,6 +24,50 @@ use crate::error_kind::Severity;
 #[derive(Debug, PartialEq, Eq, Serialize, Clone, Default)]
 pub struct ErrorDisplayConfig(HashMap<ErrorKind, Severity>);
 
+#[cfg(feature = "jsonschema")]
+impl schemars::JsonSchema for ErrorDisplayConfig {
+    fn schema_name() -> String {
+        "ErrorDisplayConfig".to_owned()
+    }
+
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        use schemars::schema::*;
+
+        // Each error code maps to either a bool or a severity string
+        let error_severity = SchemaObject {
+            subschemas: Some(Box::new(SubschemaValidation {
+                one_of: Some(vec![
+                    SchemaObject {
+                        instance_type: Some(InstanceType::Boolean.into()),
+                        ..Default::default()
+                    }
+                    .into(),
+                    generator.subschema_for::<Severity>(),
+                ]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        SchemaObject {
+            instance_type: Some(InstanceType::Object.into()),
+            metadata: Some(Box::new(Metadata {
+                description: Some(
+                    "Configure the severity for each kind of error that Pyrefly emits. Set error code to true to enable (default severity), false to disable, or use a severity string."
+                        .to_owned(),
+                ),
+                ..Default::default()
+            })),
+            object: Some(Box::new(ObjectValidation {
+                additional_properties: Some(Box::new(error_severity.into())),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .into()
+    }
+}
+
 impl ErrorDisplayConfig {
     pub fn new(config: HashMap<ErrorKind, Severity>) -> Self {
         Self(config)

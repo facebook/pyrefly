@@ -141,6 +141,33 @@ impl Serialize for PythonVersion {
     }
 }
 
+#[cfg(feature = "jsonschema")]
+impl schemars::JsonSchema for PythonVersion {
+    fn schema_name() -> String {
+        "PythonVersion".to_owned()
+    }
+
+    fn json_schema(_generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::InstanceType::String.into()),
+            metadata: Some(Box::new(schemars::schema::Metadata {
+                description: Some(
+                    "The Python version to use for type checking. Format: <major>[.<minor>[.<micro>]]"
+                        .to_owned(),
+                ),
+                default: Some(serde_json::json!("3.13.0")),
+                ..Default::default()
+            })),
+            string: Some(Box::new(schemars::schema::StringValidation {
+                pattern: Some(r"^\d+(\.\d+)?(\.\d+)?$".to_owned()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .into()
+    }
+}
+
 impl PythonVersion {
     pub fn new(major: u32, minor: u32, micro: u32) -> Self {
         Self {
@@ -199,6 +226,34 @@ impl PythonPlatform {
 
     pub fn mac() -> Self {
         Self("darwin".to_owned())
+    }
+}
+
+#[cfg(feature = "jsonschema")]
+impl schemars::JsonSchema for PythonPlatform {
+    fn schema_name() -> String {
+        "PythonPlatform".to_owned()
+    }
+
+    fn json_schema(_generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::InstanceType::String.into()),
+            metadata: Some(Box::new(schemars::schema::Metadata {
+                description: Some(
+                    "The value used with conditions based on type checking against sys.platform values."
+                        .to_owned(),
+                ),
+                default: Some(serde_json::json!("linux")),
+                examples: vec![
+                    serde_json::json!("linux"),
+                    serde_json::json!("darwin"),
+                    serde_json::json!("win32"),
+                ],
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .into()
     }
 }
 
