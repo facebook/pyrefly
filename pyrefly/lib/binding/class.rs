@@ -298,7 +298,10 @@ impl<'a> BindingsBuilder<'a> {
             //
             // Also note that there's no risk of first-usage tracking issues here because `ensure_type` does not participate in first
             // usage tracking.
-            if matches!(base_class, BaseClass::BaseClassExpr(..)) {
+            if matches!(
+                base_class,
+                BaseClass::BaseClassExpr(..) | BaseClass::TypeOf(..)
+            ) {
                 self.insert_binding(
                     KeyExpect::TypeCheckBaseClassExpr(base.range()),
                     BindingExpect::TypeCheckBaseClassExpr(base),
