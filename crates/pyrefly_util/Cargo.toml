@@ -10,7 +10,7 @@ license = "MIT"
 
 [dependencies]
 anstream = "0.6.11"
-anyhow = "1.0.98"
+anyhow = "1.0.101"
 append-only-vec = "0.1.8"
 argfile = "0.2.1"
 bstr = { version = "1.10.0", features = ["serde", "std", "unicode"] }
