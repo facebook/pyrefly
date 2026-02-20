@@ -2013,6 +2013,41 @@ Completion Results:
 }
 
 #[test]
+fn autoimport_explicit_reexport_suggests_reexport_path() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("source", "Thing = 1\n"),
+            ("public", "from source import Thing as Thing\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from public import Thing
+
+- (Variable) Thing: from source import Thing
+
+
+
+# source.py
+
+# public.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn autoimport_prefers_shorter_module() {
     let code = r#"
 T = Thing

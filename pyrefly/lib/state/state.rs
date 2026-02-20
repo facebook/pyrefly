@@ -653,7 +653,7 @@ impl<'a> Transaction<'a> {
     /// The order of the resulting `Vec` is unspecified.
     pub fn search_exports<V: Send + Sync>(
         &self,
-        searcher: impl Fn(&Handle, &SmallMap<Name, ExportLocation>) -> Vec<V> + Sync,
+        searcher: impl Fn(&Handle, &Exports, &SmallMap<Name, ExportLocation>) -> Vec<V> + Sync,
     ) -> Vec<V> {
         // Make sure all the modules are in updated_modules.
         // We have to get a mutable module data to do the lookup we need anyway.
@@ -675,10 +675,9 @@ impl<'a> Transaction<'a> {
             tasks.work_without_cancellation(|_, modules| {
                 let mut thread_local_results = Vec::new();
                 for (handle, module_data) in modules {
-                    let exports = self
-                        .lookup_export(module_data)
-                        .exports(&self.lookup(module_data.dupe()));
-                    thread_local_results.extend(searcher(handle, &exports));
+                    let exports_data = self.lookup_export(module_data);
+                    let exports = exports_data.exports(&self.lookup(module_data.dupe()));
+                    thread_local_results.extend(searcher(handle, &exports_data, &exports));
                 }
                 if !thread_local_results.is_empty() {
                     all_results.lock().push(thread_local_results);
