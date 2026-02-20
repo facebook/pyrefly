@@ -9,6 +9,7 @@ use num_traits::ToPrimitive;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::dunder;
 use pyrefly_types::class::Class;
 use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::facet::FacetChain;
@@ -506,6 +507,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
+        if let FacetKind::Attribute(attr) = facet
+            && *attr == dunder::CLASS
+        {
+            match op {
+                AtomicNarrowOp::Is(v) | AtomicNarrowOp::Eq(v) => {
+                    let right = self.expr_infer(v, errors);
+                    return Some(self.narrow_isinstance(base, &right));
+                }
+                _ => {}
+            }
+        }
         match op {
             AtomicNarrowOp::Is(v) => {
                 let right = self.expr_infer(v, errors);
