@@ -1123,7 +1123,7 @@ TypeVar('T')
 TypeVar('T')
 # ^
 ## After:
-def TypeVar():
+def TypeVar(arg1: str):
     pass
 TypeVar('T')
 # ^
@@ -1134,8 +1134,90 @@ TypeVar('T')
 # ^
 ## After:
 class TypeVar:
-    pass
+    def __init__(self, arg1: str):
+        pass
 TypeVar('T')
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_infer_callsite_types() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "class UserId:\n    def __init__(self, value: int):\n        pass\n\nuser: UserId = UserId(1234)\nmyFunc(user)\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+6 | myFunc(user)
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc(user)
+# ^
+## After:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc = None
+myFunc(user)
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc(user)
+# ^
+## After:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+def myFunc(user: UserId):
+    pass
+myFunc(user)
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc(user)
+# ^
+## After:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+class myFunc:
+    def __init__(self, user: UserId):
+        pass
+myFunc(user)
 # ^
 "#
         .trim(),
