@@ -456,7 +456,7 @@ fn test_completion_with_autoimport_submodule() {
     let root_path = root.path().join("autoimport_submodule");
 
     let mut interaction =
-        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
 
     interaction.set_root(root_path.clone());
     interaction

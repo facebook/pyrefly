@@ -9,13 +9,13 @@ use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Url;
 use lsp_types::notification::Notification as _;
 use lsp_types::notification::PublishDiagnostics;
+use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::lsp::non_wasm::protocol::Message;
 use serde_json::json;
 
-use crate::commands::lsp::IndexingMode;
-use crate::lsp::non_wasm::protocol::Message;
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 /// Test 1: Non-open file gets diagnostics in workspace mode.
 ///

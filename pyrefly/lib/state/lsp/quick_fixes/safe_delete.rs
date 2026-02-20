@@ -65,6 +65,7 @@ pub(crate) fn safe_delete_code_actions(
             handle.sys_info(),
             definition.metadata.clone(),
             TextRangeWithModule::new(definition.module.dupe(), definition.definition_range),
+            true,
         )
         .ok()?;
     if has_non_definition_reference(&references, &definition.module, definition.definition_range) {

@@ -1773,7 +1773,7 @@ impl Server {
                             x.id,
                             Ok(self
                                 .code_action(
-                                    &transaction,
+                                    &mut transaction,
                                     params,
                                     telemetry,
                                     activity_key,

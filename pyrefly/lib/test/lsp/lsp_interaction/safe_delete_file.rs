@@ -6,6 +6,7 @@
  */
 
 use lsp_types::CodeActionOrCommand;
+use lsp_types::CodeActionResponse;
 use lsp_types::DocumentChangeOperation;
 use lsp_types::DocumentChanges;
 use lsp_types::ResourceOp;
@@ -13,9 +14,9 @@ use lsp_types::Url;
 use lsp_types::request::CodeActionRequest;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 fn init_with_delete_support(root_path: &std::path::Path) -> (LspInteraction, Url) {
     let scope_uri = Url::from_file_path(root_path).unwrap();
@@ -60,7 +61,7 @@ fn test_safe_delete_file_unused() {
             },
             "context": { "diagnostics": [] }
         }))
-        .expect_response_with(|response| {
+        .expect_response_with(|response: Option<CodeActionResponse>| {
             let Some(actions) = response else {
                 return false;
             };
@@ -114,7 +115,7 @@ fn test_safe_delete_file_rejects_usages() {
             },
             "context": { "diagnostics": [] }
         }))
-        .expect_response_with(|response| {
+        .expect_response_with(|response: Option<CodeActionResponse>| {
             let Some(actions) = response else {
                 return true;
             };
