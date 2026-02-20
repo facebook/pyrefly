@@ -270,6 +270,22 @@ vinv1_2: ShouldBeInvariant1[int] = ShouldBeInvariant1[float](1.1)  # E:
 );
 
 testcase!(
+    bug = "For properties with both a getter and setter, the stored type is the setter function. This is causing us to miss visiting the getter.",
+    test_protocol_property_invariant,
+    r#"
+from typing import Protocol, TypeVar
+
+TypeT = TypeVar("TypeT")
+
+class HasP(Protocol[TypeT]): # E: Type variable `TypeT` in class `HasP` is declared as invariant, but could be contravariant based on its usage
+    @property
+    def p(self) -> TypeT: ...
+    @p.setter
+    def p(self, p: TypeT, /) -> None: ...
+"#,
+);
+
+testcase!(
     test_sequence_inheritance,
     r#"
 from typing import Sequence
