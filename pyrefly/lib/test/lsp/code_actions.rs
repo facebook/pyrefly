@@ -17,6 +17,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::absolutize::Absolutize;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use tempfile::Builder;
@@ -4214,7 +4215,7 @@ value = 1
         )
     };
 
-    let state = State::new(config_finder);
+    let state = State::new(config_finder, TEST_THREAD_COUNT);
     let main_handle = Handle::new(
         ModuleName::from_str("main"),
         ModulePath::memory(main_path.clone()),
@@ -4240,6 +4241,7 @@ value = 1
     transaction.as_mut().run(
         &[main_handle.clone(), other_handle.clone()],
         Require::Everything,
+        None,
     );
     state.commit_transaction(transaction, None);
 
