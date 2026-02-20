@@ -21,7 +21,7 @@ parse-display = "0.8.2"
 pyrefly_build = { path = "../pyrefly_build" }
 pyrefly_python = { path = "../pyrefly_python" }
 pyrefly_util = { path = "../pyrefly_util" }
-regex = "1.12.2"
+regex = "1.12.3"
 regex-syntax = "0.7.5"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }

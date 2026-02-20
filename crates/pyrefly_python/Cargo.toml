@@ -19,7 +19,7 @@ lsp-types = { git = "https://github.com/astral-sh/lsp-types", rev = "3512a9f33ea
 parse-display = "0.8.2"
 pathdiff = "0.2"
 pyrefly_util = { path = "../pyrefly_util" }
-regex = "1.12.2"
+regex = "1.12.3"
 ruff_notebook = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
 ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
 ruff_python_parser = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
