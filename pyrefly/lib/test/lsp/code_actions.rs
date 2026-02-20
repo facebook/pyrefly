@@ -5,13 +5,27 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
+use std::fs::create_dir_all;
+use std::sync::Arc;
+
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
+use pyrefly_util::absolutize::Absolutize;
+use pyrefly_util::arc_id::ArcId;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use tempfile::Builder;
 
+use crate::config::config::ConfigFile;
+use crate::config::config::ProjectLayout;
+use crate::config::finder::ConfigFinder;
 use crate::module::module_info::ModuleInfo;
+use crate::state::load::FileContents;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::require::Require;
@@ -348,6 +362,41 @@ fn assert_no_introduce_parameter_action(code: &str) {
         "expected no introduce-parameter actions, found {}",
         actions.len()
     );
+}
+
+fn position_of_function_name(source: &str, function_name: &str) -> TextSize {
+    let needle = format!("def {}", function_name);
+    let start = source
+        .find(&needle)
+        .unwrap_or_else(|| panic!("missing function `{}`", function_name));
+    let name_start = start + "def ".len();
+    TextSize::try_from(name_start).unwrap()
+}
+
+fn compute_use_function_actions(
+    files: &[(&'static str, &str)],
+    function_module: &'static str,
+    function_name: &str,
+) -> (
+    HashMap<&'static str, ModuleInfo>,
+    Vec<LocalRefactorCodeAction>,
+) {
+    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::Everything);
+    let transaction = state.transaction();
+    let mut module_infos = HashMap::new();
+    for (name, _) in files {
+        let handle = handles.get(name).unwrap();
+        module_infos.insert(*name, transaction.get_module_info(handle).unwrap());
+    }
+    let handle = handles.get(function_module).unwrap();
+    let module_info = module_infos
+        .get(function_module)
+        .expect("missing function module");
+    let position = position_of_function_name(module_info.contents(), function_name);
+    let actions = transaction
+        .use_function_code_actions(handle, TextRange::new(position, position))
+        .unwrap_or_default();
+    (module_infos, actions)
 }
 
 fn assert_no_extract_variable_action(code: &str) {
@@ -3404,6 +3453,413 @@ def caller():
     accept(**values)
 "#;
     assert_no_introduce_parameter_action(code);
+}
+
+#[test]
+fn use_function_across_modules() {
+    let mod1 = r#"
+def square(p):
+    return p ** 2
+
+my_var = 3 ** 2
+"#;
+    let mod2 = r#"
+another_var = 4 ** 2
+"#;
+    let (module_infos, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "square");
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_mod1 = apply_refactor_edits_for_module(module_infos.get("mod1").unwrap(), edits);
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let expected_mod1 = r#"
+def square(p):
+    return p ** 2
+
+my_var = square(3)
+"#;
+    let expected_mod2 = r#"
+from mod1 import square
+another_var = square(4)
+"#;
+    assert_eq!(expected_mod1.trim(), updated_mod1.trim());
+    assert_eq!(expected_mod2.trim(), updated_mod2.trim());
+}
+
+#[test]
+fn use_function_reuses_existing_imports() {
+    let mod1 = r#"
+def square(p):
+    return p ** 2
+"#;
+    let mod2 = r#"
+from mod1 import square as sq
+another_var = 4 ** 2
+"#;
+    let mod3 = r#"
+import mod1 as m
+value = 5 ** 2
+"#;
+    let (module_infos, actions) = compute_use_function_actions(
+        &[("mod1", mod1), ("mod2", mod2), ("mod3", mod3)],
+        "mod1",
+        "square",
+    );
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let updated_mod3 = apply_refactor_edits_for_module(module_infos.get("mod3").unwrap(), edits);
+    let expected_mod2 = r#"
+from mod1 import square as sq
+another_var = sq(4)
+"#;
+    let expected_mod3 = r#"
+import mod1 as m
+value = m.square(5)
+"#;
+    assert_eq!(expected_mod2.trim(), updated_mod2.trim());
+    assert_eq!(expected_mod3.trim(), updated_mod3.trim());
+}
+
+#[test]
+fn use_function_skips_shadowed_function_name() {
+    let mod1 = r#"
+def square(p):
+    return p ** 2
+"#;
+    let mod2 = r#"
+square = 10
+value = 5 ** 2
+"#;
+    let mod3 = r#"
+another_var = 4 ** 2
+"#;
+    let (module_infos, actions) = compute_use_function_actions(
+        &[("mod1", mod1), ("mod2", mod2), ("mod3", mod3)],
+        "mod1",
+        "square",
+    );
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let updated_mod3 = apply_refactor_edits_for_module(module_infos.get("mod3").unwrap(), edits);
+    let expected_mod2 = r#"
+square = 10
+value = 5 ** 2
+"#;
+    let expected_mod3 = r#"
+from mod1 import square
+another_var = square(4)
+"#;
+    assert_eq!(expected_mod2.trim(), updated_mod2.trim());
+    assert_eq!(expected_mod3.trim(), updated_mod3.trim());
+}
+
+#[test]
+fn use_function_repeated_param_matches_and_rejects() {
+    let mod1 = r#"
+def double(x):
+    return x + x
+"#;
+    let mod2 = r#"
+value = 3 + 3
+other = 3 + 4
+"#;
+    let mod3 = r#"
+from mod1 import double as d
+a = 2
+total = a + a
+"#;
+    let (module_infos, actions) = compute_use_function_actions(
+        &[("mod1", mod1), ("mod2", mod2), ("mod3", mod3)],
+        "mod1",
+        "double",
+    );
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let updated_mod3 = apply_refactor_edits_for_module(module_infos.get("mod3").unwrap(), edits);
+    let expected_mod2 = r#"
+from mod1 import double
+value = double(3)
+other = 3 + 4
+"#;
+    let expected_mod3 = r#"
+from mod1 import double as d
+a = 2
+total = d(a)
+"#;
+    assert_eq!(expected_mod2.trim(), updated_mod2.trim());
+    assert_eq!(expected_mod3.trim(), updated_mod3.trim());
+}
+
+#[test]
+fn use_function_rewrites_multiple_matches_in_file() {
+    let mod1 = r#"
+def square(p):
+    return p ** 2
+"#;
+    let mod2 = r#"
+first = 2 ** 2
+second = 3 ** 2
+"#;
+    let (module_infos, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "square");
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let expected_mod2 = r#"
+from mod1 import square
+first = square(2)
+second = square(3)
+"#;
+    assert_eq!(expected_mod2.trim(), updated_mod2.trim());
+}
+
+#[test]
+fn use_function_rewrites_expression_stmt_in_function_body() {
+    let mod1 = r#"
+def square(x):
+    return x ** 2
+
+def other(x):
+    x ** 2
+"#;
+    let (module_infos, actions) = compute_use_function_actions(&[("mod1", mod1)], "mod1", "square");
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_mod1 = apply_refactor_edits_for_module(module_infos.get("mod1").unwrap(), edits);
+    let expected_mod1 = r#"
+def square(x):
+    return x ** 2
+
+def other(x):
+    square(x)
+"#;
+    assert_eq!(expected_mod1.trim(), updated_mod1.trim());
+}
+
+#[test]
+fn use_function_limits_edits_to_project_config() {
+    let temp = Builder::new()
+        .prefix("pyrefly-test-")
+        .tempdir()
+        .expect("failed to create tempdir");
+    let main_root = temp.path().join("main");
+    let other_root = temp.path().join("other");
+    create_dir_all(&main_root).expect("failed to create main project root");
+    create_dir_all(&other_root).expect("failed to create other project root");
+
+    let main_path = main_root.join("main.py");
+    let other_path = other_root.join("other.py");
+
+    let main_code = r#"
+def one():
+    return 1
+
+value = 1
+"#;
+    let other_code = r#"
+value = 1
+"#;
+
+    let mut main_config = ConfigFile::init_at_root(&main_root, &ProjectLayout::Flat, false);
+    main_config.interpreters.skip_interpreter_query = true;
+    main_config.configure();
+    let main_config = ArcId::new(main_config);
+
+    let mut other_config = ConfigFile::init_at_root(&other_root, &ProjectLayout::Flat, false);
+    other_config.interpreters.skip_interpreter_query = true;
+    other_config.configure();
+    let other_config = ArcId::new(other_config);
+
+    let config_finder = {
+        let main_root = main_root.clone();
+        let other_root = other_root.clone();
+        let main_config_for_before = main_config.clone();
+        let other_config_for_before = other_config.clone();
+        let main_config_fallback = main_config.clone();
+        ConfigFinder::new_custom(
+            Box::new(move |_, path| {
+                let absolute = match path.details() {
+                    ModulePathDetails::FileSystem(p) | ModulePathDetails::Memory(p) => {
+                        Some(p.as_path().absolutize())
+                    }
+                    ModulePathDetails::Namespace(p) => Some(p.as_path().absolutize()),
+                    _ => None,
+                };
+                let Some(absolute) = absolute else {
+                    return Ok(None);
+                };
+                if absolute.starts_with(&main_root) {
+                    return Ok(Some(main_config_for_before.clone()));
+                }
+                if absolute.starts_with(&other_root) {
+                    return Ok(Some(other_config_for_before.clone()));
+                }
+                Ok(None)
+            }),
+            Box::new(|_| (ArcId::new(ConfigFile::default()), Vec::new())),
+            Box::new(move |_, _| main_config_fallback.clone()),
+            Box::new(|| {}),
+        )
+    };
+
+    let state = State::new(config_finder);
+    let main_handle = Handle::new(
+        ModuleName::from_str("main"),
+        ModulePath::memory(main_path.clone()),
+        main_config.get_sys_info(),
+    );
+    let other_handle = Handle::new(
+        ModuleName::from_str("other"),
+        ModulePath::memory(other_path.clone()),
+        other_config.get_sys_info(),
+    );
+
+    let mut transaction = state.new_committable_transaction(Require::Everything, None);
+    transaction.as_mut().set_memory(vec![
+        (
+            main_path.clone(),
+            Some(Arc::new(FileContents::from_source(main_code.to_owned()))),
+        ),
+        (
+            other_path.clone(),
+            Some(Arc::new(FileContents::from_source(other_code.to_owned()))),
+        ),
+    ]);
+    transaction.as_mut().run(
+        &[main_handle.clone(), other_handle.clone()],
+        Require::Everything,
+    );
+    state.commit_transaction(transaction, None);
+
+    let transaction = state.transaction();
+    let main_info = transaction.get_module_info(&main_handle).unwrap();
+    let other_info = transaction.get_module_info(&other_handle).unwrap();
+    let position = position_of_function_name(main_info.contents(), "one");
+    let actions = transaction
+        .use_function_code_actions(&main_handle, TextRange::new(position, position))
+        .unwrap_or_default();
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_main = apply_refactor_edits_for_module(&main_info, edits);
+    let updated_other = apply_refactor_edits_for_module(&other_info, edits);
+    let expected_main = r#"
+def one():
+    return 1
+
+value = one()
+"#;
+    assert_eq!(expected_main.trim(), updated_main.trim());
+    assert_eq!(other_code.trim(), updated_other.trim());
+}
+
+#[test]
+fn use_function_zero_args() {
+    let mod1 = r#"
+def one():
+    return 1
+
+local = 1
+"#;
+    let mod2 = r#"
+other = 1
+"#;
+    let (module_infos, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "one");
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_mod1 = apply_refactor_edits_for_module(module_infos.get("mod1").unwrap(), edits);
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let expected_mod1 = r#"
+def one():
+    return 1
+
+local = one()
+"#;
+    let expected_mod2 = r#"
+from mod1 import one
+other = one()
+"#;
+    assert_eq!(expected_mod1.trim(), updated_mod1.trim());
+    assert_eq!(expected_mod2.trim(), updated_mod2.trim());
+}
+
+#[test]
+fn use_function_default_arg() {
+    let mod1 = r#"
+def square(p=2):
+    return p ** 2
+"#;
+    let mod2 = r#"
+value = 3 ** 2
+"#;
+    let (module_infos, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "square");
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let expected_mod2 = r#"
+from mod1 import square
+value = square(3)
+"#;
+    assert_eq!(expected_mod2.trim(), updated_mod2.trim());
+}
+
+#[test]
+fn use_function_prefers_outermost_match() {
+    let mod1 = r#"
+def inc(x):
+    return x + 1
+"#;
+    let mod2 = r#"
+value = (2 + 1) + 1
+"#;
+    let (module_infos, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "inc");
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let expected_mod2 = r#"
+from mod1 import inc
+value = inc(2 + 1)
+"#;
+    assert_eq!(expected_mod2.trim(), updated_mod2.trim());
+}
+
+#[test]
+fn use_function_rejects_bool_op() {
+    let mod1 = r#"
+def both(a, b):
+    return a and b
+"#;
+    let mod2 = r#"
+value = True and False
+"#;
+    let (_, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "both");
+    assert!(
+        actions.is_empty(),
+        "expected no use-function actions for boolean operators"
+    );
+}
+
+#[test]
+fn use_function_rejects_chained_comparison() {
+    let mod1 = r#"
+def between(a, b, c):
+    return a < b < c
+"#;
+    let mod2 = r#"
+value = 1 < 2 < 3
+"#;
+    let (_, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "between");
+    assert!(
+        actions.is_empty(),
+        "expected no use-function actions for chained comparisons"
+    );
 }
 
 mod extract_field_tests {

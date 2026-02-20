@@ -30,6 +30,7 @@ use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::ast_helpers::find_containing_function_def;
 use crate::state::state::CancellableTransaction;
 
 /// Finds a function definition at a specific position in an AST.
@@ -66,26 +67,18 @@ pub fn find_containing_function_for_call(
     ast: &ModModule,
     position: TextSize,
 ) -> Option<(String, TextRange)> {
-    let covering_nodes = Ast::locate_node(ast, position);
-
-    // Look through the node chain for the containing function
-    for (i, node) in covering_nodes.iter().enumerate() {
-        if let AnyNodeRef::StmtFunctionDef(func_def) = node {
-            // Check if this is a method (next node is a ClassDef)
-            if let Some(AnyNodeRef::StmtClassDef(class_def)) = covering_nodes.get(i + 1) {
-                let name = format!(
-                    "{}.{}.{}",
-                    handle.module(),
-                    class_def.name.id,
-                    func_def.name.id
-                );
-                return Some((name, func_def.name.range()));
-            } else {
-                // Top-level function
-                let name = format!("{}.{}", handle.module(), func_def.name.id);
-                return Some((name, func_def.name.range()));
-            }
+    if let Some(containing) = find_containing_function_def(ast, position) {
+        if let Some(class_def) = containing.class_def {
+            let name = format!(
+                "{}.{}.{}",
+                handle.module(),
+                class_def.name.id,
+                containing.function_def.name.id
+            );
+            return Some((name, containing.function_def.name.range()));
         }
+        let name = format!("{}.{}", handle.module(), containing.function_def.name.id);
+        return Some((name, containing.function_def.name.range()));
     }
 
     // No containing function found - this is module-level code.

@@ -81,6 +81,7 @@ use crate::types::module::ModuleType;
 use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 
+pub(crate) mod ast_helpers;
 mod dict_completions;
 mod quick_fixes;
 
@@ -2307,6 +2308,14 @@ impl<'a> Transaction<'a> {
         selection: TextRange,
     ) -> Option<Vec<LocalRefactorCodeAction>> {
         quick_fixes::convert_star_import::convert_star_import_code_actions(self, handle, selection)
+    }
+
+    pub fn use_function_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::use_function::use_function_code_actions(self, handle, selection)
     }
 
     /// Determines whether a module is a third-party package.

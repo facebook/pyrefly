@@ -3590,6 +3590,10 @@ impl Server {
             transaction.invert_boolean_code_actions(&handle, range)
         );
         timed_refactor_action!(
+            "use_function",
+            transaction.use_function_code_actions(&handle, range)
+        );
+        timed_refactor_action!(
             "extract_function",
             transaction.extract_function_code_actions(&handle, range)
         );
