@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -66,6 +67,7 @@ pub struct Workspace {
     pub disabled_language_services: Option<DisabledLanguageServices>,
     pub display_type_errors: Option<DisplayTypeErrors>,
     pub lsp_analysis_config: Option<LspAnalysisConfig>,
+    pub stream_diagnostics: Option<bool>,
 }
 
 impl Workspace {
@@ -177,8 +179,6 @@ struct PyreflyClientConfig {
     analysis: Option<LspAnalysisConfig>,
     #[serde(default)]
     disabled_language_services: Option<DisabledLanguageServices>,
-    // This is a global config that's read separately
-    #[allow(dead_code)]
     stream_diagnostics: Option<bool>,
 }
 
@@ -389,6 +389,9 @@ impl Workspaces {
             if let Some(disabled_language_services) = pyrefly.disabled_language_services {
                 self.update_disabled_language_services(scope_uri, disabled_language_services);
             }
+            if let Some(stream_diagnostics) = pyrefly.stream_diagnostics {
+                self.update_stream_diagnostics(scope_uri, stream_diagnostics);
+            }
             self.update_display_type_errors(modified, scope_uri, pyrefly.display_type_errors);
             // Handle analysis config nested under pyrefly (e.g., pyrefly.analysis)
             if let Some(analysis) = pyrefly.analysis {
@@ -438,6 +441,21 @@ impl Workspaces {
             None => {
                 self.default.write().disabled_language_services = Some(disabled_language_services);
             }
+        }
+    }
+
+    /// Update streamDiagnostics setting for scope_uri, None if default workspace
+    fn update_stream_diagnostics(&self, scope_uri: &Option<Url>, stream_diagnostics: bool) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
+                    workspace.stream_diagnostics = Some(stream_diagnostics);
+                }
+            }
+            None => self.default.write().stream_diagnostics = Some(stream_diagnostics),
         }
     }
 
@@ -562,6 +580,14 @@ impl Workspaces {
 
     pub fn sourcedb_available(&self) -> bool {
         !self.source_db_config_map.lock().is_empty()
+    }
+
+    /// Check if diagnostics should be streamed for a file at the given path.
+    /// Defaults to true if not explicitly configured.
+    pub fn should_stream_diagnostics(&self, path: &Path) -> bool {
+        self.get_with(path.to_path_buf(), |(_, workspace)| {
+            workspace.stream_diagnostics.unwrap_or(true)
+        })
     }
 }
 

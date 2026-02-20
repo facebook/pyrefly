@@ -568,9 +568,6 @@ pub struct Server {
     /// - Empty set means there is an ongoing recheck but all open files at the start of
     ///   the recheck were subsequently modified
     currently_streaming_diagnostics_for_handles: RwLock<Option<SmallSet<Handle>>>,
-    /// Whether to stream diagnostics as they become available during recheck.
-    /// Defaults to true. Set via `streamDiagnostics` initialization option.
-    stream_diagnostics: bool,
     /// Testing-only flag to prevent the next recheck from committing.
     /// When set, the recheck queue task will loop without committing the transaction.
     do_not_commit_recheck: AtomicBool,
@@ -1934,15 +1931,6 @@ impl Server {
 
         let workspaces = Arc::new(Workspaces::new(Workspace::default(), &folders));
 
-        // Parse streamDiagnostics from initialization options, defaulting to true
-        let stream_diagnostics = initialize_params
-            .initialization_options
-            .as_ref()
-            .and_then(|opts| opts.get("pyrefly"))
-            .and_then(|pyrefly| pyrefly.get("streamDiagnostics"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-
         let config_finder = Workspaces::config_finder(workspaces.dupe());
 
         // Parse commentFoldingRanges from initialization options, defaults to false
@@ -1989,7 +1977,6 @@ impl Server {
             surface,
             comment_folding_ranges,
             currently_streaming_diagnostics_for_handles: RwLock::new(None),
-            stream_diagnostics,
             do_not_commit_recheck: AtomicBool::new(false),
             // Will be set to true if we send a workspace/configuration request
             awaiting_initial_workspace_config: AtomicBool::new(should_request_workspace_settings),
@@ -2459,22 +2446,29 @@ impl Server {
         f: impl FnOnce(&mut Transaction) + Send + Sync + 'static,
     ) {
         let open_handles = self.get_open_file_handles();
-        let stream_diagnostics = self.stream_diagnostics;
         self.recheck_queue.queue_task(
             kind,
             Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
-                // Take a snapshot of the open files at the beginning of the transaction
-                // we'll stream diagnostics for those files as they become available
-                let open_handles_set: SmallSet<Handle> = open_handles.iter().cloned().collect();
+                // Filter to only include handles from workspaces with streaming enabled
+                let streaming_handles: SmallSet<Handle> = open_handles
+                    .iter()
+                    .filter(|h| {
+                        server
+                            .workspaces
+                            .should_stream_diagnostics(h.path().as_path())
+                    })
+                    .cloned()
+                    .collect();
                 // Store the snapshot so non-committable transactions know not to publish
                 // diagnostics for these files (they'll be streamed by this transaction)
-                if stream_diagnostics {
+                let has_streaming = !streaming_handles.is_empty();
+                if has_streaming {
                     *server.currently_streaming_diagnostics_for_handles.write() =
-                        Some(open_handles_set.clone());
+                        Some(streaming_handles.clone());
                 }
                 let publish_callback =
                     move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
-                        if stream_diagnostics && changed && open_handles_set.contains(handle) {
+                        if changed && streaming_handles.contains(handle) {
                             server.publish_for_handles(
                                 transaction,
                                 std::slice::from_ref(handle),
@@ -4421,19 +4415,27 @@ impl Server {
     /// This ensures validate_in_memory() only runs after config invalidation completes
     fn invalidate_config_and_validate_in_memory(&self) {
         let open_handles = self.get_open_file_handles();
-        let stream_diagnostics = self.stream_diagnostics;
         self.recheck_queue.queue_task(
             TelemetryEventKind::InvalidateConfig,
             Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
-                let open_handles_set: SmallSet<Handle> = open_handles.iter().cloned().collect();
-                // Only set this if streaming is enabled
-                if stream_diagnostics {
+                // Filter to only include handles from workspaces with streaming enabled
+                let streaming_handles: SmallSet<Handle> = open_handles
+                    .iter()
+                    .filter(|h| {
+                        server
+                            .workspaces
+                            .should_stream_diagnostics(h.path().as_path())
+                    })
+                    .cloned()
+                    .collect();
+                let has_streaming = !streaming_handles.is_empty();
+                if has_streaming {
                     *server.currently_streaming_diagnostics_for_handles.write() =
-                        Some(open_handles_set.clone());
+                        Some(streaming_handles.clone());
                 }
                 let publish_callback =
                     move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
-                        if stream_diagnostics && changed && open_handles_set.contains(handle) {
+                        if changed && streaming_handles.contains(handle) {
                             server.publish_for_handles(
                                 transaction,
                                 std::slice::from_ref(handle),

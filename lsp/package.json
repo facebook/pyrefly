@@ -224,7 +224,8 @@
                 "python.pyrefly.streamDiagnostics": {
                     "type": "boolean",
                     "default": true,
-                    "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes. This is a global setting that applies to all workspaces."
+                    "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes.",
+                    "scope": "resource"
                 },
                 "pyrefly.commentFoldingRanges": {
                     "type": "boolean",
