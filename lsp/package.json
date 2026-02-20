@@ -227,6 +227,15 @@
                     "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes.",
                     "scope": "resource"
                 },
+                "python.pyrefly.diagnosticMode": {
+                    "type": "string",
+                    "default": "openFilesOnly",
+                    "description": "Controls the scope of Pyrefly's diagnostic analysis. When set to 'openFilesOnly', diagnostics are only provided for files that are currently open in the editor.",
+                    "enum": [
+                        "openFilesOnly"
+                    ],
+                    "scope": "resource"
+                },
                 "pyrefly.commentFoldingRanges": {
                     "type": "boolean",
                     "default": false,
