@@ -254,6 +254,7 @@ use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::lsp::non_wasm::mru::CompletionMru;
 use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::protocol::read_lsp_message;
@@ -300,6 +301,11 @@ use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::PublishDiagnosticsSubscriber;
 use crate::types::class::ClassDefIndex;
+
+pub struct InitializeInfo {
+    pub params: InitializeParams,
+    pub supports_diagnostic_markdown: bool,
+}
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -466,17 +472,29 @@ impl ServerConnection {
         diags: Vec<Diagnostic>,
         version: Option<i32>,
         source: DiagnosticSource,
+        diagnostic_markdown_support: bool,
     ) {
         if matches!(source, DiagnosticSource::Streaming) {
             info!("Streamed {} diagnostics for {}", diags.len(), uri);
         } else {
             info!("Published {} diagnostics for {}", diags.len(), uri);
         }
-        self.send(Message::Notification(
-            new_notification::<PublishDiagnostics>(PublishDiagnosticsParams::new(
-                uri, diags, version,
-            )),
-        ));
+        if diagnostic_markdown_support {
+            let mut params =
+                serde_json::to_value(PublishDiagnosticsParams::new(uri, diags, version)).unwrap();
+            apply_diagnostic_markup(&mut params);
+            self.send(Message::Notification(Notification {
+                method: PublishDiagnostics::METHOD.to_owned(),
+                params,
+                activity_key: None,
+            }));
+        } else {
+            self.send(Message::Notification(
+                new_notification::<PublishDiagnostics>(PublishDiagnosticsParams::new(
+                    uri, diags, version,
+                )),
+            ));
+        }
     }
 
     fn publish_diagnostics(
@@ -485,19 +503,127 @@ impl ServerConnection {
         notebook_cell_urls: SmallMap<PathBuf, Url>,
         version_info: HashMap<PathBuf, i32>,
         source: DiagnosticSource,
+        diagnostic_markdown_support: bool,
     ) {
         for (path, diags) in diags {
             if let Some(url) = notebook_cell_urls.get(&path) {
-                self.publish_diagnostics_for_uri(url.clone(), diags, None, source)
+                self.publish_diagnostics_for_uri(
+                    url.clone(),
+                    diags,
+                    None,
+                    source,
+                    diagnostic_markdown_support,
+                )
             } else {
                 let path = path.absolutize();
                 let version = version_info.get(&path).copied();
                 match Url::from_file_path(&path) {
-                    Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, version, source),
+                    Ok(uri) => self.publish_diagnostics_for_uri(
+                        uri,
+                        diags,
+                        version,
+                        source,
+                        diagnostic_markdown_support,
+                    ),
                     Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
                 }
             }
         }
+    }
+}
+
+fn diagnostic_markdown_support(params: &Value) -> bool {
+    let text_document = match params
+        .get("capabilities")
+        .and_then(|caps| caps.get("textDocument"))
+    {
+        Some(text_document) => text_document,
+        None => return false,
+    };
+
+    // First, honor the `textDocument.diagnostic.markupMessageSupport` setting if present.
+    if let Some(supported) = text_document
+        .get("diagnostic")
+        .and_then(|diagnostic| diagnostic.get("markupMessageSupport"))
+        .and_then(Value::as_bool)
+    {
+        return supported;
+    }
+
+    // Fall back to `textDocument.publishDiagnostics.markupMessageSupport`.
+    text_document
+        .get("publishDiagnostics")
+        .and_then(|publish_diagnostics| publish_diagnostics.get("markupMessageSupport"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn apply_diagnostic_markup(value: &mut Value) {
+    fn wrap_messages(diagnostics: &mut [Value]) {
+        for diagnostic in diagnostics {
+            let message = match diagnostic.get("message").and_then(|value| value.as_str()) {
+                Some(message) => format_diagnostic_message_for_markdown(message),
+                None => continue,
+            };
+            if let Some(obj) = diagnostic.as_object_mut() {
+                obj.insert(
+                    "message".to_owned(),
+                    serde_json::json!({"kind": "markdown", "value": message}),
+                );
+            }
+        }
+    }
+
+    if let Some(diagnostics) = value.get_mut("diagnostics").and_then(|v| v.as_array_mut()) {
+        wrap_messages(diagnostics);
+    }
+
+    if let Some(items) = value.get_mut("items").and_then(|v| v.as_array_mut()) {
+        wrap_messages(items);
+    }
+
+    if let Some(related_documents) = value.get_mut("relatedDocuments")
+        && let Some(related_documents) = related_documents.as_object_mut()
+    {
+        for report in related_documents.values_mut() {
+            apply_diagnostic_markup(report);
+        }
+    }
+}
+
+fn format_diagnostic_message_for_markdown(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut in_code_span = false;
+    for ch in message.chars() {
+        if ch == '`' {
+            in_code_span = !in_code_span;
+            out.push(ch);
+            continue;
+        }
+        if in_code_span {
+            out.push(ch);
+            continue;
+        }
+        match ch {
+            '\\' | '*' | '_' | '[' | ']' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_diagnostic_message_for_markdown;
+
+    #[test]
+    fn test_format_diagnostic_message_for_markdown() {
+        let input = "__init__ *args **kwargs list[int] `list[int]`";
+        let expected = "\\_\\_init\\_\\_ \\*args \\*\\*kwargs list\\[int\\] `list[int]`";
+        assert_eq!(format_diagnostic_message_for_markdown(input), expected);
     }
 }
 
@@ -571,6 +697,8 @@ pub struct Server {
     /// Whether to stream diagnostics as they become available during recheck.
     /// Defaults to true. Set via `streamDiagnostics` initialization option.
     stream_diagnostics: bool,
+    /// Whether the client supports markdown in diagnostic messages.
+    diagnostic_markdown_support: bool,
     /// Testing-only flag to prevent the next recheck from committing.
     /// When set, the recheck queue task will loop without committing the transaction.
     do_not_commit_recheck: AtomicBool,
@@ -625,7 +753,7 @@ pub fn shutdown_finish(connection: &Connection, id: RequestId) {
 // If we receive an unexpected shutdown notification, respond and wait for exit.
 pub fn initialize_start(
     connection: &Connection,
-) -> anyhow::Result<Option<(RequestId, InitializeParams)>> {
+) -> anyhow::Result<Option<(RequestId, InitializeInfo)>> {
     loop {
         let Ok(msg) = connection.receiver.recv() else {
             break;
@@ -633,8 +761,15 @@ pub fn initialize_start(
         match msg {
             Message::Request(x) => {
                 if x.method == Initialize::METHOD {
+                    let supports_diagnostic_markdown = diagnostic_markdown_support(&x.params);
                     let params = serde_json::from_value(x.params)?;
-                    return Ok(Some((x.id, params)));
+                    return Ok(Some((
+                        x.id,
+                        InitializeInfo {
+                            params,
+                            supports_diagnostic_markdown,
+                        },
+                    )));
                 }
 
                 error!("Unexpected request before initialize: {x:?}");
@@ -1014,7 +1149,7 @@ struct TypeHierarchyTarget {
 
 pub fn lsp_loop(
     connection: Connection,
-    initialization_params: InitializeParams,
+    initialization: InitializeInfo,
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     build_system_blocking: bool,
@@ -1028,7 +1163,8 @@ pub fn lsp_loop(
     let server = Server::new(
         connection,
         lsp_queue,
-        initialization_params,
+        initialization.params,
+        initialization.supports_diagnostic_markdown,
         indexing_mode,
         workspace_indexing_limit,
         build_system_blocking,
@@ -1736,10 +1872,17 @@ impl Server {
                         )
                     {
                         self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
-                        self.send_response(new_response(
-                            x.id,
-                            Ok(self.document_diagnostics(&transaction, params)),
-                        ));
+                        let mut result =
+                            serde_json::to_value(self.document_diagnostics(&transaction, params))
+                                .unwrap();
+                        if self.diagnostic_markdown_support {
+                            apply_diagnostic_markup(&mut result);
+                        }
+                        self.send_response(Response {
+                            id: x.id,
+                            result: Some(result),
+                            error: None,
+                        });
                     }
                 } else if let Some(params) = as_request::<ProvideType>(&x) {
                     if let Some(params) = self
@@ -1913,6 +2056,7 @@ impl Server {
         connection: Connection,
         lsp_queue: LspQueue,
         initialize_params: InitializeParams,
+        diagnostic_markdown_support: bool,
         indexing_mode: IndexingMode,
         workspace_indexing_limit: usize,
         build_system_blocking: bool,
@@ -1990,6 +2134,7 @@ impl Server {
             comment_folding_ranges,
             currently_streaming_diagnostics_for_handles: RwLock::new(None),
             stream_diagnostics,
+            diagnostic_markdown_support,
             do_not_commit_recheck: AtomicBool::new(false),
             // Will be set to true if we send a workspace/configuration request
             awaiting_initial_workspace_config: AtomicBool::new(should_request_workspace_settings),
@@ -2283,6 +2428,7 @@ impl Server {
             notebook_cell_urls,
             self.version_info.lock().clone(),
             source,
+            self.diagnostic_markdown_support,
         );
         if self
             .initialize_params
@@ -3037,6 +3183,7 @@ impl Server {
                             Vec::new(),
                             version,
                             DiagnosticSource::DidClose,
+                            self.diagnostic_markdown_support,
                         );
                         self.open_notebook_cells.write().remove(&cell);
                     }
@@ -3058,6 +3205,7 @@ impl Server {
                         Vec::new(),
                         version,
                         DiagnosticSource::DidClose,
+                        self.diagnostic_markdown_support,
                     );
                     entry.remove();
                 }
