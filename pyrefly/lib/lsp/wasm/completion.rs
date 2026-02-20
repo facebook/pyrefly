@@ -684,7 +684,7 @@ impl Transaction<'_> {
                         &ast,
                         self.config_finder(),
                         handle.dupe(),
-                        handle_to_import_from,
+                        handle_to_import_from.dupe(),
                         &name,
                         import_format,
                     );
