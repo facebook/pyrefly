@@ -1516,6 +1516,12 @@ impl Type {
             .is_some_and(|meta| matches!(meta.role, PropertyRole::SetterDecorator))
     }
 
+    pub fn attrs_default_field(&self) -> Option<&Name> {
+        self.visit_toplevel_func_metadata::<Option<&Name>>(&|meta: &FuncMetadata| {
+            meta.flags.attrs_default_field.as_ref()
+        })
+    }
+
     pub fn is_property_setter_with_getter(&self) -> Option<Type> {
         self.property_metadata().and_then(|meta| match meta.role {
             PropertyRole::Setter => Some(meta.getter.clone()),

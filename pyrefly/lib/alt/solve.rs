@@ -5068,11 +5068,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn solve_decorator(&self, x: &BindingDecorator, errors: &ErrorCollector) -> Arc<Decorator> {
-        let mut ty = self.expr_infer(&x.expr, errors);
+        let mut ty = if x.attrs_default_field.is_some() {
+            self.expr_infer(&x.expr, &self.error_swallower())
+        } else {
+            self.expr_infer(&x.expr, errors)
+        };
         self.pin_all_placeholder_types(&mut ty, true, x.expr.range(), errors);
         self.expand_vars_mut(&mut ty);
         let deprecation = parse_deprecation(&x.expr);
-        Arc::new(Decorator { ty, deprecation })
+        Arc::new(Decorator {
+            ty,
+            deprecation,
+            attrs_default_field: x.attrs_default_field.clone(),
+        })
     }
 
     pub fn solve_decorated_function(
