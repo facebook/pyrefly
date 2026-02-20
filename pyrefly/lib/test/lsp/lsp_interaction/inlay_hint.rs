@@ -9,6 +9,7 @@ use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::test::lsp::lsp_interaction::util::check_inlay_hint_label_values;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
@@ -28,66 +29,80 @@ fn test_inlay_hint_default_config() {
     interaction
         .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([
-            {
-                "label":[
-                    {"value":" -> "},
-                    {"value":"tuple"},
-                    {"value":"["},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"1"},
-                    {"value":"]"},
-                    {"value":", "},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"2"},
-                    {"value":"]"},
-                    {"value":"]"}
-                ],
-                "position":{"character":21,"line":6},
-                "textEdits":[{
-                    "newText":" -> tuple[Literal[1], Literal[2]]",
-                    "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
-                }]
-            },
-            {
-                "label":[
-                    {"value":": "},
-                    {"value":"tuple"},
-                    {"value":"["},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"1"},
-                    {"value":"]"},
-                    {"value":", "},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"2"},
-                    {"value":"]"},
-                    {"value":"]"}
-                ],
-                "position":{"character":6,"line":11},
-                "textEdits":[{
-                    "newText":": tuple[Literal[1], Literal[2]]",
-                    "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
-                }]
-            },
-            {
-                "label":[
-                    {"value":" -> "},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"0"},
-                    {"value":"]"}
-                ],
-                "position":{"character":15,"line":14},
-                "textEdits":[{
-                    "newText":" -> Literal[0]",
-                    "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
-                }]
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 3 {
+                return false;
             }
-        ]))
+
+            let hint0 = &hints[0];
+            if hint0.position.line != 6 || hint0.position.character != 21 {
+                return false;
+            }
+            if !check_inlay_hint_label_values(
+                hint0,
+                &[
+                    (" -> ", false),
+                    ("tuple", true),
+                    ("[", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("1", false),
+                    ("]", false),
+                    (", ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("2", false),
+                    ("]", false),
+                    ("]", false),
+                ],
+            ) {
+                return false;
+            }
+
+            let hint1 = &hints[1];
+            if hint1.position.line != 11 || hint1.position.character != 6 {
+                return false;
+            }
+            if !check_inlay_hint_label_values(
+                hint1,
+                &[
+                    (": ", false),
+                    ("tuple", true),
+                    ("[", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("1", false),
+                    ("]", false),
+                    (", ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("2", false),
+                    ("]", false),
+                    ("]", false),
+                ],
+            ) {
+                return false;
+            }
+
+            let hint2 = &hints[2];
+            if hint2.position.line != 14 || hint2.position.character != 15 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint2,
+                &[
+                    (" -> ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("0", false),
+                    ("]", false),
+                ],
+            )
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -181,42 +196,55 @@ fn test_inlay_hint_disable_variables() {
     interaction
         .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([{
-            "label":[
-                {"value":" -> "},
-                {"value":"tuple"},
-                {"value":"["},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"1"},
-                {"value":"]"},
-                {"value":", "},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"2"},
-                {"value":"]"},
-                {"value":"]"}
-            ],
-            "position":{"character":21,"line":6},
-            "textEdits":[{
-                "newText":" -> tuple[Literal[1], Literal[2]]",
-                "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
-            }]
-        },
-        {
-            "label":[
-                {"value":" -> "},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"0"},
-                {"value":"]"}
-            ],
-            "position":{"character":15,"line":14},
-            "textEdits":[{
-                "newText":" -> Literal[0]",
-                "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
-            }]
-        }]))
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 2 {
+                return false;
+            }
+
+            let hint0 = &hints[0];
+            if hint0.position.line != 6 || hint0.position.character != 21 {
+                return false;
+            }
+            if !check_inlay_hint_label_values(
+                hint0,
+                &[
+                    (" -> ", false),
+                    ("tuple", true),
+                    ("[", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("1", false),
+                    ("]", false),
+                    (", ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("2", false),
+                    ("]", false),
+                    ("]", false),
+                ],
+            ) {
+                return false;
+            }
+
+            let hint1 = &hints[1];
+            if hint1.position.line != 14 || hint1.position.character != 15 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint1,
+                &[
+                    (" -> ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("0", false),
+                    ("]", false),
+                ],
+            )
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -245,28 +273,38 @@ fn test_inlay_hint_disable_returns() {
     interaction
         .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([{
-            "label":[
-                {"value":": "},
-                {"value":"tuple"},
-                {"value":"["},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"1"},
-                {"value":"]"},
-                {"value":", "},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"2"},
-                {"value":"]"},
-                {"value":"]"}
-            ],
-            "position":{"character":6,"line":11},
-            "textEdits":[{
-                "newText":": tuple[Literal[1], Literal[2]]",
-                "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
-            }]
-        }]))
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 11 || hint.position.character != 6 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (": ", false),
+                    ("tuple", true),
+                    ("[", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("1", false),
+                    ("]", false),
+                    (", ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("2", false),
+                    ("]", false),
+                    ("]", false),
+                ],
+            )
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -320,6 +358,459 @@ fn test_inlay_hint_labels_support_goto_type_definition() {
                 }
             }
             true
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_tuple_type_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 3 {
+                return false;
+            }
+
+            let hint0 = &hints[0];
+            if !check_inlay_hint_label_values(
+                hint0,
+                &[
+                    (" -> ", false),
+                    ("tuple", true),
+                    ("[", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("1", false),
+                    ("]", false),
+                    (", ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("2", false),
+                    ("]", false),
+                    ("]", false),
+                ],
+            ) {
+                return false;
+            }
+
+            let hint1 = &hints[1];
+            check_inlay_hint_label_values(
+                hint1,
+                &[
+                    (": ", false),
+                    ("tuple", true),
+                    ("[", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("1", false),
+                    ("]", false),
+                    (", ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("2", false),
+                    ("]", false),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_typevar_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("typevar_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("typevar_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 10 || hint.position.character != 14 {
+                return false;
+            }
+            check_inlay_hint_label_values(hint, &[(" -> ", false), ("TypeVar", true)])
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_typevartuple_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("typevartuple_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("typevartuple_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 10 || hint.position.character != 14 {
+                return false;
+            }
+            check_inlay_hint_label_values(hint, &[(" -> ", false), ("TypeVarTuple", true)])
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_paramspec_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("paramspec_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("paramspec_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 10 || hint.position.character != 14 {
+                return false;
+            }
+            check_inlay_hint_label_values(hint, &[(" -> ", false), ("ParamSpec", true)])
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_class_based_typed_dict_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("typed_dict_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("typed_dict_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 13 || hint.position.character != 24 {
+                return false;
+            }
+            check_inlay_hint_label_values(hint, &[(" -> ", false), ("MyTypedDict", true)])
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_anonymous_typed_dict_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("anonymous_typed_dict_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("anonymous_typed_dict_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 6 || hint.position.character != 34 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (" -> ", false),
+                    ("dict", true),
+                    ("[", false),
+                    ("str", true),
+                    (", ", false),
+                    ("int", true),
+                    (" | ", false),
+                    ("str", true),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_never_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("never_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("never_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 6 || hint.position.character != 19 {
+                return false;
+            }
+            check_inlay_hint_label_values(hint, &[(" -> ", false), ("Never", true)])
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_literal_string_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("literal_string_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("literal_string_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 8 || hint.position.character != 40 {
+                return false;
+            }
+            check_inlay_hint_label_values(hint, &[(" -> ", false), ("LiteralString", true)])
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_type_guard_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("type_guard_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("type_guard_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 12 || hint.position.character != 7 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (": ", false),
+                    ("(", false),
+                    ("val", false),
+                    (": ", false),
+                    ("object", true),
+                    (") -> ", false),
+                    ("TypeGuard", true),
+                    ("[", false),
+                    ("str", true),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_type_is_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("type_is_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("type_is_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 12 || hint.position.character != 7 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (": ", false),
+                    ("(", false),
+                    ("val", false),
+                    (": ", false),
+                    ("object", true),
+                    (") -> ", false),
+                    ("TypeIs", true),
+                    ("[", false),
+                    ("str", true),
+                    ("]", false),
+                ],
+            )
         })
         .unwrap();
 

@@ -25,6 +25,7 @@ pub mod types;
 
 use core::panic;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::BufWriter;
 use std::ops::Not;
@@ -42,10 +43,13 @@ use pyrefly_util::thread_pool::ThreadPool;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use serde::Serialize;
 
+use crate::error::error::Error as TypeError;
 use crate::module::bundled::BundledStub;
 use crate::module::typeshed::typeshed;
+use crate::module::typeshed_third_party::typeshed_third_party;
 use crate::report::pysa::call_graph::CallGraph;
 use crate::report::pysa::call_graph::ExpressionIdentifier;
 use crate::report::pysa::call_graph::export_call_graphs;
@@ -86,6 +90,8 @@ struct PysaProjectModule {
     module_id: ModuleId,
     module_name: ModuleName,        // e.g, `foo.bar`
     source_path: ModulePathDetails, // Path to the source code
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relative_source_path: Option<PathBuf>, // Path relative to a root or search path
     info_filename: Option<PathBuf>, // Filename for info files
     #[serde(skip_serializing)]
     handle: Handle,
@@ -95,6 +101,8 @@ struct PysaProjectModule {
     is_interface: bool, // Is this a .pyi file?
     #[serde(skip_serializing_if = "<&bool>::not")]
     is_init: bool, // Is this a __init__.py(i) file?
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    is_internal: bool, // Is this a module from the project (as opposed to a dependency)?
 }
 
 /// Format of the index file `pyrefly.pysa.json`
@@ -104,6 +112,9 @@ struct PysaProjectFile {
     modules: HashMap<ModuleId, PysaProjectModule>,
     builtin_module_id: ModuleId,
     object_class_id: ClassId,
+    dict_class_id: ClassId,
+    typing_module_id: ModuleId,
+    typing_mapping_class_id: ClassId,
 }
 
 /// Format of the file `definitions/my.module:id.json` containing all definitions
@@ -200,9 +211,13 @@ pub fn export_module_call_graphs(
 
 fn build_module_mapping(
     handles: &Vec<Handle>,
+    project_handles: &[Handle],
     module_ids: &ModuleIds,
 ) -> HashMap<ModuleId, PysaProjectModule> {
     let step = StepLogger::start("Building module list", "Built module list");
+
+    // Set of handles from the "project-includes", i.e only handles that are typed checked.
+    let project_handles: HashSet<&Handle> = project_handles.iter().collect();
 
     let mut project_modules = HashMap::new();
     for handle in handles {
@@ -231,19 +246,36 @@ fn build_module_mapping(
             }
         };
 
+        let module_name = handle.module();
+        let module_path = handle.path();
+        let relative_source_path = match module_path.details() {
+            ModulePathDetails::FileSystem(path) | ModulePathDetails::Namespace(path) => module_path
+                .root_of(module_name)
+                .and_then(|root| path.as_path().strip_prefix(root).ok())
+                .map(|path| path.to_path_buf()),
+            ModulePathDetails::Memory(_) => None,
+            ModulePathDetails::BundledTypeshed(relative_path)
+            | ModulePathDetails::BundledTypeshedThirdParty(relative_path)
+            | ModulePathDetails::BundledThirdParty(relative_path) => {
+                Some(relative_path.to_path_buf())
+            }
+        };
+
         assert!(
             project_modules
                 .insert(
                     module_id,
                     PysaProjectModule {
                         module_id,
-                        module_name: handle.module(),
-                        source_path: handle.path().details().clone(),
+                        module_name,
+                        source_path: module_path.details().clone(),
+                        relative_source_path,
                         info_filename: info_filename.clone(),
                         handle: handle.clone(),
                         is_test: false,
                         is_interface: handle.path().is_interface(),
                         is_init: handle.path().is_init(),
+                        is_internal: project_handles.contains(handle),
                     }
                 )
                 .is_none(),
@@ -448,28 +480,91 @@ fn add_module_is_test_flags(
         .unwrap())
 }
 
+fn write_bundle_stubs(bundle: &impl BundledStub, directory: &Path) -> anyhow::Result<()> {
+    for module in bundle.modules() {
+        let module_path = bundle.find(module).unwrap();
+        let relative_path = match module_path.details() {
+            ModulePathDetails::BundledTypeshed(path) => &**path,
+            ModulePathDetails::BundledTypeshedThirdParty(path) => &**path,
+            _ => panic!("unexpected module path for typeshed module"),
+        };
+        let content = bundle.load(relative_path).unwrap();
+        let target_path = directory.join(relative_path);
+        fs_anyhow::create_dir_all(target_path.parent().unwrap())?;
+        fs_anyhow::write(&target_path, content.as_bytes())?;
+    }
+
+    Ok(())
+}
+
 // Dump all typeshed files, so we can parse them.
 fn write_typeshed_files(results_directory: &Path) -> anyhow::Result<()> {
     let step = StepLogger::start("Exporting typeshed files", "Exported typeshed files");
-    let typeshed = typeshed()?;
 
-    for typeshed_module in typeshed.modules() {
-        let module_path = typeshed.find(typeshed_module).unwrap();
-        let relative_path = match module_path.details() {
-            ModulePathDetails::BundledTypeshed(path) => &**path,
-            _ => panic!("unexpected module path for typeshed module"),
-        };
-        let content = typeshed.load(relative_path).unwrap();
-        let target_path = results_directory.join("typeshed").join(relative_path);
-        fs_anyhow::create_dir_all(target_path.parent().unwrap())?;
-        fs_anyhow::write(&target_path, content.as_bytes())?;
+    let typeshed = typeshed()?;
+    write_bundle_stubs(typeshed, &results_directory.join("typeshed"))?;
+
+    if let Ok(typeshed_third_party) = typeshed_third_party() {
+        write_bundle_stubs(
+            typeshed_third_party,
+            &results_directory.join("typeshed_third_party"),
+        )?;
     }
 
     step.finish();
     Ok(())
 }
 
-pub fn write_results(results_directory: &Path, transaction: &Transaction) -> anyhow::Result<()> {
+#[derive(Debug, Clone, Serialize)]
+struct PysaTypeError {
+    module_id: ModuleId,
+    location: PysaLocation,
+    kind: pyrefly_config::error_kind::ErrorKind,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PysaTypeErrorsFile {
+    format_version: u32,
+    errors: Vec<PysaTypeError>,
+}
+
+fn write_errors_file(
+    results_directory: &Path,
+    errors: &[TypeError],
+    module_ids: &ModuleIds,
+) -> anyhow::Result<()> {
+    let step = StepLogger::start("Exporting type errors", "Exported type errors");
+
+    let writer = BufWriter::new(File::create(results_directory.join("errors.json"))?);
+    serde_json::to_writer(
+        writer,
+        &PysaTypeErrorsFile {
+            format_version: 1,
+            errors: errors
+                .iter()
+                .map(|error| PysaTypeError {
+                    module_id: module_ids
+                        .get(ModuleKey::from_module(error.module()))
+                        .unwrap(),
+                    location: PysaLocation::from_text_range(error.range(), error.module()),
+                    kind: error.error_kind(),
+                    message: error.msg(),
+                })
+                .collect::<Vec<_>>(),
+        },
+    )?;
+
+    step.finish();
+    Ok(())
+}
+
+pub fn write_results(
+    results_directory: &Path,
+    transaction: &Transaction,
+    project_handles: &[Handle],
+    errors: &[TypeError],
+) -> anyhow::Result<()> {
     let step = StepLogger::start(
         &format!("Writing results to `{}`", results_directory.display()),
         &format!("Wrote results to `{}`", results_directory.display()),
@@ -485,7 +580,7 @@ pub fn write_results(results_directory: &Path, transaction: &Transaction) -> any
 
     let handles = transaction.handles();
     let module_ids = ModuleIds::new(&handles);
-    let project_modules = build_module_mapping(&handles, &module_ids);
+    let project_modules = build_module_mapping(&handles, project_handles, &module_ids);
     let module_work_list = make_module_work_list(&project_modules);
 
     let reversed_override_graph = build_reversed_override_graph(&handles, transaction, &module_ids);
@@ -534,17 +629,27 @@ pub fn write_results(results_directory: &Path, transaction: &Transaction) -> any
 
     write_typeshed_files(results_directory)?;
 
+    write_errors_file(results_directory, errors, &module_ids)?;
+
     let builtin_module = handles
         .iter()
         .filter(|handle| handle.module().as_str() == "builtins")
         .exactly_one()
         .expect("expected exactly one builtins module");
+    let typing_module = handles
+        .iter()
+        .filter(|handle| handle.module().as_str() == "typing")
+        .exactly_one()
+        .expect("expected exactly one typing module");
     let object_class_id = ClassId::from_class(
         transaction
             .get_stdlib(builtin_module)
             .object()
             .class_object(),
     );
+    let dict_class_id = ClassId::from_class(transaction.get_stdlib(builtin_module).dict_object());
+    let typing_mapping_class_id =
+        ClassId::from_class(transaction.get_stdlib(typing_module).mapping_object());
 
     let writer = BufWriter::new(File::create(results_directory.join("pyrefly.pysa.json"))?);
     serde_json::to_writer(
@@ -556,6 +661,11 @@ pub fn write_results(results_directory: &Path, transaction: &Transaction) -> any
                 .get(ModuleKey::from_handle(builtin_module))
                 .unwrap(),
             object_class_id,
+            dict_class_id,
+            typing_module_id: module_ids
+                .get(ModuleKey::from_handle(typing_module))
+                .unwrap(),
+            typing_mapping_class_id,
         },
     )?;
 

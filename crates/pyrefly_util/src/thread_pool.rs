@@ -22,7 +22,7 @@ use crate::lock::Mutex;
 /// The stack size for all created threads.
 ///
 /// Can be overridden by setting the `PYREFLY_STACK_SIZE` environment variable (in bytes).
-const DEFAULT_STACK_SIZE: usize = 5 * 1024 * 1024;
+const DEFAULT_STACK_SIZE: usize = 10 * 1024 * 1024;
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ThreadCount {
@@ -85,8 +85,16 @@ impl ThreadPool {
 
         let stack_size = Self::stack_size();
         let mut builder = rayon::ThreadPoolBuilder::new().stack_size(stack_size);
-        if let ThreadCount::NumThreads(threads) = count {
-            builder = builder.num_threads(threads.get());
+        match count {
+            ThreadCount::NumThreads(threads) => {
+                builder = builder.num_threads(threads.get());
+            }
+            ThreadCount::AllThreads => {
+                let max_threads = std::thread::available_parallelism()
+                    .map(|n| n.get().min(64))
+                    .unwrap_or(1);
+                builder = builder.num_threads(max_threads);
+            }
         }
         let pool = builder.build().expect("To be able to build a thread pool");
         // Only print the message once

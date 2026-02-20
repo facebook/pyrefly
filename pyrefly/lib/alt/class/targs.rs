@@ -15,7 +15,6 @@ use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -34,11 +33,11 @@ use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
+use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
 use crate::types::types::TArgs;
-use crate::types::types::TParam;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
@@ -169,27 +168,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
         let targs = self.create_default_targs(
             self.get_class_tparams(cls),
-            Some(&|tparam: &TParam| {
-                errors.add(
+            Some(&|tparam: &Quantified| {
+                Self::add_implicit_any_error(
+                    errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
-                    vec1![
-                        format!(
-                            "Cannot determine the type parameter `{}` for generic class `{}`",
-                            tparam.name(),
-                            cls.name(),
-                        ),
-                        "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),
-                    ],
+                    format!("class `{}`", cls.name()),
+                    Some(tparam.name().as_str()),
                 );
             }),
         );
         self.type_of_instance(cls, targs)
     }
 
-    pub fn promote_forall(&self, forall: Forall<Forallable>, _range: TextRange) -> Type {
-        // TODO(grievejia): We probably want to error here as well
-        let targs = self.create_default_targs(forall.tparams.dupe(), None);
+    pub fn promote_forall(
+        &self,
+        forall: Forall<Forallable>,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let targs = self.create_default_targs(
+            forall.tparams.dupe(),
+            Some(&|tparam: &Quantified| {
+                Self::add_implicit_any_error(
+                    errors,
+                    range,
+                    format!("type alias `{}`", forall.body.name()),
+                    Some(tparam.name().as_str()),
+                );
+            }),
+        );
         forall.apply_targs(targs)
     }
 
@@ -204,7 +211,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tparams = self.get_class_tparams(class);
         TArgs::new(
             tparams.dupe(),
-            tparams.quantifieds().map(|q| q.clone().to_type()).collect(),
+            tparams
+                .iter()
+                .map(|q| q.clone().to_type(self.heap))
+                .collect(),
         )
     }
 
@@ -217,6 +227,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// instantiate(list) == list[T]
     pub fn instantiate(&self, cls: &Class) -> Type {
         self.type_of_instance(cls, self.targs_of_tparams(cls))
+    }
+
+    pub fn instantiate_type_var_tuple(&self) -> (TParams, Type) {
+        let quantified = Quantified::new(
+            self.uniques.fresh(),
+            Name::new_static("Ts"),
+            QuantifiedKind::TypeVarTuple,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Covariant,
+        );
+        let tparams = TParams::new(vec![quantified.clone()]);
+        let tuple_ty = self.heap.mk_tuple(Tuple::Unpacked(Box::new((
+            Vec::new(),
+            self.heap.mk_quantified(quantified),
+            Vec::new(),
+        ))));
+        (tparams, tuple_ty)
     }
 
     /// Gets this Class as a ClassType with its tparams as the arguments. For non-TypedDict
@@ -234,30 +262,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Instantiates a class or typed dictionary with fresh variables for its type parameters.
-    pub fn instantiate_fresh_class(&self, cls: &Class) -> Type {
-        self.solver()
-            .fresh_quantified(
-                &self.get_class_tparams(cls),
-                self.instantiate(cls),
-                self.uniques,
-            )
-            .1
-    }
-
-    pub fn instantiate_fresh_tuple(&self) -> Type {
-        let quantified = Quantified::type_var_tuple(Name::new_static("Ts"), self.uniques, None);
-        let tparams = TParams::new(vec![TParam {
-            quantified: quantified.clone(),
-            variance: PreInferenceVariance::PCovariant,
-        }]);
-        let tuple_ty = Type::Tuple(Tuple::Unpacked(Box::new((
-            Vec::new(),
-            Type::Quantified(Box::new(quantified)),
-            Vec::new(),
-        ))));
-        self.solver()
-            .fresh_quantified(&tparams, tuple_ty, self.uniques)
-            .1
+    pub fn instantiate_fresh_class(&self, cls: &Class) -> (QuantifiedHandle, Type) {
+        self.solver().fresh_quantified(
+            &self.get_class_tparams(cls),
+            self.instantiate(cls),
+            self.uniques,
+        )
     }
 
     pub fn instantiate_fresh_forall(&self, forall: Forall<Forallable>) -> (QuantifiedHandle, Type) {
@@ -272,7 +282,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> (QuantifiedHandle, Function) {
         let (qs, t) =
             self.solver()
-                .fresh_quantified(tparams, Type::Function(Box::new(func)), self.uniques);
+                .fresh_quantified(tparams, self.heap.mk_function(func), self.uniques);
         match t {
             Type::Function(func) => (qs, *func),
             // We passed a Function to fresh_quantified(), so we know we get a Function back out.
@@ -287,7 +297,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> (QuantifiedHandle, Callable) {
         let (qs, t) =
             self.solver()
-                .fresh_quantified(tparams, Type::Callable(Box::new(c)), self.uniques);
+                .fresh_quantified(tparams, self.heap.mk_callable_from(c), self.uniques);
         match t {
             Type::Callable(c) => (qs, *c),
             // We passed a Function to fresh_quantified(), so we know we get a Function back out.
@@ -299,7 +309,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn create_default_targs(
         &self,
         tparams: Arc<TParams>,
-        on_fallback_to_gradual: Option<&dyn Fn(&TParam)>,
+        on_fallback_to_gradual: Option<&dyn Fn(&Quantified)>,
     ) -> TArgs {
         if tparams.is_empty() {
             TArgs::default()
@@ -316,11 +326,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // To make it 100% accurate, we actually need to hook the callback into `as_graudal_type()`. It's doable
                     // but could add a lot of complexities so let's keep it as an exercise in the future.
                     if let Some(f) = on_fallback_to_gradual
-                        && x.quantified.default().is_none()
+                        && x.default().is_none()
                     {
                         f(x);
                     }
-                    x.quantified.as_gradual_type()
+                    x.as_gradual_type()
                 })
                 .collect();
             TArgs::new(tparams, tys)
@@ -330,9 +340,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn type_of_instance(&self, cls: &Class, targs: TArgs) -> Type {
         let metadata = self.get_metadata_for_class(cls);
         if metadata.is_typed_dict() {
-            Type::TypedDict(TypedDict::new(cls.dupe(), targs))
+            self.heap.mk_typed_dict(TypedDict::new(cls.dupe(), targs))
         } else {
-            Type::ClassType(ClassType::new(cls.dupe(), targs))
+            self.heap.mk_class_type(ClassType::new(cls.dupe(), targs))
         }
     }
 
@@ -353,7 +363,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (param_idx, param) in tparams.iter().enumerate() {
             if let Some(arg) = targs.get(targ_idx) {
                 // Get next type argument
-                match param.quantified.kind() {
+                match param.kind() {
                     QuantifiedKind::TypeVarTuple => {
                         // We know that ParamSpec params must be matched by ParamSpec args, so chop off both params and args
                         // at the next ParamSpec when computing how many args the TypeVarTuple should consume.
@@ -433,7 +443,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn peek_next_paramspec_param(&self, start_idx: usize, tparams: &TParams) -> Option<usize> {
         for (i, param) in tparams.iter().enumerate().skip(start_idx) {
-            if param.quantified.is_param_spec() {
+            if param.is_param_spec() {
                 return Some(i);
             }
         }
@@ -481,7 +491,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::Unpack(t) => {
                     if !suffix.is_empty() {
-                        middle.push(Type::unbounded_tuple(self.unions(suffix)));
+                        middle.push(self.heap.mk_unbounded_tuple(self.unions(suffix)));
                         suffix = Vec::new();
                     } else {
                         middle.push((**t).clone())
@@ -507,8 +517,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         match middle.as_slice() {
-            [] => Type::concrete_tuple(prefix),
-            [middle] => Type::unpacked_tuple(prefix, middle.clone(), suffix),
+            [] => self.heap.mk_concrete_tuple(prefix),
+            [middle] => self.heap.mk_unpacked_tuple(prefix, middle.clone(), suffix),
             // We can't precisely model unpacking two unbounded iterables, so we'll keep any
             // concrete prefix and suffix elements and merge everything in between into an unbounded tuple
             _ => {
@@ -516,12 +526,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .iter()
                     .map(|t| {
                         self.unwrap_iterable(t)
-                            .unwrap_or(self.stdlib.object().clone().to_type())
+                            .unwrap_or(self.heap.mk_class_type(self.stdlib.object().clone()))
                     })
                     .collect();
-                Type::unpacked_tuple(
+                self.heap.mk_unpacked_tuple(
                     prefix,
-                    Type::unbounded_tuple(self.unions(middle_types)),
+                    self.heap.mk_unbounded_tuple(self.unions(middle_types)),
                     suffix,
                 )
             }
@@ -530,7 +540,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn create_paramspec_value(&self, targs: &[Type]) -> Type {
         let params: Vec<Param> = targs.map(|t| Param::PosOnly(None, t.clone(), Required::Required));
-        Type::ParamSpecValue(ParamList::new(params))
+        self.heap.mk_param_spec_value(ParamList::new(params))
     }
 
     fn create_next_paramspec_arg(
@@ -541,6 +551,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         if arg.is_kind_param_spec() {
             arg.clone()
+        } else if arg.is_any() {
+            // Any is the universal type that is compatible with any ParamSpec.
+            // Convert it to Ellipsis, which is the gradual type for ParamSpec.
+            self.heap.mk_ellipsis()
         } else {
             self.error(
                 errors,
@@ -551,13 +565,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.for_display(arg.clone())
                 ),
             );
-            Type::Ellipsis
+            self.heap.mk_ellipsis()
         }
     }
 
     fn create_next_typevar_arg(
         &self,
-        param: &TParam,
+        param: &Quantified,
         arg: &Type,
         range: TextRange,
         validate_restriction: bool,
@@ -602,13 +616,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let arg = arg.clone();
                             arg.transform(&mut |x| {
                                 if let Type::TypeVar(tv) = x {
-                                    *x = tv.restriction().as_type(self.stdlib);
+                                    *x = tv.restriction().as_type(self.stdlib, self.heap);
                                 }
                             })
                         };
                         self.check_type(
                             &arg_for_check,
-                            &restriction.as_type(self.stdlib),
+                            &restriction.as_type(self.stdlib, self.heap),
                             range,
                             errors,
                             tcc,
@@ -622,7 +636,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn get_tparam_default(
         &self,
-        param: &TParam,
+        param: &Quantified,
         checked_targs: &[Type],
         name_to_idx: &SmallMap<&Name, usize>,
     ) -> Type {
@@ -642,12 +656,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         // The default refers to the value of a TypeVar that isn't in scope. We've
                         // already logged an error in TParams::new(); return a sensible default.
-                        Type::any_implicit()
+                        self.heap.mk_any_implicit()
                     }
                 }
             })
         } else {
-            param.quantified.as_gradual_type()
+            param.as_gradual_type()
         }
     }
 
@@ -666,7 +680,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let all_remaining_params_can_be_empty = tparams
             .iter()
             .skip(param_idx)
-            .all(|x| x.quantified.is_type_var_tuple() || x.default().is_some());
+            .all(|x| x.is_type_var_tuple() || x.default().is_some());
         if !all_remaining_params_can_be_empty {
             self.error(
                 errors,

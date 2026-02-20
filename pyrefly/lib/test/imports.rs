@@ -501,21 +501,21 @@ x = foo.bar  # E: No attribute `bar` in module `foo`
 testcase!(
     test_missing_import_named,
     r#"
-from foo import bar  # E: Could not find import of `foo`
+from foo import bar  # E: Cannot find module `foo`
 "#,
 );
 
 testcase!(
     test_missing_import_star,
     r#"
-from foo import *  # E: Could not find import of `foo`
+from foo import *  # E: Cannot find module `foo`
 "#,
 );
 
 testcase!(
     test_missing_import_module,
     r#"
-import foo, bar.baz  # E: Could not find import of `foo`  # E: Could not find import of `bar.baz`
+import foo, bar.baz  # E: Cannot find module `foo`  # E: Cannot find module `bar.baz`
 "#,
 );
 
@@ -765,7 +765,7 @@ def test2() -> Literal[foo.F.Y]: ... # E: `foo.F.Y` is not a valid enum member
 testcase!(
     test_relative_import_missing_module_attribute,
     r#"
-from . import foo  # E: Could not find import of `.`
+from . import foo  # E: Cannot find module `.`
     "#,
 );
 
@@ -1075,5 +1075,93 @@ testcase!(
     env_extra_builtins_in_typings(),
     r#"
 x: X = X()
+"#,
+);
+
+fn env_extra_builtins_single_underscore() -> TestEnv {
+    TestEnv::one_with_path(
+        "__builtins__",
+        "__builtins__.pyi",
+        r#"
+def gettext(message: str) -> str: ...
+def _(message: str) -> str: ...
+"#,
+    )
+}
+
+testcase!(
+    test_extra_builtins_single_underscore,
+    env_extra_builtins_single_underscore(),
+    r#"
+from typing import assert_type
+# Single underscore `_` is a common alias for gettext and should be exported from builtins
+assert_type(gettext("a"), str)
+assert_type(_("b"), str)
+"#,
+);
+
+fn env_assign_to_ellipsis() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "foo_stub",
+        "foo_stub.pyi",
+        r#"
+X = ...
+"#,
+    );
+    env.add_with_path(
+        "bar_source",
+        "bar_source.py",
+        r#"
+Y = ...
+"#,
+    );
+    env
+}
+
+testcase!(
+    test_var_assigned_to_ellipsis,
+    env_assign_to_ellipsis(),
+    r#"
+from foo_stub import X
+from bar_source import Y
+from typing import Any, assert_type, reveal_type
+
+assert_type(X, Any)
+assert_type(X.anything, Any)
+
+reveal_type(Y)  # E: Ellipsis
+Y.anything  # E: `EllipsisType` has no attribute `anything`
+    "#,
+);
+
+fn env_final_value() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from typing import Final
+X: Final = 42
+Y: Final[int] = 42
+"#,
+    )
+}
+
+testcase!(
+    test_modify_imported_final_value,
+    env_final_value(),
+    r#"
+from foo import X, Y
+X = 10  # E: Cannot assign to `X` because it is imported as final
+Y = 10  # E: Cannot assign to `Y` because it is imported as final
+"#,
+);
+
+testcase!(
+    test_modify_imported_as_final_value,
+    env_final_value(),
+    r#"
+from foo import X as x, Y as y
+x = 10  # E: Cannot assign to `x` because it is imported as final
+y = 10  # E: Cannot assign to `y` because it is imported as final
 "#,
 );

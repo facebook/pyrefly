@@ -95,9 +95,9 @@ class Y2(Y): pass
 class S2(S): pass
 
 def foo(b: bool) -> Generator[Y2, S, R]:
-    s1 = yield Y() # E: Type of yielded value `Y` is not assignable to declared return type `Y2`
+    s1 = yield Y() # E: Yielded type `Y` is not assignable to declared yield type `Y2`
     s2 = yield Y2()
-    s3 = yield None # E: Type of yielded value `None` is not assignable to declared return type `Y2`
+    s3 = yield None # E: Yielded type `None` is not assignable to declared yield type `Y2`
 
     assert_type(s1, S)
     assert_type(s2, S)
@@ -111,7 +111,7 @@ def foo(b: bool) -> Generator[Y2, S, R]:
 def bar() -> Generator[Y, S2, None]:
     s1 = yield Y()
     s2 = yield Y2()
-    s3 = yield None # E: Type of yielded value `None` is not assignable to declared return type `Y`
+    s3 = yield None # E: Yielded type `None` is not assignable to declared yield type `Y`
 
     r = yield from foo(True) # OK
 
@@ -121,11 +121,11 @@ def bar() -> Generator[Y, S2, None]:
     assert_type(r, R)
 
 def baz() -> Generator[Y2, S2, None]:
-    s = yield from bar() # E: Cannot yield from a generator of type `Generator[Y, S2, None]` because it does not match the declared return type `Generator[Y2, S2, Unknown]`
+    s = yield from bar() # E: Cannot yield from `Generator[Y, S2, None]`, which is not assignable to declared return type `Generator[Y2, S2, Unknown]`
     assert_type(s, None)
 
 def qux() -> Generator[Y, S, None]:
-    s = yield from bar() # E: Cannot yield from a generator of type `Generator[Y, S2, None]` because it does not match the declared return type `Generator[Y, S, Unknown]`
+    s = yield from bar() # E: Cannot yield from `Generator[Y, S2, None]`, which is not assignable to declared return type `Generator[Y, S, Unknown]`
     assert_type(s, None)
 "#,
 );
@@ -461,16 +461,66 @@ async def main() -> None:
 );
 
 testcase!(
-    bug = "We don't understand yield in lambda, and misattribute the yield to the surrounding function",
     test_lambda_yield,
     r#"
 from typing import assert_type
 def f(x: int):
-    callback = lambda: (yield x)  # E: Invalid `yield` outside of a function
+    callback = lambda: (yield x)
     l = [i for i in callback()]
-    assert_type(l, list[int])  # E: assert_type(list[Any], list[int])
+    assert_type(l, list[int])
     return l
-assert_type(f(1), list[int])  # E: assert_type(list[Any], list[int])
+assert_type(f(1), list[int])
+"#,
+);
+
+testcase!(
+    test_lambda_yield_from,
+    r#"
+from typing import assert_type
+def f():
+    callback = lambda: (yield from [1, 2, 3])
+    l = [i for i in callback()]
+    assert_type(l, list[int])
+    return l
+assert_type(f(), list[int])
+"#,
+);
+
+testcase!(
+    test_lambda_yield_and_yield_from,
+    r#"
+from typing import assert_type
+def f():
+    callback = lambda: ((yield "a"), (yield from ["b", "c"]))
+    l = [i for i in callback()]
+    assert_type(l, list[str])
+"#,
+);
+
+testcase!(
+    test_nested_lambda_yield,
+    r#"
+from typing import Any, Literal, assert_type, Generator
+def f():
+    # The yield belongs to the inner lambda, not the outer one.
+    outer = lambda: (lambda: (yield 1))
+    inner = outer()
+    # The return type (third param) is Any because the lambda body IS the yield
+    # expression, which evaluates to the send type. The send type cannot generally
+    # be inferred without annotations, so Any is the best we can do.
+    assert_type(inner(), Generator[Literal[1], Any, Any])
+"#,
+);
+
+testcase!(
+    test_lambda_yield_in_subexpression,
+    r#"
+from typing import Any, Literal, assert_type, Generator
+def f():
+    # When yield is inside a subexpression rather than being the entire body,
+    # the return type is the subexpression type, not the send type.
+    callback = lambda: [(yield 1)]
+    assert_type(callback(), Generator[Literal[1], Any, list[Any]])
 "#,
 );
 

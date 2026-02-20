@@ -14,4 +14,6 @@ pub mod gencode;
 #[rustfmt::skip]
 pub mod python;
 #[rustfmt::skip]
+pub mod python_xrefs;
+#[rustfmt::skip]
 pub mod src;

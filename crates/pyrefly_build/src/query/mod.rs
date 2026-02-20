@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fmt;
@@ -12,17 +13,22 @@ use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Context as _;
 use dupe::Dupe as _;
 use itertools::Itertools as _;
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_util::fs_anyhow;
+use pyrefly_util::interned_path::InternedPath;
 use serde::Deserialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tempfile::NamedTempFile;
+use tracing::error;
+use tracing::info;
 use vec1::Vec1;
 #[allow(unused_imports)]
 use vec1::vec1;
@@ -38,11 +44,11 @@ pub mod custom;
 pub(crate) enum Include {
     #[allow(unused)]
     Target(Target),
-    Path(ModulePathBuf),
+    Path(InternedPath),
 }
 
 impl Include {
-    pub fn path(path: ModulePathBuf) -> Self {
+    pub fn path(path: InternedPath) -> Self {
         Self::Path(path)
     }
 
@@ -54,52 +60,79 @@ impl Include {
     }
 }
 
+pub struct QueryResult {
+    pub db: anyhow::Result<TargetManifestDatabase>,
+    pub build_id: Option<String>,
+    pub build_duration: Option<Duration>,
+    pub parse_duration: Option<Duration>,
+    pub stdout_size: Option<usize>,
+}
+
 pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
-    fn query_source_db(
-        &self,
-        files: &SmallSet<Include>,
-        cwd: &Path,
-    ) -> anyhow::Result<TargetManifestDatabase> {
+    /// Query the sourcedb for the set of files provided, running from the CWD.
+    /// Returns the parsed source database or any errors that occurred, and an
+    /// optional string representing a unique ID from the build system,
+    /// if available and applicable.
+    fn query_source_db(&self, files: &SmallSet<Include>, cwd: &Path) -> QueryResult {
         if files.is_empty() {
-            return Ok(TargetManifestDatabase {
-                db: SmallMap::new(),
-                root: cwd.to_path_buf(),
-            });
+            return QueryResult {
+                db: Ok(TargetManifestDatabase {
+                    db: SmallMap::new(),
+                    root: cwd.to_path_buf(),
+                }),
+                build_id: None,
+                build_duration: None,
+                parse_duration: None,
+                stdout_size: None,
+            };
         }
 
-        let mut argfile =
-            NamedTempFile::with_prefix("pyrefly_build_query_").with_context(|| {
-                "Failed to create temporary argfile for querying source DB".to_owned()
-            })?;
-        let mut argfile_args = OsString::from("--");
-        files.iter().flat_map(Include::to_cli_arg).for_each(|arg| {
-            argfile_args.push("\n");
-            argfile_args.push(arg);
-        });
+        let build_id_file = NamedTempFile::with_prefix("pyrefly_build_id_")
+            .inspect_err(|e| error!("Failed to create build ID tempfile: {e:#?}"))
+            .ok();
 
-        argfile
-            .as_file_mut()
-            .write_all(argfile_args.as_encoded_bytes())
-            .with_context(|| "Could not write to argfile when querying source DB".to_owned())?;
+        let mut build_duration = None;
+        let mut parse_duration = None;
+        let mut stdout_size = None;
 
-        let mut cmd = self.construct_command();
-        cmd.arg(format!("@{}", argfile.path().display()));
-        cmd.current_dir(cwd);
-
-        let result = cmd.output()?;
-        if !result.status.success() {
-            let stdout = String::from_utf8(result.stdout)
-                .unwrap_or_else(|_| "<Failed to parse stdout from source DB query>".to_owned());
-            let stderr = String::from_utf8(result.stderr).unwrap_or_else(|_| {
-                "<Failed to parse stderr from Buck source DB query>".to_owned()
+        let db = (|| {
+            let mut argfile =
+                NamedTempFile::with_prefix("pyrefly_build_query_").with_context(|| {
+                    "Failed to create temporary argfile for querying source DB".to_owned()
+                })?;
+            let mut argfile_args = OsString::from("--");
+            files.iter().flat_map(Include::to_cli_arg).for_each(|arg| {
+                argfile_args.push("\n");
+                argfile_args.push(arg);
             });
 
-            return Err(anyhow::anyhow!(
-                "Source DB query failed...\nSTDOUT: {stdout}\nSTDERR: {stderr}"
-            ));
-        }
+            argfile
+                .as_file_mut()
+                .write_all(argfile_args.as_encoded_bytes())
+                .with_context(|| "Could not write to argfile when querying source DB".to_owned())?;
 
-        match serde_json::from_slice(&result.stdout)
+            let build_start = Instant::now();
+            let mut cmd = self.construct_command(build_id_file.as_ref().map(|b| b.path()));
+            cmd.arg(format!("@{}", argfile.path().display()));
+            cmd.current_dir(cwd);
+
+            let result = cmd.output()?;
+            let parse_start = Instant::now();
+            build_duration = Some(parse_start - build_start);
+            if !result.status.success() {
+                let stdout = String::from_utf8(result.stdout)
+                    .unwrap_or_else(|_| "<Failed to parse stdout from source DB query>".to_owned());
+                let stderr = String::from_utf8(result.stderr).unwrap_or_else(|_| {
+                    "<Failed to parse stderr from Buck source DB query>".to_owned()
+                });
+
+                return Err(anyhow::anyhow!(
+                    "Source DB query failed...\nSTDOUT: {stdout}\nSTDERR: {stderr}"
+                ));
+            }
+            stdout_size = Some(result.stdout.len());
+
+            let parse_result = match serde_json::from_slice(&result.stdout)
                 .with_context(|| {
                     format!(
                         "Failed to construct valid `TargetManifestDatabase` from querier result. Command run: {} {}",
@@ -107,51 +140,75 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
                         cmd.get_args().map(|a| a.to_string_lossy()).join(" "),
                     )
                 }) {
-            Err(e) => {
-                let Some(downcast) = e.downcast_ref::<serde_json::error::Error>() else {
-                    return Err(e);
-                };
-                let Ok(content) = String::from_utf8(result.stdout) else {
-                    return Err(e);
-                };
-                let lines = content.lines().collect::<Vec<_>>();
-                let error_line = downcast.line();
-                let start = std::cmp::max(0, error_line - 30);
-                let end = std::cmp::min(lines.len() - 1, error_line + 20);
-                let cont = std::cmp::min(error_line + 1, end);
+                    Err(e) => {
+                        let Some(downcast) = e.downcast_ref::<serde_json::error::Error>() else {
+                            return Err(e);
+                        };
+                        let Ok(content) = String::from_utf8(result.stdout) else {
+                            return Err(e);
+                        };
+                        let lines = content.lines().collect::<Vec<_>>();
+                        let error_line = downcast.line();
+                        let start = std::cmp::max(0, error_line - 30);
+                        let end = std::cmp::min(lines.len() - 1, error_line + 20);
+                        let cont = std::cmp::min(error_line + 1, end);
 
-                let e = e.context(
-                    format!(
-                        "Context: ```\n{} # THIS LINE HAS A PROBLEM\n{}\n```",
-                        lines[start..=error_line].iter().join("\n"),
-                        lines[cont..=end].iter().join("\n"),
-                    )
-                );
+                        let e = e.context(
+                            format!(
+                                "Context: ```\n{} # THIS LINE HAS A PROBLEM\n{}\n```",
+                                lines[start..=error_line].iter().join("\n"),
+                                lines[cont..=end].iter().join("\n"),
+                            )
+                        );
 
-                Err(e)
-            },
-            ok => ok,
+                        Err(e)
+                    },
+                    ok => ok,
+            };
+            parse_duration = Some(parse_start.elapsed());
+            parse_result
+        })();
+
+        let build_id = (|| {
+            let build_id_file = build_id_file?;
+            let build_id_path = build_id_file.path();
+            let build_id = fs_anyhow::read_to_string(build_id_path)
+                .inspect_err(|e| error!("Failed to read build ID from file {e:#?}"))
+                .ok()?;
+            if build_id.is_empty() {
+                None
+            } else {
+                Some(build_id)
+            }
+        })();
+
+        if let Some(build_id) = &build_id {
+            info!("Source DB build ID: {build_id}");
+        }
+
+        QueryResult {
+            db,
+            build_id,
+            build_duration,
+            parse_duration,
+            stdout_size,
         }
     }
 
-    fn construct_command(&self) -> Command;
-}
-
-fn is_path_initfile(path: &Path) -> bool {
-    path.ends_with("__init__.py") || path.ends_with("__init__.pyi")
+    fn construct_command(&self, build_id_file: Option<&Path>) -> Command;
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub(crate) struct PythonLibraryManifest {
     pub deps: SmallSet<Target>,
-    pub srcs: SmallMap<ModuleName, Vec1<ModulePathBuf>>,
+    pub srcs: SmallMap<ModuleName, Vec1<InternedPath>>,
     #[serde(default)]
     pub relative_to: Option<PathBuf>,
     #[serde(flatten)]
     pub sys_info: SysInfo,
     pub buildfile_path: PathBuf,
     #[serde(default, skip)]
-    pub packages: SmallMap<ModuleName, Vec1<ModulePathBuf>>,
+    pub packages: SmallMap<ModuleName, Vec1<InternedPath>>,
 }
 
 impl PythonLibraryManifest {
@@ -173,179 +230,78 @@ impl PythonLibraryManifest {
         if let Some(relative_to) = &mut self.relative_to {
             *relative_to = root.join(&relative_to);
         }
-        let relative_to = self.relative_to.as_deref().unwrap_or(root);
+
+        // VSCode resolves symlinks, so we also need to so our lookups
+        // will match what VSCode (and our language server) give us.
+        let relative_to = self
+            .relative_to
+            .as_deref()
+            .map(|p| p.canonicalize().map(Cow::Owned).unwrap_or(Cow::Borrowed(p)))
+            .unwrap_or(Cow::Borrowed(root));
+        let rewrite_paths = |paths: &mut Vec1<InternedPath>| {
+            paths.iter_mut().for_each(|p| {
+                let mut file = relative_to.join(&**p);
+                if !p.starts_with(&self.buildfile_path) && self.relative_to.is_none() {
+                    // do the same as above, but cover the case where `relative_to` isn't relevant
+                    file = file.canonicalize().unwrap_or(file);
+                }
+                *p = InternedPath::new(file)
+            })
+        };
         self.srcs.iter_mut().for_each(|(_, paths)| {
-            paths.iter_mut().for_each(|p| {
-                let resolved = relative_to.join(&**p);
-                // canonicalize it, since VSCode will do it for us anyway and
-                // then path lookups won't work
-                // TODO(connernilsen): do we need to store canonicalized files and
-                // buck-provided files?
-                let file = resolved.canonicalize().unwrap_or(resolved);
-                *p = ModulePathBuf::new(file)
-            })
+            rewrite_paths(paths);
         });
-        self.packages.iter_mut().for_each(|(_, paths)| {
-            paths.iter_mut().for_each(|p| {
-                let resolved = relative_to.join(&**p);
-                // canonicalize it, since VSCode will do it for us anyway and
-                // then path lookups won't work
-                // TODO(connernilsen): do we need to store canonicalized files and
-                // buck-provided files?
-                let file = resolved.canonicalize().unwrap_or(resolved);
-                *p = ModulePathBuf::new(file)
-            })
-        });
+        self.packages
+            .iter_mut()
+            .for_each(|(_, paths)| rewrite_paths(paths));
         self.buildfile_path = root.join(&self.buildfile_path);
     }
 
-    /// Returns a map of package module name to init file or implicit package directory and
-    /// path of where to continue upward searching for module names in later steps.
+    /// Synthesize packages for all source modules.
     ///
-    /// When a real __init__ file is found on disk, we return `Ok()`, containing a tuple
-    /// of all init files pointing to the given module name and path of where to continue
-    /// searching from next.
+    /// Uses a simple algorithm:
+    /// 1. For each source that is an explicit __init__.py/pyi, add it as a package
+    /// 2. For each source module, walk up the module hierarchy and create namespace
+    ///    packages for each parent
     ///
-    /// When no init file is found, we return `Err()`, which is both the directory
-    /// where we synthesize an implicit package, as well as the path of where to continue
-    /// searching from next.
-    fn get_explicit_and_basic_implicit_packages(
-        &self,
-        target_root: &Path,
-        all_dunder_inits: &SmallSet<ModulePathBuf>,
-    ) -> SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), &Path>> {
-        let mut start_packages: SmallMap<
-            ModuleName,
-            Result<(Vec1<ModulePathBuf>, ModulePathBuf), &Path>,
-        > = SmallMap::new();
+    /// This matches the behavior in `BuckCheckSourceDatabase` and follows Buck's
+    /// convention that any module parent is implicitly an empty `__init__.py` file.
+    ///
+    /// See: <https://github.com/facebook/buck2/blob/main/prelude/python/tools/wheel.py>
+    fn fill_implicit_packages(&mut self) {
+        let mut packages: SmallMap<ModuleName, Vec1<InternedPath>> = SmallMap::new();
 
-        // attempt to push the given init file onto `start_packages` if `all_dunder_inits` knows about
-        // it. Return false if we didn't push, true otherwise.
-        let push_if_init_exists = |module: &ModuleName,
-                                   paths: &Vec1<ModulePathBuf>,
-                                   start_packages: &mut SmallMap<
-            ModuleName,
-            Result<(Vec1<ModulePathBuf>, ModulePathBuf), &Path>,
-        >| {
-            let Some(parent) = paths.first().parent() else {
-                return false;
-            };
-            if !parent.starts_with(target_root) {
-                return false;
-            }
-            let Some(parent_parent) = parent.parent() else {
-                return false;
-            };
+        for (module_name, paths) in &self.srcs {
+            let first_path = paths.first();
+            let path_ref = first_path.as_path();
+            let is_init = path_ref.file_stem() == Some("__init__".as_ref());
 
-            // if one of the paths here is a dunder init, then all paths here will be
-            // a dunder init
-            let path = paths.first();
-            if !all_dunder_inits.contains(path) {
-                return false;
-            }
-            start_packages.insert(
-                module.dupe(),
-                // `parent_parent` is used here, since we want to continue searching
-                // from the package's parent, which is the file's directory's parent.
-                Ok((
-                    paths.mapped_ref(|p| ModulePathBuf::from_path(p)),
-                    ModulePathBuf::from_path(parent_parent),
-                )),
-            );
-            true
-        };
-        for (module, paths) in &self.srcs {
-            if push_if_init_exists(module, paths, &mut start_packages) {
-                continue;
+            // If this is an explicit init file (__init__.py or __init__.pyi), add ALL paths
+            // (there may be both .py and .pyi variants)
+            if is_init {
+                packages.insert(*module_name, paths.clone());
             }
 
-            let path = paths.first();
-            let Some(parent_path) = path.parent() else {
-                continue;
-            };
+            // Walk up and synthesize parent packages (as directories)
+            let mut name = *module_name;
+            let mut path = path_ref.to_path_buf();
 
-            if push_if_init_exists(
-                module,
-                &vec1![
-                    ModulePathBuf::new(path.join("__init__.py")),
-                    ModulePathBuf::new(path.join("__init__.pyi"))
-                ],
-                &mut start_packages,
-            ) {
-                continue;
+            // For init files, pop once first since the __init__.py file corresponds
+            // to the directory that contains it (e.g., `foo/bar/__init__.py` -> `foo/bar`)
+            if is_init {
+                path.pop();
             }
 
-            if !parent_path.starts_with(target_root) {
-                continue;
-            }
-            let Some(parent_module) = module.parent() else {
-                continue;
-            };
-
-            start_packages
-                .entry(parent_module)
-                .or_insert(Err(parent_path));
-        }
-
-        start_packages
-    }
-
-    /// Given a map of modules to real or synthesized packages, synthesize missing packages up to
-    /// and including this manifest's build file.
-    fn fill_ancestor_synthesized_packages(
-        &self,
-        start_packages: SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), &Path>>,
-        target_root: &Path,
-    ) -> SmallMap<ModuleName, Vec1<ModulePathBuf>> {
-        // the result we're going to use, with all the files we've found so far
-        let mut inits: SmallMap<ModuleName, Vec1<ModulePathBuf>> = start_packages
-            .iter()
-            .map(|(name, path)| {
-                let files = match path {
-                    Ok((files, _)) => files.clone(),
-                    Err(file) => vec1![ModulePathBuf::from_path(file)],
-                };
-                (name.dupe(), files)
-            })
-            .collect();
-
-        // fill in implicit packages for parent directories, if there's not an entry already
-        for (mut module, path) in start_packages {
-            let mut path = match &path {
-                Ok((_, next_path)) => &**next_path,
-                Err(next_path) => *next_path,
-            };
-            while let Some(parent_module) = module.parent() {
-                let Some(parent_path) = path.parent() else {
-                    break;
-                };
-
-                if inits.contains_key(&parent_module) || !parent_path.starts_with(target_root) {
-                    break;
-                }
-
-                inits.insert(
-                    parent_module.dupe(),
-                    vec1![ModulePathBuf::from_path(parent_path)],
-                );
-                module = parent_module;
-                path = parent_path;
+            while let Some(parent) = name.parent() {
+                path.pop();
+                packages
+                    .entry(parent)
+                    .or_insert_with(|| vec1![InternedPath::from_path(&path)]);
+                name = parent;
             }
         }
 
-        inits
-    }
-
-    /// Get all explicit and implicit dunder inits, preferring explicit. Produces
-    /// dunder inits all the way up to the directory containing this manifest's build file.
-    fn fill_implicit_packages(&mut self, all_dunder_inits: &SmallSet<ModulePathBuf>) {
-        let Some(target_root) = self.relative_to.as_deref().or(self.buildfile_path.parent()) else {
-            return;
-        };
-        let start_packages =
-            self.get_explicit_and_basic_implicit_packages(target_root, all_dunder_inits);
-
-        self.packages = self.fill_ancestor_synthesized_packages(start_packages, target_root);
+        self.packages = packages;
     }
 }
 
@@ -374,22 +330,12 @@ impl TargetManifestDatabase {
             })
             .collect();
 
-        let mut explicit_dunder_inits = SmallSet::new();
         for manifest in self.db.values_mut() {
             match manifest {
                 TargetManifest::Alias { .. } => continue,
                 TargetManifest::Library(lib) => {
                     lib.replace_alias_deps(&aliases);
                     lib.rewrite_relative_to_root(&self.root);
-
-                    for paths in lib.srcs.values() {
-                        if !is_path_initfile(paths.first()) {
-                            continue;
-                        }
-                        for path in paths {
-                            explicit_dunder_inits.insert(path.dupe());
-                        }
-                    }
                 }
             }
         }
@@ -398,7 +344,7 @@ impl TargetManifestDatabase {
             match manifest {
                 TargetManifest::Alias { .. } => continue,
                 TargetManifest::Library(mut lib) => {
-                    lib.fill_implicit_packages(&explicit_dunder_inits);
+                    lib.fill_implicit_packages();
                     result.insert(target, lib);
                 }
             }
@@ -636,12 +582,12 @@ mod tests {
     fn map_srcs(
         srcs: &[(&str, &[&str])],
         prefix_paths: Option<&str>,
-    ) -> SmallMap<ModuleName, Vec1<ModulePathBuf>> {
+    ) -> SmallMap<ModuleName, Vec1<InternedPath>> {
         let prefix = prefix_paths.map(Path::new);
         let map_path = |p| {
             prefix.map_or_else(
-                || ModulePathBuf::from_path(Path::new(p)),
-                |prefix| ModulePathBuf::new(prefix.join(p)),
+                || InternedPath::from_path(Path::new(p)),
+                |prefix| InternedPath::new(prefix.join(p)),
             )
         };
         srcs.iter()
@@ -663,12 +609,12 @@ mod tests {
     fn map_implicit_packages(
         inits: &[(&str, &[&str])],
         prefix_paths: Option<&str>,
-    ) -> SmallMap<ModuleName, Vec1<ModulePathBuf>> {
+    ) -> SmallMap<ModuleName, Vec1<InternedPath>> {
         let prefix = prefix_paths.map(Path::new);
         let map_path = |p| {
             prefix.map_or_else(
-                || ModulePathBuf::from_path(Path::new(p)),
-                |prefix| ModulePathBuf::new(prefix.join(p)),
+                || InternedPath::from_path(Path::new(p)),
+                |prefix| InternedPath::new(prefix.join(p)),
             )
         };
         inits
@@ -978,6 +924,13 @@ mod tests {
                     ("pyre.client.log", &[
                      "pyre/client/log/__init__.py",
                     ]),
+                    // Synthesized parent packages
+                    ("pyre.client", &[
+                     "pyre/client",
+                    ]),
+                    ("pyre", &[
+                     "pyre",
+                    ]),
                 ],
                 None,
             ),
@@ -1143,255 +1096,221 @@ mod tests {
 
     #[test]
     fn test_package_finding() {
-        let mut db = TargetManifestDatabase::get_test_database();
-        for manifest in db.db.values_mut() {
-            match manifest {
-                TargetManifest::Library(m) => {
-                    m.rewrite_relative_to_root(&db.root);
-                }
-                _ => (),
-            }
-        }
-        let all_dunder_inits = [
-            "colorama/__init__.pyi",
-            "colorama/__init__.py",
-            "click/__init__.pyi",
-            "click/__init__.py",
-            "pyre/client/log/__init__.py",
-            "build-out/materialized/generated/__init__.py",
-        ]
-        .iter()
-        .map(|p| ModulePathBuf::new(db.root.join(p)))
-        .collect::<SmallSet<ModulePathBuf>>();
+        // Test that fill_implicit_packages correctly synthesizes packages for all targets.
+        // This tests explicit __init__ files are preserved and parent packages are synthesized.
+        let db = TargetManifestDatabase::get_test_database();
+        let result = db.produce_map();
 
-        let result: (
-            SmallMap<
-                Target,
-                SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), PathBuf>>,
-            >,
-            SmallMap<Target, SmallMap<ModuleName, Vec1<ModulePathBuf>>>,
-        ) = db
-            .db
-            .iter_mut()
-            .filter_map(|(t, m)| match m {
-                TargetManifest::Library(lib) => Some((t, lib)),
-                TargetManifest::Alias { .. } => None,
-            })
-            .fold(
-                (SmallMap::new(), SmallMap::new()),
-                |(mut first, mut second), (t, l)| {
-                    let root = l
-                        .relative_to
-                        .as_deref()
-                        .or(l.buildfile_path.parent())
-                        .unwrap();
-                    let base_packages =
-                        l.get_explicit_and_basic_implicit_packages(root, &all_dunder_inits);
-                    first.insert(
-                        t.dupe(),
-                        base_packages
-                            .iter()
-                            .map(|(k, v)| {
-                                (
-                                    k.dupe(),
-                                    match v {
-                                        Err(v) => Err(v.to_path_buf()),
-                                        Ok(v) => Ok(v.clone()),
-                                    },
-                                )
-                            })
-                            .collect(),
-                    );
-                    second.insert(
-                        t.dupe(),
-                        l.fill_ancestor_synthesized_packages(base_packages, root),
-                    );
-                    (first, second)
-                },
-            );
+        // Test colorama:py-stubs - explicit __init__.pyi
+        let colorama_stubs = result
+            .get(&Target::from_string("//colorama:py-stubs".to_owned()))
+            .unwrap();
+        assert!(
+            colorama_stubs
+                .packages
+                .contains_key(&ModuleName::from_str("colorama")),
+            "colorama:py-stubs should have 'colorama' package"
+        );
+        // Verify it's the explicit init file, not a synthesized directory
+        assert!(
+            colorama_stubs
+                .packages
+                .get(&ModuleName::from_str("colorama"))
+                .unwrap()
+                .first()
+                .as_path()
+                .ends_with("__init__.pyi"),
+            "colorama package should point to explicit __init__.pyi"
+        );
 
-        let expected_start_packages: SmallMap<
-            Target,
-            SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), PathBuf>>,
-        > = smallmap! {
-            "//colorama:py-stubs" => smallmap! {
-                "colorama" => Ok((
-                    vec1![
-                        "colorama/__init__.pyi",
-                    ],
-                    "",
-                )),
-            },
-            "//colorama:py" => smallmap! {
-                "colorama" => Ok((
-                    vec1![
-                        "colorama/__init__.py",
-                    ],
-                    "",
-                )),
-            },
-            "//click:py" => smallmap! {
-                "click" => Ok((
-                    vec1![
-                        "click/__init__.pyi",
-                        "click/__init__.py",
-                    ],
-                    "",
-                )),
-            },
-            "//pyre/client/log:log" => smallmap! {
-                "pyre.client.log" => Ok((
-                    vec1![
-                        "pyre/client/log/__init__.py",
-                    ],
-                    "pyre/client",
-                )),
-            },
-            "//pyre/client/log:log2" => smallmap! {
-                "log" => Ok((
-                    vec1![
-                        "pyre/client/log/__init__.py",
-                    ],
-                    "pyre/client",
-                )),
-            },
-            "//implicit_package/test:main" => smallmap! {
-                "implicit_package" => Err(
-                    "implicit_package/test",
+        // Test colorama:py - explicit __init__.py
+        let colorama_py = result
+            .get(&Target::from_string("//colorama:py".to_owned()))
+            .unwrap();
+        assert!(
+            colorama_py
+                .packages
+                .contains_key(&ModuleName::from_str("colorama")),
+            "colorama:py should have 'colorama' package"
+        );
+        assert!(
+            colorama_py
+                .packages
+                .get(&ModuleName::from_str("colorama"))
+                .unwrap()
+                .first()
+                .as_path()
+                .ends_with("__init__.py"),
+            "colorama package should point to explicit __init__.py"
+        );
+
+        // Test click:py - explicit __init__ with both .py and .pyi variants
+        let click = result
+            .get(&Target::from_string("//click:py".to_owned()))
+            .unwrap();
+        assert!(
+            click.packages.contains_key(&ModuleName::from_str("click")),
+            "click:py should have 'click' package"
+        );
+        assert_eq!(
+            click
+                .packages
+                .get(&ModuleName::from_str("click"))
+                .unwrap()
+                .len(),
+            2,
+            "click package should have both .pyi and .py variants"
+        );
+
+        // Test pyre/client/log:log - explicit init plus synthesized parent packages
+        let pyre_log = result
+            .get(&Target::from_string("//pyre/client/log:log".to_owned()))
+            .unwrap();
+        assert!(
+            pyre_log
+                .packages
+                .contains_key(&ModuleName::from_str("pyre.client.log")),
+            "pyre/client/log:log should have 'pyre.client.log' package"
+        );
+        assert!(
+            pyre_log
+                .packages
+                .contains_key(&ModuleName::from_str("pyre.client")),
+            "pyre/client/log:log should have synthesized 'pyre.client' package"
+        );
+        assert!(
+            pyre_log
+                .packages
+                .contains_key(&ModuleName::from_str("pyre")),
+            "pyre/client/log:log should have synthesized 'pyre' package"
+        );
+
+        // Test implicit_package/test:main - synthesized implicit package
+        let implicit_main = result
+            .get(&Target::from_string(
+                "//implicit_package/test:main".to_owned(),
+            ))
+            .unwrap();
+        assert!(
+            implicit_main
+                .packages
+                .contains_key(&ModuleName::from_str("implicit_package")),
+            "implicit_package/test:main should have synthesized 'implicit_package' package"
+        );
+
+        // Test implicit_package/test:lib - deeply nested synthesized packages
+        let implicit_lib = result
+            .get(&Target::from_string(
+                "//implicit_package/test:lib".to_owned(),
+            ))
+            .unwrap();
+        assert!(
+            implicit_lib
+                .packages
+                .contains_key(&ModuleName::from_str("implicit_package")),
+            "implicit_package/test:lib should have 'implicit_package' package"
+        );
+        assert!(
+            implicit_lib
+                .packages
+                .contains_key(&ModuleName::from_str("implicit_package.lib")),
+            "implicit_package/test:lib should have 'implicit_package.lib' package"
+        );
+        assert!(
+            implicit_lib
+                .packages
+                .contains_key(&ModuleName::from_str("implicit_package.deeply")),
+            "implicit_package/test:lib should have 'implicit_package.deeply' package"
+        );
+        assert!(
+            implicit_lib
+                .packages
+                .contains_key(&ModuleName::from_str("implicit_package.deeply.nested")),
+            "implicit_package/test:lib should have 'implicit_package.deeply.nested' package"
+        );
+        assert!(
+            implicit_lib.packages.contains_key(&ModuleName::from_str(
+                "implicit_package.deeply.nested.package"
+            )),
+            "implicit_package/test:lib should have 'implicit_package.deeply.nested.package' package"
+        );
+
+        // Test external:package - external path packages
+        let external = result
+            .get(&Target::from_string("//external:package".to_owned()))
+            .unwrap();
+        assert!(
+            external
+                .packages
+                .contains_key(&ModuleName::from_str("external_package")),
+            "external:package should have 'external_package' package"
+        );
+
+        // Test generated:lib - explicit init with relative_to
+        let generated_lib = result
+            .get(&Target::from_string("//generated:lib".to_owned()))
+            .unwrap();
+        assert!(
+            generated_lib
+                .packages
+                .contains_key(&ModuleName::from_str("generated")),
+            "generated:lib should have 'generated' package"
+        );
+        assert!(
+            generated_lib
+                .packages
+                .get(&ModuleName::from_str("generated"))
+                .unwrap()
+                .first()
+                .as_path()
+                .to_string_lossy()
+                .contains("__init__.py"),
+            "generated package should point to explicit __init__.py"
+        );
+
+        // Test generated:main - synthesized package
+        let generated_main = result
+            .get(&Target::from_string("//generated:main".to_owned()))
+            .unwrap();
+        assert!(
+            generated_main
+                .packages
+                .contains_key(&ModuleName::from_str("generated")),
+            "generated:main should have synthesized 'generated' package"
+        );
+    }
+
+    #[test]
+    fn test_implicit_packages_for_generated_files() {
+        let db = TargetManifestDatabase::new(
+            smallmap! {
+                Target::from_string("//thrift:types".to_owned()) => TargetManifest::lib(
+                    &[("foo.bar.types", &["buck-out/gen/foo/bar/types.pyi"])],
+                    &[],
+                    "thrift/BUCK",
+                    &[],
+                    None
                 ),
             },
-            "//implicit_package/test:lib" => smallmap! {
-                "implicit_package.lib" => Err(
-                    "implicit_package/test/lib",
-                ),
-                "implicit_package.deeply.nested.package" => Err(
-                    "implicit_package/test/deeply/nested/package",
-                ),
-            },
-            "//external:package" => smallmap! {
-                "external_package" => Err(
-                    "/path/to/another/repository/package/external_package",
-                ),
-            },
-            "//generated:main" => smallmap! {
-                "generated" => Err(
-                    "generated",
-                ),
-            },
-            "//generated:lib" => smallmap! {
-                "generated" => Ok((
-                    vec1![
-                        "build-out/materialized/generated/__init__.py",
-                    ],
-                    "build-out/materialized",
-                )),
-            }
-        }
-        .into_iter()
-        .map(|(t, m)| {
-            (
-                Target::from_string(t.to_owned()),
-                m.into_iter()
-                    .map(|(name, r)| {
-                        (
-                            ModuleName::from_str(name),
-                            match r {
-                                Ok((paths, next)) => Ok((
-                                    paths.mapped(|p| ModulePathBuf::new(db.root.join(p))),
-                                    ModulePathBuf::new(db.root.join(next)),
-                                )),
-                                Err(next) => Err(db.root.join(next)),
-                            },
-                        )
-                    })
-                    .collect(),
-            )
-        })
-        .collect();
+            PathBuf::from("/repo"),
+        );
 
-        assert_eq!(result.0, expected_start_packages);
+        let result = db.produce_map();
+        let manifest = result
+            .get(&Target::from_string("//thrift:types".to_owned()))
+            .unwrap();
 
-        let expected_ancestor_synthesized_packages = smallmap! {
-            "//colorama:py-stubs" => smallmap! {
-                "colorama" => vec1![
-                        "colorama/__init__.pyi",
-                ],
-            },
-            "//colorama:py" => smallmap! {
-                "colorama" => vec1![
-                        "colorama/__init__.py",
-                ],
-            },
-            "//click:py" => smallmap! {
-                "click" => vec1![
-                        "click/__init__.pyi",
-                        "click/__init__.py",
-                ],
-            },
-            "//pyre/client/log:log" => smallmap! {
-                "pyre.client.log" => vec1![
-                        "pyre/client/log/__init__.py",
-                ],
-            },
-            "//pyre/client/log:log2" => smallmap! {
-                "log" => vec1![
-                        "pyre/client/log/__init__.py",
-                ],
-            },
-            "//implicit_package/test:main" => smallmap! {
-                "implicit_package" => vec1![
-                    "implicit_package/test",
-                ],
-            },
-            "//implicit_package/test:lib" => smallmap! {
-                "implicit_package.lib" => vec1![
-                    "implicit_package/test/lib",
-                ],
-                "implicit_package.deeply.nested.package" => vec1![
-                    "implicit_package/test/deeply/nested/package",
-                ],
-                "implicit_package.deeply.nested" => vec1![
-                    "implicit_package/test/deeply/nested",
-                ],
-                "implicit_package.deeply" => vec1![
-                    "implicit_package/test/deeply",
-                ],
-                "implicit_package" => vec1![
-                    "implicit_package/test",
-                ],
-            },
-            "//external:package" => smallmap! {
-                "external_package" => vec1![
-                    "/path/to/another/repository/package/external_package",
-                ],
-            },
-            "//generated:main" => smallmap! {
-                "generated" => vec1![
-                    "generated",
-                ],
-            },
-            "//generated:lib" => smallmap! {
-                "generated" => vec1![
-                    "build-out/materialized/generated/__init__.py",
-                ],
-            }
-        }
-        .into_iter()
-        .map(|(t, m)| {
-            (
-                Target::from_string(t.to_owned()),
-                m.into_iter()
-                    .map(|(name, paths)| {
-                        (
-                            ModuleName::from_str(name),
-                            paths.mapped(|p| ModulePathBuf::new(db.root.join(p))),
-                        )
-                    })
-                    .collect(),
-            )
-        })
-        .collect();
-
-        assert_eq!(result.1, expected_ancestor_synthesized_packages);
+        assert!(
+            manifest
+                .packages
+                .contains_key(&ModuleName::from_str("foo.bar")),
+            "Expected packages to contain 'foo.bar', but got: {:?}",
+            manifest.packages.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            manifest.packages.contains_key(&ModuleName::from_str("foo")),
+            "Expected packages to contain 'foo', but got: {:?}",
+            manifest.packages.keys().collect::<Vec<_>>()
+        );
     }
 }

@@ -94,6 +94,7 @@ pub enum Qualifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::literal::LitStyle;
 
     #[test]
     fn test_display() {
@@ -116,7 +117,7 @@ mod tests {
         assert_eq!(
             Annotation {
                 qualifiers: vec![Qualifier::Required, Qualifier::ReadOnly],
-                ty: Some(Type::LiteralString),
+                ty: Some(Type::LiteralString(LitStyle::Implicit)),
             }
             .to_string(),
             "Required[ReadOnly[LiteralString]]"

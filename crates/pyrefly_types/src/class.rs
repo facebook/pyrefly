@@ -84,6 +84,8 @@ pub struct ClassFieldProperties {
     is_annotated: bool,
     // The field is initialized on the class (outside of a method)
     is_initialized_on_class: bool,
+    // The field is defined in the class body (not in a method via self.x = ...)
+    is_defined_in_class_body: bool,
     range: TextRange,
     // The range of the docstring following this field, if present
     docstring_range: Option<TextRange>,
@@ -98,12 +100,14 @@ impl ClassFieldProperties {
     pub fn new(
         is_annotated: bool,
         has_default_value: bool,
+        is_defined_in_class_body: bool,
         range: TextRange,
         docstring_range: Option<TextRange>,
     ) -> Self {
         Self {
             is_annotated,
             is_initialized_on_class: has_default_value,
+            is_defined_in_class_body,
             range,
             docstring_range,
         }
@@ -111,6 +115,10 @@ impl ClassFieldProperties {
 
     pub fn is_initialized_on_class(&self) -> bool {
         self.is_initialized_on_class
+    }
+
+    pub fn is_defined_in_class_body(&self) -> bool {
+        self.is_defined_in_class_body
     }
 
     pub fn docstring_range(&self) -> Option<TextRange> {
@@ -249,6 +257,14 @@ impl Class {
 
     pub fn fields(&self) -> impl ExactSizeIterator<Item = &Name> {
         self.0.fields.keys()
+    }
+
+    pub fn class_body_fields(&self) -> impl Iterator<Item = &Name> {
+        self.0
+            .fields
+            .iter()
+            .filter(|(_, prop)| prop.is_defined_in_class_body)
+            .map(|(name, _)| name)
     }
 
     pub fn is_field_annotated(&self, name: &Name) -> bool {

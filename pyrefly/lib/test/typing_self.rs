@@ -88,7 +88,7 @@ class A:
 
     def f2(self):
         assert_type(self, Self)
-    
+
     def f3(self: Self) -> Self:
         assert_type(self, Self)
         return self
@@ -96,7 +96,6 @@ class A:
 );
 
 testcase!(
-    bug = "The display and solve semantics for `Self` are incorrect",
     test_instance_attr,
     r#"
 from typing import Self, assert_type
@@ -115,7 +114,6 @@ assert_type(B().x, B)
 );
 
 testcase!(
-    bug = "The display and solve semantics for `Self` are incorrect",
     test_class_attr,
     r#"
 from typing import ClassVar, Self, assert_type
@@ -194,4 +192,83 @@ class C:
     def m(self):
         assert_type(self(), Self)
 "#,
+);
+
+testcase!(
+    bug = "conformance: Should error when returning concrete class instead of Self",
+    test_self_return_concrete_class,
+    r#"
+from typing import Self
+
+class Shape:
+    def method(self) -> Self:
+        return Shape()  # should error: returns Shape, not Self
+
+    @classmethod
+    def cls_method(cls) -> Self:
+        return Shape()  # should error: returns Shape, not Self
+"#,
+);
+
+testcase!(
+    test_self_in_class_body_expression,
+    r#"
+from typing import Self, assert_type
+
+class SomeClass:
+    # Self in inferred class variable type
+    cache = dict[int, Self]()
+
+    def get_instance(self) -> Self:
+        x = self.cache[0]
+        if x:
+            return x
+        raise RuntimeError()
+
+assert_type(SomeClass().cache, dict[int, SomeClass])
+assert_type(SomeClass().get_instance(), SomeClass)
+"#,
+);
+
+testcase!(
+    test_self_outside_class,
+    r#"
+from typing import Self
+
+def foo() -> Self: ... # E: `Self` must appear within a class
+x: Self # E: `Self` must appear within a class
+tupleSelf = tuple[Self] # E: `Self` must appear within a class
+    "#,
+);
+
+testcase!(
+    test_self_inside_class,
+    r#"
+from typing import Self
+
+class A[T]: pass
+class B(A[Self]): pass # E: `Self` must appear within a class
+class C:
+    @staticmethod
+    def foo() -> Self: ... # E: `Self` cannot be used in a static method
+
+    @staticmethod
+    def bar(x: Self) -> None: ... # E: `Self` cannot be used in a static method
+
+    @staticmethod
+    def baz() -> list[Self]: ... # E: `Self` cannot be used in a static method
+    "#,
+);
+
+testcase!(
+    test_self_inside_metaclass,
+    r#"
+from typing import Self
+
+class C(type):
+    x: Self  # E: `Self` cannot be used in a metaclass
+    def foo(cls) -> Self: ... # E: `Self` cannot be used in a metaclass
+    def __new__(cls, x: Self) -> Self: ... # E: `Self` cannot be used in a metaclass  # E: `Self` cannot be used in a metaclass
+    def __mul__(cls, count: int) -> list[Self]: ... # E: `Self` cannot be used in a metaclass
+    "#,
 );

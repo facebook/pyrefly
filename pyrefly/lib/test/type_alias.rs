@@ -68,7 +68,7 @@ type X[T] = list
 testcase!(
     test_bad_type_alias,
     r#"
-type X = 1  # E: number literal cannot be used in annotations
+type X = 1  # E: Number literal cannot be used in annotations
     "#,
 );
 
@@ -286,7 +286,7 @@ testcase!(
     test_bad_annotated_alias,
     r#"
 from typing import TypeAlias
-X: TypeAlias = 1  # E: number literal cannot be used in annotations
+X: TypeAlias = 1  # E: Number literal cannot be used in annotations
     "#,
 );
 
@@ -446,6 +446,23 @@ bad2: C[int].X  # E: Generic attribute `X` of class `C` is not visible on the cl
     "#,
 );
 
+// Type alias scopes (PEP 695) should have access to enclosing class scopes,
+// similar to annotation scopes.
+testcase!(
+    test_type_alias_sees_class_scope,
+    r#"
+from typing import assert_type
+class Foo:
+    class Bar: ...
+
+    attr = Bar()
+    type Baz = Bar | None
+
+def f(x: Foo.Baz):
+    assert_type(x, Foo.Bar | None)
+    "#,
+);
+
 testcase!(
     test_union_alias,
     r#"
@@ -513,7 +530,6 @@ Z = Optional["Y"]
 );
 
 testcase!(
-    bug = "The recursive instance of X is resolved to Unknown",
     test_type_alias_recursive,
     r#"
 type X = int | list["X"]
@@ -521,7 +537,7 @@ x1: X = 1
 x2: X = [1]
 x3: X = [[1, 2]]
 x4: X = [1, [2, 3]]
-x5: X = ["foo"]  # Not OK
+x5: X = ["foo"]  # E: not assignable
 "#,
 );
 
@@ -553,7 +569,7 @@ t9: TypeAlias = Protocol[int]  # E: `Protocol` is not allowed in this context
 t10: TypeAlias = Final  # E: Expected a type argument for `Final`
 t11: TypeAlias = Final[int]  # E: `Final` is not allowed in this context
 t12: TypeAlias = TypeAlias  # OK
-t13: TypeAlias = [int][0]  # E: invalid subscript expression cannot be used in annotations
+t13: TypeAlias = [int][0]  # E: Invalid subscript expression cannot be used in annotations
 "#,
 );
 
@@ -642,7 +658,7 @@ T = TypeVar('T', bound=int)
 X = type[T]
 def f(x: X[bool]) -> bool:
     return x()
-def g(x: type[T][int]):  # E: invalid subscript expression
+def g(x: type[T][int]):  # E: Invalid subscript expression
     pass
 def h(x: X[str]):  # E: `str` is not assignable to upper bound `int`
     pass
@@ -872,5 +888,338 @@ x5: TA | C = val1
 x6: TA | C = val2
 x7: TA | C = C()
 c2: Callable[[int], int] = f2  # E: `(x: C | int | str) -> C | int | str` is not assignable to `(int) -> int`
+    "#,
+);
+
+testcase!(
+    test_named_expression_in_type_alias,
+    r#"
+# Named expressions (walrus operator) are not allowed inside type aliases (PEP 695).
+# This matches Python's behavior which raises a SyntaxError.
+type T = (a := 1)  # E: Named expression cannot be used within a type alias # E: Expected `T` to be a type alias
+type U = (a := 1)  # E: Named expression cannot be used within a type alias # E: Expected `U` to be a type alias
+type V = int | (b := str)  # E: Named expression cannot be used within a type alias
+    "#,
+);
+
+testcase!(
+    test_union_type_alias_typevar_order,
+    r#"
+import dataclasses as dc
+from typing import TypeVar, Iterable
+
+@dc.dataclass
+class Ok[T]:
+    value: T
+
+@dc.dataclass
+class Error[T: Exception]:
+    error: T
+
+_T = TypeVar("_T")
+_TE = TypeVar("_TE", bound=Exception)
+Result = Ok[_T] | Error[_TE]
+
+def func[T, TE: Exception](
+    results: Iterable[Result[T, TE]],
+) -> tuple[Iterable[Ok[T]], Iterable[Error[TE]]]: ...
+
+# Verify instantiation works correctly
+def test(r: Result[int, ValueError]) -> None:
+    pass
+
+test(Ok(42))
+test(Error(ValueError("error")))
+    "#,
+);
+
+testcase!(
+    test_union_type_alias_typevar_order_multiple,
+    r#"
+from typing import TypeVar, assert_type
+import dataclasses as dc
+
+@dc.dataclass
+class Zebra[T]:
+    value: T
+
+@dc.dataclass
+class Bee[T]:
+    value: T
+
+@dc.dataclass
+class Aardvark[T]:
+    value: T
+
+_T1 = TypeVar("_T1")
+_T2 = TypeVar("_T2")
+_T3 = TypeVar("_T3")
+
+# Source order: _T1, _T2, _T3 (from Zebra, Bee, Aardvark)
+# Alphabetical order would be: Aardvark[_T3], Bee[_T2], Zebra[_T1] -> _T3, _T2, _T1
+Combined = Zebra[_T1] | Bee[_T2] | Aardvark[_T3]
+
+# This should work: int->_T1, str->_T2, float->_T3
+x: Combined[int, str, float] = Zebra(42)
+assert_type(x, Zebra[int] | Bee[str] | Aardvark[float])
+
+y: Combined[int, str, float] = Bee("hello")
+z: Combined[int, str, float] = Aardvark(3.14)
+    "#,
+);
+
+// Test that duplicate TypeVars are handled correctly (only first occurrence counts)
+testcase!(
+    test_union_type_alias_duplicate_typevar,
+    r#"
+from typing import TypeVar, assert_type
+import dataclasses as dc
+
+_T = TypeVar("_T")
+
+@dc.dataclass
+class First[T]:
+    value: T
+
+@dc.dataclass
+class Second[T]:
+    value: T
+
+# _T appears in both, but should only be one type parameter
+Alias = First[_T] | Second[_T]
+
+x: Alias[int] = First(42)
+assert_type(x, First[int] | Second[int])
+
+y: Alias[str] = Second("hello")
+assert_type(y, First[str] | Second[str])
+    "#,
+);
+
+testcase!(
+    test_type_alias_subscript_forward_ref,
+    r#"
+from typing import TypeVar, Generic, Iterator
+
+T = TypeVar("T")
+E = TypeVar("E")
+
+class Ok(Generic[T]):
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+class Err(Generic[E]):
+    def __init__(self, error: E) -> None:
+        self.error = error
+
+Result = Ok[T] | Err[E]
+
+class CannotTransform(Exception):
+    pass
+
+TResult = Result[T, CannotTransform]
+
+class Line:
+    pass
+
+def type_alias_subscript() -> Iterator["TResult[Line]"]:
+    yield Ok(Line())
+    "#,
+);
+
+testcase!(
+    bug = "conformance: Should error when using non-type expressions as implicit type aliases",
+    test_bad_implicit_type_alias_conformance,
+    r#"
+BadTypeAlias1 = eval("".join(map(chr, [105, 110, 116])))
+BadTypeAlias6 = (lambda: int)()
+BadTypeAlias7 = [int][0]
+BadTypeAlias8 = int if 1 < 3 else str
+BadTypeAlias12 = list or set
+
+def bad_type_aliases(
+    p1: BadTypeAlias1,  # should error: eval result is not a valid type
+    p6: BadTypeAlias6,  # should error: lambda call is not a valid type
+    p7: BadTypeAlias7,  # should error: list subscript is not a valid type
+    p8: BadTypeAlias8,  # should error: conditional expr is not a valid type
+    p12: BadTypeAlias12,  # should error: 'or' expr is not a valid type
+):
+    pass
+"#,
+);
+
+testcase!(
+    test_type_alias_variance_conformance,
+    r#"
+from typing import Generic, TypeVar, TypeAlias
+
+T = TypeVar("T")
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class ClassA(Generic[T]): ...
+
+A_Alias_1: TypeAlias = ClassA[T_co]
+A_Alias_2: TypeAlias = A_Alias_1[T_co]
+
+class ClassA_1(ClassA[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
+class ClassA_2(A_Alias_1[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
+class ClassA_3(A_Alias_2[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
+
+class ClassB(Generic[T, T_co]): ...
+
+B_Alias_1 = ClassB[T_co, T_contra]
+
+class ClassB_1(B_Alias_1[T_contra, T_co]): ...  # E: Type variable `T_contra` is Contravariant but is used in invariant position
+"#,
+);
+
+testcase!(
+    test_typealiastype_circular_conformance,
+    r#"
+from typing import TypeAliasType, TypeVar
+
+T = TypeVar("T")
+
+# Direct self-reference
+BadAlias4 = TypeAliasType("BadAlias4", "BadAlias4")  # E: cyclic self-reference in `BadAlias4`
+
+# Self-reference in union with type param
+BadAlias5 = TypeAliasType("BadAlias5", T | "BadAlias5[str]", type_params=(T,))  # E: cyclic self-reference in `BadAlias5`
+
+# Mutual circular reference
+BadAlias6 = TypeAliasType("BadAlias6", "BadAlias7")  # E: cyclic self-reference in `BadAlias6`
+BadAlias7 = TypeAliasType("BadAlias7", BadAlias6)  # E: cyclic self-reference in `BadAlias7`
+
+# Self-reference via list
+BadAlias21 = TypeAliasType("BadAlias21", list[BadAlias21])  # E: cyclic self-reference in `BadAlias21`
+"#,
+);
+
+testcase!(
+    test_forward_ref_in_typealiastype_value_by_kw,
+    r#"
+from typing import TypeAliasType
+X = TypeAliasType("X", value="C")
+class C: ...
+def f(x: X): ...
+f(C())
+f(0)  # E: not assignable
+    "#,
+);
+
+testcase!(
+    test_unused_and_out_of_order_tparams_in_typealiastype,
+    r#"
+from typing import TypeAliasType, TypeVar, assert_type
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+T3 = TypeVar("T3")
+X = TypeAliasType("X", dict[T2, T1], type_params=(T1, T2, T3))
+def f(x: X[int, str, bytes]):
+    assert_type(x, dict[str, int])
+    "#,
+);
+
+testcase!(
+    test_type_statement_circular_conformance,
+    r#"
+from typing import Callable
+
+# Direct self-reference (not through generic param)
+type RecursiveTypeAlias3 = RecursiveTypeAlias3  # E: cyclic self-reference in `RecursiveTypeAlias3`
+
+type RecursiveTypeAlias4[T] = T | RecursiveTypeAlias4[str]  # E: cyclic self-reference in `RecursiveTypeAlias4`
+
+type RecursiveTypeAlias6 = RecursiveTypeAlias7  # E: cyclic self-reference in `RecursiveTypeAlias6`
+type RecursiveTypeAlias7 = RecursiveTypeAlias6  # E: cyclic self-reference in `RecursiveTypeAlias7`
+"#,
+);
+
+testcase!(
+    test_type_statement_redeclaration_conformance,
+    r#"
+type BadTypeAlias14 = int
+type BadTypeAlias14 = int # E: Cannot redefine existing type alias `BadTypeAlias14`
+
+class C:
+    type T = int
+    type T = int # E: Cannot redefine existing type alias `T`
+"#,
+);
+
+testcase!(
+    test_redeclare_type_alias_as_non_type_alias,
+    r#"
+type BadTypeAlias14 = int
+BadTypeAlias14 = 0  # E: Cannot redefine existing type alias `BadTypeAlias14`
+"#,
+);
+
+testcase!(
+    test_redeclare_non_type_alias_as_type_alias,
+    r#"
+BadTypeAlias14 = 0
+type BadTypeAlias14 = int  # E: Cannot redefine existing name `BadTypeAlias14` as a type alias
+"#,
+);
+
+testcase!(
+    test_redeclare_legacy_type_alias,
+    r#"
+from typing import TypeAlias, Union
+
+X1: TypeAlias = int
+X1 = 0  # E: Cannot redefine existing type alias `X1`
+
+X2 = Union[int, str]
+X2 = 0  # E: Cannot redefine existing type alias `X2`
+    "#,
+);
+
+testcase!(
+    test_redeclare_typealiastype,
+    r#"
+from typing import TypeAliasType
+X = TypeAliasType("X", int)
+X = 0  # E: Cannot redefine existing type alias `X`
+    "#,
+);
+
+testcase!(
+    test_redeclare_type_alias_in_nested_scope_ok,
+    r#"
+type X = int
+class C:
+    type X = str
+    "#,
+);
+
+testcase!(
+    test_display_instance_vs_type,
+    r#"
+from typing import reveal_type, TypeVar
+
+X = int | str
+reveal_type([X])  # E: list[type[X]]
+def f(x: X):
+    reveal_type([x])  # E: list[X]
+
+T = TypeVar("T")
+X = list[T]
+reveal_type([X])  # E: list[type[X[T]]]
+    "#,
+);
+
+testcase!(
+    bug = "Pyrefly gets tripped up by a self-referential bound in LoggerAdapter's type parameter",
+    test_logger_alias,
+    r#"
+from typing import Any
+import logging
+
+LoggerLike = logging.Logger | logging.LoggerAdapter[Any]
+
+def f(x: LoggerLike | None = None): ...  # E: Expected a type form, got instance of `UnionType | type[Logger | None] | Any`
     "#,
 );

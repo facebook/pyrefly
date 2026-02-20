@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::sys_info::PythonVersion;
+
 use crate::test::util::TestEnv;
 use crate::test::util::testcase_for_macro;
 use crate::testcase;
@@ -64,6 +66,19 @@ def f(x: str) -> int:
     return 1
 y = f("test")
 assert_type(y, int)
+"#,
+);
+
+testcase!(
+    test_tstring,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from string.templatelib import Template
+from typing import assert_type
+
+v = 99
+template = t"hello{42}world{v}goodbye"
+assert isinstance(template, Template)
 "#,
 );
 
@@ -352,10 +367,46 @@ testcase!(
 from typing import Final
 
 x: Final[int] = 0
-x = 1  # E: `x` is marked final
+x = 1  # E: Cannot assign to variable `x` because it is marked final
 
 y: Final = "foo"
-y = "bar"  # E: `y` is marked final
+y = "bar"  # E: Cannot assign to variable `y` because it is marked final
+"#,
+);
+
+testcase!(
+    test_final_field,
+    r#"
+from typing import Final
+class C:
+    x: Final[int] = 1
+    uninitialized: Final[str]
+    def __init__(self):
+        self.x = 42  # E: Cannot set field `x`
+        self.uninitialized = "ok"
+"#,
+);
+
+testcase!(
+    test_final_reassign,
+    r#"
+from typing import Final, TextIO
+x: Final[int] = 0
+x = 1  # E: Cannot assign to variable `x` because it is marked final
+x += 1  # E: Cannot assign to variable `x` because it is marked final
+y = x = 3 # E: Cannot assign to variable `x` because it is marked final
+y = (x := 3) # E: Cannot assign to variable `x` because it is marked final
+x, y = 4, 5 # E: Cannot assign to variable `x` because it is marked final
+[x, y] = [6, 7] # E: Cannot assign to variable `x` because it is marked final
+for x in [1, 2, 3]:  # E: Cannot assign to variable `x` because it is marked final
+    ...
+
+xs: Final[list[int]] = []
+[_, *xs] = [1, 2, 3]  # E: Cannot assign to variable `xs` because it is marked final
+
+f: Final[TextIO]
+with open("file.txt") as f: # E: Cannot assign to variable `f` because it is marked final
+    ...
 "#,
 );
 
@@ -363,6 +414,16 @@ testcase!(
     test_reveal_type,
     r#"
 from typing import reveal_type
+reveal_type()  # E: reveal_type needs 1 positional argument, got 0
+reveal_type(1)  # E: revealed type: Literal[1]
+    "#,
+);
+
+testcase!(
+    test_typing_extensions_reveal_type,
+    TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+from typing_extensions import reveal_type
 reveal_type()  # E: reveal_type needs 1 positional argument, got 0
 reveal_type(1)  # E: revealed type: Literal[1]
     "#,
@@ -626,7 +687,7 @@ class B[T]:
     pass
 for x in A[str]:
     assert_type(x, int)
-for _ in B[str]:  # E: Type `type[B[str]]` is not iterable
+for _ in B[str]:
     pass
     "#,
 );
@@ -697,12 +758,13 @@ for a in A:  # E: Type `type[A]` is not iterable
 );
 
 testcase!(
+    bug = "Although A[int] is a generic alias and can be iterated over, type[A[int]] is a type and cannot be iterated over.",
     test_getitem_cannot_iterate_generic_class,
     r#"
 class A[T]:
     def __getitem__(self, i: int) -> int: ...
 def f(x: type[A[int]]):
-    for a in x:  # E: Type `type[A[int]]` is not iterable
+    for a in x:  # Expect an error here
         pass
     "#,
 );
@@ -766,11 +828,11 @@ testcase!(
 val = 42
 def foo(arg): ...
 def test(
-    a: foo(arg=val),  # E: function call cannot be used in annotations
-    b: lambda: None,  # E: lambda definition cannot be used in annotations
-    c: [foo(arg=val)], # E: list literal cannot be used in annotations
-    d: (1, 2), # E: tuple literal cannot be used in annotations
-    e: 1 + 2,  # E: binary operation `+` cannot be used in annotations
+    a: foo(arg=val),  # E: Function call cannot be used in annotations
+    b: lambda: None,  # E: Lambda definition cannot be used in annotations
+    c: [foo(arg=val)], # E: List literal cannot be used in annotations
+    d: (1, 2), # E: Tuple literal cannot be used in annotations
+    e: 1 + 2,  # E: Binary operation `+` cannot be used in annotations
 ): ...
 "#,
 );
@@ -797,12 +859,29 @@ c2: type[C, C] = C  # E: Expected 1 type argument for `type`, got 2
 );
 
 testcase!(
+    test_type_without_argument_is_equivalent_to_type_any,
+    r#"
+from typing import assert_type, Any
+def f(x: type) -> None:
+    g(x)
+    assert_type(x, type[Any])
+def g(x: type[Any]) -> None:
+    f(x)
+    assert_type(x, type)
+"#,
+);
+
+testcase!(
     test_annotated,
     r#"
 from typing import Annotated, assert_type
 def f(x: Annotated[int, "test"], y: Annotated[int, "test", "test"]):
     assert_type(x, int)
     assert_type(y, int)
+def g(x: Annotated[int]): # E: `Annotated` needs at least one piece of metadata in addition to the type
+    pass
+X = Annotated[int, "meta"]
+Y = Annotated[int] # E: `Annotated` needs at least one piece of metadata in addition to the type
     "#,
 );
 
@@ -988,6 +1067,13 @@ testcase!(
 # This parse error results in two identical Identifiers, which previously caused a panic.
 a = True if # E: Parse
 "#,
+);
+
+testcase!(
+    test_syntax_error_resulting_in_empty_defintion,
+    r#"
+@:a=1 # E: Parse # E: Could not find name `a`
+    "#,
 );
 
 testcase!(
@@ -1352,14 +1438,24 @@ def f(x: Type) -> None: ...
 def g(x: type) -> None: ...
 
 f(int)
-f(Type)
+f(Type)  # E: not assignable to parameter `x` with type `type[Any]`
 f(type)
-f(42)  # E: not assignable to parameter `x` with type `type[Unknown]`
+f(42)  # E: not assignable to parameter `x` with type `type[Any]`
 
 g(int)
-g(Type)
+g(Type)  # E: not assignable to parameter `x` with type `type[Any]`
 g(type)
-g(42)  # E: not assignable to parameter `x` with type `type`
+g(42)  # E: not assignable to parameter `x` with type `type[Any]`
+"#,
+);
+
+testcase!(
+    test_typing_type_properties,
+    r#"
+from typing import Type, assert_type, reveal_type
+def f(x: Type) -> None:
+    assert_type(x.__mro__, tuple[type, ...])
+    assert_type(x.__base__, type | None)
 "#,
 );
 
@@ -1543,6 +1639,30 @@ testcase!(
     r#"
 # Used to crash, https://github.com/facebook/pyrefly/issues/518
 if"":=  # E: Assignment expression target must be an identifier # E: Expected an expression
+"#,
+);
+
+testcase!(
+    test_crash_on_invalid_attribute_walrus,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/1903
+(:=).:  # E: Cannot annotate non-self attribute `:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Parse error: Expected an expression
+"#,
+);
+
+testcase!(
+    test_crash_on_incomplete_walrus,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/2093
+(:=  # E: Parse error: Expected an expression # E: Parse error: Expected an expression
+"#,
+);
+
+testcase!(
+    test_crash_on_augassign_walrus_rhs,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/1991
+1 += (c := 1)  # E: Parse error: Invalid augmented assignment target
 "#,
 );
 
@@ -1782,6 +1902,22 @@ assert_type(Foo[0], str)
 "#,
 );
 
+testcase!(
+    test_class_metaclass_getitem,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    def __getitem__(self, item: int) -> str:
+        return str(item)
+
+class Foo(metaclass=Meta):
+    pass
+
+assert_type(Foo[0], str)
+"#,
+);
+
 testcase!(test_panic_docstring, "\"\"\" F\n\u{85}\"\"\"",);
 
 testcase!(
@@ -1942,4 +2078,23 @@ testcase!(
 def test():
     x: (yield from [1])  # E:
     "#,
+);
+
+testcase!(
+    test_passing_callable_as_type_not_allowed,
+    r#"
+from typing import Callable, Type, Any
+def takes_type(x: type): ...
+def takes_Type(x: Type): ...
+def takes_type_any(x: type[Any]): ...
+def takes_Type_any(x: Type[Any]): ...
+takes_type(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_type_any(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type_any(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+"#,
 );

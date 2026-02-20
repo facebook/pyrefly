@@ -8,11 +8,12 @@
 use std::fmt;
 
 use dupe::Dupe;
-use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::class::ClassType;
+use pyrefly_types::equality::TypeEq;
+use pyrefly_types::equality::TypeEqCtx;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_util::display::commas_iter;
@@ -42,12 +43,14 @@ use crate::types::types::Type;
 /// (in particular, the targs of generic bases) of the bases of a class. If only the class objects are
 /// needed, query `ClassMetadata` instead since that one doesn't require calculating the full types.
 ///
-/// The reason this is tracked separately from `ClassMetadata` is to avoid the possiblity of
+/// The reason this is tracked separately from `ClassMetadata` is to avoid the possibility of
 /// cycles when type arguments of the base classes may depend on the class itself.
-#[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, VisitMut, Default)]
 pub struct ClassBases {
     /// The direct base types in the base class list
     base_types: Box<[ClassType]>,
+    /// Source ranges for each base type (parallel array, same length as base_types)
+    base_ranges: Box<[TextRange]>,
     /// The first tuple ancestor, if there is one in the inheritance tree.
     ///
     /// This is recursively computed, not just a direct tuple base. We throw an error and keep only
@@ -58,10 +61,21 @@ pub struct ClassBases {
     pub has_pydantic_strict_metadata: bool,
 }
 
+/// Manual TypeEq implementation that ignores base_ranges.
+/// TextRange contains source positions which shouldn't affect interface equality.
+impl TypeEq for ClassBases {
+    fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
+        TypeEq::type_eq(&self.base_types, &other.base_types, ctx)
+            && TypeEq::type_eq(&self.tuple_ancestor, &other.tuple_ancestor, ctx)
+            && self.has_pydantic_strict_metadata == other.has_pydantic_strict_metadata
+    }
+}
+
 impl ClassBases {
     pub fn recursive() -> Self {
         Self {
             base_types: Box::new([]),
+            base_ranges: Box::new([]),
             tuple_ancestor: None,
             has_pydantic_strict_metadata: false,
         }
@@ -73,6 +87,11 @@ impl ClassBases {
 
     pub fn iter(&self) -> impl Iterator<Item = &ClassType> {
         self.base_types.iter()
+    }
+
+    /// Iterate over base types with their source ranges.
+    pub fn iter_with_ranges(&self) -> impl Iterator<Item = (&ClassType, TextRange)> {
+        self.base_types.iter().zip(self.base_ranges.iter().copied())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -103,7 +122,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             base = self.solver().force_var(v);
         }
         if matches!(&base, Type::ClassDef(t) if t.name() == "tuple") {
-            base = Type::type_form(Type::SpecialForm(SpecialForm::Tuple));
+            base = self
+                .heap
+                .mk_type_form(self.heap.mk_special_form(SpecialForm::Tuple));
         }
         let mut has_strict = false;
         let arguments_untype = |slice: &Expr, has_strict: &mut bool| {
@@ -130,7 +151,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let tys = arguments_untype(slice, &mut has_strict);
                 self.specialize_forall_in_base_class(*forall, tys, range, errors)
             }
-            Type::ClassDef(cls) => Type::type_form(self.specialize_in_base_class(
+            Type::ClassDef(cls) => self.heap.mk_type_form(self.specialize_in_base_class(
                 &cls,
                 arguments_untype(slice, &mut has_strict),
                 range,
@@ -184,7 +205,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn is_type_alias_with_pydantic_strict_metadata(&self, ty: &Type) -> bool {
-        matches!(ty, Type::TypeAlias(ta) if ta.annotated_metadata()
+        matches!(ty, Type::TypeAlias(ta) if self.get_type_alias(ta).annotated_metadata()
             .iter()
             .any(|metadata| self.is_pydantic_strict_metadata(metadata)))
     }
@@ -238,9 +259,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some((ty, x.range()))
                 }
                 BaseClass::NamedTuple(..) => Some((
-                    self.stdlib.named_tuple_fallback().clone().to_type(),
+                    self.heap
+                        .mk_class_type(self.stdlib.named_tuple_fallback().clone()),
                     x.range(),
                 )),
+                BaseClass::SynthesizedBase(class_idx, _) => {
+                    self.get_idx(*class_idx).as_ref().0.as_ref().map(|cls| {
+                        let ct = self.promote_nontypeddict_silently_to_classtype(cls);
+                        (self.heap.mk_class_type(ct), x.range())
+                    })
+                }
                 BaseClass::InvalidExpr(..) | BaseClass::TypedDict(..) | BaseClass::Generic(..) => {
                     None
                 }
@@ -299,23 +327,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         }
                     }
+                    (Type::Type(box Type::Any(_)), range) => {
+                        // `type[Any]` is equivalent to `type` or `Type`
+                        let class = self.stdlib.builtins_type().clone();
+                        let bases = self
+                            .get_base_types_for_class(self.stdlib.builtins_type().class_object());
+                        Some((class, bases, range))
+                    }
                     (_, _) => None,
                 }
             })
             .collect::<Vec<_>>();
 
-        let mut base_class_types = base_type_base_and_range
+        let mut base_class_types_with_ranges = base_type_base_and_range
             .into_iter()
             .map(|(base_class_type, base_class_bases, range)| {
                 if is_new_type
-                    && base_class_type.targs().as_slice().iter().any(|ty| {
-                        ty.any(|ty| {
-                            matches!(
-                                ty,
-                                Type::TypeVar(_) | Type::TypeVarTuple(_) | Type::ParamSpec(_)
-                            )
-                        })
-                    })
+                    && base_class_type
+                        .targs()
+                        .as_slice()
+                        .iter()
+                        .any(|ty| ty.any(|ty| ty.is_raw_legacy_type_variable()))
                 {
                     self.error(
                         errors,
@@ -324,43 +356,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         "Second argument to NewType cannot be an unbound generic".to_owned(),
                     );
                 }
-                if let Some(base_tuple_ancestor) = base_class_bases.tuple_ancestor() {
-                    if let Some(existing_tuple_ancestor) = &tuple_ancestor {
-                        if existing_tuple_ancestor.is_any_tuple() {
-                            tuple_ancestor = Some(base_tuple_ancestor.clone());
-                        } else if !base_tuple_ancestor.is_any_tuple()
-                            && base_tuple_ancestor != existing_tuple_ancestor
-                        {
-                            self.error(
-                                errors,
-                                range,
-                                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                                format!(
-                                    "Cannot extend multiple incompatible tuples: `{}` and `{}`",
-                                    self.for_display(Type::Tuple(existing_tuple_ancestor.clone())),
-                                    self.for_display(Type::Tuple(base_tuple_ancestor.clone())),
-                                ),
-                            );
-                        }
-                    } else {
-                        tuple_ancestor = Some(base_tuple_ancestor.clone());
-                    }
+                if let Some(base_tuple_ancestor) = base_class_bases.tuple_ancestor()
+                    && tuple_ancestor.as_ref().is_none_or(|t| t.is_any_tuple())
+                {
+                    tuple_ancestor = Some(base_tuple_ancestor.clone());
                 }
-                base_class_type
+                (base_class_type, range)
             })
             .collect::<Vec<_>>();
 
         let metadata = self.get_metadata_for_class(cls);
-        if metadata.is_typed_dict() && base_class_types.is_empty() {
+        if metadata.is_typed_dict() && base_class_types_with_ranges.is_empty() {
             // This is a "fallback" class that contains attributes that are available on all TypedDict subclasses.
             // Note that this also makes those attributes available on *instances* of said subclasses; this is
             // desirable for methods but problematic for fields like `__total__` that should be available on the class
             // but not the instance. For now, we make all fields available on both classes and instances.
-            base_class_types.push(self.stdlib.typed_dict_fallback().clone());
+            base_class_types_with_ranges.push((
+                self.stdlib.typed_dict_fallback().clone(),
+                TextRange::default(),
+            ));
         }
 
+        // Unzip into separate arrays
+        let (base_types, base_ranges): (Vec<_>, Vec<_>) =
+            base_class_types_with_ranges.into_iter().unzip();
+
         ClassBases {
-            base_types: base_class_types.into_boxed_slice(),
+            base_types: base_types.into_boxed_slice(),
+            base_ranges: base_ranges.into_boxed_slice(),
             tuple_ancestor,
             has_pydantic_strict_metadata,
         }

@@ -23,16 +23,17 @@ use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_build::source_db::Target;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::TextSize;
 use serde::Deserialize;
@@ -91,11 +92,15 @@ impl SourceDatabase for PlaygroundSourceDatabase {
         Some(Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
     }
 
-    fn query_source_db(&self, _: SmallSet<ModulePathBuf>, _: bool) -> anyhow::Result<bool> {
-        Ok(false)
+    fn query_source_db(
+        &self,
+        _: SmallSet<InternedPath>,
+        _: bool,
+    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
+        (Ok(false), TelemetrySourceDbRebuildInstanceStats::default())
     }
 
-    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern<'_>> {
+    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern> {
         self.module_mappings
             .values()
             .map(|p| WatchPattern::file(p.as_path().to_path_buf()))
@@ -106,7 +111,7 @@ impl SourceDatabase for PlaygroundSourceDatabase {
         None
     }
 
-    fn get_generated_files(&self) -> SmallSet<ModulePathBuf> {
+    fn get_generated_files(&self) -> SmallSet<InternedPath> {
         SmallSet::new()
     }
 }
@@ -359,8 +364,12 @@ impl Playground {
 
         let handles: Vec<Handle> = self.handles.values().map(|handle| handle.dupe()).collect();
 
-        self.state
-            .run_with_committing_transaction(transaction, &handles, Require::Everything);
+        self.state.run_with_committing_transaction(
+            transaction,
+            &handles,
+            Require::Everything,
+            None,
+        );
         Some(format!(
             "{}.{}",
             desired_version.major, desired_version.minor
@@ -382,8 +391,12 @@ impl Playground {
 
             let handles: Vec<Handle> = self.handles.values().map(|handle| handle.dupe()).collect();
 
-            self.state
-                .run_with_committing_transaction(transaction, &handles, Require::Everything);
+            self.state.run_with_committing_transaction(
+                transaction,
+                &handles,
+                Require::Everything,
+                None,
+            );
 
             if self.handles.contains_key(&filename) {
                 self.active_filename = filename;
@@ -402,30 +415,29 @@ impl Playground {
         let transaction = self.state.transaction();
 
         for (filename, handle) in &self.handles {
-            let file_errors = transaction
-                .get_errors([handle])
-                .collect_errors()
-                .shown
-                .into_map(|e| {
-                    let range = e.display_range();
-                    Diagnostic {
-                        start_line: range.start.line_within_file().get() as i32,
-                        start_col: range.start.column().get() as i32,
-                        end_line: range.end.line_within_file().get() as i32,
-                        end_col: range.end.column().get() as i32,
-                        message_header: e.msg_header().to_owned(),
-                        message_details: e.msg_details().unwrap_or("").to_owned(),
-                        kind: e.error_kind().to_name().to_owned(),
-                        // Severity values defined here: https://microsoft.github.io/monaco-editor/typedoc/enums/MarkerSeverity.html
-                        severity: match e.severity() {
-                            Severity::Error => 8,
-                            Severity::Warn => 4,
-                            Severity::Info => 2,
-                            Severity::Ignore => 1,
-                        },
-                        filename: filename.clone(),
-                    }
-                });
+            let errors = transaction.get_errors([handle]);
+            let mut shown = errors.collect_errors().shown;
+            shown.extend(errors.collect_unused_ignore_errors_for_display().shown);
+            let file_errors = shown.into_map(|e| {
+                let range = e.display_range();
+                Diagnostic {
+                    start_line: range.start.line_within_file().get() as i32,
+                    start_col: range.start.column().get() as i32,
+                    end_line: range.end.line_within_file().get() as i32,
+                    end_col: range.end.column().get() as i32,
+                    message_header: e.msg_header().to_owned(),
+                    message_details: e.msg_details().unwrap_or("").to_owned(),
+                    kind: e.error_kind().to_name().to_owned(),
+                    // Severity values defined here: https://microsoft.github.io/monaco-editor/typedoc/enums/MarkerSeverity.html
+                    severity: match e.severity() {
+                        Severity::Error => 8,
+                        Severity::Warn => 4,
+                        Severity::Info => 2,
+                        Severity::Ignore => 1,
+                    },
+                    filename: filename.clone(),
+                }
+            });
             all_diagnostics.extend(file_errors);
 
             // Add unused diagnostics
@@ -622,10 +634,14 @@ impl Playground {
             .get_module_info(handle)
             .zip(transaction.inlay_hints(handle, Default::default()))
             .map(|(info, hints)| {
-                hints.into_map(|(position, label_parts)| {
-                    let position = Position::from_display_pos(info.display_pos(position));
+                hints.into_map(|hint_data| {
+                    let position = Position::from_display_pos(info.display_pos(hint_data.position));
                     // Concatenate all label parts into a single string for the playground
-                    let label: String = label_parts.iter().map(|(text, _)| text.as_str()).collect();
+                    let label: String = hint_data
+                        .label_parts
+                        .iter()
+                        .map(|(text, _)| text.as_str())
+                        .collect();
                     InlayHint { label, position }
                 })
             })
@@ -671,11 +687,11 @@ mod tests {
         state.set_active_file("main.py");
 
         let expected_headers = &[
-            "Could not find import of `t`",
+            "Cannot find module `t`",
             "Parse error: Expected `import`, found newline",
         ];
         let expected_details = &[
-            "  Looked in these locations:\n  Build system source database",
+            "  Did you mean `nt`?\n  Looked in these locations:\n  Build system source database",
             "",
         ];
         let expected_error_kinds = &[ErrorKind::MissingImport, ErrorKind::ParseError];

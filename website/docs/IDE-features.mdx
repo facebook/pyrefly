@@ -4,6 +4,13 @@ title: IDE Supported Features
 description: Supported features for Pyrefly's IDE extension
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # IDE Supported Features
 
 Pyrefly’s language server powers a complete editing experience while **fully disabling Pylance**, ensuring no interference between checkers.
@@ -286,6 +293,171 @@ In Jupyter Lab, once you install the [jupyterlab-lsp](https://jupyterlab-lsp.rea
 
 Notebook support is experimental. Please report any bugs on our Github.
 
+---
+### [Call Hierarchy](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_prepareCallHierarchy)
+
+See all incoming functions calls to a particular function, as well as all outgoing function calls from a function. Call Hierarchy provides a full picture of
+how a particular function is used within a call stack.
+
+<video
+  src="/videos/call-hierarchy.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### [Type Hierarchy](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_prepareTypeHierarchy)
+
+See all subclasses and superclasses of a selected class.
+
+<video
+  src="/videos/type-hierarchy.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Pull Member Up and Push Member Down
+
+Pull a method from a subclass to a superclass, or push a method from a superclass to a subclass.
+
+Pull Member Up
+<video
+  src="/videos/pull-up-refactor.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+Push Member Down
+<video
+  src="/videos/push-down-refactor.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Convert to Package and Convert to Module
+
+Convert to Package takes .py file and moves it to a package directory with all logic moved into an __init__.py file.
+
+<video
+  src="/videos/convert-to-package.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+Convert to Module takes an existing package with all logic defined in its __init__.py and creates a named .py file from it.
+
+<video
+  src="/videos/convert-to-module.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Move function to top level
+
+Takes a function nested within another function or statement and moves it to the top level of the module.
+
+<video
+  src="/videos/top-level-refactor.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Introduce Parameter
+
+Adds a new parameter to a function definition and update all call sites to pass the new parameter.
+
+<video
+  src="/videos/refactor-introduce-parameter.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Inline Variable
+
+Removes redundant variables by replacing them with their value.
+
+<video
+  src="/videos/refactor-inline-variable.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Extract to Field
+
+Declare a new field on a class with the value of the selected expression.
+
+<video
+  src="/videos/refactor-extract-to-field.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Extract to Variable
+
+Declare a new variable with the value of the selected expression.
+
+<video
+  src="/videos/refactor-extract-to-variable.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Invert Boolean
+
+Flips the value of a boolean and updates all usages to work with new value.
+
+<video
+  src="/videos/refactor-invert-boolean.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
 ---
 
 ## Planned features

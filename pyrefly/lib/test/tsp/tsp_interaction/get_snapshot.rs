@@ -8,9 +8,9 @@
 //! Tests for TSP getSnapshot request
 
 use lsp_server::RequestId;
-use lsp_server::Response;
 use tempfile::TempDir;
 
+use crate::lsp::non_wasm::protocol::Response;
 use crate::test::tsp::tsp_interaction::object_model::TspInteraction;
 
 #[test]

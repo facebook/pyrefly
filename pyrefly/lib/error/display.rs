@@ -50,14 +50,16 @@ impl ErrorContext {
                 format!("Cannot match positional sub-patterns in `{ty}`")
             }
             Self::ImportNotFound(import) => {
-                format!("Could not find import of `{import}`")
+                format!("Cannot find module `{import}`")
             }
-            Self::ImportNotTyped(import) => format!("Missing type stubs for `{import}`"),
+            Self::ImportNotTyped(import) => format!("Cannot find type stubs for module `{import}`"),
         }
     }
 }
 
 impl TypeCheckKind {
+    /// Note: `got` and `want` should be processed through `AnswersSolver::for_display` before calling this function
+    /// otherwise printed type representations may be non-deterministic due to unsolved vars
     pub fn format_error(&self, got: &Type, want: &Type, current_module: ModuleName) -> String {
         let mut ctx = TypeDisplayContext::new(&[got, want]);
         match self {
@@ -73,7 +75,7 @@ impl TypeCheckKind {
             }
             Self::AugmentedAssignment => {
                 format!(
-                    "Augmented assignment produces a value of type `{}`, which is not assignable to `{}`",
+                    "Augmented assignment result `{}` is not assignable to `{}`",
                     ctx.display(got),
                     ctx.display(want),
                 )
@@ -209,7 +211,7 @@ impl TypeCheckKind {
                 ctx.display(want)
             ),
             Self::CycleBreaking => format!(
-                "`{}` is not assignable to `{}` (caused by inconsistent types when breaking cycles)",
+                "Pyrefly detected conflicting types while breaking a dependency cycle: `{}` is not assignable to `{}`. Adding explicit type annotations might possibly help.",
                 ctx.display(got),
                 ctx.display(want)
             ),
@@ -219,12 +221,12 @@ impl TypeCheckKind {
                 ctx.display(want),
             ),
             Self::YieldValue => format!(
-                "Type of yielded value `{}` is not assignable to declared return type `{}`",
+                "Yielded type `{}` is not assignable to declared yield type `{}`",
                 ctx.display(got),
                 ctx.display(want),
             ),
             Self::YieldFrom => format!(
-                "Cannot yield from a generator of type `{}` because it does not match the declared return type `{}`",
+                "Cannot yield from `{}`, which is not assignable to declared return type `{}`",
                 ctx.display(got),
                 ctx.display(want),
             ),
@@ -233,10 +235,14 @@ impl TypeCheckKind {
                 ctx.display(want),
             ),
             Self::PostInit => format!(
-                "`__post_init__` type `{got}` is not assignable to expected type `{want}` generated from the dataclass's `InitVar` fields"
+                "`__post_init__` type `{}` is not assignable to expected type `{}` generated from the dataclass's `InitVar` fields",
+                ctx.display(got),
+                ctx.display(want),
             ),
             Self::OverloadReturn => format!(
-                "Overload return type `{got}` is not assignable to implementation return type `{want}`",
+                "Overload return type `{}` is not assignable to implementation return type `{}`",
+                ctx.display(got),
+                ctx.display(want),
             ),
             Self::OverloadInput(overload_sig, impl_sig) => {
                 format!(
@@ -245,11 +251,17 @@ impl TypeCheckKind {
             }
             Self::TypeVarSpecialization(name) => {
                 format!(
-                    "`{got}` is not assignable to upper bound `{want}` of type variable `{name}`"
+                    "`{}` is not assignable to upper bound `{}` of type variable `{name}`",
+                    ctx.display(got),
+                    ctx.display(want)
                 )
             }
             Self::Container => {
-                format!("`{got}` is not assignable to contained type `{want}`")
+                format!(
+                    "`{}` is not assignable to contained type `{}`",
+                    ctx.display(got),
+                    ctx.display(want)
+                )
             }
         }
     }

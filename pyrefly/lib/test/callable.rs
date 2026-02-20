@@ -26,6 +26,99 @@ f8: Callable[[int], int] = lambda x: x + "foo" # E: Argument `Literal['foo']` is
 );
 
 testcase!(
+    test_callable_variable_typevar_annotation,
+    r#"
+from typing import Callable, TypeVar, reveal_type
+T = TypeVar("T")
+f: Callable[[T], T] = lambda x: x
+reveal_type(f)  # E: revealed type: [T](T) -> T
+reveal_type(f(1))  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_callable_variable_multiple_typevars,
+    r#"
+from typing import Callable, TypeVar, reveal_type
+T = TypeVar("T")
+U = TypeVar("U")
+f: Callable[[T, U], T] = lambda x, y: x
+reveal_type(f)  # E: revealed type: [T, U](T, U) -> T
+reveal_type(f(1, "a"))  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_callable_variable_bounded_typevar,
+    r#"
+from typing import Callable, TypeVar, reveal_type
+T = TypeVar("T", bound=int)
+f: Callable[[T], T] = lambda x: x
+reveal_type(f)  # E: revealed type: [T: int](T) -> T
+reveal_type(f(1))  # E: revealed type: int
+f("hello")  # E: `str` is not assignable to upper bound `int` of type variable `T`
+"#,
+);
+
+testcase!(
+    test_callable_annotation_only_typevar,
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+from collections.abc import Callable
+from typing import Any, TypeVar
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+require_GET: Callable[[F], F]
+"#
+    ),
+    r#"
+from typing import reveal_type
+from foo import require_GET
+def view() -> None:
+    return None
+reveal_type(require_GET)  # E: revealed type: [F: (...) -> Any](F) -> F
+reveal_type(require_GET(view))  # E: revealed type: () -> None
+"#,
+);
+
+testcase!(
+    test_list_of_callables_variable_typevar_annotation,
+    r#"
+from typing import Callable, TypeVar, assert_type, reveal_type
+T = TypeVar("T")
+f: list[Callable[[T], T]] = [lambda x: x]
+reveal_type(f)  # E: revealed type: list[[T](T) -> T]
+assert_type(f[0](1), int)
+"#,
+);
+
+testcase!(
+    test_callable_of_list_variable_typevar_annotation,
+    r#"
+from typing import Callable, TypeVar, assert_type, reveal_type
+T = TypeVar("T")
+f: Callable[[list[T]], list[T]] = lambda x: x
+reveal_type(f)  # E: revealed type: [T](list[T]) -> list[T]
+assert_type(f([1]), list[int])
+f(1)  # E: not assignable
+"#,
+);
+
+testcase!(
+    test_callable_returns_callable_variable_typevar_annotation,
+    r#"
+from typing import Callable, TypeVar, assert_type, reveal_type
+T = TypeVar("T")
+f: Callable[[], Callable[[T], T]] = lambda: lambda x: x
+reveal_type(f)  # E: revealed type: () -> [T](T) -> T
+assert_type(f()(1), int)
+"#,
+);
+
+testcase!(
     test_callable_ellipsis_upper_bound,
     r#"
 from typing import Callable
@@ -815,7 +908,7 @@ zoo(partial(bar, b=99))
 );
 
 testcase!(
-    bug = "Self in Metaclass should be error, treated as Any. Any in metaclass call should act like no annot.",
+    bug = "Self in Metaclass should be treated as Any. Any in metaclass call should act like no annot.",
     test_callable_class_substitute_self,
     r#"
 from typing import Any, Callable, Self, assert_type
@@ -823,7 +916,7 @@ from typing import Any, Callable, Self, assert_type
 def ret[T](f: Callable[[], T]) -> T: ...
 
 class Meta(type):
-    def __call__(self, *args, **kwargs) -> Self: ... # TODO: Error here and treat `Self` as `Any`
+    def __call__(self, *args, **kwargs) -> Self: ... # E: `Self` cannot be used in a metaclass
 
 # metaclass __call__
 class A(metaclass=Meta):
@@ -924,7 +1017,7 @@ class C(B): ...
 
 def f[T: B](x: T) -> T: ...
 
-c1: Callable[[A], A] = f # E: `[T](x: T) -> T` is not assignable to `(A) -> A`
+c1: Callable[[A], A] = f # E: `[T: B](x: T) -> T` is not assignable to `(A) -> A`
 c2: Callable[[B], B] = f # OK
 c3: Callable[[C], C] = f # OK
     "#,
@@ -1163,4 +1256,101 @@ class A:
     x: int = 0
 assert_type(f(), int)
     "#,
+);
+
+testcase!(
+    test_preserve_param_default,
+    r#"
+from typing import reveal_type
+
+def f(x: bool = True) -> bool:
+    return x
+
+def g[T](f: T) -> T:
+    return f
+
+reveal_type(g(f))  # E: (x: bool = True) -> bool
+    "#,
+);
+
+testcase!(
+    test_lambda_matches_generic_callable,
+    r#"
+from typing import Callable, List, TypeVar
+T = TypeVar("T")
+def f(x):
+    return x
+def wrap(fn: Callable[[List[T]], T]): ...
+def g():
+    return wrap(lambda x: f(x))
+    "#,
+);
+
+testcase!(
+    bug = "conformance: Protocol with ParamSpec[...] should be compatible with Protocol using *args: Any, **kwargs: Any",
+    test_protocol_paramspec_ellipsis,
+    r#"
+from typing import Any, Protocol, ParamSpec
+
+P = ParamSpec("P")
+
+class Proto3(Protocol):
+    def __call__(self, a: int, *args: Any, **kwargs: Any) -> None: ...
+
+class Proto4(Protocol[P]):
+    def __call__(self, a: int, *args: P.args, **kwargs: P.kwargs) -> None: ...
+
+class Proto6(Protocol):
+    # Note: conformance uses `*args: Any, *, k: str` which pyrefly incorrectly treats as parse error
+    def __call__(self, a: int, /, *args: Any, k: str, **kwargs: Any) -> None: ...
+
+class Proto7(Protocol):
+    def __call__(self, a: float, /, b: int, *, k: str, m: str) -> None: ...
+
+def test(p4: Proto4[...], p7: Proto7):
+    # Both should be OK per conformance spec - pyrefly incorrectly errors
+    ok10: Proto3 = p4  # E: `Proto4[Ellipsis]` is not assignable to `Proto3`
+    ok11: Proto6 = p7  # E: `Proto7` is not assignable to `Proto6`
+"#,
+);
+
+testcase!(
+    bug = "conformance: Constructor to Callable conversion issues with overloads and __new__",
+    test_constructor_callable_conversion,
+    r#"
+from typing import Callable, ParamSpec, TypeVar, Self, assert_type, overload, Generic
+
+P = ParamSpec("P")
+R = TypeVar("R")
+T = TypeVar("T")
+
+def accepts_callable(cb: Callable[P, R]) -> Callable[P, R]:
+    return cb
+
+class Class3:
+    def __new__(cls, *args, **kwargs) -> Self: ...
+    def __init__(self, x: int) -> None: ...
+
+r3 = accepts_callable(Class3)
+
+class Class7(Generic[T]):
+    @overload
+    def __init__(self: "Class7[int]", x: int) -> None: ...
+    @overload
+    def __init__(self: "Class7[str]", x: str) -> None: ...
+    def __init__(self, x: int | str) -> None:
+        pass
+
+r7 = accepts_callable(Class7)
+# pyrefly incorrectly errors on these - should be OK
+assert_type(r7(""), Class7[str])  # E: assert_type(Class7[int], Class7[str]) failed # E: Argument `Literal['']` is not assignable
+
+class Class8(Generic[T]):
+    def __new__(cls, x: list[T], y: list[T]) -> Self:
+        return super().__new__(cls)
+
+r8 = accepts_callable(Class8)
+# pyrefly incorrectly errors on this - should be OK
+assert_type(r8([""], [""]), Class8[str])  # E: assert_type(Class8[Any], Class8[str]) failed
+"#,
 );

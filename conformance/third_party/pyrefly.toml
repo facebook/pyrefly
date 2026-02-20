@@ -1,1 +1,3 @@
 # Empty configuration file to make sure pyrefly treats this directory as the project root.
+[errors]
+unreachable = "ignore"

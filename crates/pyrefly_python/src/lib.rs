@@ -18,6 +18,7 @@
 #![feature(if_let_guard)]
 
 pub mod ast;
+pub mod comment_section;
 pub mod display;
 pub mod docstring;
 pub mod dunder;

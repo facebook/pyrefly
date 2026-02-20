@@ -72,6 +72,10 @@ impl ModuleGlobalVariables {
     pub fn get(&self, short_identifier: ShortIdentifier) -> Option<&GlobalVariableBase> {
         self.0.get(&short_identifier)
     }
+
+    pub fn contains(&self, name: &Name) -> bool {
+        self.0.values().any(|global| global.name == *name)
+    }
 }
 
 impl WholeProgramGlobalVariables {
@@ -95,7 +99,7 @@ impl GlobalVariable {
                 .type_
                 .as_ref()
                 .map(|type_| PysaType::from_type(type_, context)),
-            location: PysaLocation::new(context.module_info.display_range(identifier.range())),
+            location: PysaLocation::from_text_range(identifier.range(), &context.module_info),
         }
     }
 }
@@ -112,7 +116,7 @@ fn visit_assign_target(
             .key_to_idx_hashed_opt(Hashed::new(&Key::Definition(short_identifier)))
             .and_then(|idx| context.answers.get_idx(idx));
         if let Some(type_) = type_.as_ref()
-            && (type_.ty().is_type_variable() || is_bound_method_like(type_.ty()))
+            && (type_.ty().is_raw_legacy_type_variable() || is_bound_method_like(type_.ty()))
         {
             // Don't export:
             // - Type variable, such as `T = TypeVar("T")`

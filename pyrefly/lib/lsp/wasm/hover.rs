@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+// @lint-ignore-every SPELL
+
 use std::collections::HashMap;
 
 use lsp_types::Hover;
@@ -13,6 +15,7 @@ use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::Url;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
@@ -20,26 +23,163 @@ use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::Required;
+use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
+use pyrefly_util::visit::Visit;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::alt::answers_solver::AnswersSolver;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::wasm::signature_help::CallInfo;
+use crate::lsp::wasm::signature_help::is_constructor_call;
+use crate::lsp::wasm::signature_help::override_constructor_return_type;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::IdentifierContext;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
+
+pub struct HoverValue {
+    pub kind: Option<SymbolKind>,
+    pub name: Option<String>,
+    pub type_: Type,
+    pub docstring: Option<Docstring>,
+    pub parameter_doc: Option<(String, String)>,
+    pub display: Option<String>,
+    pub show_go_to_links: bool,
+}
+
+impl HoverValue {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn format_symbol_def_locations(t: &Type) -> Option<String> {
+        let symbol_paths = collect_symbol_def_paths(t);
+        let linked_names = symbol_paths
+            .into_iter()
+            .filter_map(|(qname, file_path)| {
+                if let Ok(mut url) = Url::from_file_path(&file_path) {
+                    let start_pos = qname.module().display_range(qname.range()).start;
+                    if let Some(cell) = start_pos.cell() {
+                        url.set_fragment(Some(&format!(
+                            "{},L{},{}",
+                            cell.get(),
+                            start_pos.line_within_cell().get(),
+                            start_pos.column()
+                        )));
+                    } else {
+                        url.set_fragment(Some(&format!(
+                            "L{},{}",
+                            start_pos.line_within_file().get(),
+                            start_pos.column()
+                        )));
+                    }
+                    Some(format!("[{}]({})", qname.id(), url))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        if linked_names.is_empty() {
+            None
+        } else {
+            Some(format!("\n\nGo to {linked_names}"))
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn format_symbol_def_locations(t: &Type) -> Option<String> {
+        None
+    }
+
+    fn resolve_symbol_kind(&self) -> Option<SymbolKind> {
+        match self.kind {
+            Some(SymbolKind::Attribute) if self.type_.is_toplevel_callable() => self
+                .type_
+                .visit_toplevel_func_metadata(&|meta| match &meta.kind {
+                    FunctionKind::Def(func) if func.cls.is_some() => Some(SymbolKind::Method),
+                    _ => Some(SymbolKind::Function),
+                })
+                .unwrap_or(SymbolKind::Method)
+                .into(),
+            Some(other) => Some(other),
+            None => None,
+        }
+    }
+
+    pub fn format(&self) -> Hover {
+        let docstring_formatted = match self.docstring.as_ref().map(|d| d.resolve()) {
+            Some(content) => format!("\n---\n{}", content.trim()),
+            None => String::new(),
+        };
+        let parameter_doc_formatted =
+            self.parameter_doc
+                .as_ref()
+                .map_or(String::new(), |(name, doc)| {
+                    let prefix = if self.docstring.is_some() {
+                        "\n\n---\n"
+                    } else {
+                        "\n---\n"
+                    };
+                    let cleaned = doc.trim().replace('\n', "  \n");
+                    format!("{prefix}**Parameter `{}`**\n{}", name, cleaned)
+                });
+        let kind_formatted = self
+            .resolve_symbol_kind()
+            .map(|kind| format!("{} ", kind.display_for_hover()))
+            .or_else(|| {
+                if self.type_.is_toplevel_callable() {
+                    Some("(function) ".to_owned())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        let name_formatted = self
+            .name
+            .as_ref()
+            .map(|s| format!("{s}: "))
+            .unwrap_or_default();
+        let symbol_def_formatted = if self.show_go_to_links {
+            HoverValue::format_symbol_def_locations(&self.type_).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let type_display = self.display.clone().unwrap_or_else(|| {
+            self.type_
+                .as_lsp_string_with_fallback_name(self.name.as_deref(), LspDisplayMode::Hover)
+        });
+
+        Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: format!(
+                    "```python\n{}{}{}\n```{}{}{}",
+                    kind_formatted,
+                    name_formatted,
+                    type_display,
+                    docstring_formatted,
+                    parameter_doc_formatted,
+                    symbol_def_formatted
+                ),
+            }),
+            range: None,
+        }
+    }
+}
 
 /// Gets all suppressed errors that overlap with the given line.
 ///
@@ -140,120 +280,31 @@ fn position_is_in_docstring(
     body_contains_docstring(ast.body.as_slice(), position)
 }
 
-pub struct HoverValue {
-    pub kind: Option<SymbolKind>,
-    pub name: Option<String>,
-    pub type_: Type,
-    pub docstring: Option<Docstring>,
-    pub parameter_doc: Option<(String, String)>,
-    pub display: Option<String>,
-    pub show_go_to_links: bool,
+/// If we can't determine a symbol name via go-to-definition, fall back to what the
+/// type metadata knows about the callable. This primarily handles third-party stubs
+/// where we only have typeshed information.
+fn fallback_hover_name_from_type(type_: &Type) -> Option<String> {
+    let name = type_.visit_toplevel_func_metadata(&|meta| Some(meta.kind.function_name()));
+    if let Some(name) = name {
+        return Some(name.to_string());
+    }
+    // Recurse through Type wrapper
+    if let Type::Type(inner) = type_ {
+        return fallback_hover_name_from_type(inner);
+    }
+    None
 }
 
-impl HoverValue {
-    #[cfg(not(target_arch = "wasm32"))]
-    fn format_symbol_def_locations(t: &Type) -> Option<String> {
-        let symbol_paths = collect_symbol_def_paths(t);
-        let linked_names = symbol_paths
-            .into_iter()
-            .filter_map(|(qname, file_path)| {
-                if let Ok(mut url) = Url::from_file_path(&file_path) {
-                    let start_pos = qname.module().display_range(qname.range()).start;
-                    if let Some(cell) = start_pos.cell() {
-                        url.set_fragment(Some(&format!(
-                            "{},L{},{}",
-                            cell.get(),
-                            start_pos.line_within_cell().get(),
-                            start_pos.column()
-                        )));
-                    } else {
-                        url.set_fragment(Some(&format!(
-                            "L{},{}",
-                            start_pos.line_within_file().get(),
-                            start_pos.column()
-                        )));
-                    }
-                    Some(format!("[{}]({})", qname.id(), url))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" | ");
-
-        if linked_names.is_empty() {
-            None
-        } else {
-            Some(format!("\n\nGo to {linked_names}"))
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn format_symbol_def_locations(t: &Type) -> Option<String> {
-        None
-    }
-
-    pub fn format(&self) -> Hover {
-        let docstring_formatted = self
-            .docstring
-            .as_ref()
-            .map(|docstring| docstring.resolve())
-            .map_or_else(
-                || "".to_owned(),
-                |content| format!("\n---\n{}", content.trim()),
-            );
-        let parameter_doc_formatted =
-            self.parameter_doc
-                .as_ref()
-                .map_or("".to_owned(), |(name, doc)| {
-                    let prefix = if self.docstring.is_some() {
-                        "\n\n---\n"
-                    } else {
-                        "\n---\n"
-                    };
-                    let cleaned = doc.trim().replace('\n', "  \n");
-                    format!("{prefix}**Parameter `{}`**\n{}", name, cleaned)
-                });
-        let kind_formatted = self.kind.map_or_else(
-            || {
-                if self.type_.is_toplevel_callable() {
-                    "(function) ".to_owned()
-                } else {
-                    String::new()
-                }
-            },
-            |kind| format!("{} ", kind.display_for_hover()),
-        );
-        let name_formatted = self
-            .name
-            .as_ref()
-            .map_or("".to_owned(), |s| format!("{s}: "));
-        let symbol_def_formatted = if self.show_go_to_links {
-            HoverValue::format_symbol_def_locations(&self.type_).unwrap_or("".to_owned())
-        } else {
-            String::new()
-        };
-        let type_display = self.display.clone().unwrap_or_else(|| {
-            self.type_
-                .as_hover_string_with_fallback_name(self.name.as_deref())
-        });
-
-        Hover {
-            contents: HoverContents::Markup(MarkupContent {
-                kind: MarkupKind::Markdown,
-                value: format!(
-                    "```python\n{}{}{}\n```{}{}{}",
-                    kind_formatted,
-                    name_formatted,
-                    type_display,
-                    docstring_formatted,
-                    parameter_doc_formatted,
-                    symbol_def_formatted
-                ),
-            }),
-            range: None,
-        }
-    }
+/// Extract the identifier under the cursor so we can label hover results
+/// even when go-to-definition fails.
+fn identifier_text_at(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<String> {
+    transaction
+        .identifier_at(handle, position)
+        .map(|id| id.identifier.id.to_string())
 }
 
 fn collect_typed_dict_fields_for_hover<'a>(
@@ -300,33 +351,102 @@ fn expand_callable_kwargs_for_hover<'a>(
     }
 }
 
-/// If we can't determine a symbol name via go-to-definition, fall back to what the
-/// type metadata knows about the callable. This primarily handles third-party stubs
-/// where we only have typeshed information.
-fn fallback_hover_name_from_type(type_: &Type) -> Option<String> {
-    let name = type_.check_toplevel_func_metadata(&|meta| {
-        Some(meta.kind.function_name().into_owned().to_string())
-    });
-    if name.is_some() {
-        return name;
-    }
-    // Recurse through Type wrapper
-    if let Type::Type(inner) = type_ {
-        return fallback_hover_name_from_type(inner);
-    }
-    None
+fn parameter_documentation_for_callee(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    callee_range: TextRange,
+) -> Option<HashMap<String, String>> {
+    let position = callee_range.start();
+    let docstring = transaction
+        .find_definition(
+            handle,
+            position,
+            FindPreference {
+                prefer_pyi: false,
+                ..Default::default()
+            },
+        )
+        .into_iter()
+        .find_map(|item| {
+            item.docstring_range
+                .map(|range| (range, item.module.clone()))
+        })
+        .or_else(|| {
+            transaction
+                .find_definition(handle, position, FindPreference::default())
+                .into_iter()
+                .find_map(|item| {
+                    item.docstring_range
+                        .map(|range| (range, item.module.clone()))
+                })
+        })?;
+    let (range, module) = docstring;
+    let docs = parse_parameter_documentation(module.code_at(range));
+    if docs.is_empty() { None } else { Some(docs) }
 }
 
-/// Extract the identifier under the cursor so we can label hover results
-/// even when go-to-definition fails.
-fn identifier_text_at(
+fn keyword_argument_documentation(
     transaction: &Transaction<'_>,
     handle: &Handle,
     position: TextSize,
-) -> Option<String> {
-    transaction
-        .identifier_at(handle, position)
-        .map(|id| id.identifier.id.to_string())
+) -> Option<(String, String)> {
+    let identifier = transaction.identifier_at(handle, position)?;
+    if !matches!(identifier.context, IdentifierContext::KeywordArgument(_)) {
+        return None;
+    }
+    let CallInfo { callee_range, .. } = transaction.get_callables_from_call(handle, position)?;
+    let docs = parameter_documentation_for_callee(transaction, handle, callee_range)?;
+    let name = identifier.identifier.id.to_string();
+    docs.get(name.as_str()).cloned().map(|doc| (name, doc))
+}
+
+fn parameter_definition_documentation(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    definition_range: TextRange,
+    name: &Name,
+) -> Option<(String, String)> {
+    let ast = transaction.get_ast(handle)?;
+    let module = transaction.get_module_info(handle)?;
+
+    let func = ast
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            ruff_python_ast::Stmt::FunctionDef(func) => Some(func),
+            _ => None,
+        })
+        .find(|func| func.range.contains_inclusive(definition_range.start()))?;
+
+    let doc_range = Docstring::range_from_stmts(func.body.as_slice())?;
+    let docs = parse_parameter_documentation(module.code_at(doc_range));
+    let key = name.as_str();
+    docs.get(key).cloned().map(|doc| (key.to_owned(), doc))
+}
+
+/// Check if the cursor position is on the `in` keyword within a for loop or comprehension.
+/// Returns Some(iterable_range) if found, None otherwise.
+fn in_keyword_in_iteration_at(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<TextRange> {
+    let ast = transaction.get_ast(handle)?;
+
+    for node in Ast::locate_node(&ast, position) {
+        // Extract target end and iter range from for statements and comprehensions.
+        // In valid Python syntax, the region between target and iter contains only
+        // whitespace and the `in` keyword, so a position check is sufficient.
+        let (target_end, iter_range) = match node {
+            AnyNodeRef::StmtFor(s) => (s.target.range().end(), s.iter.range()),
+            AnyNodeRef::Comprehension(c) => (c.target.range().end(), c.iter.range()),
+            _ => continue,
+        };
+        if position >= target_end && position < iter_range.start() {
+            return Some(iter_range);
+        }
+    }
+    None
 }
 
 pub fn get_hover(
@@ -369,8 +489,58 @@ pub fn get_hover(
         return None;
     }
 
+    // Check if hovering over `in` keyword in for loop or comprehension. These `in`s are different
+    // from using `in` as a binary comparison operator and therefore needs some special handling.
+    if let Some(iterable_range) = in_keyword_in_iteration_at(transaction, handle, position)
+        && let Some(iterable_type) = transaction.get_type_at(handle, iterable_range.start())
+    {
+        return Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: format!(
+                    "```python\n(keyword) in\n```\n---\nIteration over `{}`",
+                    iterable_type
+                ),
+            }),
+            range: None,
+        });
+    }
+
     // Otherwise, fall through to the existing type hover logic
-    let type_ = transaction.get_type_at(handle, position)?;
+    let mut type_ = transaction.get_type_at(handle, position)?;
+
+    // Helper function to check if we're hovering over a callee and get its range
+    let find_callee_range_at_position = || -> Option<TextRange> {
+        use ruff_python_ast::Expr;
+        let mod_module = transaction.get_ast(handle)?;
+        let mut result = None;
+        mod_module.visit(&mut |expr: &Expr| {
+            if let Expr::Call(call) = expr {
+                // Check if position is within the callee (func) range
+                if call.func.range().contains(position) {
+                    result = Some(call.func.range());
+                }
+            }
+        });
+        result
+    };
+
+    // Check both: hovering in arguments area OR hovering over the callee itself
+    let callee_range_opt = transaction
+        .get_callables_from_call(handle, position)
+        .map(|info| info.callee_range)
+        .or_else(find_callee_range_at_position);
+
+    if let Some(callee_range) = callee_range_opt {
+        let is_constructor = transaction
+            .get_answers(handle)
+            .and_then(|ans| ans.get_type_trace(callee_range))
+            .is_some_and(is_constructor_call);
+        if is_constructor && let Some(new_type) = override_constructor_return_type(type_.clone()) {
+            type_ = new_type;
+        }
+    }
+
     let fallback_name_from_type = fallback_hover_name_from_type(&type_);
     let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
@@ -391,10 +561,7 @@ pub fn get_hover(
         .into_iter()
         .next()
     {
-        let mut kind = metadata.symbol_kind();
-        if matches!(kind, Some(SymbolKind::Attribute)) && type_.is_toplevel_callable() {
-            kind = Some(SymbolKind::Method);
-        }
+        let kind = metadata.symbol_kind();
         let name = {
             let snippet = module.code_at(definition_location);
             if snippet.chars().any(|c| !c.is_whitespace()) {
@@ -402,7 +569,7 @@ pub fn get_hover(
             } else if let Some(name) = display_name.clone() {
                 Some(name)
             } else {
-                fallback_name_from_type.clone()
+                fallback_name_from_type
             }
         };
         (kind, name, docstring_range, Some(module))
@@ -417,7 +584,10 @@ pub fn get_hover(
         let mut cloned = type_.clone();
         move |solver| {
             cloned.visit_toplevel_callable_mut(|c| expand_callable_kwargs_for_hover(&solver, c));
-            cloned.as_hover_string_with_fallback_name(name_for_display.as_deref())
+            cloned.as_lsp_string_with_fallback_name(
+                name_for_display.as_deref(),
+                LspDisplayMode::Hover,
+            )
         }
     });
 
@@ -464,79 +634,6 @@ pub fn get_hover(
     )
 }
 
-fn keyword_argument_documentation(
-    transaction: &Transaction<'_>,
-    handle: &Handle,
-    position: TextSize,
-) -> Option<(String, String)> {
-    let identifier = transaction.identifier_at(handle, position)?;
-    if !matches!(identifier.context, IdentifierContext::KeywordArgument(_)) {
-        return None;
-    }
-    let (_, _, _, callee_range) = transaction.get_callables_from_call(handle, position)?;
-    let docs = parameter_documentation_for_callee(transaction, handle, callee_range)?;
-    let name = identifier.identifier.id.to_string();
-    docs.get(name.as_str()).cloned().map(|doc| (name, doc))
-}
-
-fn parameter_definition_documentation(
-    transaction: &Transaction<'_>,
-    handle: &Handle,
-    definition_range: TextRange,
-    name: &Name,
-) -> Option<(String, String)> {
-    let ast = transaction.get_ast(handle)?;
-    let module = transaction.get_module_info(handle)?;
-
-    let func = ast
-        .body
-        .iter()
-        .filter_map(|stmt| match stmt {
-            ruff_python_ast::Stmt::FunctionDef(func) => Some(func),
-            _ => None,
-        })
-        .find(|func| func.range.contains_inclusive(definition_range.start()))?;
-
-    let doc_range = Docstring::range_from_stmts(func.body.as_slice())?;
-    let docs = parse_parameter_documentation(module.code_at(doc_range));
-    let key = name.as_str();
-    docs.get(key).cloned().map(|doc| (key.to_owned(), doc))
-}
-
-fn parameter_documentation_for_callee(
-    transaction: &Transaction<'_>,
-    handle: &Handle,
-    callee_range: TextRange,
-) -> Option<HashMap<String, String>> {
-    let position = callee_range.start();
-    let docstring = transaction
-        .find_definition(
-            handle,
-            position,
-            FindPreference {
-                prefer_pyi: false,
-                ..Default::default()
-            },
-        )
-        .into_iter()
-        .find_map(|item| {
-            item.docstring_range
-                .map(|range| (range, item.module.clone()))
-        })
-        .or_else(|| {
-            transaction
-                .find_definition(handle, position, FindPreference::default())
-                .into_iter()
-                .find_map(|item| {
-                    item.docstring_range
-                        .map(|range| (range, item.module.clone()))
-                })
-        })?;
-    let (range, module) = docstring;
-    let docs = parse_parameter_documentation(module.code_at(range));
-    if docs.is_empty() { None } else { Some(docs) }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -551,11 +648,12 @@ mod tests {
     use pyrefly_types::callable::FuncMetadata;
     use pyrefly_types::callable::Function;
     use pyrefly_types::callable::FunctionKind;
+    use pyrefly_types::heap::TypeHeap;
     use ruff_python_ast::name::Name;
 
     use super::*;
 
-    fn make_function_type(module_name: &str, func_name: &str) -> Type {
+    fn make_function_type(heap: &TypeHeap, module_name: &str, func_name: &str) -> Type {
         let module = Module::new(
             ModuleName::from_str(module_name),
             ModulePath::filesystem(PathBuf::from(format!("{module_name}.pyi"))),
@@ -569,22 +667,24 @@ mod tests {
             })),
             flags: FuncFlags::default(),
         };
-        Type::Function(Box::new(Function {
-            signature: Callable::ellipsis(Type::None),
+        heap.mk_function(Function {
+            signature: Callable::ellipsis(heap.mk_none()),
             metadata,
-        }))
+        })
     }
 
     #[test]
     fn fallback_uses_function_metadata() {
-        let ty = make_function_type("numpy", "arange");
+        let heap = TypeHeap::new();
+        let ty = make_function_type(&heap, "numpy", "arange");
         let fallback = fallback_hover_name_from_type(&ty);
         assert_eq!(fallback.as_deref(), Some("arange"));
     }
 
     #[test]
     fn fallback_recurses_through_type_wrapper() {
-        let ty = Type::Type(Box::new(make_function_type("pkg.subpkg", "run")));
+        let heap = TypeHeap::new();
+        let ty = heap.mk_type(make_function_type(&heap, "pkg.subpkg", "run"));
         let fallback = fallback_hover_name_from_type(&ty);
         assert_eq!(fallback.as_deref(), Some("run"));
     }

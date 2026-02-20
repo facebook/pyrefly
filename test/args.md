@@ -35,21 +35,7 @@ $ mkdir $TMPDIR/site_package_path && \
 $ mkdir $TMPDIR/site_package_missing_source && \
 > mkdir $TMPDIR/site_package_missing_source/pkg-stubs && \
 > echo "class X: ..." > $TMPDIR/site_package_missing_source/pkg-stubs/__init__.py && \
-> echo "import pkg" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --ignore-missing-source=false --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
-ERROR * Found stubs for `pkg`, but no source* (glob)
-[1]
-```
-
-```scrut {output_stream.stdout}
-$ echo "from pkg import X" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --ignore-missing-source=false --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
-ERROR * Found stubs for `pkg`, but no source* (glob)
-[1]
-```
-
-```scrut {output_stream.stdout}
-$ echo "from pkg import X" > $TMPDIR/foo.py && \
+> echo "from pkg import X" > $TMPDIR/foo.py && \
 > $PYREFLY check $TMPDIR/foo.py --error=missing-source --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
 ERROR * Found stubs for `pkg`, but no source* (glob)
 [1]
@@ -61,7 +47,7 @@ ERROR * Found stubs for `pkg`, but no source* (glob)
 $ mkdir $TMPDIR/error_missing_source && \
 > echo -e '[errors]\nmissing-source="error"' > $TMPDIR/error_missing_source/pyrefly.toml && \
 > echo "from pkg import X" > $TMPDIR/error_missing_source/foo.py && \
-> $PYREFLY check $TMPDIR/error_missing_source/foo.py --ignore-missing-source --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
+> $PYREFLY check $TMPDIR/error_missing_source/foo.py --ignore=missing-source --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
 [0]
 ```
 
@@ -88,7 +74,7 @@ $ mkdir $TMPDIR/site_package_missing_stubs && \
 > touch $TMPDIR/site_package_missing_stubs/django/forms/__init__.py && \
 > echo "from django import forms; from typing import reveal_type; reveal_type(forms)" > $TMPDIR/foo.py && \
 > $PYREFLY check $TMPDIR/foo.py --error untyped-import --ignore missing-module-attribute --site-package-path $TMPDIR/site_package_missing_stubs --output-format=min-text
-ERROR * Missing type stubs for `django` * (glob)
+ERROR * Cannot find type stubs for module `django` * (glob)
  INFO * revealed type: Module[django.forms] * (glob)
 [1]
 ```

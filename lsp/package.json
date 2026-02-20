@@ -66,6 +66,23 @@
                 "command": "pyrefly.unfoldAllDocstrings"
             }
         ],
+        "semanticTokenScopes": [
+            {
+                "language": "python",
+                "scopes": {
+                    "variable.readonly": [
+                        "variable.other.constant.python"
+                    ]
+                }
+            }
+        ],
+        "configurationDefaults": {
+            "editor.semanticTokenColorCustomizations": {
+                "rules": {
+                    "variable.readonly:python": "#4EC9B0"
+                }
+            }
+        },
         "configuration": {
             "properties": {
                 "pyrefly.lspPath": {
@@ -86,7 +103,8 @@
                 "python.pyrefly.disableLanguageServices": {
                     "type": "boolean",
                     "default": false,
-                    "description": "If true, pyrefly will not provide other IDE services like completions, hover, definition, etc. To control type errors, see `python.pyrefly.displayTypeErrors`"
+                    "description": "If true, pyrefly will not provide other IDE services like completions, hover, definition, etc. To control type errors, see `python.pyrefly.displayTypeErrors`",
+                    "scope": "resource"
                 },
                 "python.pyrefly.displayTypeErrors": {
                     "type": "string",
@@ -97,7 +115,8 @@
                         "force-on",
                         "force-off",
                         "error-missing-imports"
-                    ]
+                    ],
+                    "scope": "resource"
                 },
                 "pyrefly.trace.server": {
                     "type": "string",
@@ -112,6 +131,7 @@
                     "type": "object",
                     "default": {},
                     "description": "Disable specific language services. Set individual services to true to disable them.",
+                    "scope": "resource",
                     "properties": {
                         "hover": {
                             "type": "boolean",
@@ -189,6 +209,27 @@
                     "default": true,
                     "description": "Controls whether hover tooltips include 'Go to definition' and 'Go to type definition' navigation links.",
                     "scope": "resource"
+                },
+                "python.analysis.completeFunctionParens": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Automatically insert parentheses when completing a function or method.",
+                    "scope": "resource"
+                },
+                "python.pyrefly.syncNotebooks": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "If true, Pyrefly will sync notebook documents with the language server. Set to false to disable notebook support."
+                },
+                "python.pyrefly.streamDiagnostics": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes. This is a global setting that applies to all workspaces."
+                },
+                "pyrefly.commentFoldingRanges": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Controls whether comment section folding ranges are included in the editor. When true, comments following the pattern '# Section Name ----' (with 4+ trailing dashes) create collapsible regions, similar to R's code section convention."
                 }
             }
         }

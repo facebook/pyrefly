@@ -116,3 +116,41 @@ Declaration Result:
         report.trim()
     );
 }
+
+#[test]
+fn goto_declaration_module_binding() {
+    let code_import_provider: &str = r#"
+def helper():
+    pass
+"#;
+    let code_test: &str = r#"
+import import_provider
+
+def main():
+    import_provider
+#   ^
+"#;
+
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code_test),
+            ("import_provider", code_import_provider),
+        ],
+        get_declaration_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+5 |     import_provider
+        ^
+Declaration Result:
+2 | import import_provider
+           ^^^^^^^^^^^^^^^
+
+
+# import_provider.py
+"#
+        .trim(),
+        report.trim()
+    );
+}

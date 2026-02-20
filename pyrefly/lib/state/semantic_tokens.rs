@@ -14,21 +14,44 @@ use lsp_types::SemanticTokensLegend;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit as _;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
 use crate::binding::binding::Key;
+
+const SELF_PARAMETER_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("selfParameter");
+
+/// Adds the DEFAULT_LIBRARY modifier if the module is a standard library module
+/// (builtins, typing, typing_extensions).
+fn maybe_add_default_library_modifier(
+    module: ModuleName,
+    modifiers: &mut Vec<SemanticTokenModifier>,
+) {
+    if ["builtins", "typing", "typing_extensions"].contains(&module.as_str()) {
+        modifiers.push(SemanticTokenModifier::DEFAULT_LIBRARY);
+    }
+}
+
+fn maybe_add_self_parameter_modifier(name: &str, modifiers: &mut Vec<SemanticTokenModifier>) {
+    if name == "self" || name == "cls" {
+        modifiers.push(SELF_PARAMETER_MODIFIER.clone());
+    }
+}
 
 pub struct SemanticTokensLegends {
     token_types_index: HashMap<SemanticTokenType, u32>,
@@ -74,6 +97,7 @@ impl SemanticTokensLegends {
                 SemanticTokenModifier::MODIFICATION,
                 SemanticTokenModifier::DOCUMENTATION,
                 SemanticTokenModifier::DEFAULT_LIBRARY,
+                SELF_PARAMETER_MODIFIER.clone(),
             ],
         }
     }
@@ -223,27 +247,6 @@ impl SemanticTokenBuilder {
             .any(|disabled| disabled.contains_range(range))
     }
 
-    pub fn process_key(
-        &mut self,
-        key: &Key,
-        definition_module: ModuleName,
-        symbol_kind: SymbolKind,
-    ) {
-        let reference_range = key.range();
-        let (token_type, mut token_modifiers) =
-            symbol_kind.to_lsp_semantic_token_type_with_modifiers();
-        let is_default_library = {
-            let module_name_str = definition_module.as_str();
-            module_name_str == "builtins"
-                || module_name_str == "typing"
-                || module_name_str == "typing_extensions"
-        };
-        if is_default_library {
-            token_modifiers.push(SemanticTokenModifier::DEFAULT_LIBRARY);
-        }
-        self.push_if_in_range(reference_range, token_type, token_modifiers);
-    }
-
     fn process_arguments(&mut self, args: &Arguments) {
         for keyword in &args.keywords {
             if let Some(arg) = &keyword.arg {
@@ -256,51 +259,166 @@ impl SemanticTokenBuilder {
         &mut self,
         x: &Expr,
         get_type_of_attribute: &dyn Fn(TextRange) -> Option<Type>,
+        get_symbol_kind: &dyn Fn(&Key) -> Option<(ModuleName, SymbolKind)>,
     ) {
         match x {
+            Expr::Name(name) => {
+                // Use ExprContext to pick the right key type:
+                // Store context -> Definition (name definition sites)
+                // Load/Del context -> BoundName (name usages/references)
+                let key = match name.ctx {
+                    ExprContext::Store => Key::Definition(ShortIdentifier::expr_name(name)),
+                    _ => Key::BoundName(ShortIdentifier::expr_name(name)),
+                };
+                if let Some((def_module, symbol_kind)) = get_symbol_kind(&key) {
+                    let (token_type, mut token_modifiers) =
+                        symbol_kind.to_lsp_semantic_token_type_with_modifiers();
+                    if symbol_kind == SymbolKind::Parameter {
+                        maybe_add_self_parameter_modifier(name.id.as_str(), &mut token_modifiers);
+                    }
+                    maybe_add_default_library_modifier(def_module, &mut token_modifiers);
+                    self.push_if_in_range(name.range, token_type, token_modifiers);
+                } else if name.ctx == ExprContext::Store {
+                    // For Store context (variable definitions), fallback to VARIABLE
+                    // even if we can't resolve the symbol kind
+                    self.push_if_in_range(name.range, SemanticTokenType::VARIABLE, Vec::new());
+                }
+            }
             Expr::Call(call) => {
                 self.process_arguments(&call.arguments);
-                x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute));
+                x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
             }
             Expr::Attribute(attr) => {
                 // todo(samzhou19815): if the class's base is Enum, it should be ENUM_MEMBER
                 let kind = match get_type_of_attribute(attr.range()) {
-                    Some(Type::BoundMethod(_)) => SemanticTokenType::METHOD,
-                    Some(Type::Function(_) | Type::Callable(_)) => SemanticTokenType::FUNCTION,
-                    Some(Type::ClassDef(_)) => SemanticTokenType::CLASS,
+                    Some(ty) if ty.is_toplevel_callable() => {
+                        let is_method = ty.visit_toplevel_func_metadata(&|meta| {
+                            matches!(&meta.kind, FunctionKind::Def(func) if func.cls.is_some())
+                        });
+                        if is_method {
+                            SemanticTokenType::METHOD
+                        } else {
+                            SemanticTokenType::FUNCTION
+                        }
+                    }
+                    Some(Type::ClassDef(_) | Type::Type(_)) => SemanticTokenType::CLASS,
+                    Some(Type::TypeAlias(_) | Type::UntypedAlias(_)) => {
+                        SemanticTokenType::INTERFACE
+                    }
+                    Some(Type::Module(_)) => SemanticTokenType::NAMESPACE,
                     _ => SemanticTokenType::PROPERTY,
                 };
                 self.push_if_in_range(attr.attr.range(), kind, Vec::new());
                 attr.value
-                    .visit(&mut |x| self.process_expr(x, get_type_of_attribute));
+                    .visit(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
+            }
+            // Comprehensions need special handling because the Visit trait doesn't visit targets
+            Expr::ListComp(list_comp) => {
+                for comp in &list_comp.generators {
+                    comp.target.visit(&mut |e| {
+                        self.process_expr(e, get_type_of_attribute, get_symbol_kind)
+                    });
+                }
+                x.recurse(&mut |e| self.process_expr(e, get_type_of_attribute, get_symbol_kind));
+            }
+            Expr::SetComp(set_comp) => {
+                for comp in &set_comp.generators {
+                    comp.target.visit(&mut |e| {
+                        self.process_expr(e, get_type_of_attribute, get_symbol_kind)
+                    });
+                }
+                x.recurse(&mut |e| self.process_expr(e, get_type_of_attribute, get_symbol_kind));
+            }
+            Expr::DictComp(dict_comp) => {
+                for comp in &dict_comp.generators {
+                    comp.target.visit(&mut |e| {
+                        self.process_expr(e, get_type_of_attribute, get_symbol_kind)
+                    });
+                }
+                x.recurse(&mut |e| self.process_expr(e, get_type_of_attribute, get_symbol_kind));
+            }
+            Expr::Generator(generator) => {
+                for comp in &generator.generators {
+                    comp.target.visit(&mut |e| {
+                        self.process_expr(e, get_type_of_attribute, get_symbol_kind)
+                    });
+                }
+                x.recurse(&mut |e| self.process_expr(e, get_type_of_attribute, get_symbol_kind));
             }
             _ => {
-                x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute));
+                x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
             }
         }
     }
 
-    fn process_stmt(&mut self, x: &Stmt) {
+    fn process_stmt(
+        &mut self,
+        x: &Stmt,
+        in_class: bool,
+        get_symbol_kind: &dyn Fn(&Key) -> Option<(ModuleName, SymbolKind)>,
+    ) {
         match x {
             Stmt::ClassDef(class_def) => {
-                if self.is_disabled(class_def.range) {
-                    self.push_if_in_range(
-                        class_def.name.range,
-                        SemanticTokenType::CLASS,
-                        Vec::new(),
-                    );
+                self.push_if_in_range(class_def.name.range, SemanticTokenType::CLASS, Vec::new());
+                if let Some(type_params) = &class_def.type_params {
+                    for tp in &type_params.type_params {
+                        self.push_if_in_range(
+                            tp.name().range(),
+                            SemanticTokenType::TYPE_PARAMETER,
+                            Vec::new(),
+                        );
+                    }
                 }
-                x.recurse(&mut |x| self.process_stmt(x));
+                x.recurse(&mut |x| self.process_stmt(x, true, get_symbol_kind));
             }
             Stmt::FunctionDef(function_def) => {
-                if self.is_disabled(function_def.range) {
+                let token_type = if in_class {
+                    SemanticTokenType::METHOD
+                } else {
+                    SemanticTokenType::FUNCTION
+                };
+                self.push_if_in_range(function_def.name.range, token_type, Vec::new());
+                if let Some(type_params) = &function_def.type_params {
+                    for tp in &type_params.type_params {
+                        self.push_if_in_range(
+                            tp.name().range(),
+                            SemanticTokenType::TYPE_PARAMETER,
+                            Vec::new(),
+                        );
+                    }
+                }
+                // Highlight all parameters as PARAMETER
+                for param in function_def.parameters.iter_non_variadic_params() {
+                    let mut modifiers = Vec::new();
+                    maybe_add_self_parameter_modifier(
+                        param.parameter.name.as_str(),
+                        &mut modifiers,
+                    );
                     self.push_if_in_range(
-                        function_def.name.range,
-                        SemanticTokenType::FUNCTION,
-                        Vec::new(),
+                        param.parameter.name.range(),
+                        SemanticTokenType::PARAMETER,
+                        modifiers,
                     );
                 }
-                x.recurse(&mut |x| self.process_stmt(x));
+                if let Some(vararg) = &function_def.parameters.vararg {
+                    let mut modifiers = Vec::new();
+                    maybe_add_self_parameter_modifier(vararg.name.as_str(), &mut modifiers);
+                    self.push_if_in_range(
+                        vararg.name.range(),
+                        SemanticTokenType::PARAMETER,
+                        modifiers,
+                    );
+                }
+                if let Some(kwarg) = &function_def.parameters.kwarg {
+                    let mut modifiers = Vec::new();
+                    maybe_add_self_parameter_modifier(kwarg.name.as_str(), &mut modifiers);
+                    self.push_if_in_range(
+                        kwarg.name.range(),
+                        SemanticTokenType::PARAMETER,
+                        modifiers,
+                    );
+                }
+                x.recurse(&mut |x| self.process_stmt(x, false, get_symbol_kind));
             }
             Stmt::Assign(assign) => {
                 if self.is_disabled(assign.range()) {
@@ -314,7 +432,7 @@ impl SemanticTokenBuilder {
                         }
                     }
                 }
-                x.recurse(&mut |x| self.process_stmt(x));
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
             }
             Stmt::Try(stmt_try) => {
                 for ExceptHandler::ExceptHandler(handler) in stmt_try.handlers.iter() {
@@ -322,6 +440,7 @@ impl SemanticTokenBuilder {
                         self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
                     }
                 }
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
             }
             Stmt::With(with) => {
                 for with_item in with.items.iter() {
@@ -329,28 +448,81 @@ impl SemanticTokenBuilder {
                         self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
                     }
                 }
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
             }
             Stmt::Import(StmtImport { names, .. }) => {
                 for alias in names {
-                    self.push_if_in_range(alias.name.range, SemanticTokenType::NAMESPACE, vec![]);
+                    // For `import X`, look up the import to get defaultLibrary modifier.
+                    // For dotted imports like `import x.y`, the key uses just the first component,
+                    // but we can't easily extract that from the AST here, so skip the lookup.
+                    let mut modifiers = vec![];
+                    if !alias.name.id.contains('.') {
+                        let import_key =
+                            Key::Import(Box::new((Name::new(&alias.name.id), alias.name.range)));
+                        if let Some((def_module, _)) = get_symbol_kind(&import_key) {
+                            maybe_add_default_library_modifier(def_module, &mut modifiers);
+                        }
+                    }
+                    self.push_if_in_range(
+                        alias.name.range,
+                        SemanticTokenType::NAMESPACE,
+                        modifiers.clone(),
+                    );
+                    // If there's an alias, also highlight that as NAMESPACE
                     if let Some(asname) = &alias.asname {
-                        self.push_if_in_range(asname.range, SemanticTokenType::NAMESPACE, vec![]);
+                        self.push_if_in_range(
+                            asname.range,
+                            SemanticTokenType::NAMESPACE,
+                            modifiers,
+                        );
                     }
                 }
             }
-            Stmt::ImportFrom(StmtImportFrom {
-                module: Some(module),
-                ..
-            }) => {
-                self.push_if_in_range(module.range, SemanticTokenType::NAMESPACE, vec![]);
+            Stmt::ImportFrom(StmtImportFrom { module, names, .. }) => {
+                if let Some(module) = module {
+                    self.push_if_in_range(module.range, SemanticTokenType::NAMESPACE, vec![]);
+                }
+                for alias in names {
+                    // Look up the symbol kind using the bound name's key
+                    let bound_name = alias.asname.as_ref().unwrap_or(&alias.name);
+                    let def_key = Key::Definition(ShortIdentifier::new(bound_name));
+                    if let Some((def_module, symbol_kind)) = get_symbol_kind(&def_key) {
+                        let (token_type, mut token_modifiers) =
+                            symbol_kind.to_lsp_semantic_token_type_with_modifiers();
+                        maybe_add_default_library_modifier(def_module, &mut token_modifiers);
+                        // If there's an alias, highlight the original name with the resolved type
+                        if alias.asname.is_some() {
+                            self.push_if_in_range(
+                                alias.name.range,
+                                token_type.clone(),
+                                token_modifiers.clone(),
+                            );
+                        }
+                        self.push_if_in_range(bound_name.range, token_type, token_modifiers);
+                    } else {
+                        // Fallback to NAMESPACE if we can't resolve
+                        if alias.asname.is_some() {
+                            self.push_if_in_range(
+                                alias.name.range,
+                                SemanticTokenType::NAMESPACE,
+                                vec![],
+                            );
+                        }
+                        self.push_if_in_range(
+                            bound_name.range,
+                            SemanticTokenType::NAMESPACE,
+                            vec![],
+                        );
+                    }
+                }
             }
             Stmt::AnnAssign(ann_assign) => {
                 if let Expr::Name(name) = &*ann_assign.target {
                     self.push_if_in_range(name.range, SemanticTokenType::VARIABLE, vec![]);
                 }
-                x.recurse(&mut |x| self.process_stmt(x));
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
             }
-            _ => x.recurse(&mut |x| self.process_stmt(x)),
+            _ => x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind)),
         }
     }
 
@@ -358,11 +530,12 @@ impl SemanticTokenBuilder {
         &mut self,
         ast: &ModModule,
         get_type_of_attribute: &dyn Fn(TextRange) -> Option<Type>,
+        get_symbol_kind: &dyn Fn(&Key) -> Option<(ModuleName, SymbolKind)>,
     ) {
         for s in &ast.body {
-            self.process_stmt(s);
+            self.process_stmt(s, false, get_symbol_kind);
         }
-        ast.visit(&mut |e| self.process_expr(e, get_type_of_attribute));
+        ast.visit(&mut |e| self.process_expr(e, get_type_of_attribute, get_symbol_kind));
     }
 
     pub fn all_tokens_sorted(self) -> Vec<SemanticTokenWithFullRange> {

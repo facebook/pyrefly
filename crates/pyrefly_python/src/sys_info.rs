@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Ordering;
 use std::convert::Infallible;
 use std::fmt;
 use std::fmt::Display;
@@ -24,7 +25,11 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprNumberLiteral;
+use ruff_python_ast::ExprSet;
+use ruff_python_ast::ExprSlice;
+use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtIf;
 use ruff_python_ast::UnaryOp;
@@ -207,15 +212,38 @@ impl PythonPlatform {
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, Hash, Default)]
 pub struct SysInfo(Arc<WithHash<SysInfoInner>>);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct SysInfoInner {
     version: PythonVersion,
     platform: PythonPlatform,
+    type_checking: bool,
+}
+
+impl Default for SysInfoInner {
+    fn default() -> Self {
+        Self {
+            version: PythonVersion::default(),
+            platform: PythonPlatform::default(),
+            type_checking: true,
+        }
+    }
 }
 
 impl SysInfo {
     pub fn new(version: PythonVersion, platform: PythonPlatform) -> Self {
-        Self(Arc::new(WithHash::new(SysInfoInner { version, platform })))
+        Self(Arc::new(WithHash::new(SysInfoInner {
+            version,
+            platform,
+            type_checking: true,
+        })))
+    }
+
+    pub fn new_without_type_checking(version: PythonVersion, platform: PythonPlatform) -> Self {
+        Self(Arc::new(WithHash::new(SysInfoInner {
+            version,
+            platform,
+            type_checking: false,
+        })))
     }
 
     pub fn version(&self) -> PythonVersion {
@@ -224,6 +252,10 @@ impl SysInfo {
 
     pub fn platform(&self) -> &PythonPlatform {
         &self.0.key().platform
+    }
+
+    pub fn type_checking(&self) -> bool {
+        self.0.key().type_checking
     }
 }
 
@@ -283,15 +315,20 @@ impl<'de> Deserialize<'de> for SysInfo {
     }
 }
 
-#[derive(Debug, PartialEq, PartialOrd)]
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
 enum Value {
     Tuple(Vec<Value>),
     String(String),
     Int(i64),
     Bool(bool),
-    /// I know what the value evaluates to when considered truthy, but not it's precise outcome.
+    /// I know what the value evaluates to when considered truthy, but not its precise outcome.
     /// We make sure below that it never compares equal to itself
     Truthiness(bool),
+    /// Represents the python version, as returned by `sys.version_info`
+    /// This is a tuple containing (major, minor, micro) and potentially the release level and serial.
+    /// See https://docs.python.org/fr/3/library/sys.html#sys.version_info
+    /// When evaluating it, we must assume the release level and serial are unknown.
+    VersionInfo(PythonVersion),
 }
 
 impl Value {
@@ -302,34 +339,143 @@ impl Value {
             Value::Int(x) => *x != 0,
             Value::String(x) => !x.is_empty(),
             Value::Tuple(x) => !x.is_empty(),
+            Value::VersionInfo(_) => true,
         }
     }
 
     fn same_type(&self, other: &Value) -> bool {
         match (self, other) {
             (Value::Tuple(_), Value::Tuple(_)) => true,
+            (Value::Tuple(_), Value::VersionInfo(_)) => true,
             (Value::String(_), Value::String(_)) => true,
             (Value::Int(_), Value::Int(_)) => true,
             (Value::Bool(_), Value::Bool(_)) => true,
-            (Value::Truthiness(_), Value::Truthiness(_)) => false, // We don't know if they are the same ype
+            (Value::Truthiness(_), Value::Truthiness(_)) => false, // We don't know if they are the same type
+            (Value::VersionInfo(_), Value::VersionInfo(_)) => true,
+            (Value::VersionInfo(_), Value::Tuple(_)) => true,
             _ => false,
         }
     }
 
     fn compare(&self, op: CmpOp, other: &Value) -> Option<bool> {
+        match op {
+            CmpOp::In | CmpOp::NotIn => {
+                let contains = match other {
+                    Value::Tuple(values) => values
+                        .iter()
+                        .any(|value| self.compare(CmpOp::Eq, value) == Some(true)),
+                    _ => return None,
+                };
+                return Some(if matches!(op, CmpOp::In) {
+                    contains
+                } else {
+                    !contains
+                });
+            }
+            _ => {}
+        }
+
         if !self.same_type(other) {
             return None; // Someone got confused, or we are working with Truthiness
         }
-        Some(match op {
-            CmpOp::Eq => self == other,
-            CmpOp::NotEq => self != other,
-            CmpOp::Lt => self < other,
-            CmpOp::LtE => self <= other,
-            CmpOp::Gt => self > other,
-            CmpOp::GtE => self >= other,
-            _ => return None,
+
+        Some(match (self, other) {
+            (Value::VersionInfo(left), Value::Tuple(right)) => {
+                compare_version_with_tuple(left, right, op)?
+            }
+            (Value::Tuple(left), Value::VersionInfo(right)) => {
+                compare_tuple_with_version(left, right, op)?
+            }
+            (Value::VersionInfo(left), Value::VersionInfo(right)) => {
+                compare_versions(left, right, op)?
+            }
+            _ => match op {
+                CmpOp::Eq => self == other,
+                CmpOp::NotEq => self != other,
+                CmpOp::Lt => self < other,
+                CmpOp::LtE => self <= other,
+                CmpOp::Gt => self > other,
+                CmpOp::GtE => self >= other,
+                _ => return None,
+            },
         })
     }
+}
+
+fn compare_versions(left: &PythonVersion, right: &PythonVersion, op: CmpOp) -> Option<bool> {
+    ordering_matches(left.cmp(right), op)
+}
+
+fn compare_version_with_tuple(version: &PythonVersion, tuple: &[Value], op: CmpOp) -> Option<bool> {
+    let tuple = tuple_as_ints(tuple)?;
+    compare_version_tuple(version, &tuple, op, true)
+}
+
+fn compare_tuple_with_version(tuple: &[Value], version: &PythonVersion, op: CmpOp) -> Option<bool> {
+    let tuple = tuple_as_ints(tuple)?;
+    compare_version_tuple(version, &tuple, op, false)
+}
+
+fn compare_version_tuple(
+    version: &PythonVersion,
+    tuple: &[i64],
+    op: CmpOp,
+    version_on_left: bool,
+) -> Option<bool> {
+    if tuple.is_empty() || tuple.len() > 3 {
+        return None;
+    }
+    let version_tuple = [
+        version.major as i64,
+        version.minor as i64,
+        version.micro as i64,
+    ];
+    match op {
+        CmpOp::Eq => Some(version_tuple[..tuple.len()] == tuple[..]),
+        CmpOp::NotEq => Some(version_tuple[..tuple.len()] != tuple[..]),
+        CmpOp::Lt | CmpOp::LtE | CmpOp::Gt | CmpOp::GtE => {
+            let ordering = if version_on_left {
+                lexicographic_cmp(&version_tuple, tuple)
+            } else {
+                lexicographic_cmp(tuple, &version_tuple)
+            };
+            ordering_matches(ordering, op)
+        }
+        _ => None,
+    }
+}
+
+fn ordering_matches(ordering: Ordering, op: CmpOp) -> Option<bool> {
+    Some(match op {
+        CmpOp::Eq => ordering == Ordering::Equal,
+        CmpOp::NotEq => ordering != Ordering::Equal,
+        CmpOp::Lt => ordering == Ordering::Less,
+        CmpOp::LtE => ordering != Ordering::Greater,
+        CmpOp::Gt => ordering == Ordering::Greater,
+        CmpOp::GtE => ordering != Ordering::Less,
+        _ => return None,
+    })
+}
+
+fn lexicographic_cmp(left: &[i64], right: &[i64]) -> Ordering {
+    for (left_item, right_item) in left.iter().zip(right.iter()) {
+        match left_item.cmp(right_item) {
+            Ordering::Equal => continue,
+            ordering => return ordering,
+        }
+    }
+    left.len().cmp(&right.len())
+}
+
+fn tuple_as_ints(tuple: &[Value]) -> Option<Vec<i64>> {
+    let mut ints = Vec::with_capacity(tuple.len());
+    for value in tuple {
+        match value {
+            Value::Int(value) => ints.push(*value),
+            _ => return None,
+        }
+    }
+    Some(ints)
 }
 
 impl SysInfo {
@@ -354,15 +500,12 @@ impl SysInfo {
             {
                 match attr.as_str() {
                     "platform" => Some(Value::String(self.0.platform.as_str().to_owned())),
-                    "version_info" => Some(Value::Tuple(vec![
-                        Value::Int(self.0.version.major as i64),
-                        Value::Int(self.0.version.minor as i64),
-                    ])),
+                    "version_info" => Some(Value::VersionInfo(self.0.version)),
                     _ => None,
                 }
             }
             Expr::Name(name) if Self::is_type_checking_constant_name(name.id()) => {
-                Some(Value::Bool(true))
+                Some(Value::Bool(self.type_checking()))
             }
             Expr::Attribute(ExprAttribute {
                 // We support TYPE_CHECKING regardless of which import (or reimport) it is from.
@@ -370,7 +513,7 @@ impl SysInfo {
                 attr,
                 ..
             }) if value.is_name_expr() && Self::is_type_checking_constant_name(attr.as_str()) => {
-                Some(Value::Bool(true))
+                Some(Value::Bool(self.type_checking()))
             }
             Expr::Call(ExprCall {
                 func, arguments, ..
@@ -383,8 +526,18 @@ impl SysInfo {
             {
                 Some(Value::Bool(x.starts_with(&y)))
             }
+            Expr::Subscript(ExprSubscript { value, slice, .. }) => {
+                let base = self.evaluate(value)?;
+                self.subscript_value(&base, slice)
+            }
             Expr::Tuple(x) => Some(Value::Tuple(
                 x.elts.try_map(|x| self.evaluate(x).ok_or(())).ok()?,
+            )),
+            Expr::List(ExprList { elts, .. }) => Some(Value::Tuple(
+                elts.try_map(|x| self.evaluate(x).ok_or(())).ok()?,
+            )),
+            Expr::Set(ExprSet { elts, .. }) => Some(Value::Tuple(
+                elts.try_map(|x| self.evaluate(x).ok_or(())).ok()?,
             )),
             Expr::NumberLiteral(ExprNumberLiteral { value: i, .. }) => {
                 Some(Value::Int(i.as_int()?.as_i64()?))
@@ -431,6 +584,78 @@ impl SysInfo {
                 }
                 _ => None,
             },
+            _ => None,
+        }
+    }
+
+    fn subscript_value(&self, base: &Value, slice: &Expr) -> Option<Value> {
+        match base {
+            Value::Tuple(values) => self.subscript_tuple(values, slice),
+            Value::VersionInfo(version) => {
+                let components = [
+                    Value::Int(version.major as i64),
+                    Value::Int(version.minor as i64),
+                    Value::Int(version.micro as i64),
+                ];
+                self.subscript_tuple(&components, slice)
+            }
+            _ => None,
+        }
+    }
+
+    fn subscript_tuple(&self, values: &[Value], slice: &Expr) -> Option<Value> {
+        match slice {
+            Expr::Slice(ExprSlice {
+                lower, upper, step, ..
+            }) => {
+                let step = match step.as_deref() {
+                    Some(expr) => self.eval_index(expr)?,
+                    None => 1,
+                };
+                if step != 1 {
+                    return None;
+                }
+                let len = values.len() as i64;
+                let mut start = match lower.as_deref() {
+                    Some(expr) => self.eval_index(expr)?,
+                    None => 0,
+                };
+                let mut end = match upper.as_deref() {
+                    Some(expr) => self.eval_index(expr)?,
+                    None => len,
+                };
+                if start < 0 {
+                    start += len;
+                }
+                if end < 0 {
+                    end += len;
+                }
+                start = start.clamp(0, len);
+                end = end.clamp(0, len);
+                if start > end {
+                    return Some(Value::Tuple(Vec::new()));
+                }
+                let start = start as usize;
+                let end = end as usize;
+                Some(Value::Tuple(values[start..end].to_vec()))
+            }
+            _ => {
+                let mut index = self.eval_index(slice)?;
+                let len = values.len() as i64;
+                if index < 0 {
+                    index += len;
+                }
+                if index < 0 || index >= len {
+                    return None;
+                }
+                Some(values[index as usize].clone())
+            }
+        }
+    }
+
+    fn eval_index(&self, expr: &Expr) -> Option<i64> {
+        match self.evaluate(expr)? {
+            Value::Int(value) => Some(value),
             _ => None,
         }
     }

@@ -9,6 +9,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_graph::index::Idx;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::TypeParams;
 use ruff_text_size::Ranged;
@@ -25,7 +26,6 @@ use crate::binding::binding::KeyTParams;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
-use crate::graph::index::Idx;
 use crate::types::class::Class;
 use crate::types::types::TParams;
 use crate::types::types::TParamsSource;
@@ -40,7 +40,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         scoped_type_params: Option<&TypeParams>,
         errors: &ErrorCollector,
     ) -> Arc<TParams> {
-        let scoped_tparams = self.scoped_type_params(scoped_type_params);
+        let scoped_tparams = self.scoped_type_params(scoped_type_params, errors);
         self.validated_tparams(name.range, scoped_tparams, TParamsSource::Class, errors)
     }
 
@@ -52,14 +52,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         legacy: &[Idx<KeyLegacyTypeParam>],
         errors: &ErrorCollector,
     ) -> Arc<TParams> {
-        let scoped_tparams = self.scoped_type_params(scoped_type_params);
+        let scoped_tparams = self.scoped_type_params(scoped_type_params, errors);
         let legacy_tparams = legacy
             .iter()
             .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
             .collect::<SmallSet<_>>();
         let legacy_map = legacy_tparams
             .iter()
-            .map(|p| (p.quantified.clone(), p))
+            .map(|p| (p.clone(), p))
             .collect::<SmallMap<_, _>>();
         let lookup_tparam = |t: &Type| {
             let (q, kind) = match t {
@@ -150,7 +150,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        // Convert our set of `TParam`s into a `TParams` object, which will also perform
+        // Convert our set of `Quantified`s into a `TParams` object, which will also perform
         // some additional validation that isn't specific to classes.
         self.validated_tparams(
             name.range,

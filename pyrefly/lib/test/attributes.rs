@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+// @lint-ignore-every SPELL deliberately testing bad spelling
+
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -355,10 +357,10 @@ class A:
 
 class B:
     def __init__(self, a: A):
-        a.x: int = 1  # E: Type cannot be declared in assignment to non-self attribute `a.x`
+        a.x: int = 1  # E: Cannot annotate non-self attribute `a.x`
 
 a: A = A()
-a.x: int = 5  # E: Type cannot be declared in assignment to non-self attribute `a.x`
+a.x: int = 5  # E: Cannot annotate non-self attribute `a.x`
     "#,
 );
 
@@ -412,7 +414,6 @@ def f(a: A):
 );
 
 testcase!(
-    bug = "TODO(stroxler): We are always promoting literals. It is sound to preserve literals for read-only attributes",
     test_final_attribute_assigned_in_init,
     r#"
 from typing import assert_type, Final, Literal
@@ -420,7 +421,7 @@ class A:
     def __init__(self):
         self.x: Final = 0
 def f(a: A):
-    assert_type(a.x, Literal[0])  # E: assert_type(int, Literal[0])
+    assert_type(a.x, Literal[0])
     "#,
 );
 
@@ -605,7 +606,7 @@ def f2(c: Callable[[C, int], None]):
 f1(C.f)  # E: Argument `(self: C, x: int) -> None` is not assignable to parameter `c` with type `(int) -> None`
 f1(C().f)
 f2(C.f)
-f2(C().f)  # E: Argument `BoundMethod[C, (self: C, x: int) -> None]` is not assignable to parameter `c` with type `(C, int) -> None`
+f2(C().f)  # E: Argument `(self: C, x: int) -> None` is not assignable to parameter `c` with type `(C, int) -> None`
     "#,
 );
 
@@ -942,6 +943,87 @@ del foo.y  # E: No attribute `y` in module `foo`
 );
 
 testcase!(
+    test_module_getattr_from_import,
+    TestEnv::one("foo", "def __getattr__(name: str) -> int: ..."),
+    r#"
+from typing import assert_type
+from foo import x, y
+assert_type(x, int)
+assert_type(y, int)
+    "#,
+);
+
+fn test_env_with_incomplete_module() -> TestEnv {
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+from _typeshed import Incomplete
+def __getattr__(name: str) -> Incomplete: ...
+"#,
+    )
+}
+
+testcase!(
+    test_module_getattr_stub_incomplete,
+    test_env_with_incomplete_module(),
+    r#"
+from typing import assert_type, Any
+from foo import x, y
+# Incomplete is essentially Any, so x and y should be Any
+assert_type(x, Any)
+assert_type(y, Any)
+    "#,
+);
+
+fn test_env_with_getattr_and_other_attribute() -> TestEnv {
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+x: str
+def __getattr__(name: str) -> int: ...
+"#,
+    )
+}
+
+testcase!(
+    test_module_getattr_explicit_export_priority,
+    test_env_with_getattr_and_other_attribute(),
+    r#"
+from typing import assert_type
+from foo import x, y
+# x is explicitly defined as str, should not use __getattr__
+assert_type(x, str)
+# y is not defined, should use __getattr__ and be int
+assert_type(y, int)
+    "#,
+);
+
+fn test_env_with_getattr_and_submodule() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "foo",
+        "foo/__init__.pyi",
+        "def __getattr__(name: str) -> int: ...",
+    );
+    env.add_with_path("foo.bar", "foo/bar.pyi", "");
+    env
+}
+
+testcase!(
+    test_submodule_takes_precedence_over_module_getattr,
+    test_env_with_getattr_and_submodule(),
+    r#"
+from foo import bar  # submodule
+from foo import baz  # non-existent attribute, should fall back to __getattr__
+from typing import assert_type, reveal_type
+reveal_type(bar)  # E: Module[foo.bar]
+assert_type(baz, int)
+    "#,
+);
+
+testcase!(
     test_any_subclass,
     r#"
 from typing import Any, assert_type
@@ -969,6 +1051,16 @@ class Test(B):
     def m2(cls) -> None:
         assert_type(super().z, Any)
     "#,
+);
+
+testcase!(
+    test_any_as_base_class_suppresses_missing_attribute_in_method,
+    r#"
+from typing import Any
+class MyTest(Any):
+    def foo(self):
+        self.bar()  # should not error: Any is in base-class hierarchy
+"#,
 );
 
 testcase!(
@@ -1250,6 +1342,122 @@ def test(x: LiteralString):
 );
 
 testcase!(
+    test_private_attribute_outside_class,
+    r#"
+class A:
+    __secret: int = 0
+
+exposed = A.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+
+class B:
+    leaked = A.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+
+class C:
+    __secret: int = 0
+    def reveal(self, a: A):
+        return a.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+"#,
+);
+
+testcase!(
+    test_private_attribute_inside_class,
+    r#"
+class A:
+    __secret: int = 0
+
+    def reveal(self) -> int:
+        return self.__secret
+
+    @classmethod
+    def reveal_cls(cls) -> int:
+        return cls.__secret
+
+    @staticmethod
+    def reveal_static() -> int:
+        return A.__secret
+"#,
+);
+
+testcase!(
+    test_private_attribute_on_peer_instance,
+    r#"
+class F1:
+    __v: int
+
+    def equals(self, other: "F1") -> bool:
+        return self.__v == other.__v
+"#,
+);
+
+testcase!(
+    test_private_attribute_in_subclass_method,
+    r#"
+class A:
+    __secret: int = 0
+
+class B(A):
+    def leak(self) -> int:
+        return self.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+"#,
+);
+
+testcase!(
+    test_unknown_access_of_private_attribute,
+    r#"
+class A:
+    __secret: int = 0
+    def get_secret(self, other):
+        # OK: `other` may be an instance of `A`, which has a `__secret` attribute
+        return other.__secret
+    "#,
+);
+
+testcase!(
+    test_private_attribute_in_function_in_method,
+    r#"
+class A:
+    __secret: int = 0
+    def get_secret(self):
+        def get():
+            return self.__secret
+        return get()
+    "#,
+);
+
+testcase!(
+    test_nonexistent_private_attribute,
+    r#"
+class A:
+    pass
+class B:
+    def oops1(self):
+        return self.__secret  # E: Object of class `B` has no attribute `__secret`
+    def oops2(self, other: A):
+        return other.__secret  # E: Object of class `A` has no attribute `__secret`
+    "#,
+);
+
+// We allow __attr access on modules, since name mangling only occurs on attributes of classes.
+testcase!(
+    test_module_attr_is_not_private,
+    TestEnv::one("foo", "__x: int = 0"),
+    r#"
+import foo
+import types
+print(foo.__x)
+
+def f(mod1, mod2: types.ModuleType):
+    print(mod1.__x)
+    print(mod2.__x)
+
+class A:
+    def f(self, mod: types.ModuleType):
+        print(foo.__x)
+        print(mod.__x)
+    "#,
+);
+
+testcase!(
     test_attribute_access_on_type_callable,
     r#"
 from typing import Callable
@@ -1412,7 +1620,7 @@ class A[T]:
     @overload
     def f(self, x: T | None) -> T: ...
     def f(self, x=None) -> Any: ...
-reveal_type(A.f) # E: revealed type: Overload[[T](self: A[T]) -> T, [T](self: A[T], x: T | None) -> T]
+reveal_type(A.f) # E: revealed type: Overload[\n  [T](self: A[T]) -> T\n  [T](self: A[T], x: T | None) -> T\n]
 assert_type(A.f(A[int]()), int)
     "#,
 );
@@ -1430,7 +1638,7 @@ class A[T]:
     def f(x: T) -> T: ...
     @staticmethod
     def f(x = None) -> Any: ...
-reveal_type(A.f) # E: revealed type: Overload[(x: None = ...) -> None, [T](x: T) -> T]
+reveal_type(A.f) # E: revealed type: Overload[\n  (x: None = ...) -> None\n  [T](x: T) -> T\n]
 assert_type(A.f(), None)
 assert_type(A.f(0), int)
     "#,
@@ -1739,7 +1947,7 @@ def get_type_t[T]() -> type[T]:
     return cast(type[T], 0)
 def foo[T](x: type[T]):
     # mypy reveals the same thing we do (the type of `type.__new__`), while pyright reveals `Unknown`.
-    reveal_type(get_type_t().__new__)  # E: Overload[(cls: type[type], o: object, /) -> type, [Self](cls: type[Self], name: str, bases: tuple[type, ...], namespace: dict[str, Any], /, **kwds: Any) -> Self]
+    reveal_type(get_type_t().__new__)  # E: Overload[\n  [Self@type: type](cls: type[Self@type], o: object, /) -> type[Any]\n  [Self](cls: type[Self], name: str, bases: tuple[type[Any], ...], namespace: dict[str, Any], /, **kwds: Any) -> Self\n]
     "#,
 );
 
@@ -1802,7 +2010,7 @@ testcase!(
     r#"
 from typing import Never, assert_type, reveal_type
 def f() -> type[Never]: ...
-reveal_type(f().mro) # E: BoundMethod[type, (self: type) -> list[type]]
+reveal_type(f().mro) # E: (self: type) -> list[type[Any]]
 assert_type(f().wut, Never)
     "#,
 );
@@ -1915,6 +2123,70 @@ def f(x: Color) -> Color:
 );
 
 testcase!(
+    test_union_attribute_missing_no_suggestion,
+    r#"
+# When an attribute exists on some union members but not others,
+# we shouldn't suggest similar attributes from the types that have it
+def f(x: str | None):
+    return x.split()  # E: Object of class `NoneType` has no attribute `split` # !E: Did you mean
+"#,
+);
+
+testcase!(
+    test_union_attribute_missing_no_suggestion_three_types,
+    r#"
+# Partial union failure with 3 types: attribute exists on 1, missing on 2
+def f(x: str | int | None):
+    return x.split()  # E: Object of class `NoneType` has no attribute `split`\nObject of class `int` has no attribute `split` # !E: Did you mean
+"#,
+);
+
+testcase!(
+    test_union_attribute_missing_no_suggestion_mostly_have_it,
+    r#"
+# Even if most types have the attribute, if ANY don't, skip suggestion
+class A:
+    upper: int
+    lower: int
+class B:
+    upper: int
+    lower: int
+class C:
+    def upper(self) -> str: ...
+def f(x: C | A | B):
+    # C has "upper" method, A and B have "upper" attribute
+    # But C doesn't have "lower" attribute, A and B do
+    x.lowerr  # E: Object of class `C` has no attribute `lowerr` # !E: Did you mean
+"#,
+);
+
+testcase!(
+    test_union_both_missing_should_suggest,
+    r#"
+# When an attribute is missing on ALL union members, we should still suggest
+class A:
+    value: int
+class B:
+    value: str
+def f(x: A | B):
+    return x.vaule  # E: Object of class `A` has no attribute `vaule`\nObject of class `B` has no attribute `vaule`\n  Did you mean `value`?
+"#,
+);
+
+testcase!(
+    test_union_all_have_attribute_no_error,
+    r#"
+# When all union members have the attribute, there should be no error
+class A:
+    value: int
+class B:
+    value: str
+def f(x: A | B):
+    return x.value  # No error - both A and B have 'value'
+"#,
+);
+
+testcase!(
     test_class_toplevel_inherited_attr_name,
     r#"
 # at the class top level, inherited attribute names should be considered in scope
@@ -1945,5 +2217,101 @@ class A:
 def f(a: A):
     assert_type(a.x, Any | None)
     assert_type(a.y, None)
+    "#,
+);
+
+testcase!(
+    test_do_not_promote_explicit_literal_param,
+    r#"
+from typing import Literal, assert_type
+class A:
+    def __init__(self, answer: Literal[42]):
+        self.answer = answer
+def f(a: A):
+    assert_type(a.answer, Literal[42])
+    "#,
+);
+
+testcase!(
+    test_do_not_promote_explicit_literal_union,
+    r#"
+from typing import Literal, assert_type
+class File:
+    def __init__(self, mode: Literal["read", "write"]):
+        self.mode = mode
+def f(fi: File):
+    assert_type(fi.mode, Literal["read", "write"])
+    "#,
+);
+
+testcase!(
+    test_unannotated_attribute_tuple_literal_promotion,
+    r#"
+from typing import assert_type
+class A:
+    def __init__(self):
+        self.x = (42, 42)
+def f(a: A):
+    assert_type(a.x, tuple[int, int])
+    a.x = (0, 0)
+    "#,
+);
+
+testcase!(
+    test_always_promote_inferred_literalstring,
+    r#"
+from typing import assert_type
+class A:
+    def __init__(self):
+        greeting = "hello"
+        self.x = f"{greeting} world"
+        self.y = f"{greeting} world" if greeting == "hello" else 42
+def f(a: A):
+    assert_type(a.x, str)
+    assert_type(a.y, int | str)
+    "#,
+);
+
+testcase!(
+    test_top_level_anonymous_typeddict,
+    r#"
+from typing import NotRequired, TypedDict
+class TD(TypedDict):
+    x: NotRequired[int]
+class A:
+    def __init__(self, check: bool):
+        self.x = {"x": 0}
+        self.y = {"x": 0} if check else 42
+def f(a: A):
+    x: TD = a.x
+    # anoynmous typed dicts are promoted away when unioned
+    y: dict[str, int] | int = a.y
+    "#,
+);
+
+testcase!(
+    test_nested_anonymous_typeddict,
+    r#"
+from typing import Any
+
+def f() -> list[dict[str, Any]]:
+    pets = [{"name": "Carmen", "age": 3}]
+    return pets
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1341
+testcase!(
+    test_optional_type_truthiness,
+    r#"
+class A[T]:
+    def __init__(self):
+        self.foo: T | None = None
+
+class B(A[None]):
+    def m(self, x: int | None):
+        foo = self.foo
+        if not foo:
+            pass
     "#,
 );

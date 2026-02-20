@@ -49,13 +49,13 @@ class A:
 class B[T](A): ...
 class C[T]: ...
 assert_type(A.__new__(A), A)
-assert_type(A.__new__(B[int]), A)
-assert_type(A.__new__(C[int]), A) # E: Argument `type[C[int]]` is not assignable to parameter `cls` with type `type[A]` in function `A.__new__`
+assert_type(A.__new__(B[int]), B[int])
+assert_type(A.__new__(C[int]), C[int]) # E: `C[int]` is not assignable to upper bound `A` of type variable `Self@A`
 
 o = A()
 assert_type(o.__new__(A), A)
-assert_type(o.__new__(B[int]), A)
-assert_type(o.__new__(C[int]), A) # E: Argument `type[C[int]]` is not assignable to parameter `cls` with type `type[A]` in function `A.__new__`
+assert_type(o.__new__(B[int]), B[int])
+assert_type(o.__new__(C[int]), C[int]) # E: `C[int]` is not assignable to upper bound `A` of type variable `Self@A`
     "#,
 );
 
@@ -82,8 +82,8 @@ testcase!(
 from typing import assert_type, Self
 class A[T]:
     def __new__(cls: type[Self], x: T) -> Self: ...
-o = A[int].__new__(A[str], "foo") # E: `type[A[str]]` is not assignable to parameter `cls` with type `type[A[int]]` # E: Argument `Literal['foo']` is not assignable to parameter `x` with type `int` in function `A.__new__`
-assert_type(o, A[int])
+# A[int] is a generic alias, which doesn't resolve to custom __new__
+o = A[int].__new__(A[str], "foo") # E: Missing positional argument `args` in function `types.GenericAlias.__new__` # E: `A[str]` is not assignable to upper bound `GenericAlias` of type variable `Self@GenericAlias` # E: Argument `Literal['foo']` is not assignable to parameter `origin` with type `type[Any]` in function `types.GenericAlias.__new__`
     "#,
 );
 
@@ -254,6 +254,111 @@ testcase!(
     test_any_constructor,
     r#"
 from typing import Any
-Any()  # E: `Any` can not be instantiated
+Any()  # E: `Any` cannot be instantiated
+    "#,
+);
+
+testcase!(
+    test_object_new_explicit_call,
+    r#"
+from typing import assert_type
+
+class A: pass
+class B(A): pass
+
+# Direct object.__new__ calls should return the argument class type
+x1 = object.__new__(A)
+assert_type(x1, A)
+
+x2 = object.__new__(B)
+assert_type(x2, B)
+
+# Works with builtin classes too
+x3 = object.__new__(int)
+assert_type(x3, int)
+
+# Works with `type` annotations too
+def f(cls: type[A]):
+    x4 = object.__new__(cls)
+    assert_type(x4, A)
+    "#,
+);
+
+testcase!(
+    test_object_new_with_generics,
+    r#"
+from typing import assert_type
+
+class Container[T]: pass
+
+# object.__new__ with generic class should preserve type params
+x = object.__new__(Container[int])
+assert_type(x, Container[int])
+    "#,
+);
+
+testcase!(
+    test_custom_new_unaffected,
+    r#"
+from typing import Self, assert_type
+
+class A[T]:
+    def __new__(cls: type[Self], x: T) -> Self: ...
+
+# A[int] is a generic alias, which doesn't resolve to custom __new__
+o = A[int].__new__(A[int], 42) # E: Missing positional argument `args` in function `types.GenericAlias.__new__` # E: `A[int]` is not assignable to upper bound `GenericAlias` of type variable `Self@GenericAlias` # E: Argument `Literal[42]` is not assignable to parameter `origin` with type `type[Any]` in function `types.GenericAlias.__new__`
+assert_type(o, A[int])
+
+# Receiver type binding is preserved
+class B:
+    def __new__(cls) -> Self: ...
+
+b = B.__new__(B)
+assert_type(b, B)
+    "#,
+);
+
+testcase!(
+    test_inherit_custom_new,
+    r#"
+from typing import assert_type, Self
+class A:
+    def __new__(cls) -> Self:
+        return super().__new__(cls)
+class B(A):
+    pass
+assert_type(A().__new__(B), B)
+assert_type(A.__new__(B), B)
+    "#,
+);
+
+testcase!(
+    test_inherit_generic_custom_new,
+    r#"
+from typing import assert_type, Self
+class A:
+    def __new__[T](cls, x: T, y: T) -> Self:
+        return super().__new__(cls)
+class B(A):
+    pass
+assert_type(A.__new__(B, 0, 0), B)
+    "#,
+);
+
+testcase!(
+    test_inherit_overloaded_custom_new,
+    r#"
+from typing import assert_type, overload, Self
+class A:
+    @overload
+    def __new__(cls) -> Self: ...
+    @overload
+    def __new__(cls, x) -> Self: ...
+    def __new__(cls, x=None) -> Self:
+        return super().__new__(cls)
+class B(A):
+    pass
+assert_type(A.__new__(B), B)
+assert_type(A.__new__(B, 0), B)
     "#,
 );

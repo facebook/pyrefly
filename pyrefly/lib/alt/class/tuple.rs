@@ -28,7 +28,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .map(Type::Tuple)
             .map(|ty| cls.targs().substitute_into(ty))
         {
-            return Some(simplify_tuples(tuple));
+            return Some(simplify_tuples(tuple, self.heap));
         }
         None
     }

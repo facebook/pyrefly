@@ -99,6 +99,28 @@ def takes_inferred(i) -> None:
 );
 
 testcase!(
+    test_generic_decorator_with_unannotated_param,
+    r#"
+from typing import Callable, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+T3 = TypeVar("T3")
+
+def decorator(func: Callable[[T1, T2], T3]) -> Callable[[T1, T2], T3]:
+    return func
+
+class Expr:
+    @decorator
+    def __truediv__(self, other) -> "Expr":
+        return Expr()
+
+x = Expr()
+y = x / 2
+    "#,
+);
+
+testcase!(
     test_callable_instance,
     r#"
 from typing import Callable, reveal_type
@@ -657,16 +679,28 @@ reveal_type(my_func)  # E: revealed type: (object) -> None
 "#,
 );
 
-testcase!(
-    test_numba_jit_decorators_preserve_signature,
-    TestEnv::one_with_path(
+fn env_numba() -> TestEnv {
+    let mut env = TestEnv::one_with_path(
         "numba",
-        "numba.pyi",
+        "numba/__init__.pyi",
+        r#"
+from numba.core.decorators import jit, njit
+"#,
+    );
+    env.add_with_path(
+        "numba.core.decorators",
+        "numba/core/decorators.pyi",
         r#"
 def jit(*args, **kwargs): ...
 def njit(*args, **kwargs): ...
 "#,
-    ),
+    );
+    env
+}
+
+testcase!(
+    test_numba_jit_decorators_preserve_signature,
+    env_numba(),
     r#"
 import numba
 from typing import assert_type

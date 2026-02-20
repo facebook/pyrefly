@@ -1,15 +1,21 @@
 # Pyrefly: A fast type checker and language server for Python with powerful IDE features
 
 [![pyrefly](https://img.shields.io/endpoint?url=https://pyrefly.org/badge.json)](https://github.com/facebook/pyrefly)
-[![PyPI](https://img.shields.io/pypi/v/pyrefly.svg?color=blue)](https://pypi.python.org/pypi/pyrefly)
+[![PyPI](https://img.shields.io/pypi/dm/pyrefly?color=blue&label=pypi)](https://pypi.python.org/pypi/pyrefly)
+[![Visual Studio Marketplace](https://img.shields.io/visual-studio-marketplace/d/meta.pyrefly?color=blue&label=VS%20Code)](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly)
+[![Open VSX](https://img.shields.io/open-vsx/dt/meta/pyrefly?color=blue&label=Open%20VSX)](https://open-vsx.org/extension/meta/pyrefly)
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?logo=discord&logoColor=white)](https://discord.gg/Cf7mFQtW7W)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 Pyrefly is a type checker and language server for Python, which provides
 lightning-fast type checking along with IDE features such as code navigation,
 semantic highlighting, and code completion. It is available as a
-[command-line tool](https://pyrefly.org/en/docs/installation/) and a
-[VSCode extension](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly).
+[command-line tool](https://pyrefly.org/en/docs/installation/) and an extension
+for popular IDEs and editors such as
+[VSCode](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly),
+[Neovim](https://pyrefly.org/en/docs/IDE/#neovim),
+[Zed](https://zed.dev/extensions/pyrefly), and
+[more](https://pyrefly.org/en/docs/IDE/).
 
 See the [Pyrefly website](https://pyrefly.org) for full documentation and how to
 add Pyrefly to your editor of choice.
@@ -21,8 +27,7 @@ you find bugs.
 
 - Try out pyrefly in your browser: [Sandbox](https://pyrefly.org/sandbox/)
 - Get the command-line tool: `pip install pyrefly`
-- Get the VSCode extension:
-  [Link](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly)
+- Get the IDE Extension: [IDE installation page](https://pyrefly.org/en/docs/IDE/)
 
 ### Key Features:
 
@@ -79,6 +84,8 @@ Pyrefly is split into a number of crates (mostly under `crates/`):
   `Visit`.
 - `pyrefly_python` are Python utilities with no type-checking aspects, such as
   modelling modules or `sys.info`.
+- `pyrefly_graph` provides utilities for indexing values and caching
+  computations that may depend on each other.
 - `pyrefly_bundled` are the third-party
   [typeshed stubs](https://github.com/python/typeshed).
 - `pyrefly_config` defines the Pyrefly configuration, along with support for
