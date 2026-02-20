@@ -324,6 +324,10 @@ enum Value {
     /// I know what the value evaluates to when considered truthy, but not its precise outcome.
     /// We make sure below that it never compares equal to itself
     Truthiness(bool),
+    /// Represents the python version, as returned by `sys.version_info`
+    /// This is a tuple containing (major, minor, micro) and potentially the release level and serial.
+    /// See https://docs.python.org/fr/3/library/sys.html#sys.version_info
+    /// When evaluating it, we must assume the release level and serial are unknown.
     VersionInfo(PythonVersion),
 }
 
@@ -580,22 +584,6 @@ impl SysInfo {
                 }
                 _ => None,
             },
-            Expr::Subscript(ExprSubscript { value, slice, .. }) => {
-                let value = self.evaluate(value)?;
-                let index = self.evaluate(slice)?;
-                match (value, index) {
-                    (Value::Tuple(elts), Value::Int(i)) => {
-                        if i >= 0
-                            && let Ok(i) = usize::try_from(i)
-                        {
-                            elts.into_iter().nth(i)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                }
-            }
             _ => None,
         }
     }
