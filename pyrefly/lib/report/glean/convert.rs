@@ -640,7 +640,7 @@ impl GleanState<'_> {
             && let Some(base_type) = answers.get_type_trace(base_expr.range())
         {
             self.transaction
-                .ad_hoc_solve(self.handle, "glean_attribute_definition", |solver| {
+                .ad_hoc_solve(self.handle, |solver| {
                     let name = attr_name.id();
                     let completions = |ty| solver.completions(ty, Some(name), false);
 

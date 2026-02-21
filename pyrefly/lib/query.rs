@@ -713,14 +713,12 @@ impl<'a> CalleesWithLocation<'a> {
         fallback_name: &str,
         callee_from_ancestor: F,
     ) -> Vec<Callee> {
-        let call_target = self
-            .transaction
-            .ad_hoc_solve(&self.handle, "query_mro", |solver| {
-                let mro = solver.get_mro_for_class(c);
-                iter::once(c)
-                    .chain(mro.ancestors(solver.stdlib).map(|x| x.class_object()))
-                    .find_map(|c| callee_from_ancestor(&solver, c))
-            });
+        let call_target = self.transaction.ad_hoc_solve(&self.handle, |solver| {
+            let mro = solver.get_mro_for_class(c);
+            iter::once(c)
+                .chain(mro.ancestors(solver.stdlib).map(|x| x.class_object()))
+                .find_map(|c| callee_from_ancestor(&solver, c))
+        });
         let class_name = Self::qname_to_string(c.qname());
         let target = if let Some(Some(t)) = call_target {
             t
@@ -1360,9 +1358,7 @@ impl Query {
                 let t = self.state.transaction();
                 let h = self.make_handle(name, ModulePath::filesystem(path));
                 let result = t
-                    .ad_hoc_solve(&h, "query_is_subset_eq", |solver| {
-                        solver.is_subset_eq(&sub_ty, &super_ty)
-                    })
+                    .ad_hoc_solve(&h, |solver| solver.is_subset_eq(&sub_ty, &super_ty))
                     .unwrap_or(false);
                 return Ok(result);
             }
@@ -1415,7 +1411,7 @@ impl Query {
         let result = if is_typed_dict_request {
             matches!(sub_ty, Type::TypedDict(_) | Type::PartialTypedDict(_))
         } else {
-            t.ad_hoc_solve(&h, "query_is_subset_eq", |solver| {
+            t.ad_hoc_solve(&h, |solver| {
                 solver.is_subset_eq(&sub_ty, &super_ty_opt.unwrap())
             })
             .unwrap_or(false)

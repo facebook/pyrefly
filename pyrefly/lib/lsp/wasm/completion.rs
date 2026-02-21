@@ -508,7 +508,7 @@ impl Transaction<'_> {
         let Some(actual_type) = actual_type else {
             return false;
         };
-        self.ad_hoc_solve(handle, "completion_type_compat", |solver| {
+        self.ad_hoc_solve(handle, |solver| {
             solver.is_subset_eq(actual_type, expected_type)
         })
         .map(|compatible| !compatible)
@@ -563,7 +563,7 @@ impl Transaction<'_> {
 
                 let is_deprecated = ty.as_ref().is_some_and(|t| {
                     if let Type::ClassDef(cls) = t {
-                        self.ad_hoc_solve(handle, "completion_deprecation", |solver| {
+                        self.ad_hoc_solve(handle, |solver| {
                             solver.get_metadata_for_class(cls).deprecation().is_some()
                         })
                         .unwrap_or(false)
@@ -888,7 +888,7 @@ impl Transaction<'_> {
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
                 {
-                    self.ad_hoc_solve(handle, "completion_attributes", |solver| {
+                    self.ad_hoc_solve(handle, |solver| {
                         solver
                             .completions(base_type, None, true)
                             .iter()

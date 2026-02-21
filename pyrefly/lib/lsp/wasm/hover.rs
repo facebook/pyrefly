@@ -580,7 +580,7 @@ pub fn get_hover(
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
     let name_for_display = name.clone();
-    let type_display = transaction.ad_hoc_solve(handle, "hover_display", {
+    let type_display = transaction.ad_hoc_solve(handle, {
         let mut cloned = type_.clone();
         move |solver| {
             cloned.visit_toplevel_callable_mut(|c| expand_callable_kwargs_for_hover(&solver, c));

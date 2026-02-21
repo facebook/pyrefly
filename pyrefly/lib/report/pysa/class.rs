@@ -243,7 +243,7 @@ pub fn get_class_field_from_current_class_only(
 ) -> Option<Arc<ClassField>> {
     context
         .transaction
-        .ad_hoc_solve(&context.handle, "pysa_class_field", |solver| {
+        .ad_hoc_solve(&context.handle, |solver| {
             solver.get_field_from_current_class_only(class, field_name)
         })
         .unwrap()
@@ -257,7 +257,7 @@ pub fn get_super_class_member(
 ) -> Option<WithDefiningClass<Arc<ClassField>>> {
     context
         .transaction
-        .ad_hoc_solve(&context.handle, "pysa_super_class_member", |solver| {
+        .ad_hoc_solve(&context.handle, |solver| {
             solver.get_super_class_member(class, start_lookup_cls, field_name)
         })
         .flatten()
