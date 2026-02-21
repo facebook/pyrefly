@@ -6,6 +6,7 @@
  */
 
 pub(crate) mod convert_star_import;
+pub(crate) mod dict_definition;
 pub(crate) mod extract_field;
 pub(crate) mod extract_function;
 mod extract_shared;
