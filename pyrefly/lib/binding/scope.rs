@@ -647,24 +647,33 @@ impl FlowStyle {
     ) -> FlowStyle {
         let mut merged = styles.next().unwrap_or(FlowStyle::Other);
         for x in styles {
-            match (&merged, x) {
+            match (&mut merged, x) {
                 // If they're identical, keep it
-                (l, r) if l == &r => {}
+                (l, ref r) if *l == *r => {}
                 // Uninitialized-like branches merge into PossiblyUninitialized.
-                // MaybeInitialized is treated like PossiblyUninitialized for merge purposes.
+                // Must come before MaybeInitialized catch-all to avoid masking
+                // valid uninitialized paths.
                 (
-                    FlowStyle::Uninitialized
-                    | FlowStyle::PossiblyUninitialized
-                    | FlowStyle::MaybeInitialized(_),
+                    FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized,
                     _,
                 )
                 | (
                     _,
-                    FlowStyle::Uninitialized
-                    | FlowStyle::PossiblyUninitialized
-                    | FlowStyle::MaybeInitialized(_),
+                    FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized,
                 ) => {
                     return FlowStyle::PossiblyUninitialized;
+                }
+                // Two MaybeInitialized: combine termination keys from both branches.
+                // Each branch independently needs its keys to be Never for that path
+                // to be initialized, so we collect all keys.
+                (FlowStyle::MaybeInitialized(keys), FlowStyle::MaybeInitialized(other_keys)) => {
+                    keys.extend(other_keys);
+                }
+                // MaybeInitialized + a fully initialized style: keep the MaybeInitialized
+                // keys since those paths still need verification at solve time.
+                (FlowStyle::MaybeInitialized(_), _) => {}
+                (_, FlowStyle::MaybeInitialized(keys)) => {
+                    merged = FlowStyle::MaybeInitialized(keys);
                 }
                 // Unclear how to merge, default to None
                 _ => {
