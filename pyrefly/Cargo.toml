@@ -18,6 +18,7 @@ path = "bin/main.rs"
 [dependencies]
 anstream = "0.6.11"
 anyhow = "1.0.101"
+arc-swap = { version = "1.5", features = ["weak"] }
 blake3 = { version = "=1.8.2", features = ["mmap", "rayon", "traits-preview"] }
 clap = { version = "4.5.42", features = ["cargo", "derive", "env", "string", "unicode", "wrap_help"] }
 crossbeam-channel = "0.5.15"

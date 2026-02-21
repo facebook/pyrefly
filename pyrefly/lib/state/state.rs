@@ -49,9 +49,6 @@ use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryTransactionStats;
 use pyrefly_util::thread_pool::ThreadPool;
 use pyrefly_util::uniques::UniqueFactory;
-use pyrefly_util::upgrade_lock::UpgradeLock;
-use pyrefly_util::upgrade_lock::UpgradeLockExclusiveGuard;
-use pyrefly_util::upgrade_lock::UpgradeLockWriteGuard;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -98,9 +95,8 @@ use crate::module::bundled::BundledStub;
 use crate::module::finder::find_import_prefixes;
 use crate::module::typeshed::BundledTypeshedStdlib;
 use crate::solver::solver::VarRecurser;
-use crate::state::dirty::Dirty;
+use crate::state::dirty::AtomicDirty;
 use crate::state::epoch::Epoch;
-use crate::state::epoch::Epochs;
 use crate::state::errors::Errors;
 use crate::state::load::FileContents;
 use crate::state::load::Load;
@@ -111,11 +107,16 @@ use crate::state::loader::LoaderFindCache;
 use crate::state::memory::MemoryFiles;
 use crate::state::memory::MemoryFilesLookup;
 use crate::state::memory::MemoryFilesOverlay;
+use crate::state::module::CleanGuard;
+use crate::state::module::ModuleState;
+use crate::state::module::ModuleStateMut;
+use crate::state::module::ModuleStateReader;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::steps::Context;
 use crate::state::steps::Step;
 use crate::state::steps::Steps;
+use crate::state::steps::StepsMut;
 use crate::state::subscriber::Subscriber;
 use crate::types::callable::Deprecation;
 use crate::types::class::Class;
@@ -355,7 +356,7 @@ enum ImportResolution {
 struct ModuleData {
     handle: Handle,
     config: ArcId<ConfigFile>,
-    state: ModuleDataInner,
+    state: ModuleState,
     /// The dependencies of this module, including both resolved and failed imports.
     /// Most modules exist in exactly one place, but it can be possible to load the same module multiple times with different paths.
     deps: HashMap<ModuleName, ImportResolution, BuildNoHash>,
@@ -366,7 +367,7 @@ struct ModuleData {
 struct ModuleDataMut {
     handle: Handle,
     config: RwLock<ArcId<ConfigFile>>,
-    state: UpgradeLock<Step, ModuleDataInner>,
+    state: ModuleStateMut,
     /// The dependencies of this module, including both resolved and failed imports.
     /// Invariant: If `h1` depends on `h2` then we must have both of:
     /// data[h1].deps[h2.module] == ImportResolution::Resolved(set) where set.contains(h2)
@@ -380,41 +381,13 @@ struct ModuleDataMut {
     rdeps: Mutex<HashSet<Handle>>,
 }
 
-/// The fields of `ModuleDataMut` that are stored together as they might be mutated.
-#[derive(Debug, Clone)]
-struct ModuleDataInner {
-    require: Require,
-    epochs: Epochs,
-    dirty: Dirty,
-    steps: Steps,
-}
-
-impl ModuleDataInner {
-    fn new(require: Require, now: Epoch) -> Self {
-        Self {
-            require,
-            epochs: Epochs::new(now),
-            dirty: Dirty::default(),
-            steps: Steps::default(),
-        }
-    }
-
-    fn update_require(&mut self, require: Require) -> bool {
-        let dirty = require > self.require;
-        if dirty {
-            self.require = require;
-        }
-        dirty
-    }
-}
-
 impl ModuleData {
     /// Make a copy of the data that can be mutated.
     fn clone_for_mutation(&self) -> ModuleDataMut {
         ModuleDataMut {
             handle: self.handle.dupe(),
             config: RwLock::new(self.config.dupe()),
-            state: UpgradeLock::new(self.state.clone()),
+            state: self.state.clone_for_mutation(),
             deps: RwLock::new(self.deps.clone()),
             rdeps: Mutex::new(self.rdeps.clone()),
         }
@@ -426,7 +399,7 @@ impl ModuleDataMut {
         Self {
             handle,
             config: RwLock::new(config),
-            state: UpgradeLock::new(ModuleDataInner::new(require, now)),
+            state: ModuleStateMut::new(require, now),
             deps: Default::default(),
             rdeps: Default::default(),
         }
@@ -444,7 +417,7 @@ impl ModuleDataMut {
         } = self;
         let deps = mem::take(&mut *deps.write());
         let rdeps = mem::take(&mut *rdeps.lock());
-        let state = state.read().clone();
+        let state = state.take_and_freeze();
         ModuleData {
             handle: handle.dupe(),
             config: config.read().dupe(),
@@ -575,28 +548,28 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn get_solutions(&self, handle: &Handle) -> Option<Arc<Solutions>> {
-        self.with_module_inner(handle, |x| x.steps.solutions.dupe())
+        self.with_module_inner(handle, |x| x.get_solutions())
     }
 
     pub fn get_bindings(&self, handle: &Handle) -> Option<Bindings> {
-        self.with_module_inner(handle, |x| x.steps.answers.as_ref().map(|x| x.0.dupe()))
+        self.with_module_inner(handle, |x| x.get_answers().map(|a| a.0.dupe()))
     }
 
     pub fn get_answers(&self, handle: &Handle) -> Option<Arc<Answers>> {
-        self.with_module_inner(handle, |x| x.steps.answers.as_ref().map(|x| x.1.dupe()))
+        self.with_module_inner(handle, |x| x.get_answers().map(|a| a.1.dupe()))
     }
 
     pub fn get_ast(&self, handle: &Handle) -> Option<Arc<ruff_python_ast::ModModule>> {
-        self.with_module_inner(handle, |x| x.steps.ast.dupe())
+        self.with_module_inner(handle, |x| x.get_ast())
     }
 
     pub fn get_config(&self, handle: &Handle) -> Option<ArcId<ConfigFile>> {
-        // We ignore the ModuleDataInner, but no worries, this is not on a critical path
+        // We ignore the ModuleState, but no worries, this is not on a critical path
         self.with_module_config_inner(handle, |c, _| Some(c.dupe()))
     }
 
     pub fn get_load(&self, handle: &Handle) -> Option<Arc<Load>> {
-        self.with_module_inner(handle, |x| x.steps.load.dupe())
+        self.with_module_inner(handle, |x| x.get_load())
     }
 
     pub fn get_errors<'b>(&self, handles: impl IntoIterator<Item = &'b Handle>) -> Errors {
@@ -605,7 +578,7 @@ impl<'a> Transaction<'a> {
                 .into_iter()
                 .filter_map(|handle| {
                     self.with_module_config_inner(handle, |config, x| {
-                        Some((x.steps.load.dupe()?, config.dupe()))
+                        Some((x.get_load()?, config.dupe()))
                     })
                 })
                 .collect(),
@@ -619,7 +592,7 @@ impl<'a> Transaction<'a> {
                 self.readable
                     .modules
                     .values()
-                    .filter_map(|x| Some((x.state.steps.load.dupe()?, x.config.dupe())))
+                    .filter_map(|x| Some((x.state.get_load()?, x.config.dupe())))
                     .collect(),
             );
         }
@@ -627,16 +600,11 @@ impl<'a> Transaction<'a> {
             .data
             .updated_modules
             .iter_unordered()
-            .filter_map(|x| {
-                Some((
-                    x.1.state.read().steps.load.dupe()?,
-                    x.1.config.read().dupe(),
-                ))
-            })
+            .filter_map(|x| Some((x.1.state.get_load()?, x.1.config.read().dupe())))
             .collect::<Vec<_>>();
         for (k, v) in self.readable.modules.iter() {
             if self.data.updated_modules.get(k).is_none()
-                && let Some(load) = v.state.steps.load.dupe()
+                && let Some(load) = v.state.get_load()
             {
                 res.push((load, v.config.dupe()));
             }
@@ -777,7 +745,7 @@ impl<'a> Transaction<'a> {
 
         if self.data.updated_modules.is_empty() {
             for (handle, module) in self.readable.modules.iter() {
-                let lines = module.state.steps.line_count();
+                let lines = module.state.line_count();
                 if user_handles.contains(handle) {
                     user_lines += lines;
                 } else {
@@ -786,7 +754,7 @@ impl<'a> Transaction<'a> {
             }
         } else {
             for (handle, module) in self.data.updated_modules.iter_unordered() {
-                let lines = module.state.read().steps.line_count();
+                let lines = module.state.line_count();
                 if user_handles.contains(handle) {
                     user_lines += lines;
                 } else {
@@ -796,7 +764,7 @@ impl<'a> Transaction<'a> {
 
             for (handle, module) in self.readable.modules.iter() {
                 if self.data.updated_modules.get(handle).is_none() {
-                    let lines = module.state.steps.line_count();
+                    let lines = module.state.line_count();
                     if user_handles.contains(handle) {
                         user_lines += lines;
                     } else {
@@ -846,47 +814,22 @@ impl<'a> Transaction<'a> {
         find_import_prefixes(&self.get_module(handle).config.read(), module)
     }
 
-    fn clean(
-        &self,
-        module_data: &ArcId<ModuleDataMut>,
-        exclusive: UpgradeLockExclusiveGuard<Step, ModuleDataInner>,
-    ) {
+    fn clean(&self, module_data: &ArcId<ModuleDataMut>, guard: CleanGuard) {
         // We need to clean up the state.
         // If things have changed, we need to update the last_step.
         // We clear memory as an optimisation only.
 
-        // Mark ourselves as having completed everything.
-        let finish = |w: &mut ModuleDataInner| {
-            w.epochs.checked = self.data.now;
-            w.dirty.clean();
-        };
-        // Rebuild stuff. Pass clear_ast to indicate we need to rebuild the AST, otherwise can reuse it (if present).
-        let rebuild = |mut w: UpgradeLockWriteGuard<Step, ModuleDataInner>, clear_ast: bool| {
-            w.steps.last_step = if clear_ast || w.steps.ast.is_none() {
-                if w.steps.load.is_none() {
-                    None
-                } else {
-                    Some(Step::Load)
-                }
-            } else {
-                Some(Step::Ast)
-            };
-            if clear_ast {
-                w.steps.ast = None;
-            }
-            // Do not clear solutions or exports, since we use them for equality.
-            w.steps.answers = None;
-            w.epochs.computed = self.data.now;
+        let dirty = guard.take_dirty();
+
+        // Helper: rebuild and clear deps/rdeps.
+        let rebuild = |clear_ast: bool| {
             if let Some(subscriber) = &self.data.subscriber {
                 subscriber.start_work(&module_data.handle);
             }
             let mut deps_lock = module_data.deps.write();
             let deps = mem::take(&mut *deps_lock);
-            finish(&mut w);
+            guard.rebuild(clear_ast, self.data.now);
             if !deps.is_empty() {
-                // Downgrade to exclusive, so other people can read from us, or we lock up.
-                // But don't give up the lock entirely, so we don't recompute anything
-                let _exclusive = w.exclusive();
                 for resolution in deps.values() {
                     if let ImportResolution::Resolved(handles_map) = resolution {
                         for (dep_handle, _depends_on) in handles_map {
@@ -904,19 +847,18 @@ impl<'a> Transaction<'a> {
             drop(deps_lock);
         };
 
-        if exclusive.dirty.require() {
+        if dirty.require() {
             // We have increased the `Require` level, so redo everything to make sure
             // we capture everything.
             // Could be optimized to do less work (e.g. if you had Retain::Error before don't need to reload)
-            let mut write = exclusive.write();
-            write.steps.load = None;
-            rebuild(write, true);
+            guard.store_load(None);
+            rebuild(true);
             return;
         }
 
         // Validate the load flag.
-        if exclusive.dirty.load()
-            && let Some(old_load) = exclusive.steps.load.dupe()
+        if dirty.load()
+            && let Some(old_load) = guard.get_load()
         {
             let (file_contents, self_error) =
                 Load::load_from_path(module_data.handle.path(), &self.memory_lookup());
@@ -935,34 +877,32 @@ impl<'a> Transaction<'a> {
                     }
                 }
             {
-                let mut write = exclusive.write();
-                write.steps.load = Some(Arc::new(Load::load_from_data(
+                guard.store_load(Some(Arc::new(Load::load_from_data(
                     module_data.handle.module(),
                     module_data.handle.path().dupe(),
                     old_load.errors.style(),
                     file_contents,
                     self_error,
-                )));
-                rebuild(write, true);
+                ))));
+                rebuild(true);
                 return;
             }
         }
 
         // The contents are the same, so we can just reuse the old load contents. But errors could have changed from deps.
-        if exclusive.dirty.deps()
-            && let Some(old_load) = exclusive.steps.load.dupe()
+        if dirty.deps()
+            && let Some(old_load) = guard.get_load()
         {
-            let mut write = exclusive.write();
-            write.steps.load = Some(Arc::new(Load {
+            guard.store_load(Some(Arc::new(Load {
                 errors: ErrorCollector::new(old_load.module_info.dupe(), old_load.errors.style()),
                 module_info: old_load.module_info.clone(),
-            }));
-            rebuild(write, false);
+            })));
+            rebuild(false);
             return;
         }
 
         // Validate the find flag.
-        if exclusive.dirty.find() {
+        if dirty.find() {
             let loader = self.get_cached_loader(&module_data.config.read());
             let mut is_dirty = false;
 
@@ -1006,25 +946,23 @@ impl<'a> Transaction<'a> {
             }
 
             if is_dirty {
-                let mut write = exclusive.write();
                 // Create new ErrorCollector to clear old errors from the previous config
-                if let Some(old_load) = write.steps.load.dupe() {
-                    write.steps.load = Some(Arc::new(Load {
+                if let Some(old_load) = guard.get_load() {
+                    guard.store_load(Some(Arc::new(Load {
                         errors: ErrorCollector::new(
                             old_load.module_info.dupe(),
                             old_load.errors.style(),
                         ),
                         module_info: old_load.module_info.clone(),
-                    }));
+                    })));
                 }
-                rebuild(write, false);
+                rebuild(false);
                 return;
             }
         }
 
-        // The module was not dirty. Make sure our dependencies aren't dirty either.
-        let mut write = exclusive.write();
-        finish(&mut write);
+        // The module was not dirty.
+        guard.finish_clean(self.data.now);
     }
 
     /// Try to mark a module as dirty due to dependency changes.
@@ -1034,25 +972,11 @@ impl<'a> Transaction<'a> {
         module_data: &ArcId<ModuleDataMut>,
         dirtied: &mut Vec<ArcId<ModuleDataMut>>,
     ) -> bool {
-        loop {
-            let reader = module_data.state.read();
-            if reader.epochs.computed == self.data.now || reader.dirty.deps() {
-                // Either doesn't need setting, or already set
-                return false;
-            }
-            // This can potentially race with `clean`, so make sure we use the `last` as our exclusive key,
-            // which importantly is a different key to the `first` that `clean` uses.
-            // Slight risk of a busy-loop, but better than a deadlock.
-            if let Some(exclusive) = reader.exclusive(Step::last()) {
-                if exclusive.epochs.computed == self.data.now || exclusive.dirty.deps() {
-                    return false;
-                }
-                dirtied.push(module_data.dupe());
-                exclusive.write().dirty.set_deps();
-                return true;
-            }
-            // continue around the loop - failed to get the lock, but we really want it
+        let marked = module_data.state.try_mark_deps_dirty(self.data.now);
+        if marked {
+            dirtied.push(module_data.dupe());
         }
+        marked
     }
 
     /// Compute a module up to the given step, performing single-level fine-grained
@@ -1065,34 +989,40 @@ impl<'a> Transaction<'a> {
     fn demand(&self, module_data: &ArcId<ModuleDataMut>, step: Step) {
         let mut computed = false;
         loop {
-            let reader = module_data.state.read();
-            if reader.epochs.checked != self.data.now {
-                if let Some(ex) = reader.exclusive(Step::first()) {
-                    self.clean(module_data, ex);
+            // Check if the module has been cleaned in this epoch.
+            if !module_data.state.is_checked(self.data.now) {
+                if let Some(guard) = module_data.state.try_start_clean() {
+                    self.clean(module_data, guard);
                     // We might have done some cleaning
                     computed = true;
                 }
                 continue;
             }
 
-            let todo = match reader.steps.next_step() {
+            // Check if next step needs computing.
+            let todo = match module_data.state.next_step() {
                 Some(todo) if todo <= step => todo,
                 _ => break,
             };
-            let exclusive = match reader.exclusive(todo) {
-                Some(exclusive) => exclusive,
+
+            // Try to acquire exclusive compute access for this step.
+            let guard = match module_data.state.try_start_compute(todo) {
+                Some(guard) => guard,
                 None => {
-                    // The world changed, we should check again
+                    // Another thread is computing this step; check again.
                     continue;
                 }
             };
-            let todo = match exclusive.steps.next_step() {
+
+            // Re-check next_step under exclusive access, since another thread
+            // may have completed the step between our check and lock acquisition.
+            let todo = match guard.next_step() {
                 Some(todo) if todo <= step => todo,
                 _ => break,
             };
 
             computed = true;
-            let require = exclusive.require;
+            let require = guard.require();
             let stdlib = self.get_stdlib(&module_data.handle);
             let config = module_data.config.read();
             let ctx = Context {
@@ -1111,28 +1041,17 @@ impl<'a> Transaction<'a> {
                 tensor_shapes: config.tensor_shapes(module_data.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
             };
-            let set = todo.compute(&exclusive.steps, &ctx);
+
+            let mut old_data = Steps::default();
+            guard.compute(todo, &mut old_data, &ctx);
             {
-                let mut to_drop_ast = None;
-                let mut to_drop_answers = None;
-                let mut writer = exclusive.write();
                 let mut load_result = None;
-                let old_solutions = if todo == Step::Solutions {
-                    writer.steps.solutions.take()
-                } else {
-                    None
-                };
-                let old_exports = if todo == Step::Exports {
-                    writer.steps.exports.take()
-                } else {
-                    None
-                };
-                set.0(&mut writer.steps);
                 // Compute which exports changed for fine-grained invalidation.
                 // Check at both the Exports step (for wildcard set changes) and
                 // the Solutions step (for type changes).
                 let changed_exports: ChangedExports = if todo == Step::Solutions {
-                    match (old_solutions.as_ref(), writer.steps.solutions.as_ref()) {
+                    let new_solutions = module_data.state.get_solutions();
+                    match (old_data.solutions.as_ref(), new_solutions.as_ref()) {
                         (Some(old), Some(new)) => {
                             let changed = old.changed_exports(new);
                             if changed.is_empty() {
@@ -1154,7 +1073,8 @@ impl<'a> Transaction<'a> {
                     // This detects both wildcard set changes and definition name changes.
                     // Wildcard changes affect `from M import *`.
                     // Name existence changes affect `from M import name`.
-                    match (old_exports.as_ref(), writer.steps.exports.as_ref()) {
+                    let new_exports = module_data.state.get_exports();
+                    match (old_data.exports.as_ref(), new_exports.as_ref()) {
                         (Some(old), Some(new)) => {
                             let mut changed_set: SmallSet<ChangedExport> = SmallSet::new();
                             // Check for definition name changes (added/removed names)
@@ -1187,18 +1107,14 @@ impl<'a> Transaction<'a> {
                 if todo == Step::Answers && !require.keep_ast() {
                     // We have captured the Ast, and must have already built Exports (we do it serially),
                     // so won't need the Ast again.
-                    to_drop_ast = writer.steps.ast.take();
+                    guard.evict_ast();
                 } else if todo == Step::Solutions {
                     if !require.keep_bindings() && !require.keep_answers() {
                         // From now on we can use the answers directly, so evict the bindings/answers.
-                        to_drop_answers = writer.steps.answers.take();
+                        guard.evict_answers();
                     }
-                    load_result = writer.steps.load.dupe();
+                    load_result = module_data.state.get_load();
                 }
-                drop(writer);
-                // Release the lock before dropping
-                drop(to_drop_ast);
-                drop(to_drop_answers);
                 if !matches!(changed_exports, ChangedExports::NoChange) {
                     self.data
                         .changed
@@ -1275,7 +1191,7 @@ impl<'a> Transaction<'a> {
         // instead of approximating it using require levels.
         if computed
             && let Some(next) = step.next()
-            && /* See "NOTE" */ module_data.state.read().require.compute_errors()
+            && /* See "NOTE" */ module_data.state.require().compute_errors()
         {
             // For a large benchmark, LIFO is 10Gb retained, FIFO is 13Gb.
             // Perhaps we are getting to the heart of the graph with LIFO?
@@ -1288,10 +1204,10 @@ impl<'a> Transaction<'a> {
     fn with_module_inner<R>(
         &self,
         handle: &Handle,
-        f: impl FnOnce(&ModuleDataInner) -> Option<R>,
+        f: impl FnOnce(&dyn ModuleStateReader) -> Option<R>,
     ) -> Option<R> {
         if let Some(v) = self.data.updated_modules.get(handle) {
-            f(&v.state.read())
+            f(&v.state)
         } else if let Some(v) = self.readable.modules.get(handle) {
             f(&v.state)
         } else {
@@ -1303,10 +1219,10 @@ impl<'a> Transaction<'a> {
     fn with_module_config_inner<R>(
         &self,
         handle: &Handle,
-        f: impl FnOnce(&ArcId<ConfigFile>, &ModuleDataInner) -> Option<R>,
+        f: impl FnOnce(&ArcId<ConfigFile>, &dyn ModuleStateReader) -> Option<R>,
     ) -> Option<R> {
         if let Some(v) = self.data.updated_modules.get(handle) {
-            f(&v.config.read(), &v.state.read())
+            f(&v.config.read(), &v.state)
         } else if let Some(v) = self.readable.modules.get(handle) {
             f(&v.config, &v.state)
         } else {
@@ -1358,7 +1274,7 @@ impl<'a> Transaction<'a> {
         msg: String,
         kind: ErrorKind,
     ) {
-        let load = module_data.state.read().steps.load.dupe().unwrap();
+        let load = module_data.state.get_load().unwrap();
         load.errors.add(range, ErrorInfo::Kind(kind), vec1![msg]);
     }
 
@@ -1423,8 +1339,7 @@ impl<'a> Transaction<'a> {
 
     fn lookup_export(&self, module_data: &ArcId<ModuleDataMut>) -> Arc<Exports> {
         self.demand(module_data, Step::Exports);
-        let lock = module_data.state.read();
-        lock.steps.exports.dupe().unwrap()
+        module_data.state.get_exports().unwrap()
     }
 
     /// Look up the location of an exported name in a module.
@@ -1437,7 +1352,7 @@ impl<'a> Transaction<'a> {
 
         match export_map.get(name)? {
             ExportLocation::ThisModule(export) => {
-                let load = module_data.state.read().steps.load.dupe()?;
+                let load = module_data.state.get_load()?;
                 Some((load.module_info.dupe(), export.location))
             }
             ExportLocation::OtherModule(other_module, alias) => {
@@ -1468,15 +1383,14 @@ impl<'a> Transaction<'a> {
         // Either: We have solutions (use that), or we have answers (calculate that), or we have none (demand and try again)
         // Check; demand; check - the second check is guaranteed to work.
         for _ in 0..2 {
-            let lock = module_data.state.read();
-            if lock.epochs.checked == self.data.now {
+            if module_data.state.is_checked(self.data.now) {
                 // Only use existing solutions or answers if the module data is current.
                 // Otherwise, the module might be dirty and require computation.
-                if let Some(solutions) = &lock.steps.solutions
-                    && lock.steps.last_step == Some(Step::Solutions)
+                if let Some(solutions) = module_data.state.get_solutions()
+                    && module_data.state.last_step() == Some(Step::Solutions)
                 {
                     return solutions.get_hashed_opt(key).duped();
-                } else if let Some(answers) = &lock.steps.answers {
+                } else if let Some(answers) = module_data.state.get_answers() {
                     // Fast path: check if the answer is already computed in the
                     // Calculation cell. This avoids duping Arcs and constructing
                     // a TransactionHandle when the value is cached.
@@ -1486,9 +1400,7 @@ impl<'a> Transaction<'a> {
                         return Some(v);
                     }
                     // Slow path: need full solve_exported_key for computation.
-                    let load = lock.steps.load.dupe().unwrap();
-                    let answers = answers.dupe();
-                    drop(lock);
+                    let load = module_data.state.get_load().unwrap();
                     let stdlib = self.get_stdlib(&module_data.handle);
                     let lookup = self.lookup(module_data);
                     let result = answers.1.solve_exported_key(
@@ -1504,7 +1416,6 @@ impl<'a> Transaction<'a> {
                     return result;
                 }
             }
-            drop(lock);
             self.demand(&module_data, Step::Answers);
         }
         unreachable!("We demanded the answers, either answers or solutions should be present");
@@ -1581,12 +1492,7 @@ impl<'a> Transaction<'a> {
             let dirty = mem::take(&mut *self.data.dirty.lock());
             for h in handles {
                 let (m, created) = self.get_module_ex(h, require);
-                let mut state = m.state.write(Step::first()).unwrap();
-                let dirty_require = state.update_require(require);
-                if dirty_require {
-                    state.dirty.set_require();
-                }
-                drop(state);
+                let dirty_require = m.state.increase_require(require);
                 if (created || dirty_require) && !dirty.contains(&m) {
                     self.data.todo.push_fifo(Step::first(), m);
                 }
@@ -1691,7 +1597,7 @@ impl<'a> Transaction<'a> {
         let mut dirty_set: std::sync::MutexGuard<'_, SmallSet<ArcId<ModuleDataMut>>> =
             self.data.dirty.lock();
         for x in dirty.into_values() {
-            x.state.write(Step::Load).unwrap().dirty.set_deps();
+            x.state.dirty.set_deps();
             dirty_set.insert(x);
         }
     }
@@ -1829,44 +1735,44 @@ impl<'a> Transaction<'a> {
     ) -> Option<R> {
         let module_data = self.get_module(handle);
         let lookup = self.lookup(module_data.dupe());
-        let steps = &module_data.state.read().steps;
-        let errors = &steps.load.as_ref()?.errors;
-        let (bindings, answers) = steps.answers.as_deref().as_ref()?;
+        let load = module_data.state.get_load()?;
+        let answers = module_data.state.get_answers()?;
+        let errors = &load.errors;
         let stdlib = self.get_stdlib(handle);
         let recurser = VarRecurser::new();
         let config = module_data.config.read();
         let thread_state = ThreadState::new(config.recursion_limit_config());
         let solver = AnswersSolver::new(
             &lookup,
-            answers,
+            &answers.1,
             errors,
-            bindings,
+            &answers.0,
             &lookup,
             &self.data.state.uniques,
             &recurser,
             &stdlib,
             &thread_state,
-            answers.heap(),
+            answers.1.heap(),
         );
         let result = solve(solver);
         Some(result)
     }
 
-    fn invalidate(&mut self, pred: impl Fn(&Handle) -> bool, dirty: impl Fn(&mut Dirty)) {
+    fn invalidate(&mut self, pred: impl Fn(&Handle) -> bool, dirty: impl Fn(&AtomicDirty)) {
         let mut dirty_set = self.data.dirty.lock();
         // We need to mark as dirty all those in updated_modules, and lift those in readable.modules up if they are dirty.
         // Most things in updated are also in readable, so we are likely to set them twice - but it's not too expensive.
         // Make sure we do updated first, as doing readable will cause them all to move to dirty.
         for (handle, module_data) in self.data.updated_modules.iter_unordered() {
             if pred(handle) {
-                dirty(&mut module_data.state.write(Step::Load).unwrap().dirty);
+                dirty(&module_data.state.dirty);
                 dirty_set.insert(module_data.dupe());
             }
         }
         for handle in self.readable.modules.keys() {
             if pred(handle) {
                 let module_data = self.get_module(handle);
-                dirty(&mut module_data.state.write(Step::Load).unwrap().dirty);
+                dirty(&module_data.state.dirty);
                 dirty_set.insert(module_data.dupe());
             }
         }
@@ -1922,12 +1828,7 @@ impl<'a> Transaction<'a> {
             let config2 = self.data.state.get_config(handle);
             if config2 != *module_data.config.read() {
                 *module_data.config.write() = config2;
-                module_data
-                    .state
-                    .write(Step::Load)
-                    .unwrap()
-                    .dirty
-                    .set_find();
+                module_data.state.dirty.set_find();
                 dirty_set.insert(module_data.dupe());
             }
         }
@@ -1937,12 +1838,7 @@ impl<'a> Transaction<'a> {
                 if module_data.config != config2 {
                     let module_data = self.get_module(handle);
                     *module_data.config.write() = config2;
-                    module_data
-                        .state
-                        .write(Step::Load)
-                        .unwrap()
-                        .dirty
-                        .set_find();
+                    module_data.state.dirty.set_find();
                     dirty_set.insert(module_data.dupe());
                 }
             }
@@ -1979,12 +1875,7 @@ impl<'a> Transaction<'a> {
         let mut dirty_set = self.data.dirty.lock();
         for module_data in self.data.updated_modules.values() {
             if configs.contains(&*module_data.config.read()) {
-                module_data
-                    .state
-                    .write(Step::Load)
-                    .unwrap()
-                    .dirty
-                    .set_find();
+                module_data.state.dirty.set_find();
                 dirty_set.insert(module_data.dupe());
             }
         }
@@ -1993,12 +1884,7 @@ impl<'a> Transaction<'a> {
                 && configs.contains(&module_data.config)
             {
                 let module_data = self.get_module(handle);
-                module_data
-                    .state
-                    .write(Step::Load)
-                    .unwrap()
-                    .dirty
-                    .set_find();
+                module_data.state.dirty.set_find();
                 dirty_set.insert(module_data.dupe());
             }
         }
@@ -2071,12 +1957,12 @@ impl<'a> Transaction<'a> {
             };
 
             let m = self.get_module(&m.handle);
-            let mut alt = Steps::default();
-            let lock = m.state.read();
+            let alt = StepsMut::new_loaded(m.state.get_load().unwrap());
+            let require = m.state.require();
             let stdlib = self.get_stdlib(&m.handle);
             let config = m.config.read();
             let ctx = Context {
-                require: lock.require,
+                require,
                 module: m.handle.module(),
                 path: m.handle.path(),
                 sys_info: m.handle.sys_info(),
@@ -2089,23 +1975,21 @@ impl<'a> Transaction<'a> {
                 tensor_shapes: config.tensor_shapes(m.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
             };
-            let mut step = Step::Load; // Start at AST (Load.next)
-            alt.load = lock.steps.load.dupe();
-            while let Some(s) = step.next() {
-                step = s;
+            let mut old = Steps::default();
+            while let Some(step) = alt.next_step() {
                 let start = Instant::now();
-                step.compute(&alt, &ctx).0(&mut alt);
+                alt.compute(step, &mut old, &ctx);
                 write(&step, start)?;
                 if step == Step::Exports {
                     let start = Instant::now();
-                    let exports = alt.exports.as_ref().unwrap();
+                    let exports = alt.exports.load_full().unwrap();
                     exports.wildcard(ctx.lookup);
                     exports.exports(ctx.lookup);
                     write(&"Exports-force", start)?;
                 }
             }
             if let Some(subscriber) = &self.data.subscriber {
-                subscriber.finish_work(self, &m.handle, &alt.load.unwrap(), false);
+                subscriber.finish_work(self, &m.handle, &alt.load.load_full().unwrap(), false);
             }
         }
         self.data.subscriber = None; // Finalize the progress bar before printing to stderr
@@ -2503,12 +2387,10 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         };
 
         // Access the target module's Answers and commit the answer.
-        let lock = module_data.state.read();
-        if let Some(answers_pair) = &lock.steps.answers {
+        if let Some(answers_pair) = module_data.state.get_answers() {
             let answers = answers_pair.1.dupe();
             // Get the target module's error collector for error propagation.
-            let target_load = lock.steps.load.as_ref().map(|load| load.dupe());
-            drop(lock);
+            let target_load = module_data.state.get_load();
             let did_write = answers.commit_preliminary(any_idx, answer);
             // Only extend errors if this write won the first-write-wins race.
             if did_write && let (Some(errors), Some(target_load)) = (errors, target_load) {
@@ -2525,7 +2407,9 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
                 target_load.errors.extend(errors);
             }
             true
-        } else if lock.steps.solutions.is_some() && lock.steps.last_step == Some(Step::Solutions) {
+        } else if module_data.state.get_solutions().is_some()
+            && module_data.state.last_step() == Some(Step::Solutions)
+        {
             // The target module's Answers have been evicted, but Solutions
             // exist. This is a benign race: another thread ran
             // `demand(Step::Solutions)` on the target module concurrently
