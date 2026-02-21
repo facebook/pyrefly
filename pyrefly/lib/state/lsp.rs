@@ -962,9 +962,11 @@ impl<'a> Transaction<'a> {
             return ty;
         }
         let original = ty.clone();
-        self.ad_hoc_solve(handle, |solver| Self::callable_from_type(&solver, ty))
-            .and_then(|callable| callable)
-            .unwrap_or(original)
+        self.ad_hoc_solve(handle, "coerce_callable", |solver| {
+            Self::callable_from_type(&solver, ty)
+        })
+        .and_then(|callable| callable)
+        .unwrap_or(original)
     }
 
     /// Extract a callable type from `ty` by invoking the solver to find its `__call__` method.
@@ -1366,7 +1368,7 @@ impl<'a> Transaction<'a> {
         base_type: Type,
         name: &Name,
     ) -> Vec<FindDefinitionItemWithDocstring> {
-        self.ad_hoc_solve(handle, |solver| {
+        self.ad_hoc_solve(handle, "attribute_definition", |solver| {
             let completions = |ty| solver.completions(ty, Some(name), false);
 
             match base_type {
@@ -2619,7 +2621,7 @@ impl<'a> Transaction<'a> {
         };
         // For each attribute we found above, we will test whether it actually will jump to the
         // given `definition`.
-        self.ad_hoc_solve(handle, |solver| {
+        self.ad_hoc_solve(handle, "attribute_references", |solver| {
             let mut references = Vec::new();
             for attribute in relevant_attributes {
                 if let Some(answers) = self.get_answers(handle)

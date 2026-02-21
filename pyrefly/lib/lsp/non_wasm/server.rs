@@ -366,7 +366,7 @@ pub trait TspInterface: Send + Sync {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &impl Telemetry,
+        telemetry: &'a impl Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
@@ -1187,7 +1187,7 @@ impl Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &impl Telemetry,
+        telemetry: &'a impl Telemetry,
         telemetry_event: &mut TelemetryEvent,
         // After this event there is another mutation
         subsequent_mutation: bool,
@@ -1394,6 +1394,26 @@ impl Server {
 
                 let mut transaction =
                     ide_transaction_manager.non_committable_transaction(&self.state);
+
+                // Set up immediate per-call telemetry for ad-hoc solves, matching
+                // the record_code_action_telemetry pattern. Each solve event is
+                // logged the instant it completes rather than batched.
+                {
+                    let server_state = self.telemetry_state();
+                    let activity_key = telemetry_event.activity_key.clone();
+                    transaction.set_ad_hoc_solve_recorder(Box::new(
+                        move |label, start, duration| {
+                            let mut event = TelemetryEvent::new_task(
+                                TelemetryEventKind::AdHocSolve(label.to_owned()),
+                                server_state.clone(),
+                                None,
+                                start,
+                            );
+                            event.set_activity_key(activity_key.clone());
+                            telemetry.record_event(event, duration, None);
+                        },
+                    ));
+                }
 
                 // As an over-approximation, validate open files. This request might be based on a transaction where we
                 // skipped this step due to a subsequent mutation. We might also have a stale saved state, which we needed
@@ -4999,7 +5019,7 @@ impl TspInterface for Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &impl Telemetry,
+        telemetry: &'a impl Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,

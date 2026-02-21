@@ -2322,15 +2322,19 @@ impl<'a> CallGraphVisitor<'a> {
                 let (init_method, new_method) = self
                     .module_context
                     .transaction
-                    .ad_hoc_solve(&self.module_context.handle, |solver| {
-                        let new_method = solver.get_dunder_new(&class_type);
-                        let overrides_new = new_method.is_some();
-                        let init_method = solver.get_dunder_init(
-                            &class_type,
-                            /* get_object_init */ !overrides_new,
-                        );
-                        (init_method, new_method)
-                    })
+                    .ad_hoc_solve(
+                        &self.module_context.handle,
+                        "call_graph_constructor",
+                        |solver| {
+                            let new_method = solver.get_dunder_new(&class_type);
+                            let overrides_new = new_method.is_some();
+                            let init_method = solver.get_dunder_init(
+                                &class_type,
+                                /* get_object_init */ !overrides_new,
+                            );
+                            (init_method, new_method)
+                        },
+                    )
                     .unwrap();
                 self.resolve_constructor_callees(
                     init_method,
@@ -2345,12 +2349,11 @@ impl<'a> CallGraphVisitor<'a> {
             Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::TypedDict(
                 typed_dict_inner,
             ))) => {
-                let init_method = self
-                    .module_context
-                    .transaction
-                    .ad_hoc_solve(&self.module_context.handle, |solver| {
-                        solver.get_typed_dict_dunder_init(&typed_dict_inner)
-                    });
+                let init_method = self.module_context.transaction.ad_hoc_solve(
+                    &self.module_context.handle,
+                    "call_graph_typed_dict_init",
+                    |solver| solver.get_typed_dict_dunder_init(&typed_dict_inner),
+                );
                 self.resolve_constructor_callees(
                     init_method,
                     /* new_method */ None,
@@ -2569,9 +2572,11 @@ impl<'a> CallGraphVisitor<'a> {
         let pyrefly_target = self
             .module_context
             .transaction
-            .ad_hoc_solve(&self.module_context.handle, |solver| {
-                expression_type.map(|type_| solver.as_call_target(type_.clone()))
-            })
+            .ad_hoc_solve(
+                &self.module_context.handle,
+                "call_graph_call_target",
+                |solver| expression_type.map(|type_| solver.as_call_target(type_.clone())),
+            )
             .flatten();
         self.resolve_pyrefly_target(
             pyrefly_target,
@@ -2603,22 +2608,26 @@ impl<'a> CallGraphVisitor<'a> {
             }
             self.module_context
                 .transaction
-                .ad_hoc_solve(&self.module_context.handle, |solver| {
-                    solver
-                        .type_of_magic_dunder_attr(
-                            base,
-                            attribute,
-                            range,
-                            &self.error_collector,
-                            None,
-                            resolve_context,
-                            /* allow_getattr_fallback */ true,
-                        )
-                        .map(|type_| ResolvedDunderAttr {
-                            target: solver.as_call_target(type_.clone()),
-                            attr_type: type_,
-                        })
-                })
+                .ad_hoc_solve(
+                    &self.module_context.handle,
+                    "call_graph_dunder_attr",
+                    |solver| {
+                        solver
+                            .type_of_magic_dunder_attr(
+                                base,
+                                attribute,
+                                range,
+                                &self.error_collector,
+                                None,
+                                resolve_context,
+                                /* allow_getattr_fallback */ true,
+                            )
+                            .map(|type_| ResolvedDunderAttr {
+                                target: solver.as_call_target(type_.clone()),
+                                attr_type: type_,
+                            })
+                    },
+                )
                 .flatten()
                 .map(
                     |ResolvedDunderAttr {
@@ -3781,13 +3790,19 @@ impl<'a> CallGraphVisitor<'a> {
         let (init_method, new_method) = self
             .module_context
             .transaction
-            .ad_hoc_solve(&self.module_context.handle, |solver| {
-                let new_method = solver.get_dunder_new(&slice_class_type);
-                let overrides_new = new_method.is_some();
-                let init_method = solver
-                    .get_dunder_init(&slice_class_type, /* get_object_init */ !overrides_new);
-                (init_method, new_method)
-            })
+            .ad_hoc_solve(
+                &self.module_context.handle,
+                "call_graph_slice_constructor",
+                |solver| {
+                    let new_method = solver.get_dunder_new(&slice_class_type);
+                    let overrides_new = new_method.is_some();
+                    let init_method = solver.get_dunder_init(
+                        &slice_class_type,
+                        /* get_object_init */ !overrides_new,
+                    );
+                    (init_method, new_method)
+                },
+            )
             .unwrap();
         let callees = self.resolve_constructor_callees(
             init_method,

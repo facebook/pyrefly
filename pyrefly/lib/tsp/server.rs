@@ -47,7 +47,7 @@ impl<T: TspInterface> TspServer<T> {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &impl Telemetry,
+        telemetry: &'a impl Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,

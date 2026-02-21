@@ -148,10 +148,11 @@ impl<'a> Transaction<'a> {
                                 {
                                     let fun = bindings.get(bindings.get(*x).undecorated_idx);
                                     if fun.def.is_async
-                                        && let Some(Some((_, _, return_ty))) = self
-                                            .ad_hoc_solve(handle, |solver| {
-                                                solver.unwrap_coroutine(&ty)
-                                            })
+                                        && let Some(Some((_, _, return_ty))) = self.ad_hoc_solve(
+                                            handle,
+                                            "inlay_hint_coroutine",
+                                            |solver| solver.unwrap_coroutine(&ty),
+                                        )
                                     {
                                         ty = return_ty;
                                     }

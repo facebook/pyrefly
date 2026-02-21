@@ -282,7 +282,7 @@ impl<'a> super::Transaction<'a> {
         handle: &Handle,
         base_type: Type,
     ) -> Option<BTreeMap<String, Type>> {
-        self.ad_hoc_solve(handle, |solver| {
+        self.ad_hoc_solve(handle, "typed_dict_keys", |solver| {
             let mut map = BTreeMap::new();
             let mut stack = vec![base_type];
             while let Some(ty) = stack.pop() {
@@ -355,7 +355,7 @@ impl<'a> super::Transaction<'a> {
 
                 if let Some(idx) = idx_opt {
                     let facets_clone = facets.clone();
-                    if let Some(keys) = self.ad_hoc_solve(handle, |solver| {
+                    if let Some(keys) = self.ad_hoc_solve(handle, "dict_key_facets", |solver| {
                         let info = solver.get_idx(idx);
                         info.key_facets_at(&facets_clone)
                     }) {
