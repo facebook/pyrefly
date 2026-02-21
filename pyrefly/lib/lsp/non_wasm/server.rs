@@ -1936,12 +1936,12 @@ impl Server {
         let workspaces = Arc::new(Workspaces::new(Workspace::default(), &folders));
 
         // Resolve the config path: CLI --config takes precedence, then
-        // initializationOptions.configFile from the editor.
+        // initializationOptions.configPath from the editor.
         let explicit_config = config.or_else(|| {
             initialize_params
                 .initialization_options
                 .as_ref()
-                .and_then(|opts| opts.get("configFile"))
+                .and_then(|opts| opts.get("configPath"))
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(PathBuf::from)
