@@ -462,7 +462,7 @@ impl Bindings {
     pub fn new(
         x: ModModule,
         module_info: ModuleInfo,
-        exports: Exports,
+        exports: &Exports,
         solver: &Solver,
         lookup: &dyn LookupExport,
         sys_info: &SysInfo,

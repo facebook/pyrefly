@@ -55,7 +55,7 @@ pub struct Steps {
     pub last_step: Option<Step>,
     pub load: Option<Arc<Load>>,
     pub ast: Option<Arc<ModModule>>,
-    pub exports: Option<Exports>,
+    pub exports: Option<Arc<Exports>>,
     pub answers: Option<Arc<(Bindings, Arc<Answers>)>>,
     pub solutions: Option<Arc<Solutions>>,
 }
@@ -159,8 +159,8 @@ impl Step {
         ctx: &Context<Lookup>,
         load: Arc<Load>,
         ast: Arc<ModModule>,
-    ) -> Exports {
-        Exports::new(&ast.body, &load.module_info, ctx.sys_info)
+    ) -> Arc<Exports> {
+        Arc::new(Exports::new(&ast.body, &load.module_info, ctx.sys_info))
     }
 
     #[inline(never)]
@@ -168,7 +168,7 @@ impl Step {
         ctx: &Context<Lookup>,
         load: Arc<Load>,
         ast: Arc<ModModule>,
-        exports: Exports,
+        exports: Arc<Exports>,
     ) -> Arc<(Bindings, Arc<Answers>)> {
         let solver = Solver::new(ctx.infer_with_first_use, ctx.tensor_shapes);
         let enable_index = ctx.require.keep_index();
@@ -176,7 +176,7 @@ impl Step {
         let bindings = Bindings::new(
             Arc::unwrap_or_clone(ast),
             load.module_info.dupe(),
-            exports,
+            &exports,
             &solver,
             ctx.lookup,
             ctx.sys_info,

@@ -1421,7 +1421,7 @@ impl<'a> Transaction<'a> {
         })
     }
 
-    fn lookup_export(&self, module_data: &ArcId<ModuleDataMut>) -> Exports {
+    fn lookup_export(&self, module_data: &ArcId<ModuleDataMut>) -> Arc<Exports> {
         self.demand(module_data, Step::Exports);
         let lock = module_data.state.read();
         lock.steps.exports.dupe().unwrap()
@@ -2116,7 +2116,7 @@ impl<'a> Transaction<'a> {
             .exports(&self.lookup(module_data))
     }
 
-    pub(crate) fn get_exports_data(&self, handle: &Handle) -> Exports {
+    pub(crate) fn get_exports_data(&self, handle: &Handle) -> Arc<Exports> {
         let module_data = self.get_module(handle);
         self.lookup_export(&module_data)
     }

@@ -10,7 +10,6 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_graph::calculation::Calculation;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::module_name::ModuleName;
@@ -87,11 +86,8 @@ pub enum ExportLocation {
     OtherModule(ModuleName, Option<Name>),
 }
 
-#[derive(Debug, Default, Clone, Dupe)]
-pub struct Exports(Arc<ExportsInner>);
-
 #[derive(Debug, Default)]
-struct ExportsInner {
+pub struct Exports {
     /// The underlying definitions.
     /// Note that these aren't actually required, once we have calculated the other fields,
     /// but they take up very little space, so not worth the hassle to detect when
@@ -110,7 +106,7 @@ struct ExportsInner {
 
 impl Display for Exports {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for x in self.0.definitions.dunder_all.entries.iter() {
+        for x in self.definitions.dunder_all.entries.iter() {
             match x {
                 DunderAllEntry::Name(_, x) => writeln!(f, "export {x}")?,
                 DunderAllEntry::Module(_, x) => writeln!(f, "from {x} import *")?,
@@ -144,19 +140,19 @@ impl Exports {
             ]);
         }
 
-        Self(Arc::new(ExportsInner {
+        Self {
             definitions,
             wildcard: Calculation::new(),
             exports: Calculation::new(),
             docstring_range: Docstring::range_from_stmts(x),
-        }))
+        }
     }
 
     /// What symbols will I get if I do `from <this_module> import *`?
     pub fn wildcard(&self, lookup: &dyn LookupExport) -> Arc<SmallSet<Name>> {
         let f = || {
             let mut result = SmallSet::new();
-            for x in &self.0.definitions.dunder_all.entries {
+            for x in &self.definitions.dunder_all.entries {
                 match x {
                     DunderAllEntry::Name(_, x) => {
                         result.insert(x.clone());
@@ -177,14 +173,14 @@ impl Exports {
             }
             Arc::new(result)
         };
-        self.0.wildcard.calculate(f).unwrap_or_default()
+        self.wildcard.calculate(f).unwrap_or_default()
     }
 
     /// Get the names that were added or removed between self and other.
     /// Returns the symmetric difference: names that exist in one but not the other.
     pub fn changed_names(&self, other: &Self) -> SmallSet<Name> {
-        let self_set = self.0.wildcard.get();
-        let other_set = other.0.wildcard.get();
+        let self_set = self.wildcard.get();
+        let other_set = other.wildcard.get();
 
         let (self_set, other_set) = match (self_set, other_set) {
             (Some(s), Some(o)) => (s, o),
@@ -213,8 +209,8 @@ impl Exports {
     /// Only checks names that exist in both versions (existence changes tracked separately).
     /// Ignores TextRange fields (range, docstring_range) per design doc.
     pub fn changed_metadata_names(&self, other: &Self) -> SmallSet<Name> {
-        let self_defs = &self.0.definitions;
-        let other_defs = &other.0.definitions;
+        let self_defs = &self.definitions;
+        let other_defs = &other.definitions;
 
         let mut changed = SmallSet::new();
 
@@ -249,16 +245,15 @@ impl Exports {
 
     /// Get the docstring for this module.
     pub fn docstring_range(&self) -> Option<TextRange> {
-        self.0.docstring_range
+        self.docstring_range
     }
 
     /// If `position` is inside a user-specified `__all__` string entry, return its range and name.
     pub fn dunder_all_name_at(&self, position: TextSize) -> Option<(TextRange, Name)> {
-        if self.0.definitions.dunder_all.kind != DunderAllKind::Specified {
+        if self.definitions.dunder_all.kind != DunderAllKind::Specified {
             return None;
         }
-        self.0
-            .definitions
+        self.definitions
             .dunder_all
             .entries
             .iter()
@@ -271,18 +266,16 @@ impl Exports {
     }
 
     pub fn is_submodule_imported_implicitly(&self, name: &Name) -> bool {
-        self.0
-            .definitions
+        self.definitions
             .implicitly_imported_submodules
             .contains(name)
     }
 
     /// Return an iterator with entries in `__all__` that are user-defined or None if `__all__` was not present.
     pub fn get_explicit_dunder_all_names_iter(&self) -> Option<impl Iterator<Item = &Name>> {
-        match self.0.definitions.dunder_all.kind {
+        match self.definitions.dunder_all.kind {
             DunderAllKind::Specified => Some(
-                self.0
-                    .definitions
+                self.definitions
                     .dunder_all
                     .entries
                     .iter()
@@ -304,19 +297,19 @@ impl Exports {
         module_info: &ModuleInfo,
     ) -> Vec<(TextRange, Name)> {
         // Only validate if __all__ was explicitly defined by the user
-        if self.0.definitions.dunder_all.kind == DunderAllKind::Inferred {
+        if self.definitions.dunder_all.kind == DunderAllKind::Inferred {
             return Vec::new();
         }
         let mut invalid = Vec::new();
-        for entry in &self.0.definitions.dunder_all.entries {
+        for entry in &self.definitions.dunder_all.entries {
             if let DunderAllEntry::Name(range, name) = entry {
                 // Check if name exists in definitions
-                if self.0.definitions.definitions.contains_key(name) {
+                if self.definitions.definitions.contains_key(name) {
                     continue;
                 }
                 // Check if name is available through a wildcard import
                 let mut found_in_import = false;
-                for (module, _) in self.0.definitions.import_all.iter() {
+                for (module, _) in self.definitions.import_all.iter() {
                     if let Some(wildcard) = lookup.get_wildcard(*module)
                         && wildcard.contains(name)
                     {
@@ -343,10 +336,10 @@ impl Exports {
     pub fn exports(&self, lookup: &dyn LookupExport) -> Arc<SmallMap<Name, ExportLocation>> {
         let f = || {
             let mut result: SmallMap<Name, ExportLocation> = SmallMap::new();
-            for (name, definition) in self.0.definitions.definitions.iter_hashed() {
-                let deprecation = self.0.definitions.deprecated.get_hashed(name).cloned();
-                let special_export = self.0.definitions.special_exports.get_hashed(name).copied();
-                let is_final = self.0.definitions.final_names.contains_hashed(name);
+            for (name, definition) in self.definitions.definitions.iter_hashed() {
+                let deprecation = self.definitions.deprecated.get_hashed(name).cloned();
+                let special_export = self.definitions.special_exports.get_hashed(name).copied();
+                let is_final = self.definitions.final_names.contains_hashed(name);
                 let export = match &definition.style {
                     DefinitionStyle::Annotated(symbol_kind, ..)
                     | DefinitionStyle::Unannotated(symbol_kind) => {
@@ -392,7 +385,7 @@ impl Exports {
                 };
                 result.insert_hashed(name.cloned(), export);
             }
-            for m in self.0.definitions.import_all.keys() {
+            for m in self.definitions.import_all.keys() {
                 if let Some(wildcard) = lookup.get_wildcard(*m) {
                     for name in wildcard.iter_hashed() {
                         result.insert_hashed(name.cloned(), ExportLocation::OtherModule(*m, None));
@@ -401,12 +394,11 @@ impl Exports {
             }
             Arc::new(result)
         };
-        self.0.exports.calculate(f).unwrap_or_default()
+        self.exports.calculate(f).unwrap_or_default()
     }
 
     pub fn is_explicit_reexport(&self, name: &Name) -> bool {
-        self.0
-            .definitions
+        self.definitions
             .definitions
             .get(name)
             .is_some_and(|definition| matches!(definition.style, DefinitionStyle::ImportAsEq(_)))
@@ -418,6 +410,7 @@ mod tests {
     use std::path::PathBuf;
 
     use anyhow::anyhow;
+    use dupe::Dupe;
     use pyrefly_python::ast::Ast;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::module_path::ModuleStyle;
@@ -428,7 +421,7 @@ mod tests {
     use super::*;
     use crate::state::loader::FindError;
 
-    impl LookupExport for SmallMap<ModuleName, Exports> {
+    impl LookupExport for SmallMap<ModuleName, Arc<Exports>> {
         fn export_exists(&self, module: ModuleName, k: &Name) -> bool {
             self.get(&module)
                 .map(|x| x.exports(self).contains_key(k))
@@ -476,7 +469,7 @@ mod tests {
         }
     }
 
-    fn mk_exports(contents: &str, style: ModuleStyle) -> Exports {
+    fn mk_exports(contents: &str, style: ModuleStyle) -> Arc<Exports> {
         let ast = Ast::parse(contents, PySourceType::Python).0;
         let path = ModulePath::filesystem(PathBuf::from(if style == ModuleStyle::Interface {
             "foo.pyi"
@@ -488,7 +481,7 @@ mod tests {
             path,
             Arc::new(contents.to_owned()),
         );
-        Exports::new(&ast.body, &module_info, &SysInfo::default())
+        Arc::new(Exports::new(&ast.body, &module_info, &SysInfo::default()))
     }
 
     fn eq_wildcards(exports: &Exports, lookup: &dyn LookupExport, all: &[&str]) {
