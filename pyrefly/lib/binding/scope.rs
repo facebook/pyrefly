@@ -653,14 +653,8 @@ impl FlowStyle {
                 // Uninitialized-like branches merge into PossiblyUninitialized.
                 // Must come before MaybeInitialized catch-all to avoid masking
                 // valid uninitialized paths.
-                (
-                    FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized,
-                    _,
-                )
-                | (
-                    _,
-                    FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized,
-                ) => {
+                (FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized, _)
+                | (_, FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized) => {
                     return FlowStyle::PossiblyUninitialized;
                 }
                 // Two MaybeInitialized: combine termination keys from both branches.
