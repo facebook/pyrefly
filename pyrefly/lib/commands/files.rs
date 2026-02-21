@@ -161,7 +161,7 @@ fn get_globs_and_config_for_project(
     filtered_globs
         .errors()
         .into_iter()
-        .map(ConfigError::warn)
+        .map(|e| ConfigError::warn(e, None))
         .for_each(|e| errors.push(e));
 
     add_config_errors(&config_finder, errors)?;

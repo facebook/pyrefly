@@ -121,9 +121,10 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
             })
         };
 
-        // we print the errors here instead of returning them since
-        // it gives the most immediate feedback for config loading errors
-        for error in errors.drain(..).chain(config.configure()) {
+        // we print the errors here for immediate feedback, but also collect them
+        // so they can be surfaced as diagnostics in the LSP
+        let all_errors: Vec<_> = errors.drain(..).chain(config.configure()).collect();
+        for error in &all_errors {
             error.print();
         }
         let config = ArcId::new(config);
@@ -139,7 +140,7 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
 
         self.0.loaded_configs.insert(config.downgrade());
 
-        (config, errors)
+        (config, all_errors)
     }
 }
 

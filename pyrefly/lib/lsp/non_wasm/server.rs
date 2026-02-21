@@ -185,6 +185,7 @@ use lsp_types::request::WorkspaceSymbolRequest;
 use pyrefly_build::SourceDatabase;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::config::ConfigSource;
+use pyrefly_config::finder::ConfigError;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
@@ -544,6 +545,10 @@ pub struct Server {
     filewatcher_registered: AtomicBool,
     watched_patterns: Mutex<SmallSet<WatchPattern>>,
     version_info: Mutex<HashMap<PathBuf, i32>>,
+    /// Track config files that currently have diagnostics displayed, so we can clear them when fixed
+    config_files_with_diagnostics: Mutex<SmallSet<PathBuf>>,
+    /// Cache of config errors to avoid them being consumed by mem::take()
+    cached_config_errors: Mutex<Vec<ConfigError>>,
     id: Uuid,
     /// The surface/entrypoint for the language server (`--from` CLI arg)
     surface: Option<String>,
@@ -1973,6 +1978,8 @@ impl Server {
             filewatcher_registered: AtomicBool::new(false),
             watched_patterns: Mutex::new(SmallSet::new()),
             version_info: Mutex::new(HashMap::new()),
+            config_files_with_diagnostics: Mutex::new(SmallSet::new()),
+            cached_config_errors: Mutex::new(Vec::new()),
             id: Uuid::new_v4(),
             surface,
             comment_folding_ranges,
@@ -2135,6 +2142,96 @@ impl Server {
         None
     }
 
+    /// Convert a ConfigError to an LSP Diagnostic
+    fn config_error_to_diagnostic(error: &ConfigError) -> Diagnostic {
+        // Use span information from ConfigError if available, otherwise default to (1, 1)
+        let (line, column) = error.span().unwrap_or((1, 1));
+
+        let range = Range {
+            start: Position {
+                line: line.saturating_sub(1) as u32, // LSP is 0-indexed
+                character: column.saturating_sub(1) as u32,
+            },
+            end: Position {
+                line: line.saturating_sub(1) as u32,
+                character: column.saturating_sub(1) as u32 + 1,
+            },
+        };
+
+        Diagnostic {
+            range,
+            severity: Some(match error.severity() {
+                pyrefly_config::error_kind::Severity::Error => DiagnosticSeverity::ERROR,
+                pyrefly_config::error_kind::Severity::Warn => DiagnosticSeverity::WARNING,
+                pyrefly_config::error_kind::Severity::Info => DiagnosticSeverity::INFORMATION,
+                pyrefly_config::error_kind::Severity::Ignore => DiagnosticSeverity::HINT,
+            }),
+            source: Some("Pyrefly".to_owned()),
+            message: error.get_message(),
+            code: Some(NumberOrString::String("config-error".to_owned())),
+            ..Default::default()
+        }
+    }
+
+    /// Publish diagnostics for config files (pyrefly.toml or pyproject.toml)
+    fn publish_config_diagnostics(&self, transaction: &Transaction, source: DiagnosticSource) {
+        let mut config_errors = transaction.get_config_errors();
+
+        // If we got fresh errors, deduplicate and update the cache
+        if !config_errors.is_empty() {
+            // Deduplicate by (file_path, message) since the same error can be added multiple times
+            let mut seen = SmallSet::new();
+            config_errors.retain(|err| {
+                let key = (err.file_path().map(|p| p.to_path_buf()), err.get_message());
+                seen.insert(key)
+            });
+            *self.cached_config_errors.lock() = config_errors.clone();
+        } else {
+            // If get_config_errors() returned empty (consumed by mem::take),
+            // use the cached errors instead
+            config_errors = self.cached_config_errors.lock().clone();
+        }
+
+        let mut config_diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
+
+        // Group errors by file path
+        for error in &config_errors {
+            if let Some(path) = error.file_path() {
+                let diag = Self::config_error_to_diagnostic(error);
+                config_diags
+                    .entry(path.to_path_buf())
+                    .or_default()
+                    .push(diag);
+            }
+        }
+
+        // Get the set of files that currently have errors
+        let current_error_files: SmallSet<PathBuf> = config_diags.keys().cloned().collect();
+
+        // Clear diagnostics for files that previously had errors but now don't
+        let mut tracked_files = self.config_files_with_diagnostics.lock();
+        for previously_erroring_file in tracked_files.iter() {
+            if !current_error_files.contains(previously_erroring_file) {
+                // File no longer has errors, publish empty diagnostics to clear
+                if let Ok(uri) = Url::from_file_path(previously_erroring_file) {
+                    self.connection
+                        .publish_diagnostics_for_uri(uri, Vec::new(), None, source);
+                }
+            }
+        }
+
+        // Publish diagnostics for files with errors
+        for (path, diagnostics) in config_diags {
+            if let Ok(uri) = Url::from_file_path(&path) {
+                self.connection
+                    .publish_diagnostics_for_uri(uri, diagnostics, None, source);
+            }
+        }
+
+        // Update the tracked set
+        *tracked_files = current_error_files;
+    }
+
     fn provide_type(
         &self,
         transaction: &mut Transaction<'_>,
@@ -2271,6 +2368,10 @@ impl Server {
             self.version_info.lock().clone(),
             source,
         );
+
+        // Publish config file diagnostics
+        self.publish_config_diagnostics(transaction, source);
+
         if self
             .initialize_params
             .capabilities
@@ -2298,6 +2399,7 @@ impl Server {
             Err(transaction) => transaction,
         };
         let handles = self.validate_in_memory_for_transaction(transaction, telemetry);
+
         match possibly_committable_transaction {
             Ok(transaction) => {
                 self.state.commit_transaction(transaction, Some(telemetry));
