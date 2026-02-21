@@ -2493,6 +2493,7 @@ impl<'a> Transaction<'a> {
     fn local_references_from_external_definition(
         &self,
         handle: &Handle,
+        definition_metadata: &DefinitionMetadata,
         definition_range: TextRange,
         module: &Module,
     ) -> Option<Vec<TextRange>> {
@@ -2524,6 +2525,30 @@ impl<'a> Transaction<'a> {
                         references.push(*ref_range);
                     }
                 }
+            }
+        }
+
+        let symbol_kind = match definition_metadata {
+            DefinitionMetadata::Variable(kind) | DefinitionMetadata::VariableOrAttribute(kind) => {
+                *kind
+            }
+            _ => None,
+        };
+
+        if matches!(
+            symbol_kind,
+            Some(SymbolKind::Parameter) | Some(SymbolKind::Variable)
+        ) {
+            let definition_name = Name::new(module.code_at(definition_range));
+            if let Some(kwarg_references) = self
+                .keyword_argument_references_from_parameter_definition(
+                    handle,
+                    module,
+                    definition_range,
+                    &definition_name,
+                )
+            {
+                references.extend(kwarg_references);
             }
         }
         Some(references)
@@ -2579,7 +2604,12 @@ impl<'a> Transaction<'a> {
         module: &Module,
     ) -> Option<Vec<TextRange>> {
         let mut references = if handle.path() != module.path() {
-            self.local_references_from_external_definition(handle, definition_range, module)?
+            self.local_references_from_external_definition(
+                handle,
+                &definition_metadata,
+                definition_range,
+                module,
+            )?
         } else {
             let definition_name = Name::new(module.code_at(definition_range));
             self.local_references_from_local_definition(
@@ -2732,12 +2762,46 @@ impl<'a> Transaction<'a> {
         definition_range: TextRange,
         expected_name: &Name,
     ) -> Option<Vec<TextRange>> {
-        let ast = self.get_ast(handle)?;
-        let keyword_args = self.collect_local_keyword_arguments_by_name(handle, expected_name);
-        let mut references = Vec::new();
-
         let definition_module = self.get_module_info(handle)?;
+        self.keyword_argument_references_from_parameter_definition(
+            handle,
+            &definition_module,
+            definition_range,
+            expected_name,
+        )
+    }
 
+    fn keyword_argument_references_from_parameter_definition(
+        &self,
+        handle: &Handle,
+        definition_module: &ModuleInfo,
+        definition_range: TextRange,
+        expected_name: &Name,
+    ) -> Option<Vec<TextRange>> {
+        let keyword_args = self.collect_local_keyword_arguments_by_name(handle, expected_name);
+        if keyword_args.is_empty() {
+            return Some(Vec::new());
+        }
+
+        let definition_ast = if handle.path() == definition_module.path() {
+            self.get_ast(handle)?
+        } else {
+            let definition_handle = Handle::new(
+                definition_module.name(),
+                definition_module.path().dupe(),
+                handle.sys_info().dupe(),
+            );
+            self.get_ast(&definition_handle).unwrap_or_else(|| {
+                Ast::parse(
+                    definition_module.contents(),
+                    definition_module.source_type(),
+                )
+                .0
+                .into()
+            })
+        };
+
+        let mut references = Vec::new();
         for (kw_identifier, callee_kind) in keyword_args {
             let callee_locations =
                 self.get_callee_location(handle, &callee_kind, FindPreference::default());
@@ -2748,13 +2812,12 @@ impl<'a> Transaction<'a> {
             } in callee_locations
             {
                 if module.path() == definition_module.path() {
-                    // Refine to get the actual parameter location
+                    // Refine to get the actual parameter location.
                     if let Some(param_range) = self.refine_param_location_for_callee(
-                        ast.as_ref(),
+                        definition_ast.as_ref(),
                         callee_def_range,
                         &kw_identifier,
                     ) {
-                        // If the parameter location matches our definition, this is a valid reference
                         if param_range == definition_range {
                             references.push(kw_identifier.range);
                         }

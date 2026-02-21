@@ -187,6 +187,65 @@ fn test_rename_editable_package_symbols_is_allowed() {
 }
 
 #[test]
+fn test_rename_kwarg_across_files() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("rename_kwargs_across_files");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let defs = root_path.join("defs.py");
+    let uses = root_path.join("uses.py");
+
+    interaction.client.did_open("defs.py");
+    interaction.client.did_open("uses.py");
+
+    interaction
+        .client
+        .send_request::<Rename>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&defs).unwrap().to_string()
+            },
+            "position": {
+                "line": 0,
+                "character": 16
+            },
+            "newName": "note"
+        }))
+        .expect_response(json!({
+            "changes": {
+                Url::from_file_path(&defs).unwrap().to_string(): [
+                    {
+                        "newText":"note",
+                        "range":{"start":{"line":0,"character":16},"end":{"line":0,"character":23}}
+                    },
+                    {
+                        "newText":"note",
+                        "range":{"start":{"line":1,"character":14},"end":{"line":1,"character":21}}
+                    },
+                ],
+                Url::from_file_path(&uses).unwrap().to_string(): [
+                    {
+                        "newText":"note",
+                        "range":{"start":{"line":3,"character":31},"end":{"line":3,"character":38}}
+                    },
+                ]
+            }
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_rename() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
