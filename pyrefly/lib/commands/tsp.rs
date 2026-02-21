@@ -63,6 +63,7 @@ pub fn run_tsp(
             args.indexing_mode,
             args.workspace_indexing_limit,
             false,
+            None, // No explicit config for TSP
             surface,
             agent_session_id,
             agent_invocation_id,

@@ -6,11 +6,13 @@
  */
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
 use clap::ValueEnum;
 use lsp_types::ServerInfo;
+use pyrefly_util::args::clap_env;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::thread_pool::ThreadCount;
 
@@ -65,6 +67,12 @@ pub struct LspArgs {
     /// Enable external references integration for cross-repo go-to-definition.
     #[arg(long, hide = true)]
     pub enable_external_references: bool,
+
+    /// Explicitly set the Pyrefly configuration file to use.
+    /// When set, the LSP will use this config for all files instead of the
+    /// upward-filesystem-walk discovery approach.
+    #[arg(long, short, value_name = "FILE", env = clap_env("CONFIG"))]
+    pub config: Option<PathBuf>,
 }
 
 /// Run LSP server with optional path remapping.
@@ -93,6 +101,7 @@ pub fn run_lsp(
             args.indexing_mode,
             args.workspace_indexing_limit,
             args.build_system_blocking,
+            args.config,
             path_remapper,
             thrift_remapper,
             telemetry,

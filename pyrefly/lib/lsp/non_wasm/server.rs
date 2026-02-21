@@ -246,6 +246,7 @@ use crate::binding::binding::KeyClassMro;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
+use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
@@ -1255,6 +1256,7 @@ pub fn lsp_loop(
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     build_system_blocking: bool,
+    config: Option<PathBuf>,
     path_remapper: Option<PathRemapper>,
     thrift_remapper: Option<ThriftRemapper>,
     telemetry: &impl Telemetry,
@@ -1275,6 +1277,7 @@ pub fn lsp_loop(
         indexing_mode,
         workspace_indexing_limit,
         build_system_blocking,
+        config,
         from,
         agent_session_id,
         agent_invocation_id,
@@ -2327,6 +2330,7 @@ impl Server {
         indexing_mode: IndexingMode,
         workspace_indexing_limit: usize,
         build_system_blocking: bool,
+        config: Option<PathBuf>,
         surface: Option<String>,
         agent_session_id: Option<String>,
         agent_invocation_id: Option<String>,
@@ -2350,7 +2354,26 @@ impl Server {
 
         let workspaces = Arc::new(Workspaces::new(Workspace::default(), &folders));
 
-        let config_finder = Workspaces::config_finder(workspaces.dupe(), wrapper);
+        // Resolve the config path: CLI --config takes precedence, then
+        // initializationOptions.configFile from the editor.
+        let explicit_config = config.or_else(|| {
+            initialize_params
+                .initialization_options
+                .as_ref()
+                .and_then(|opts| opts.get("configFile"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+        });
+
+        let config_finder = if let Some(config_path) = explicit_config {
+            let (config_file, errors) = ConfigFile::from_file(&config_path);
+            let finder = ConfigFinder::new_constant(ArcId::new(config_file));
+            finder.add_errors(errors);
+            finder
+        } else {
+            Workspaces::config_finder(workspaces.dupe(), wrapper)
+        };
 
         // Parse commentFoldingRanges from initialization options, defaults to false
         let comment_folding_ranges = initialize_params
