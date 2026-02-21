@@ -1948,7 +1948,8 @@ impl Server {
         });
 
         let config_finder = if let Some(config_path) = explicit_config {
-            let (config_file, errors) = ConfigFile::from_file(&config_path);
+            let (mut config_file, mut errors) = ConfigFile::from_file(&config_path);
+            errors.extend(config_file.configure());
             let finder = ConfigFinder::new_constant(ArcId::new(config_file));
             finder.add_errors(errors);
             finder
