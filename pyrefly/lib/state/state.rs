@@ -904,7 +904,7 @@ impl<'a> Transaction<'a> {
             drop(deps_lock);
         };
 
-        if exclusive.dirty.require {
+        if exclusive.dirty.require() {
             // We have increased the `Require` level, so redo everything to make sure
             // we capture everything.
             // Could be optimized to do less work (e.g. if you had Retain::Error before don't need to reload)
@@ -915,7 +915,7 @@ impl<'a> Transaction<'a> {
         }
 
         // Validate the load flag.
-        if exclusive.dirty.load
+        if exclusive.dirty.load()
             && let Some(old_load) = exclusive.steps.load.dupe()
         {
             let (file_contents, self_error) =
@@ -949,7 +949,7 @@ impl<'a> Transaction<'a> {
         }
 
         // The contents are the same, so we can just reuse the old load contents. But errors could have changed from deps.
-        if exclusive.dirty.deps
+        if exclusive.dirty.deps()
             && let Some(old_load) = exclusive.steps.load.dupe()
         {
             let mut write = exclusive.write();
@@ -962,7 +962,7 @@ impl<'a> Transaction<'a> {
         }
 
         // Validate the find flag.
-        if exclusive.dirty.find {
+        if exclusive.dirty.find() {
             let loader = self.get_cached_loader(&module_data.config.read());
             let mut is_dirty = false;
 
@@ -1036,7 +1036,7 @@ impl<'a> Transaction<'a> {
     ) -> bool {
         loop {
             let reader = module_data.state.read();
-            if reader.epochs.computed == self.data.now || reader.dirty.deps {
+            if reader.epochs.computed == self.data.now || reader.dirty.deps() {
                 // Either doesn't need setting, or already set
                 return false;
             }
@@ -1044,11 +1044,11 @@ impl<'a> Transaction<'a> {
             // which importantly is a different key to the `first` that `clean` uses.
             // Slight risk of a busy-loop, but better than a deadlock.
             if let Some(exclusive) = reader.exclusive(Step::last()) {
-                if exclusive.epochs.computed == self.data.now || exclusive.dirty.deps {
+                if exclusive.epochs.computed == self.data.now || exclusive.dirty.deps() {
                     return false;
                 }
                 dirtied.push(module_data.dupe());
-                exclusive.write().dirty.deps = true;
+                exclusive.write().dirty.set_deps();
                 return true;
             }
             // continue around the loop - failed to get the lock, but we really want it
@@ -1583,7 +1583,9 @@ impl<'a> Transaction<'a> {
                 let (m, created) = self.get_module_ex(h, require);
                 let mut state = m.state.write(Step::first()).unwrap();
                 let dirty_require = state.update_require(require);
-                state.dirty.require = dirty_require || state.dirty.require;
+                if dirty_require {
+                    state.dirty.set_require();
+                }
                 drop(state);
                 if (created || dirty_require) && !dirty.contains(&m) {
                     self.data.todo.push_fifo(Step::first(), m);
@@ -1689,7 +1691,7 @@ impl<'a> Transaction<'a> {
         let mut dirty_set: std::sync::MutexGuard<'_, SmallSet<ArcId<ModuleDataMut>>> =
             self.data.dirty.lock();
         for x in dirty.into_values() {
-            x.state.write(Step::Load).unwrap().dirty.deps = true;
+            x.state.write(Step::Load).unwrap().dirty.set_deps();
             dirty_set.insert(x);
         }
     }
@@ -1903,7 +1905,7 @@ impl<'a> Transaction<'a> {
         }
         self.data.updated_loaders = new_loaders;
 
-        self.invalidate(|_| true, |dirty| dirty.find = true);
+        self.invalidate(|_| true, |dirty| dirty.set_find());
     }
 
     /// The data returned by the ConfigFinder might have changed. Note: invalidate find is not also required to run. When
@@ -1920,7 +1922,12 @@ impl<'a> Transaction<'a> {
             let config2 = self.data.state.get_config(handle);
             if config2 != *module_data.config.read() {
                 *module_data.config.write() = config2;
-                module_data.state.write(Step::Load).unwrap().dirty.find = true;
+                module_data
+                    .state
+                    .write(Step::Load)
+                    .unwrap()
+                    .dirty
+                    .set_find();
                 dirty_set.insert(module_data.dupe());
             }
         }
@@ -1930,7 +1937,12 @@ impl<'a> Transaction<'a> {
                 if module_data.config != config2 {
                     let module_data = self.get_module(handle);
                     *module_data.config.write() = config2;
-                    module_data.state.write(Step::Load).unwrap().dirty.find = true;
+                    module_data
+                        .state
+                        .write(Step::Load)
+                        .unwrap()
+                        .dirty
+                        .set_find();
                     dirty_set.insert(module_data.dupe());
                 }
             }
@@ -1967,7 +1979,12 @@ impl<'a> Transaction<'a> {
         let mut dirty_set = self.data.dirty.lock();
         for module_data in self.data.updated_modules.values() {
             if configs.contains(&*module_data.config.read()) {
-                module_data.state.write(Step::Load).unwrap().dirty.find = true;
+                module_data
+                    .state
+                    .write(Step::Load)
+                    .unwrap()
+                    .dirty
+                    .set_find();
                 dirty_set.insert(module_data.dupe());
             }
         }
@@ -1976,7 +1993,12 @@ impl<'a> Transaction<'a> {
                 && configs.contains(&module_data.config)
             {
                 let module_data = self.get_module(handle);
-                module_data.state.write(Step::Load).unwrap().dirty.find = true;
+                module_data
+                    .state
+                    .write(Step::Load)
+                    .unwrap()
+                    .dirty
+                    .set_find();
                 dirty_set.insert(module_data.dupe());
             }
         }
@@ -1997,7 +2019,7 @@ impl<'a> Transaction<'a> {
         }
         self.invalidate(
             |handle| changed.contains(handle.path()),
-            |dirty| dirty.load = true,
+            |dirty| dirty.set_load(),
         );
     }
 
@@ -2016,7 +2038,7 @@ impl<'a> Transaction<'a> {
             .collect::<SmallSet<_>>();
         self.invalidate(
             |handle| files.contains(handle.path()),
-            |dirty| dirty.load = true,
+            |dirty| dirty.set_load(),
         );
     }
 
