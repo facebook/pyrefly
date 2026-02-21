@@ -1254,6 +1254,7 @@ impl LspInteraction {
                 indexing_mode,
                 workspace_indexing_limit: 50,
                 build_system_blocking: false,
+                config: None,
             };
             let _ = run_lsp(
                 conn_server,

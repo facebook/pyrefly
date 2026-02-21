@@ -6,12 +6,14 @@
  */
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
 use clap::ValueEnum;
 use lsp_types::InitializeParams;
 use lsp_types::ServerInfo;
+use pyrefly_util::args::clap_env;
 use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::util::CommandExitStatus;
@@ -57,6 +59,12 @@ pub struct LspArgs {
     /// an up-to-date source DB. Only useful for benchmarking.
     #[arg(long)]
     pub(crate) build_system_blocking: bool,
+
+    /// Explicitly set the Pyrefly configuration file to use.
+    /// When set, the LSP will use this config for all files instead of the
+    /// upward-filesystem-walk discovery approach.
+    #[arg(long, short, value_name = "FILE", env = clap_env("CONFIG"))]
+    pub(crate) config: Option<PathBuf>,
 }
 
 /// Run LSP server with optional path remapping.
@@ -80,6 +88,7 @@ pub fn run_lsp(
             args.indexing_mode,
             args.workspace_indexing_limit,
             args.build_system_blocking,
+            args.config,
             path_remapper,
             telemetry,
             external_references,
