@@ -165,6 +165,12 @@ impl TypeCheckKind {
                 param,
                 ctx.display(want),
             ),
+            Self::OverloadDefault(param) => format!(
+                "Default `{}` from implementation is not assignable to overload parameter `{}` with type `{}`",
+                ctx.display(got),
+                param,
+                ctx.display(want),
+            ),
             Self::TypedDictKey(key) => format!(
                 "`{}` is not assignable to TypedDict key{} with type `{}`",
                 ctx.display(got),

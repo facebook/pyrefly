@@ -153,6 +153,34 @@ assert_type(f(h(0)), str) # E: Argument `Literal[0]` is not assignable to parame
 );
 
 testcase!(
+    test_overload_default_incompatible,
+    r#"
+from typing import Literal, overload
+
+@overload
+def foo(a: Literal[True] = ...) -> None: ...  # E: Default `Literal[False]` from implementation is not assignable to overload parameter `a` with type `Literal[True]`
+@overload
+def foo(a: Literal[False]) -> int: ...
+def foo(a: bool = False) -> None | int:
+    return 1 if not a else None
+"#,
+);
+
+testcase!(
+    test_overload_default_matches_one_signature,
+    r#"
+from typing import overload
+
+@overload
+def f(x: None = ...) -> None: ...
+@overload
+def f(x: int = ...) -> int: ...
+def f(x: int | None = None) -> int | None:
+    return x
+"#,
+);
+
+testcase!(
     test_overload_missing_implementation,
     r#"
 from typing import overload, assert_type
