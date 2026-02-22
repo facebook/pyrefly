@@ -123,6 +123,7 @@ pub fn find_comment_start_in_line(line: &str) -> Option<usize> {
 /// Note that the variant names and docstrings are displayed in `pyrefly check --help`.
 #[derive(PartialEq, Debug, Clone, Hash, Eq, Dupe, Copy, Sequence)]
 #[derive(Deserialize, Serialize, ValueEnum)]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum Tool {
     /// Enables `# type: ignore`

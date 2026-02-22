@@ -67,6 +67,7 @@ static BUILD_SYSTEM_CACHE: LazyLock<
 > = LazyLock::new(|| Mutex::new(SmallMap::new()));
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case", tag = "type")]
 pub enum BuildSystemArgs {
     Buck(BxlArgs),
@@ -105,6 +106,7 @@ impl Display for BuildSystemArgs {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub struct BuildSystem {
     #[serde(flatten)]

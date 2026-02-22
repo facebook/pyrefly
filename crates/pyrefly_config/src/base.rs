@@ -17,6 +17,7 @@ use crate::module_wildcard::ModuleWildcard;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Default)]
 #[derive(ValueEnum)]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum UntypedDefBehavior {
     #[default]
@@ -28,6 +29,7 @@ pub enum UntypedDefBehavior {
 /// How to handle when recursion depth limit is exceeded.
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Default)]
 #[derive(ValueEnum)]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum RecursionOverflowHandler {
     /// Return a placeholder type and emit an internal error. Safe for IDE use.
@@ -134,12 +136,161 @@ pub struct ConfigBase {
 #[serde(transparent)]
 pub(crate) struct ExtraConfigs(pub(crate) Table);
 
+#[cfg(feature = "jsonschema")]
+impl schemars::JsonSchema for ExtraConfigs {
+    fn schema_name() -> String {
+        "ExtraConfigs".to_owned()
+    }
+
+    fn json_schema(_generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        // ExtraConfigs captures any unknown fields (additionalProperties: true)
+        // Since it's flattened, it won't add its own object wrapper, it just
+        // allows extra properties through
+        schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::InstanceType::Object.into()),
+            ..Default::default()
+        }
+        .into()
+    }
+}
+
 // `Value` types in `Table` might not be `Eq`, but we don't actually care about that w.r.t. `ConfigFile`
 impl Eq for ExtraConfigs {}
 
 impl PartialEq for ExtraConfigs {
     fn eq(&self, _other: &Self) -> bool {
         true
+    }
+}
+
+#[cfg(feature = "jsonschema")]
+impl schemars::JsonSchema for ConfigBase {
+    fn schema_name() -> String {
+        "ConfigBase".to_owned()
+    }
+
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        use schemars::schema::*;
+
+        let mut properties = schemars::Map::new();
+        let required: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+        // Helper to add an optional property
+        macro_rules! add_prop {
+            ($name:expr, $schema:expr) => {
+                properties.insert($name.to_owned(), $schema);
+            };
+            ($name:expr, $schema:expr, $desc:expr) => {
+                let mut s: SchemaObject = $schema.into_object();
+                s.metadata().description = Some($desc.to_owned());
+                properties.insert($name.to_owned(), s.into());
+            };
+        }
+
+        add_prop!(
+            "errors",
+            generator.subschema_for::<ErrorDisplayConfig>(),
+            "Configure the severity for each kind of error that Pyrefly emits."
+        );
+        add_prop!(
+            "permissive-ignores",
+            generator.subschema_for::<Option<bool>>(),
+            "Should Pyrefly ignore errors based on annotations from other tools?"
+        );
+
+        // enabled-ignores: SmallSet<Tool> serializes as array of Tool enums
+        {
+            let tool_schema = generator.subschema_for::<Tool>();
+            let schema = SchemaObject {
+                instance_type: Some(InstanceType::Array.into()),
+                array: Some(Box::new(ArrayValidation {
+                    items: Some(SingleOrVec::Single(Box::new(tool_schema))),
+                    ..Default::default()
+                })),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "What set of tools should Pyrefly respect ignore directives from?"
+                            .to_owned(),
+                    ),
+                    default: Some(serde_json::json!(["type", "pyrefly"])),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            properties.insert("enabled-ignores".to_owned(), schema.into());
+        }
+
+        add_prop!(
+            "replace-imports-with-any",
+            generator.subschema_for::<Option<Vec<String>>>(),
+            "Instruct Pyrefly to unconditionally replace the given module globs with typing.Any and ignore import errors for the module."
+        );
+        add_prop!(
+            "ignore-missing-imports",
+            generator.subschema_for::<Option<Vec<String>>>(),
+            "Instruct Pyrefly to replace the given module globs with typing.Any and ignore import errors for the module only when the module can't be found."
+        );
+        add_prop!(
+            "untyped-def-behavior",
+            generator.subschema_for::<Option<UntypedDefBehavior>>(),
+            "How should Pyrefly treat function definitions with no parameter or return type annotations?"
+        );
+        add_prop!(
+            "disable-type-errors-in-ide",
+            generator.subschema_for::<Option<bool>>(),
+            "Disables type errors from showing up when running Pyrefly in an IDE."
+        );
+        add_prop!(
+            "ignore-errors-in-generated-code",
+            generator.subschema_for::<Option<bool>>(),
+            "Whether to ignore type errors in generated code."
+        );
+        add_prop!(
+            "infer-with-first-use",
+            generator.subschema_for::<Option<bool>>(),
+            "Whether to infer type variables not determined by a call or constructor based on their first usage."
+        );
+        add_prop!(
+            "tensor-shapes",
+            generator.subschema_for::<Option<bool>>(),
+            "Whether to enable tensor shape checking."
+        );
+        add_prop!(
+            "recursion-depth-limit",
+            SchemaObject {
+                instance_type: Some(InstanceType::Integer.into()),
+                number: Some(Box::new(NumberValidation {
+                    minimum: Some(0.0),
+                    ..Default::default()
+                })),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "Maximum recursion depth for type evaluation. Set to 0 to disable the limit."
+                            .to_owned(),
+                    ),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }.into()
+        );
+        add_prop!(
+            "recursion-overflow-handler",
+            generator.subschema_for::<Option<RecursionOverflowHandler>>(),
+            "How should Pyrefly handle recursion overflow during type evaluation?"
+        );
+
+        let _ = required; // no required fields in ConfigBase
+
+        SchemaObject {
+            instance_type: Some(InstanceType::Object.into()),
+            object: Some(Box::new(ObjectValidation {
+                properties,
+                additional_properties: Some(Box::new(Schema::Bool(true))),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .into()
     }
 }
 

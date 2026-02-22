@@ -53,6 +53,18 @@ pub(crate) enum ConfigOrigin<T> {
     ConfigFile(T),
 }
 
+/// ConfigOrigin is transparent in schema — it serializes as the inner type T.
+#[cfg(feature = "jsonschema")]
+impl<T: schemars::JsonSchema> schemars::JsonSchema for ConfigOrigin<T> {
+    fn schema_name() -> String {
+        T::schema_name()
+    }
+
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        T::json_schema(generator)
+    }
+}
+
 impl<T: Default> Default for ConfigOrigin<T> {
     fn default() -> Self {
         ConfigOrigin::ConfigFile(T::default())
