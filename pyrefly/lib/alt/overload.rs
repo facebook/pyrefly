@@ -12,13 +12,18 @@ use itertools::Itertools;
 use pyrefly_types::callable::ArgCount;
 use pyrefly_types::callable::ArgCounts;
 use pyrefly_types::callable::Param;
+use pyrefly_types::callable::Required;
+use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::tuple::Tuple;
+use pyrefly_types::type_output::OutputWithLocations;
+use pyrefly_types::type_output::TypeOutput;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use vec1::Vec1;
@@ -399,9 +404,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .unwrap_or(overload.1.signature),
                     None => overload.1.signature,
                 };
-                let signature = self
-                    .solver()
-                    .for_display(self.heap.mk_callable_from(signature));
+                let signature =
+                    self.format_overload_signature_for_call(&signature, &args, &keywords);
                 msg.push(format!("{signature}{suffix}"));
             }
             // We intentionally discard closest_overload.call_errors. When no overload matches,
@@ -647,5 +651,164 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ctor_targs: overload_ctor_targs,
             call_errors,
         }
+    }
+
+    /// Format an overload signature, showing only the parameters used in the call.
+    fn format_overload_signature_for_call(
+        &self,
+        signature: &Callable,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+    ) -> String {
+        let full_signature = || {
+            format!(
+                "{}",
+                self.solver()
+                    .for_display(self.heap.mk_callable_from(signature.clone()))
+            )
+        };
+        let Params::List(params) = &signature.params else {
+            return full_signature();
+        };
+
+        let mut positional_remaining = args
+            .iter()
+            .filter(|arg| matches!(arg, CallArg::Arg(_)))
+            .count();
+        let mut star_remaining = args
+            .iter()
+            .filter(|arg| matches!(arg, CallArg::Star(..)))
+            .count();
+        let mut keyword_names: Vec<Name> = keywords
+            .iter()
+            .filter_map(|kw| kw.arg.map(|id| id.id.clone()))
+            .collect();
+        let mut has_kwargs = keywords.iter().any(|kw| kw.arg.is_none());
+
+        let mut elements = Vec::new();
+        let mut named_posonly = false;
+        let mut kwonly = false;
+        let mut in_omitted = false;
+        let mut missing_required = false;
+        let take_keyword = |name: &Name, names: &mut Vec<Name>| {
+            if let Some(index) = names.iter().position(|candidate| candidate == name) {
+                names.remove(index);
+                true
+            } else {
+                false
+            }
+        };
+        let format_param = |param: &Param| -> String {
+            let ctx = TypeDisplayContext::new(&[]);
+            let mut output = OutputWithLocations::new(&ctx);
+            let _ = param.fmt_with_type(&mut output, &|ty, out| {
+                let display_ty = self.solver().for_display(ty.clone());
+                out.write_type(&display_ty)
+            });
+            output
+                .parts()
+                .iter()
+                .map(|(part, _)| part.as_str())
+                .collect::<String>()
+        };
+        let mut push_ellipsis = |parts: &mut Vec<String>| {
+            if parts.last().map(|s| s.as_str()) != Some("...") {
+                parts.push("...".to_owned());
+            }
+        };
+
+        for param in params.items() {
+            let include = match param {
+                Param::PosOnly(name, _, _) => {
+                    if positional_remaining > 0 {
+                        positional_remaining -= 1;
+                        true
+                    } else if let Some(name) = name {
+                        take_keyword(name, &mut keyword_names)
+                    } else {
+                        false
+                    }
+                }
+                Param::Pos(name, _, _) => {
+                    if positional_remaining > 0 {
+                        positional_remaining -= 1;
+                        let _ = take_keyword(name, &mut keyword_names);
+                        true
+                    } else {
+                        take_keyword(name, &mut keyword_names)
+                    }
+                }
+                Param::VarArg(..) => {
+                    if positional_remaining > 0 || star_remaining > 0 {
+                        positional_remaining = 0;
+                        star_remaining = 0;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Param::KwOnly(name, _, _) => take_keyword(name, &mut keyword_names),
+                Param::Kwargs(..) => {
+                    if has_kwargs || !keyword_names.is_empty() {
+                        has_kwargs = false;
+                        keyword_names.clear();
+                        true
+                    } else {
+                        false
+                    }
+                }
+            };
+
+            if !include {
+                if matches!(param, Param::PosOnly(_, _, Required::Required))
+                    || matches!(param, Param::Pos(_, _, Required::Required))
+                    || matches!(param, Param::KwOnly(_, _, Required::Required))
+                {
+                    missing_required = true;
+                }
+                in_omitted = true;
+                continue;
+            }
+
+            if named_posonly && !matches!(param, Param::PosOnly(Some(_), _, _)) {
+                elements.push("/".to_owned());
+                named_posonly = false;
+            }
+            if in_omitted {
+                push_ellipsis(&mut elements);
+                in_omitted = false;
+            }
+            if !kwonly && matches!(param, Param::KwOnly(..)) {
+                elements.push("*".to_owned());
+                kwonly = true;
+            }
+            elements.push(format_param(param));
+
+            if matches!(param, Param::PosOnly(Some(_), _, _)) {
+                named_posonly = true;
+            }
+        }
+
+        if positional_remaining > 0 || star_remaining > 0 || has_kwargs || !keyword_names.is_empty()
+        {
+            in_omitted = true;
+        }
+
+        if named_posonly {
+            elements.push("/".to_owned());
+        }
+        if in_omitted {
+            push_ellipsis(&mut elements);
+        }
+        if elements.is_empty() {
+            elements.push("...".to_owned());
+        }
+
+        let ret_display = format!("{}", self.solver().for_display(signature.ret.clone()));
+        let mut display = format!("({}) -> {}", elements.join(", "), ret_display);
+        if missing_required {
+            display.push_str(" [missing required arguments]");
+        }
+        display
     }
 }
