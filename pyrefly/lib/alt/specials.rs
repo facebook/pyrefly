@@ -521,11 +521,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             ),
             SpecialForm::Unpack if arguments.len() == 1 => {
-                self.heap.mk_type_form(self.heap.mk_unpack(self.expr_untype(
-                    &arguments[0],
-                    TypeFormContext::TypeArgument,
-                    errors,
-                )))
+                let arg = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
+                if matches!(arg, Type::Unpack(_)) {
+                    return self.error(
+                        errors,
+                        arguments[0].range(),
+                        ErrorInfo::Kind(ErrorKind::BadUnpacking),
+                        "`Unpack` cannot be applied to an unpacked argument".to_owned(),
+                    );
+                }
+                self.heap.mk_type_form(self.heap.mk_unpack(arg))
             }
             SpecialForm::Unpack => self.error(
                 errors,

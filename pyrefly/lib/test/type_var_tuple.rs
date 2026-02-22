@@ -43,6 +43,14 @@ y: tuple[Unpack[tuple[int, str]]] = (1, "2")  # OK
 );
 
 testcase!(
+    test_double_unpack,
+    r#"
+from typing import Unpack
+x: tuple[Unpack[*tuple[int, ...]]]  # E: `Unpack` cannot be applied to an unpacked argument
+"#,
+);
+
+testcase!(
     bug = "We should disallow star-unpacking in invalid contexts",
     test_invalid_star,
     r#"
@@ -100,6 +108,16 @@ def test(a1: A[int], a2: A[int, str], b: B[int, str, int]):
     assert_type(a1.x(), tuple[int])
     assert_type(a2.x(), tuple[int, str])
     assert_type(b.x(), tuple[str, int, int])
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_unpack_concrete_tuple,
+    r#"
+from typing import Unpack
+class Cls[T, *Ts]: ...
+v1: Cls[*tuple[int, str, int, str]]
+v2: Cls[Unpack[tuple[int, str, int, str]]]
 "#,
 );
 

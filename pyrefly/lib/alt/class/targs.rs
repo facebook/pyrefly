@@ -355,6 +355,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         validate_restriction: bool,
         errors: &ErrorCollector,
     ) -> TArgs {
+        let targs = self.expand_unpacked_targs(targs);
         let nparams = tparams.len();
         let nargs = targs.len();
         let mut checked_targs = Vec::new();
@@ -439,6 +440,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         drop(name_to_idx);
         TArgs::new(tparams, checked_targs)
+    }
+
+    /// Expand unpacked tuple arguments so they can fill multiple type parameters.
+    fn expand_unpacked_targs(&self, targs: Vec<Type>) -> Vec<Type> {
+        let mut expanded = Vec::with_capacity(targs.len());
+        for arg in targs {
+            match arg {
+                Type::Unpack(box Type::Tuple(Tuple::Concrete(elts))) => {
+                    expanded.extend(elts);
+                }
+                Type::Unpack(box Type::Tuple(Tuple::Unpacked(box (prefix, middle, suffix)))) => {
+                    expanded.extend(prefix);
+                    expanded.push(Type::Unpack(Box::new(middle)));
+                    expanded.extend(suffix);
+                }
+                arg => expanded.push(arg),
+            }
+        }
+        expanded
     }
 
     fn peek_next_paramspec_param(&self, start_idx: usize, tparams: &TParams) -> Option<usize> {
