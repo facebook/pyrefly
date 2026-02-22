@@ -232,6 +232,68 @@ a: int = "test"  # type: ignore
 }
 
 #[test]
+fn hover_shows_type_sources_for_narrow_and_first_use() {
+    let code = r#"
+def f(x: int | None) -> None:
+    if x is None:
+        return
+    y = []
+    y.append(1)
+    x
+#   ^
+    y
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert_eq!(
+        r#"
+# main.py
+7 |     x
+        ^
+```python
+(parameter) x: int
+```
+---
+**Type source**
+- Narrowed by condition at 3:13: `x is not None`
+
+
+9 |     y
+        ^
+```python
+(variable) y: list[int]
+```
+---
+**Type source**
+- Inferred from first use at 6:5: `y.append(1)`
+"#
+        .trim(),
+        report.trim(),
+    );
+    let report_with_links = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report_with_links.contains("Go to ["),
+        "Expected hover to include go-to links, got: {report_with_links}"
+    );
+    assert!(
+        report_with_links.contains("](file://"),
+        "Expected hover links to use file URLs, got: {report_with_links}"
+    );
+    assert!(
+        report_with_links.contains("builtins.pyi"),
+        "Expected hover links to include builtins.pyi, got: {report_with_links}"
+    );
+}
+
+#[test]
 fn hover_over_string_with_hash_character() {
     let code = r#"
 x = "hello # world"  # pyrefly: ignore

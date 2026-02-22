@@ -15,12 +15,15 @@ use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::Url;
 use pyrefly_build::handle::Handle;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::module::Module;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FunctionKind;
@@ -33,13 +36,22 @@ use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::ExprContext;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers_solver::AnswersSolver;
+use crate::binding::binding::Binding;
+use crate::binding::binding::FirstUse;
+use crate::binding::binding::Key;
+use crate::binding::bindings::Bindings;
+use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::FacetSubject;
+use crate::binding::narrow::NarrowOp;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::wasm::signature_help::CallInfo;
@@ -58,6 +70,7 @@ pub struct HoverValue {
     pub type_: Type,
     pub docstring: Option<Docstring>,
     pub parameter_doc: Option<(String, String)>,
+    pub type_sources: Vec<String>,
     pub display: Option<String>,
     pub show_go_to_links: bool,
 }
@@ -158,6 +171,17 @@ impl HoverValue {
         } else {
             String::new()
         };
+        let type_source_formatted = if self.type_sources.is_empty() {
+            String::new()
+        } else {
+            let mut section = String::from("\n---\n**Type source**\n");
+            for source in &self.type_sources {
+                section.push_str("- ");
+                section.push_str(source);
+                section.push('\n');
+            }
+            section
+        };
         let type_display = self.display.clone().unwrap_or_else(|| {
             self.type_
                 .as_lsp_string_with_fallback_name(self.name.as_deref(), LspDisplayMode::Hover)
@@ -167,10 +191,11 @@ impl HoverValue {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: format!(
-                    "```python\n{}{}{}\n```{}{}{}",
+                    "```python\n{}{}{}\n```{}{}{}{}",
                     kind_formatted,
                     name_formatted,
                     type_display,
+                    type_source_formatted,
                     docstring_formatted,
                     parameter_doc_formatted,
                     symbol_def_formatted
@@ -305,6 +330,357 @@ fn identifier_text_at(
     transaction
         .identifier_at(handle, position)
         .map(|id| id.identifier.id.to_string())
+}
+
+fn format_type_source_location(module: &Module, range: TextRange) -> String {
+    let display_pos = module.display_pos(range.start());
+    let location = display_pos.to_string();
+    let Ok(mut url) = Url::from_file_path(module.path().as_path()) else {
+        return location;
+    };
+    let fragment = if let Some(cell) = display_pos.cell() {
+        format!(
+            "{},L{},{}",
+            cell.get(),
+            display_pos.line_within_cell().get(),
+            display_pos.column()
+        )
+    } else {
+        format!(
+            "L{},{}",
+            display_pos.line_within_file().get(),
+            display_pos.column()
+        )
+    };
+    url.set_fragment(Some(&fragment));
+    format!("[{}]({})", location, url)
+}
+
+fn format_code_snippet(module: &Module, range: TextRange) -> Option<String> {
+    if range.is_empty() {
+        return None;
+    }
+    let snippet = module.code_at(range);
+    let cleaned = snippet
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('`', "'");
+    if cleaned.is_empty() {
+        return None;
+    }
+    const MAX_LEN: usize = 80;
+    let mut truncated = cleaned;
+    if truncated.chars().count() > MAX_LEN {
+        let max_chars = MAX_LEN.saturating_sub(3);
+        let end_byte = truncated
+            .char_indices()
+            .nth(max_chars)
+            .map(|(idx, _)| idx)
+            .unwrap_or_else(|| truncated.len());
+        truncated.truncate(end_byte);
+        truncated.push_str("...");
+    }
+    Some(truncated)
+}
+
+fn format_narrow_op(module: &Module, base_name: &Name, op: &NarrowOp) -> Option<String> {
+    fn subject_with_facet(base_name: &Name, facet: Option<&FacetSubject>) -> String {
+        match facet {
+            Some(facet) => format!("{base_name}{}", facet.chain),
+            None => base_name.to_string(),
+        }
+    }
+
+    fn expr_snippet(module: &Module, expr: &ruff_python_ast::Expr) -> Option<String> {
+        format_code_snippet(module, expr.range())
+    }
+
+    fn args_snippet(module: &Module, args: &ruff_python_ast::Arguments) -> Option<String> {
+        format_code_snippet(module, args.range())
+    }
+
+    match op {
+        NarrowOp::Atomic(facet, atomic) => {
+            let subject = subject_with_facet(base_name, facet.as_ref());
+            let formatted = match atomic {
+                AtomicNarrowOp::Is(expr) => {
+                    Some(format!("{subject} is {}", expr_snippet(module, expr)?))
+                }
+                AtomicNarrowOp::IsNot(expr) => {
+                    Some(format!("{subject} is not {}", expr_snippet(module, expr)?))
+                }
+                AtomicNarrowOp::Eq(expr) => {
+                    Some(format!("{subject} == {}", expr_snippet(module, expr)?))
+                }
+                AtomicNarrowOp::NotEq(expr) => {
+                    Some(format!("{subject} != {}", expr_snippet(module, expr)?))
+                }
+                AtomicNarrowOp::IsInstance(expr, _) => Some(format!(
+                    "isinstance({subject}, {})",
+                    expr_snippet(module, expr)?
+                )),
+                AtomicNarrowOp::IsNotInstance(expr, _) => Some(format!(
+                    "not isinstance({subject}, {})",
+                    expr_snippet(module, expr)?
+                )),
+                AtomicNarrowOp::IsSubclass(expr) => Some(format!(
+                    "issubclass({subject}, {})",
+                    expr_snippet(module, expr)?
+                )),
+                AtomicNarrowOp::IsNotSubclass(expr) => Some(format!(
+                    "not issubclass({subject}, {})",
+                    expr_snippet(module, expr)?
+                )),
+                AtomicNarrowOp::TypeEq(expr) => Some(format!(
+                    "type({subject}) == {}",
+                    expr_snippet(module, expr)?
+                )),
+                AtomicNarrowOp::TypeNotEq(expr) => Some(format!(
+                    "type({subject}) != {}",
+                    expr_snippet(module, expr)?
+                )),
+                AtomicNarrowOp::In(expr) => {
+                    Some(format!("{subject} in {}", expr_snippet(module, expr)?))
+                }
+                AtomicNarrowOp::NotIn(expr) => {
+                    Some(format!("{subject} not in {}", expr_snippet(module, expr)?))
+                }
+                AtomicNarrowOp::HasAttr(attr) => Some(format!("hasattr({subject}, \"{attr}\")")),
+                AtomicNarrowOp::NotHasAttr(attr) => {
+                    Some(format!("not hasattr({subject}, \"{attr}\")"))
+                }
+                AtomicNarrowOp::GetAttr(attr, default) => {
+                    let default_snippet =
+                        default.as_ref().and_then(|expr| expr_snippet(module, expr));
+                    Some(match default_snippet {
+                        Some(default_snippet) => {
+                            format!("getattr({subject}, \"{attr}\", {default_snippet})")
+                        }
+                        None => format!("getattr({subject}, \"{attr}\")"),
+                    })
+                }
+                AtomicNarrowOp::NotGetAttr(attr, default) => {
+                    let default_snippet =
+                        default.as_ref().and_then(|expr| expr_snippet(module, expr));
+                    Some(match default_snippet {
+                        Some(default_snippet) => {
+                            format!("not getattr({subject}, \"{attr}\", {default_snippet})")
+                        }
+                        None => format!("not getattr({subject}, \"{attr}\")"),
+                    })
+                }
+                AtomicNarrowOp::HasKey(key) => Some(format!("\"{key}\" in {subject}")),
+                AtomicNarrowOp::NotHasKey(key) => Some(format!("\"{key}\" not in {subject}")),
+                AtomicNarrowOp::LenEq(expr) => {
+                    Some(format!("len({subject}) == {}", expr_snippet(module, expr)?))
+                }
+                AtomicNarrowOp::LenNotEq(expr) => {
+                    Some(format!("len({subject}) != {}", expr_snippet(module, expr)?))
+                }
+                AtomicNarrowOp::LenGt(expr) => {
+                    Some(format!("len({subject}) > {}", expr_snippet(module, expr)?))
+                }
+                AtomicNarrowOp::LenGte(expr) => {
+                    Some(format!("len({subject}) >= {}", expr_snippet(module, expr)?))
+                }
+                AtomicNarrowOp::LenLt(expr) => {
+                    Some(format!("len({subject}) < {}", expr_snippet(module, expr)?))
+                }
+                AtomicNarrowOp::LenLte(expr) => {
+                    Some(format!("len({subject}) <= {}", expr_snippet(module, expr)?))
+                }
+                AtomicNarrowOp::IsSequence => Some(format!("isinstance({subject}, Sequence)")),
+                AtomicNarrowOp::IsNotSequence => {
+                    Some(format!("not isinstance({subject}, Sequence)"))
+                }
+                AtomicNarrowOp::IsMapping => Some(format!("isinstance({subject}, Mapping)")),
+                AtomicNarrowOp::IsNotMapping => Some(format!("not isinstance({subject}, Mapping)")),
+                AtomicNarrowOp::Call(expr, arguments) => {
+                    let func_snippet = expr_snippet(module, expr)?;
+                    let args_snippet = args_snippet(module, arguments).unwrap_or_default();
+                    Some(format!("{func_snippet}{args_snippet}"))
+                }
+                AtomicNarrowOp::NotCall(expr, arguments) => {
+                    let func_snippet = expr_snippet(module, expr)?;
+                    let args_snippet = args_snippet(module, arguments).unwrap_or_default();
+                    Some(format!("not {func_snippet}{args_snippet}"))
+                }
+                AtomicNarrowOp::IsTruthy => Some(subject),
+                AtomicNarrowOp::IsFalsy => Some(format!("not {subject}")),
+                AtomicNarrowOp::TypeGuard(_, arguments) => Some(format!(
+                    "TypeGuard{}",
+                    args_snippet(module, arguments).unwrap_or_default()
+                )),
+                AtomicNarrowOp::NotTypeGuard(_, arguments) => Some(format!(
+                    "not TypeGuard{}",
+                    args_snippet(module, arguments).unwrap_or_default()
+                )),
+                AtomicNarrowOp::TypeIs(_, arguments) => Some(format!(
+                    "TypeIs{}",
+                    args_snippet(module, arguments).unwrap_or_default()
+                )),
+                AtomicNarrowOp::NotTypeIs(_, arguments) => Some(format!(
+                    "not TypeIs{}",
+                    args_snippet(module, arguments).unwrap_or_default()
+                )),
+                AtomicNarrowOp::Placeholder => None,
+            };
+            formatted
+        }
+        NarrowOp::And(ops) => {
+            let parts = ops
+                .iter()
+                .filter_map(|op| format_narrow_op(module, base_name, op))
+                .collect::<Vec<_>>();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join(" and "))
+            }
+        }
+        NarrowOp::Or(ops) => {
+            let parts = ops
+                .iter()
+                .filter_map(|op| format_narrow_op(module, base_name, op))
+                .collect::<Vec<_>>();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join(" or "))
+            }
+        }
+    }
+}
+
+fn narrow_source_for_key(
+    bindings: &Bindings,
+    module: &Module,
+    start_idx: Idx<Key>,
+) -> Option<String> {
+    let mut current = start_idx;
+    let mut seen = SmallSet::new();
+    loop {
+        if seen.contains(&current) {
+            return None;
+        }
+        seen.insert(current);
+        match bindings.get(current) {
+            Binding::Forward(next) => current = *next,
+            Binding::Narrow(_, op, _) => {
+                let key = bindings.idx_to_key(current);
+                let Key::Narrow(name, op_range, _) = key else {
+                    return None;
+                };
+                let location = format_type_source_location(module, *op_range);
+                let mut msg = format!("Narrowed by condition at {location}");
+                if let Some(snippet) = format_narrow_op(module, name, op)
+                    .or_else(|| format_code_snippet(module, *op_range))
+                {
+                    msg.push_str(&format!(": `{snippet}`"));
+                }
+                return Some(msg);
+            }
+            _ => return None,
+        }
+    }
+}
+
+fn definition_short_identifier(bindings: &Bindings, key: &Key) -> Option<ShortIdentifier> {
+    let mut current = bindings.key_to_idx(key);
+    let mut seen = SmallSet::new();
+    loop {
+        if seen.contains(&current) {
+            return None;
+        }
+        seen.insert(current);
+        let current_key = bindings.idx_to_key(current);
+        if let Key::Definition(short_identifier) = current_key {
+            return Some(short_identifier.clone());
+        }
+        match bindings.get(current) {
+            Binding::Forward(next)
+            | Binding::Narrow(next, ..)
+            | Binding::CompletedPartialType(next, ..)
+            | Binding::PartialTypeWithUpstreamsCompleted(next, ..)
+            | Binding::LoopPhi(next, ..) => current = *next,
+            Binding::Phi(_, branches) if !branches.is_empty() => {
+                current = branches[0].value_key;
+            }
+            _ => return None,
+        }
+    }
+}
+
+fn first_use_source_for_key(
+    bindings: &Bindings,
+    module: &Module,
+    key: &Key,
+    hover_position: TextSize,
+) -> Option<String> {
+    let Some(def_identifier) = definition_short_identifier(bindings, key) else {
+        return None;
+    };
+    let key = Key::CompletedPartialType(def_identifier);
+    if !bindings.is_valid_key(&key) {
+        return None;
+    }
+    let idx = bindings.key_to_idx(&key);
+    match bindings.get(idx) {
+        Binding::CompletedPartialType(_, FirstUse::UsedBy(use_idx)) => {
+            let use_range = bindings.idx_to_key(*use_idx).range();
+            if use_range.contains(hover_position) {
+                return None;
+            }
+            let location = format_type_source_location(module, use_range);
+            let mut msg = format!("Inferred from first use at {location}");
+            if let Some(snippet) = format_code_snippet(module, use_range) {
+                msg.push_str(&format!(": `{snippet}`"));
+            }
+            Some(msg)
+        }
+        _ => None,
+    }
+}
+
+fn type_sources_for_hover(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Vec<String> {
+    let Some(bindings) = transaction.get_bindings(handle) else {
+        return Vec::new();
+    };
+    let Some(module) = transaction.get_module_info(handle) else {
+        return Vec::new();
+    };
+    let Some(identifier_with_context) = transaction.identifier_at(handle, position) else {
+        return Vec::new();
+    };
+    let key = match identifier_with_context.context {
+        IdentifierContext::Expr(expr_context) => match expr_context {
+            ExprContext::Store => {
+                Key::Definition(ShortIdentifier::new(&identifier_with_context.identifier))
+            }
+            ExprContext::Load | ExprContext::Del | ExprContext::Invalid => {
+                Key::BoundName(ShortIdentifier::new(&identifier_with_context.identifier))
+            }
+        },
+        _ => return Vec::new(),
+    };
+    if !bindings.is_valid_key(&key) {
+        return Vec::new();
+    }
+    let idx = bindings.key_to_idx(&key);
+    let mut sources = Vec::new();
+    if let Some(narrow_source) = narrow_source_for_key(&bindings, &module, idx) {
+        sources.push(narrow_source);
+    }
+    if let Some(first_use_source) = first_use_source_for_key(&bindings, &module, &key, position) {
+        sources.push(first_use_source);
+    }
+    sources
 }
 
 fn collect_typed_dict_fields_for_hover<'a>(
@@ -627,6 +1003,7 @@ pub fn get_hover(
             type_,
             docstring,
             parameter_doc,
+            type_sources: type_sources_for_hover(transaction, handle, position),
             display: type_display,
             show_go_to_links,
         }
