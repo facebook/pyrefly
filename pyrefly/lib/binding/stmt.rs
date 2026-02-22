@@ -934,10 +934,14 @@ impl<'a> BindingsBuilder<'a> {
                     is_while_true,
                 );
             }
-            Stmt::If(x) => {
+            Stmt::If(mut x) => {
                 let is_definitely_unreachable = self.scopes.is_definitely_unreachable();
                 let mut exhaustive = false;
                 let if_range = x.range;
+                // Process the first `if` test before forking so that walrus-defined names
+                // are in the base flow and visible after the if-statement. This mirrors the
+                // fix for ternary expressions in expr.rs (Expr::If handling).
+                self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
                 self.start_fork(if_range);
                 // Type narrowing operations that are carried over from one branch to the next. For example, in:
                 //   if x is None:
@@ -948,6 +952,7 @@ impl<'a> BindingsBuilder<'a> {
                 // is carried over to the else branch.
                 let mut negated_prev_ops = NarrowOps::new();
                 let mut contains_static_test_with_no_else = false;
+                let mut is_first_branch = true;
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
                     self.start_branch();
                     self.bind_narrow_ops(
@@ -969,7 +974,12 @@ impl<'a> BindingsBuilder<'a> {
                             result
                         }
                     };
-                    self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
+                    // The first `if` test was already processed before the fork (above).
+                    // Only process elif/else tests here, inside the branch.
+                    if !is_first_branch {
+                        self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
+                    }
+                    is_first_branch = false;
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
                         // Skip the body in this case - it typically means a check (e.g. a sys version,
                         // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
