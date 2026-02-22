@@ -261,6 +261,7 @@ use crate::lsp::non_wasm::protocol::write_lsp_message;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
+use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
 use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
 use crate::lsp::non_wasm::stdlib::should_show_error_for_display_mode;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
@@ -892,6 +893,7 @@ pub fn capabilities(
                 CodeActionKind::QUICKFIX,
                 CodeActionKind::REFACTOR_EXTRACT,
                 CodeActionKind::REFACTOR_REWRITE,
+                CodeActionKind::new("refactor.delete"),
                 CodeActionKind::new("refactor.move"),
                 CodeActionKind::REFACTOR_INLINE,
                 CodeActionKind::SOURCE_FIX_ALL,
@@ -1498,7 +1500,7 @@ impl Server {
                             x.id,
                             Ok(self
                                 .code_action(
-                                    &transaction,
+                                    &mut transaction,
                                     params,
                                     telemetry,
                                     activity_key,
@@ -3429,7 +3431,7 @@ impl Server {
 
     fn code_action(
         &self,
-        transaction: &Transaction<'_>,
+        transaction: &mut Transaction<'_>,
         params: CodeActionParams,
         telemetry: &dyn Telemetry,
         activity_key: Option<&ActivityKey>,
@@ -3636,6 +3638,14 @@ impl Server {
         if let Some(action) =
             convert_module_package_code_actions(&self.initialize_params.capabilities, uri)
         {
+            actions.push(action);
+        }
+        if let Some(action) = safe_delete_file_code_action(
+            &self.initialize_params.capabilities,
+            &self.state,
+            transaction,
+            uri,
+        ) {
             actions.push(action);
         }
         (!actions.is_empty()).then_some(actions)

@@ -313,6 +313,20 @@ fn apply_first_inline_parameter_action(code: &str) -> Option<String> {
     Some(apply_refactor_edits_for_module(&module_info, &edits))
 }
 
+fn apply_first_safe_delete_action(code: &str) -> Option<String> {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let mut transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(code);
+    let actions = transaction
+        .safe_delete_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
+}
+
 fn compute_introduce_parameter_actions(
     code: &str,
 ) -> (
@@ -3877,4 +3891,48 @@ def compute():
     return add(1)
 "#;
     assert_eq!(expected, updated);
+}
+
+#[test]
+fn safe_delete_removes_unused_function() {
+    let code = r#"
+def foo():
+#   ^
+    return 1
+def bar():
+    return 2
+"#;
+    let updated = apply_first_safe_delete_action(code).expect("expected safe delete action");
+    let expected = r#"
+def bar():
+    return 2
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn safe_delete_inserts_pass_for_empty_class() {
+    let code = r#"
+class Foo:
+    def bar(self):
+#       ^
+        return 1
+"#;
+    let updated = apply_first_safe_delete_action(code).expect("expected safe delete action");
+    let expected = r#"
+class Foo:
+    pass
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn safe_delete_rejects_referenced_symbol() {
+    let code = r#"
+def foo():
+#   ^
+    return 1
+foo()
+"#;
+    assert!(apply_first_safe_delete_action(code).is_none());
 }

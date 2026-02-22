@@ -7,7 +7,9 @@
 
 use std::cmp::Ordering;
 use std::cmp::Reverse;
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 use dupe::Dupe;
@@ -58,6 +60,7 @@ use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
 
 use crate::ModuleInfo;
+use crate::alt::answers::Index;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
@@ -2303,6 +2306,14 @@ impl<'a> Transaction<'a> {
         quick_fixes::inline_parameter::inline_parameter_code_actions(self, handle, selection)
     }
 
+    pub fn safe_delete_code_actions(
+        &mut self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::safe_delete::safe_delete_code_actions(self, handle, selection)
+    }
+
     pub fn introduce_parameter_code_actions(
         &self,
         handle: &Handle,
@@ -3050,150 +3061,288 @@ impl<'a> Transaction<'a> {
     }
 }
 
-impl<'a> CancellableTransaction<'a> {
-    /// Finds child class implementations of a method definition.
-    /// Returns the ranges of child methods that reimplement the given parent method.
-    fn find_child_implementations(
+trait RdepTransaction {
+    fn solutions_index(&self, handle: &Handle) -> Option<Arc<Mutex<Index>>>;
+    fn module_info(&self, handle: &Handle) -> Option<Module>;
+    fn transitive_rdeps(&self, handle: Handle) -> HashSet<Handle>;
+    fn run_for_handles(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled>;
+    fn local_references_from_definition(
         &self,
         handle: &Handle,
-        definition: &TextRangeWithModule,
-    ) -> Vec<TextRange> {
-        let mut child_implementations = Vec::new();
+        definition_kind: DefinitionMetadata,
+        range: TextRange,
+        module: &Module,
+    ) -> Option<Vec<TextRange>>;
+}
 
-        if let Some(solutions) = self.as_ref().get_solutions(handle)
-            && let Some(index) = solutions.get_index()
-        {
-            let index_lock = index.lock();
-            // Search for child methods that have this definition as a parent
-            for (child_range, parent_methods) in &index_lock.parent_methods_map {
-                for (parent_module_path, parent_range) in parent_methods {
-                    // Check if the parent method matches our definition
-                    if parent_module_path == definition.module.path()
-                        && *parent_range == definition.range
-                    {
-                        // This child method is a reimplementation of our definition
-                        child_implementations.push(*child_range);
-                    }
+impl<'a> RdepTransaction for Transaction<'a> {
+    fn solutions_index(&self, handle: &Handle) -> Option<Arc<Mutex<Index>>> {
+        self.get_solutions(handle)
+            .and_then(|solutions| solutions.get_index())
+    }
+
+    fn module_info(&self, handle: &Handle) -> Option<Module> {
+        self.get_module_info(handle)
+    }
+
+    fn transitive_rdeps(&self, handle: Handle) -> HashSet<Handle> {
+        self.get_transitive_rdeps(handle)
+    }
+
+    fn run_for_handles(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
+        self.run(handles, require);
+        Ok(())
+    }
+
+    fn local_references_from_definition(
+        &self,
+        handle: &Handle,
+        definition_kind: DefinitionMetadata,
+        range: TextRange,
+        module: &Module,
+    ) -> Option<Vec<TextRange>> {
+        self.local_references_from_definition(handle, definition_kind, range, module)
+    }
+}
+
+impl<'a> RdepTransaction for CancellableTransaction<'a> {
+    fn solutions_index(&self, handle: &Handle) -> Option<Arc<Mutex<Index>>> {
+        self.as_ref()
+            .get_solutions(handle)
+            .and_then(|solutions| solutions.get_index())
+    }
+
+    fn module_info(&self, handle: &Handle) -> Option<Module> {
+        self.as_ref().get_module_info(handle)
+    }
+
+    fn transitive_rdeps(&self, handle: Handle) -> HashSet<Handle> {
+        self.as_ref().get_transitive_rdeps(handle)
+    }
+
+    fn run_for_handles(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
+        self.run(handles, require)
+    }
+
+    fn local_references_from_definition(
+        &self,
+        handle: &Handle,
+        definition_kind: DefinitionMetadata,
+        range: TextRange,
+        module: &Module,
+    ) -> Option<Vec<TextRange>> {
+        self.as_ref()
+            .local_references_from_definition(handle, definition_kind, range, module)
+    }
+}
+
+fn find_child_implementations_impl<T: RdepTransaction>(
+    transaction: &T,
+    handle: &Handle,
+    definition: &TextRangeWithModule,
+) -> Vec<TextRange> {
+    let mut child_implementations = Vec::new();
+
+    if let Some(index) = transaction.solutions_index(handle) {
+        let index_lock = index.lock();
+        for (child_range, parent_methods) in &index_lock.parent_methods_map {
+            for (parent_module_path, parent_range) in parent_methods {
+                if parent_module_path == definition.module.path()
+                    && *parent_range == definition.range
+                {
+                    child_implementations.push(*child_range);
                 }
             }
         }
-
-        child_implementations
     }
 
-    /// Computes the set of transitive reverse dependencies for a definition, handling
-    /// in-memory files and their filesystem counterparts.
-    /// Returns Err if the request is canceled in the middle of a run.
-    fn compute_transitive_rdeps_for_definition(
+    child_implementations
+}
+
+fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
+    transaction: &mut T,
+    sys_info: &SysInfo,
+    definition: &TextRangeWithModule,
+) -> Result<Vec<Handle>, Cancelled> {
+    let mut transitive_rdeps = match definition.module.path().details() {
+        ModulePathDetails::Memory(path_buf) => {
+            let handle_of_filesystem_counterpart = Handle::new(
+                definition.module.name(),
+                ModulePath::filesystem((**path_buf).clone()),
+                sys_info.dupe(),
+            );
+            let mut rdeps = transaction.transitive_rdeps(handle_of_filesystem_counterpart.dupe());
+            rdeps.insert(Handle::new(
+                definition.module.name(),
+                definition.module.path().dupe(),
+                sys_info.dupe(),
+            ));
+            rdeps
+        }
+        _ => {
+            let definition_handle = Handle::new(
+                definition.module.name(),
+                definition.module.path().dupe(),
+                sys_info.dupe(),
+            );
+            let rdeps = transaction.transitive_rdeps(definition_handle.dupe());
+            transaction.run_for_handles(&[definition_handle], Require::Everything)?;
+            rdeps
+        }
+    };
+    for fs_counterpart_of_in_memory_handles in transitive_rdeps
+        .iter()
+        .filter_map(|handle| match handle.path().details() {
+            ModulePathDetails::Memory(path_buf) => Some(Handle::new(
+                handle.module(),
+                ModulePath::filesystem((**path_buf).clone()),
+                handle.sys_info().dupe(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+    {
+        transitive_rdeps.remove(&fs_counterpart_of_in_memory_handles);
+    }
+    let candidate_handles = transitive_rdeps
+        .into_iter()
+        .sorted_by_key(|h| h.path().dupe())
+        .collect::<Vec<_>>();
+
+    Ok(candidate_handles)
+}
+
+fn patch_definition_for_handle_impl<T: RdepTransaction>(
+    transaction: &T,
+    handle: &Handle,
+    definition: &TextRangeWithModule,
+) -> TextRangeWithModule {
+    match definition.module.path().details() {
+        ModulePathDetails::Memory(path_buf) if handle.path() != definition.module.path() => {
+            let TextRangeWithModule { module, range } = definition;
+            let module = if let Some(info) = transaction.module_info(&Handle::new(
+                module.name(),
+                ModulePath::filesystem((**path_buf).clone()),
+                handle.sys_info().dupe(),
+            )) {
+                info
+            } else {
+                module.dupe()
+            };
+            TextRangeWithModule {
+                module,
+                range: *range,
+            }
+        }
+        _ => definition.clone(),
+    }
+}
+
+fn process_rdeps_with_definition_impl<T: RdepTransaction, R>(
+    transaction: &mut T,
+    sys_info: &SysInfo,
+    definition: &TextRangeWithModule,
+    mut process_fn: impl FnMut(&mut T, &Handle, &TextRangeWithModule) -> Option<R>,
+) -> Result<Vec<R>, Cancelled> {
+    let candidate_handles =
+        compute_transitive_rdeps_for_definition_impl(transaction, sys_info, definition)?;
+
+    let mut results = Vec::new();
+    for handle in candidate_handles {
+        let patched_definition = patch_definition_for_handle_impl(transaction, &handle, definition);
+        if let Some(result) = process_fn(transaction, &handle, &patched_definition) {
+            results.push(result);
+        }
+    }
+
+    Ok(results)
+}
+
+fn find_global_references_from_definition_impl<T: RdepTransaction>(
+    transaction: &mut T,
+    sys_info: &SysInfo,
+    definition_kind: DefinitionMetadata,
+    definition: TextRangeWithModule,
+) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
+    let results = process_rdeps_with_definition_impl(
+        transaction,
+        sys_info,
+        &definition,
+        |transaction, handle, patched_definition| {
+            let mut module_refs: Vec<(Module, Vec<TextRange>)> = Vec::new();
+
+            let references = transaction
+                .local_references_from_definition(
+                    handle,
+                    definition_kind.clone(),
+                    patched_definition.range,
+                    &patched_definition.module,
+                )
+                .unwrap_or_default();
+            if !references.is_empty()
+                && let Some(module_info) = transaction.module_info(handle)
+            {
+                module_refs.push((module_info, references));
+            }
+
+            let child_implementations =
+                find_child_implementations_impl(transaction, handle, patched_definition);
+            if !child_implementations.is_empty()
+                && let Some(module_info) = transaction.module_info(handle)
+            {
+                if let Some((_, ranges)) = module_refs
+                    .iter_mut()
+                    .find(|(m, _)| m.path() == module_info.path())
+                {
+                    ranges.extend(child_implementations);
+                } else {
+                    module_refs.push((module_info, child_implementations));
+                }
+            }
+
+            if module_refs.is_empty() {
+                None
+            } else {
+                Some(module_refs)
+            }
+        },
+    )?;
+
+    let mut global_references: Vec<(Module, Vec<TextRange>)> = Vec::new();
+    for module_refs in results {
+        for (module, ranges) in module_refs {
+            if let Some((_, existing_ranges)) = global_references
+                .iter_mut()
+                .find(|(m, _)| m.path() == module.path())
+            {
+                existing_ranges.extend(ranges);
+            } else {
+                global_references.push((module, ranges));
+            }
+        }
+    }
+
+    for (_, references) in &mut global_references {
+        references.sort_by_key(|range| range.start());
+        references.dedup();
+    }
+
+    Ok(global_references)
+}
+
+impl<'a> Transaction<'a> {
+    /// Returns all references (including child implementations) for the definition.
+    pub fn find_global_references_from_definition(
         &mut self,
         sys_info: &SysInfo,
-        definition: &TextRangeWithModule,
-    ) -> Result<Vec<Handle>, Cancelled> {
-        let mut transitive_rdeps = match definition.module.path().details() {
-            ModulePathDetails::Memory(path_buf) => {
-                let handle_of_filesystem_counterpart = Handle::new(
-                    definition.module.name(),
-                    ModulePath::filesystem((**path_buf).clone()),
-                    sys_info.dupe(),
-                );
-                // In-memory files can never be found through import resolution (no rdeps),
-                // so we must compute the transitive rdeps of its filesystem counterpart instead.
-                let mut rdeps = self
-                    .as_ref()
-                    .get_transitive_rdeps(handle_of_filesystem_counterpart.dupe());
-                // We still add itself to the rdeps set, so that we will still find local references
-                // within the file.
-                rdeps.insert(Handle::new(
-                    definition.module.name(),
-                    definition.module.path().dupe(),
-                    sys_info.dupe(),
-                ));
-                rdeps
-            }
-            _ => {
-                let definition_handle = Handle::new(
-                    definition.module.name(),
-                    definition.module.path().dupe(),
-                    sys_info.dupe(),
-                );
-                let rdeps = self.as_ref().get_transitive_rdeps(definition_handle.dupe());
-                // We still need to know everything about the definition file, because the index
-                // only contains non-local references.
-                self.run(&[definition_handle], Require::Everything)?;
-                rdeps
-            }
-        };
-        // Remove the filesystem counterpart from candidate list,
-        // otherwise we will have results from both filesystem and in-memory version of the file.
-        for fs_counterpart_of_in_memory_handles in transitive_rdeps
-            .iter()
-            .filter_map(|handle| match handle.path().details() {
-                ModulePathDetails::Memory(path_buf) => Some(Handle::new(
-                    handle.module(),
-                    ModulePath::filesystem((**path_buf).clone()),
-                    handle.sys_info().dupe(),
-                )),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-        {
-            transitive_rdeps.remove(&fs_counterpart_of_in_memory_handles);
-        }
-        let candidate_handles = transitive_rdeps
-            .into_iter()
-            .sorted_by_key(|h| h.path().dupe())
-            .collect::<Vec<_>>();
-
-        Ok(candidate_handles)
+        definition_kind: DefinitionMetadata,
+        definition: TextRangeWithModule,
+    ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
+        find_global_references_from_definition_impl(self, sys_info, definition_kind, definition)
     }
+}
 
-    /// Patches a definition location to handle in-memory files when searching from another module.
-    /// For in-memory files, tries to find the corresponding filesystem location to enable
-    /// reference finding across modules.
-    fn patch_definition_for_handle(
-        &self,
-        handle: &Handle,
-        definition: &TextRangeWithModule,
-    ) -> TextRangeWithModule {
-        match definition.module.path().details() {
-            // Special-case for definition inside in-memory file
-            // Calling methods with in-memory definitions naively
-            // will find no references outside of the in-memory file because
-            // file systems don't contain in-memory files.
-            ModulePathDetails::Memory(path_buf)
-                // Why do we exclude the case of finding references within the same in-memory file?
-                // If we are finding references within the same in-memory file,
-                // then there is no problem for us to use the in-memory definition location.
-                if handle.path() != definition.module.path() =>
-            {
-                // Below, we try to patch the definition location to be at the same offset, but
-                // making the path to be filesystem path instead. In this way, in the happy case
-                // where the in-memory content is exactly the same as the filesystem content,
-                // we can successfully find all the references. However, if the content diverges,
-                // then we will miss definitions from other files.
-                //
-                // In general, other than checking the reverse dependency against the in-memory
-                // content, there is not much we can do: the in-memory content can diverge from
-                // the filesystem content in arbitrary ways.
-                let TextRangeWithModule { module, range } = definition;
-                let module = if let Some(info) = self.as_ref().get_module_info(&Handle::new(
-                    module.name(),
-                    ModulePath::filesystem((**path_buf).clone()),
-                    handle.sys_info().dupe(),
-                )) {
-                    info
-                } else {
-                    module.dupe()
-                };
-                TextRangeWithModule {
-                    module,
-                    range: *range,
-                }
-            }
-            _ => definition.clone(),
-        }
-    }
-
+impl<'a> CancellableTransaction<'a> {
     /// Processes each transitive reverse dependency for a given definition location.
     ///
     /// This is a common pattern in workspace-wide
@@ -3202,22 +3351,9 @@ impl<'a> CancellableTransaction<'a> {
         &mut self,
         sys_info: &SysInfo,
         definition: &TextRangeWithModule,
-        mut process_fn: impl FnMut(&mut Self, &Handle, &TextRangeWithModule) -> Option<T>,
+        process_fn: impl FnMut(&mut Self, &Handle, &TextRangeWithModule) -> Option<T>,
     ) -> Result<Vec<T>, Cancelled> {
-        let candidate_handles =
-            self.compute_transitive_rdeps_for_definition(sys_info, definition)?;
-
-        let mut results = Vec::new();
-        for handle in candidate_handles {
-            // "Patched" means the definition's module path is adjusted for in-memory files
-            // to use the filesystem path instead, enabling cross-module reference finding
-            let patched_definition = self.patch_definition_for_handle(&handle, definition);
-            if let Some(result) = process_fn(self, &handle, &patched_definition) {
-                results.push(result);
-            }
-        }
-
-        Ok(results)
+        process_rdeps_with_definition_impl(self, sys_info, definition, process_fn)
     }
 
     /// Returns Err if the request is canceled in the middle of a run.
@@ -3227,75 +3363,7 @@ impl<'a> CancellableTransaction<'a> {
         definition_kind: DefinitionMetadata,
         definition: TextRangeWithModule,
     ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
-        let results = self.process_rdeps_with_definition(
-            sys_info,
-            &definition,
-            |transaction, handle, patched_definition| {
-                let mut module_refs: Vec<(Module, Vec<TextRange>)> = Vec::new();
-
-                // Find local references
-                let references = transaction
-                    .as_ref()
-                    .local_references_from_definition(
-                        handle,
-                        definition_kind.clone(),
-                        patched_definition.range,
-                        &patched_definition.module,
-                    )
-                    .unwrap_or_default();
-                if !references.is_empty()
-                    && let Some(module_info) = transaction.as_ref().get_module_info(handle)
-                {
-                    module_refs.push((module_info, references));
-                }
-
-                // Search for child class reimplementations using the parent_methods_map
-                let child_implementations =
-                    transaction.find_child_implementations(handle, patched_definition);
-                if !child_implementations.is_empty()
-                    && let Some(module_info) = transaction.as_ref().get_module_info(handle)
-                {
-                    // Check if we already have this module in our results
-                    if let Some((_, ranges)) = module_refs
-                        .iter_mut()
-                        .find(|(m, _)| m.path() == module_info.path())
-                    {
-                        ranges.extend(child_implementations);
-                    } else {
-                        module_refs.push((module_info, child_implementations));
-                    }
-                }
-
-                if module_refs.is_empty() {
-                    None
-                } else {
-                    Some(module_refs)
-                }
-            },
-        )?;
-
-        // Flatten nested results and merge by module
-        let mut global_references: Vec<(Module, Vec<TextRange>)> = Vec::new();
-        for module_refs in results {
-            for (module, ranges) in module_refs {
-                if let Some((_, existing_ranges)) = global_references
-                    .iter_mut()
-                    .find(|(m, _)| m.path() == module.path())
-                {
-                    existing_ranges.extend(ranges);
-                } else {
-                    global_references.push((module, ranges));
-                }
-            }
-        }
-
-        // Sort and deduplicate references in each module
-        for (_, references) in &mut global_references {
-            references.sort_by_key(|range| range.start());
-            references.dedup();
-        }
-
-        Ok(global_references)
+        find_global_references_from_definition_impl(self, sys_info, definition_kind, definition)
     }
 
     /// Finds all implementations (child class methods) of the definition at the given position.
@@ -3313,7 +3381,7 @@ impl<'a> CancellableTransaction<'a> {
             |transaction, handle, patched_definition| {
                 // Search for child class reimplementations using the parent_methods_map
                 let child_implementations =
-                    transaction.find_child_implementations(handle, patched_definition);
+                    find_child_implementations_impl(transaction, handle, patched_definition);
                 if !child_implementations.is_empty()
                     && let Some(module_info) = transaction.as_ref().get_module_info(handle)
                 {
