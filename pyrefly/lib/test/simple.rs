@@ -598,7 +598,7 @@ testcase!(
     r#"
 from typing import assert_type
 x1: dict[str, int] = {"foo": 1, **{"bar": 2}}
-x2: dict[str, int] = {"foo": 1, **{"bar": "bar"}}  # E: `dict[str, int | str]` is not assignable to `dict[str, int]`
+x2: dict[str, int] = {"foo": 1, **{"bar": "bar"}}  # E: `str` is not assignable to `int`
 assert_type({"foo": 1, **{"bar": "bar"}}, dict[str, int | str])
 {"foo": 1, **1}  # E: Expected a mapping, got Literal[1]
 "#,
@@ -610,7 +610,7 @@ testcase!(
 from typing import Mapping, assert_type
 def test(m: Mapping[str, int]) -> None:
     x1: dict[str, int] = {**m}
-    x2: dict[int, int] = {**m} # E: `dict[str, int]` is not assignable to `dict[int, int]`
+    x2: dict[int, int] = {**m} # E: `str` is not assignable to `int`
     assert_type({"foo": 1, **m}, dict[str, int])
 "#,
 );
@@ -622,7 +622,7 @@ from typing import assert_type
 class Counter[T](dict[T, int]): ...
 def test(c: Counter[str]) -> None:
     x1: dict[str, int] = {**c}
-    x2: dict[int, int] = {**c}  # E: `dict[str, int]` is not assignable to `dict[int, int]`
+    x2: dict[int, int] = {**c}  # E: `str` is not assignable to `int`
     assert_type({"foo": 1, **c}, dict[str, int])
 "#,
 );
@@ -1254,7 +1254,7 @@ testcase!(
     test_typing_alias,
     r#"
 from typing import Dict, assert_type
-y: Dict[str, int] = {"test": "test"} # E: `dict[str, str]` is not assignable to `dict[str, int]`
+y: Dict[str, int] = {"test": "test"} # E: `str` is not assignable to `int`
 assert_type(y, dict[str, int])
 "#,
 );

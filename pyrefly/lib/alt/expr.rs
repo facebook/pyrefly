@@ -77,6 +77,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
+use crate::error::context::TypeCheckKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
@@ -968,18 +969,55 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 });
             let mut key_tys = Vec::new();
             let mut value_tys = Vec::new();
+            let mut has_type_mismatch = false;
+            let check_items = hint
+                .filter(|hint| hint.errors().is_some())
+                .is_some_and(|hint| !matches!(hint.ty(), Type::Union(_)));
+            let infer_with_hint = |expr: &Expr, hint: Option<&Hint>, errors: &ErrorCollector| {
+                let ty = self.expr_infer_with_hint(expr, hint.map(|hint| hint.as_ref()), errors);
+                match hint {
+                    Some(hint) => {
+                        let matches_hint = self.is_subset_eq(&ty, hint.ty());
+                        let ty = if matches_hint {
+                            hint.ty().clone()
+                        } else {
+                            ty.promote_implicit_literals(self.stdlib)
+                        };
+                        (ty, matches_hint)
+                    }
+                    None => (ty.promote_implicit_literals(self.stdlib), true),
+                }
+            };
             items.iter().for_each(|x| match &x.key {
                 Some(key) => {
-                    let key_t = self.expr_infer_with_hint_promote(
-                        key,
-                        key_hint.as_ref().map(|hint| hint.as_ref()),
-                        errors,
-                    );
-                    let value_t = self.expr_infer_with_hint_promote(
-                        &x.value,
-                        value_hint.as_ref().map(|hint| hint.as_ref()),
-                        errors,
-                    );
+                    let (key_t, key_matches_hint) = infer_with_hint(key, key_hint.as_ref(), errors);
+                    let (value_t, value_matches_hint) =
+                        infer_with_hint(&x.value, value_hint.as_ref(), errors);
+                    if check_items
+                        && let Some(hint) = hint
+                        && let Some(check_errors) = hint.errors()
+                    {
+                        let tcc: &dyn Fn() -> TypeCheckContext =
+                            &|| TypeCheckContext::of_kind(TypeCheckKind::DictLiteralItem);
+                        if let Some(key_hint) = &key_hint
+                            && !key_matches_hint
+                        {
+                            self.check_type(&key_t, key_hint.ty(), key.range(), check_errors, tcc);
+                            has_type_mismatch = true;
+                        }
+                        if let Some(value_hint) = &value_hint
+                            && !value_matches_hint
+                        {
+                            self.check_type(
+                                &value_t,
+                                value_hint.ty(),
+                                x.value.range(),
+                                check_errors,
+                                tcc,
+                            );
+                            has_type_mismatch = true;
+                        }
+                    }
                     if !key_t.is_error() {
                         key_tys.push(key_t);
                     }
@@ -1015,6 +1053,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None => {
                     let ty = self.expr_infer(&x.value, errors);
                     if let Some((key_t, value_t)) = self.unwrap_mapping(&ty) {
+                        let key_matches_hint = key_hint
+                            .as_ref()
+                            .is_some_and(|key_hint| self.is_subset_eq(&key_t, key_hint.ty()));
+                        let value_matches_hint = value_hint
+                            .as_ref()
+                            .is_some_and(|value_hint| self.is_subset_eq(&value_t, value_hint.ty()));
+                        if check_items
+                            && let Some(hint) = hint
+                            && let Some(check_errors) = hint.errors()
+                        {
+                            let tcc: &dyn Fn() -> TypeCheckContext =
+                                &|| TypeCheckContext::of_kind(TypeCheckKind::DictLiteralItem);
+                            if let Some(key_hint) = &key_hint
+                                && !key_matches_hint
+                            {
+                                self.check_type(
+                                    &key_t,
+                                    key_hint.ty(),
+                                    x.value.range(),
+                                    check_errors,
+                                    tcc,
+                                );
+                                has_type_mismatch = true;
+                            }
+                            if let Some(value_hint) = &value_hint
+                                && !value_matches_hint
+                            {
+                                self.check_type(
+                                    &value_t,
+                                    value_hint.ty(),
+                                    x.value.range(),
+                                    check_errors,
+                                    tcc,
+                                );
+                                has_type_mismatch = true;
+                            }
+                        }
                         if !key_t.is_error() {
                             if let Some(key_hint) = &key_hint
                                 && self.is_subset_eq(&key_t, key_hint.ty())
@@ -1043,6 +1118,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             });
+            if has_type_mismatch
+                && let Some(hint) = hint
+                && hint.errors().is_some()
+            {
+                return hint.ty().clone();
+            }
             if can_create_anonymous_typed_dict && !typed_dict_fields.is_empty() {
                 return self.heap.mk_typed_dict(TypedDict::Anonymous(Box::new(
                     AnonymousTypedDictInner {
