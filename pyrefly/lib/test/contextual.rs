@@ -236,16 +236,16 @@ from typing import Generator, Iterable
 class A: ...
 class B(A): ...
 x0 = ([B()] for _ in [0])
-x1a: Generator[list[A], None, None] = x0 # E: `Generator[list[B], None, None]` is not assignable to `Generator[list[A], None, None]`
+x1a: Generator[list[A], None, None] = x0 # E: `Generator[list[B]]` is not assignable to `Generator[list[A]]`
 x1b: Generator[list[A], None, None] = ([B()] for _ in [0])
-x2a: Iterable[list[A]] = x0 # E: `Generator[list[B], None, None]` is not assignable to `Iterable[list[A]]`
+x2a: Iterable[list[A]] = x0 # E: `Generator[list[B]]` is not assignable to `Iterable[list[A]]`
 x2b: Iterable[list[A]] = ([B()] for _ in [0])
 
 # In theory, we should allow this, since the generator expression accepts _any_ send type,
 # but both Mypy and Pyright assume that the send type is `None`.
-x3: Generator[int, int, None] = (1 for _ in [1]) # E: `Generator[Literal[1], None, None]` is not assignable to `Generator[int, int, None]`
+x3: Generator[int, int, None] = (1 for _ in [1]) # E: `Generator[Literal[1]]` is not assignable to `Generator[int, int]`
 
-x4: Generator[int, None, int] = (1 for _ in [1]) # E: `Generator[Literal[1], None, None]` is not assignable to `Generator[int, None, int]`
+x4: Generator[int, None, int] = (1 for _ in [1]) # E: `Generator[Literal[1]]` is not assignable to `Generator[int, None, int]`
 "#,
 );
 

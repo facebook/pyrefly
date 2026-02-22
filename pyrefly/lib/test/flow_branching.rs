@@ -332,9 +332,9 @@ try:
 except* int as e1:  # E: Invalid exception class
     reveal_type(e1)  # E: revealed type: ExceptionGroup[int]
 except* Exception as e2:
-    reveal_type(e2)  # E: revealed type: ExceptionGroup[Exception]
+    reveal_type(e2)  # E: revealed type: ExceptionGroup
 except* ExceptionGroup as e3:  # E: Exception handler annotation in `except*` clause may not extend `BaseExceptionGroup`
-    reveal_type(e3)  # E: ExceptionGroup[ExceptionGroup[Exception]]
+    reveal_type(e3)  # E: ExceptionGroup[ExceptionGroup]
 except* (Exception1, Exception2) as e4:
     reveal_type(e4)  # E: ExceptionGroup[Exception1 | Exception2]
 except* Exception1 as e5:

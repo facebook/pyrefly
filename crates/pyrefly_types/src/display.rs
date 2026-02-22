@@ -234,12 +234,14 @@ impl<'a> TypeDisplayContext<'a> {
     }
 
     pub(crate) fn fmt_targs(&self, targs: &TArgs, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if !targs.is_empty() {
+        let display_count = targs.display_count();
+        if display_count > 0 {
             write!(
                 f,
                 "[{}]",
                 commas_iter(|| targs
                     .iter_paired()
+                    .take(display_count)
                     .map(|(param, arg)| Fmt(|f| self.fmt_targ(param, arg, f))))
             )
         } else {
