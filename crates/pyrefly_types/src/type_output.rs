@@ -141,9 +141,10 @@ impl TypeOutput for OutputWithLocations<'_> {
         // Write each type argument separately with its own location
         // This ensures that each type in a union (e.g., int | str) gets its own
         // clickable part with a link to its definition
-        if !targs.is_empty() {
+        let display_count = targs.display_count();
+        if display_count > 0 {
             self.write_str("[")?;
-            for (i, ty) in targs.as_slice().iter().enumerate() {
+            for (i, ty) in targs.as_slice().iter().take(display_count).enumerate() {
                 if i > 0 {
                     self.write_str(", ")?;
                 }

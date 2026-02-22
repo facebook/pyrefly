@@ -454,6 +454,70 @@ def f9(c1: C[int, str], c2: C[str]):
     "#,
 );
 
+// WYSIWYG display tests for issue #2461:
+// When generic type params have defaults, display should omit trailing
+// args that match their defaults.
+
+testcase!(
+    test_wysiwyg_bare_generic_all_defaults,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T', default=int)
+U = TypeVar('U', default=str)
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass) -> None:
+    reveal_type(x)  # E: revealed type: MyClass
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_partial_generic_one_default,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T')
+U = TypeVar('U', default=int)
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass[float]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass[float]
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_fully_specified_generic,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T', default=int)
+U = TypeVar('U', default=str)
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass[float, bool]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass[float, bool]
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_no_defaults_shows_all,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T')
+U = TypeVar('U')
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass[int, str]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass[int, str]
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_middle_default_not_stripped,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T')
+U = TypeVar('U', default=int)
+V = TypeVar('V')
+class MyClass(Generic[T, U, V]):  # E: Type parameter `V` without a default cannot follow type parameter `U` with a default
+    ...
+    "#,
+);
+
 testcase!(
     test_bad_default_order,
     r#"

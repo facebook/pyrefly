@@ -1715,8 +1715,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot yield from `Generator[A, None, None]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
-      "description": "Cannot yield from `Generator[A, None, None]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
+      "concise_description": "Cannot yield from `Generator[A]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
+      "description": "Cannot yield from `Generator[A]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
       "line": 118,
       "name": "invalid-yield",
       "severity": "error",
@@ -1726,8 +1726,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot yield from `Generator[int, None, None]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
-      "description": "Cannot yield from `Generator[int, None, None]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
+      "concise_description": "Cannot yield from `Generator[int]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
+      "description": "Cannot yield from `Generator[int]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
       "line": 119,
       "name": "invalid-yield",
       "severity": "error",
@@ -1737,8 +1737,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot yield from `Generator[None, int, None]`, which is not assignable to declared return type `Generator[None, str, Unknown]`",
-      "description": "Cannot yield from `Generator[None, int, None]`, which is not assignable to declared return type `Generator[None, str, Unknown]`",
+      "concise_description": "Cannot yield from `Generator[None, int]`, which is not assignable to declared return type `Generator[None, str, Unknown]`",
+      "description": "Cannot yield from `Generator[None, int]`, which is not assignable to declared return type `Generator[None, str, Unknown]`",
       "line": 135,
       "name": "invalid-yield",
       "severity": "error",
