@@ -15,6 +15,7 @@ pub mod function;
 pub mod narrow;
 pub mod pattern;
 pub mod pydantic;
+pub mod pytest;
 pub mod scope;
 pub mod stmt;
 pub mod table;

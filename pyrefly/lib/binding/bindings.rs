@@ -31,6 +31,7 @@ use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Parameter;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::TypeParam;
 use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
@@ -50,10 +51,12 @@ use vec1::vec1;
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
+use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BranchInfo;
 use crate::binding::binding::FirstUse;
+use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
@@ -73,6 +76,9 @@ use crate::binding::binding::TypeAliasRefBinding;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::pytest::PytestBindingInfo;
+use crate::binding::pytest::PytestFixtureDefinition;
+use crate::binding::pytest::is_pytest_fixture_function;
 use crate::binding::scope::Exportable;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::NameReadInfo;
@@ -180,6 +186,7 @@ struct BindingsInner {
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
+    pytest_info: Option<PytestBindingInfo>,
     /// Yield and yield-from indices for each lambda that contains yields,
     /// keyed by the lambda's TextRange. Populated at binding time so the
     /// solver can look up yield info without re-walking the AST.
@@ -242,6 +249,7 @@ pub struct BindingsBuilder<'a> {
     unused_variables: Vec<UnusedVariable>,
     semantic_checker: SemanticSyntaxChecker,
     semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
+    pytest_info: Option<crate::binding::pytest::PytestBindingInfo>,
     /// BoundName lookups deferred until after AST traversal
     deferred_bound_names: Vec<DeferredBoundName>,
     /// Yield and yield-from indices for lambdas that contain yields.
@@ -293,6 +301,7 @@ impl Bindings {
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
+            pytest_info: None,
             lambda_yield_keys: Vec::new(),
         }))
     }
@@ -320,6 +329,9 @@ impl Bindings {
         &self.0.unused_variables
     }
 
+    pub(crate) fn pytest_info(&self) -> Option<&PytestBindingInfo> {
+        self.0.pytest_info.as_ref()
+    }
     /// Returns the yield and yield-from indices for a lambda at the given range,
     /// or empty slices if the lambda has no yields.
     pub fn lambda_yield_keys(&self, range: TextRange) -> (&[Idx<KeyYield>], &[Idx<KeyYieldFrom>]) {
@@ -459,6 +471,61 @@ impl Bindings {
         }
     }
 
+    pub(crate) fn pytest_fixture_param_hint(
+        &self,
+        def: &FunctionDefData,
+        class_key: Option<&Idx<KeyClass>>,
+        param: &Identifier,
+    ) -> Option<ShortIdentifier> {
+        let info = self.0.pytest_info.as_ref()?;
+        if matches!(param.id.as_str(), "self" | "cls") {
+            return None;
+        }
+        if !self.is_pytest_test_or_fixture(def, class_key, info) {
+            return None;
+        }
+        let defs = info.fixture_definitions(&param.id)?;
+        let selected = match class_key {
+            Some(class_key) => defs
+                .iter()
+                .find(|def| def.class_key.as_ref() == Some(class_key))
+                .or_else(|| defs.iter().find(|def| def.class_key.is_none()))
+                .or_else(|| defs.first()),
+            None => defs
+                .iter()
+                .find(|def| def.class_key.is_none())
+                .or_else(|| defs.first()),
+        }?;
+        Some(selected.return_type_key)
+    }
+
+    fn is_pytest_test_or_fixture(
+        &self,
+        def: &FunctionDefData,
+        class_key: Option<&Idx<KeyClass>>,
+        info: &PytestBindingInfo,
+    ) -> bool {
+        if info.is_fixture_definition(&def.name, class_key) {
+            return true;
+        }
+        if !def.name.id.as_str().starts_with("test_") {
+            return false;
+        }
+        match class_key {
+            None => true,
+            Some(class_key) => self.is_pytest_test_class(*class_key),
+        }
+    }
+
+    fn is_pytest_test_class(&self, class_key: Idx<KeyClass>) -> bool {
+        match self.get(class_key) {
+            BindingClass::ClassDef(class_binding) => {
+                class_binding.def.name.id.as_str().starts_with("Test")
+            }
+            BindingClass::FunctionalClassDef(_, id, _, _) => id.id.as_str().starts_with("Test"),
+        }
+    }
+
     pub fn new(
         x: ModModule,
         module_info: ModuleInfo,
@@ -471,6 +538,7 @@ impl Bindings {
         enable_trace: bool,
         untyped_def_behavior: UntypedDefBehavior,
     ) -> Self {
+        let pytest_info = PytestBindingInfo::from_module(&x);
         let mut builder = BindingsBuilder {
             module_info: module_info.dupe(),
             lookup,
@@ -490,6 +558,7 @@ impl Bindings {
             unused_variables: Vec::new(),
             semantic_checker: SemanticSyntaxChecker::new(),
             semantic_syntax_errors: RefCell::new(Vec::new()),
+            pytest_info,
             deferred_bound_names: Vec::new(),
             lambda_yield_keys: Vec::new(),
         };
@@ -562,6 +631,7 @@ impl Bindings {
             unused_parameters: builder.unused_parameters,
             unused_imports: builder.unused_imports,
             unused_variables: builder.unused_variables,
+            pytest_info: builder.pytest_info,
             lambda_yield_keys: builder.lambda_yield_keys,
         }))
     }
@@ -2018,5 +2088,25 @@ impl<'a> SemanticSyntaxContext for BindingsBuilder<'a> {
 
     fn is_bound_parameter(&self, name: &str) -> bool {
         self.scopes.is_bound_parameter(name)
+    }
+}
+
+impl BindingsBuilder<'_> {
+    pub(crate) fn record_pytest_fixture_definition(
+        &mut self,
+        def: &StmtFunctionDef,
+        class_key: Option<Idx<KeyClass>>,
+    ) {
+        let Some(pytest_info) = self.pytest_info.as_mut() else {
+            return;
+        };
+        if !is_pytest_fixture_function(def, pytest_info.aliases()) {
+            return;
+        }
+        pytest_info.add_fixture_definition(PytestFixtureDefinition {
+            name: def.name.id.clone(),
+            return_type_key: ShortIdentifier::new(&def.name),
+            class_key,
+        });
     }
 }
