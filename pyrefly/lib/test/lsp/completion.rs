@@ -2803,6 +2803,40 @@ x = sys.version
 }
 
 #[test]
+fn endpoint_completion_from_client() {
+    let code = r#"
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+app = FastAPI()
+
+@app.get("/users")
+def list_users():
+    return {"ok": True}
+
+@app.post("/users")
+def create_user():
+    return {"ok": True}
+
+client = TestClient(app)
+client.get("")
+#          ^
+client.post("")
+#           ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let trimmed = report.trim();
+    for expected in [
+        "- (Value) /users: GET endpoint inserting `/users`",
+        "- (Value) /users: POST endpoint inserting `/users`",
+    ] {
+        assert!(
+            trimmed.contains(expected),
+            "missing {expected} in completions:\n{trimmed}"
+        );
+    }
+}
 fn completion_sorts_incompatible_call_argument_last() {
     let code = r#"
 class Base:
