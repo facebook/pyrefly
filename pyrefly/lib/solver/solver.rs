@@ -1216,6 +1216,7 @@ impl Solver {
             solver: self,
             type_order,
             gas: INITIAL_GAS,
+            union_widening: Vec::new(),
             recursive_assumptions: SmallSet::new(),
             class_protocol_assumptions: SmallSet::new(),
         }
@@ -1432,6 +1433,7 @@ pub struct Subset<'a, Ans: LookupAnswer> {
     pub(crate) solver: &'a Solver,
     pub type_order: TypeOrder<'a, Ans>,
     gas: Gas,
+    union_widening: Vec<SmallMap<Var, Quantified>>,
     /// Recursive assumptions of pairs of types that is_subset_eq returns true for.
     /// Used for structural typechecking of protocols and recursive type aliases.
     pub recursive_assumptions: SmallSet<(Type, Type)>,
@@ -1444,6 +1446,53 @@ pub struct Subset<'a, Ans: LookupAnswer> {
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
+    pub(super) fn collect_union_widening_vars(&self, ty: &Type) -> SmallMap<Var, Quantified> {
+        let mut vars = SmallMap::new();
+        if !ty.may_contain_quantified_var() {
+            return vars;
+        }
+        let candidates = ty.collect_maybe_quantified_vars();
+        if candidates.is_empty() {
+            return vars;
+        }
+        let variables = self.solver.variables.lock();
+        for var in candidates {
+            if vars.contains_key(&var) {
+                continue;
+            }
+            match &*variables.get(var) {
+                Variable::Quantified(q) | Variable::PartialQuantified(q) => {
+                    if q.is_type_var() {
+                        vars.insert(var, q.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        vars
+    }
+
+    pub(super) fn with_union_widening<R>(
+        &mut self,
+        vars: SmallMap<Var, Quantified>,
+        f: impl FnOnce(&mut Self) -> Result<R, SubsetError>,
+    ) -> Result<R, SubsetError> {
+        if vars.is_empty() {
+            return f(self);
+        }
+        self.union_widening.push(vars);
+        let res = f(self);
+        self.union_widening.pop();
+        res
+    }
+
+    pub(super) fn union_widening_quantified(&self, var: Var) -> Option<Quantified> {
+        self.union_widening
+            .iter()
+            .rev()
+            .find_map(|vars| vars.get(&var).cloned())
+    }
+
     pub fn is_equal(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         self.is_subset_eq(got, want)?;
         self.is_subset_eq(want, got)
@@ -1724,7 +1773,37 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         let t2 = t2.clone();
                         drop(v2_ref);
                         drop(variables);
-                        self.is_subset_eq(t1, &t2)
+                        match self.is_subset_eq(t1, &t2) {
+                            Ok(()) => Ok(()),
+                            Err(err) => match self.union_widening_quantified(*v2) {
+                                Some(q) => {
+                                    let t1_p = t1
+                                        .clone()
+                                        .promote_implicit_literals(self.type_order.stdlib());
+                                    let bound = q
+                                        .restriction()
+                                        .as_type(self.type_order.stdlib(), &self.solver.heap);
+                                    if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
+                                        self.solver.instantiation_errors.write().insert(
+                                            *v2,
+                                            TypeVarSpecializationError {
+                                                name: q.name.clone(),
+                                                got: t1_p.clone(),
+                                                want: bound,
+                                                error: err_p,
+                                            },
+                                        );
+                                    }
+                                    let widened = unions(vec![t2, t1_p], &self.solver.heap);
+                                    self.solver
+                                        .variables
+                                        .lock()
+                                        .update(*v2, Variable::Answer(widened));
+                                    Ok(())
+                                }
+                                None => Err(err),
+                            },
+                        }
                     }
                     Variable::Quantified(q) | Variable::PartialQuantified(q) => {
                         let t1_p = t1

@@ -2503,6 +2503,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         field: &ClassField,
         instance: &Instance,
     ) -> ClassAttribute {
+        self.as_instance_attribute_with_mode(field_name, field, instance, true)
+    }
+
+    fn as_instance_attribute_with_mode(
+        &self,
+        field_name: &Name,
+        field: &ClassField,
+        instance: &Instance,
+        expand_vars: bool,
+    ) -> ClassAttribute {
         // Special handling for `__new__`: because `__new__` is a static method, it can be called
         // with a `cls` argument that differs from the class on which it is accessed, so we use a
         // quantified to capture `cls`. Note that `__new__` is the only method that needs this
@@ -2556,7 +2566,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             ClassFieldInner::Method { mut ty, .. } => {
                 // bind_instance matches on the type, so resolve it if we can
-                self.expand_vars_mut(&mut ty);
+                if expand_vars {
+                    self.expand_vars_mut(&mut ty);
+                }
                 // If the field is a dunder or ClassVar[Callable] & the assigned value is a callable, we replace it with a named function
                 // so that it gets treated as a bound method.
                 //
@@ -2599,7 +2611,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 read_only_reason,
                 ..
             } => {
-                self.expand_vars_mut(&mut ty);
+                if expand_vars {
+                    self.expand_vars_mut(&mut ty);
+                }
                 if is_classvar {
                     ClassAttribute::read_only(ty, ReadOnlyReason::ClassVar)
                 } else if let Some(reason) = read_only_reason {
@@ -3556,7 +3570,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<ClassAttribute> {
         self.get_class_member(cls.class_object(), name)
             .map(|field| {
-                self.as_instance_attribute(name, &field, &Instance::of_protocol(cls, self_type))
+                self.as_instance_attribute_with_mode(
+                    name,
+                    &field,
+                    &Instance::of_protocol(cls, self_type),
+                    false,
+                )
             })
     }
 

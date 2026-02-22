@@ -1209,7 +1209,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (Type::Intersect(l), u) => any(l.0.iter(), |l| self.is_subset_eq(l, u)),
             (Type::Union(box Union { members: ls, .. }), u) => {
-                all(ls.iter(), |l| self.is_subset_eq(l, u))
+                // Allow unbound type variables on the RHS to widen across union members.
+                let widen_vars = self.collect_union_widening_vars(u);
+                self.with_union_widening(widen_vars, |subset| {
+                    all(ls.iter(), |l| subset.is_subset_eq(l, u))
+                })
             }
             // Size <: Size - expand bound Vars, canonicalize, and compare for structural equality
             (Type::Size(s1), Type::Size(s2)) => {
