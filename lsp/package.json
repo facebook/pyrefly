@@ -240,6 +240,12 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Controls whether comment section folding ranges are included in the editor. When true, comments following the pattern '# Section Name ----' (with 4+ trailing dashes) create collapsible regions, similar to R's code section convention."
+                },
+                "pyrefly.configPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to a pyrefly.toml or pyproject.toml configuration file. When set, the LSP will use this config for all files instead of an upward-filesystem-walk config discovery approach.",
+                    "scope": "resource"
                 }
             }
         }

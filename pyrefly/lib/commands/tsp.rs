@@ -51,6 +51,7 @@ pub fn run_tsp(
             args.indexing_mode,
             args.workspace_indexing_limit,
             false,
+            None, // No explicit config for TSP
             surface,
             None, // No path remapping for TSP
             Arc::new(NoExternalReferences),
