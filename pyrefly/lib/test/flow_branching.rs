@@ -1102,26 +1102,29 @@ def f():
 );
 
 testcase!(
-    bug = "We approximate flow for tests in a lossy way - the first test actually runs in the base flow",
     test_walrus_on_first_branch_of_if,
     r#"
 def condition() -> bool: ...
 def f() -> bool:
     if (b := condition()):
         pass
-    # In our approximation, `b` is defined in the branch but actually the test always evaluates
-    return b  # E: `b` may be uninitialized
+    return b
     "#,
 );
 
+// Short-circuit prevents `value := v` from executing when the lhs is `False`.
+// However, processing the test before the fork applies BoolOp lax semantics, so
+// `value` appears maybe-initialized — a known false negative from BoolOp laxness.
+// This is the same trade-off as test_walrus_in_ternary_short_circuit.
 testcase!(
+    bug = "BoolOp laxness causes false negative for walrus in short-circuit context, see #1251",
     test_false_and_walrus,
     r#"
 def f(v):
     if False and (value := v):
         print(value)
     else:
-        print(value)  # E: `value` is uninitialized
+        print(value)
     "#,
 );
 
@@ -1198,6 +1201,67 @@ def condition() -> bool: ...
 def get() -> int: ...
 def f() -> int:
     return (b if (b := get()) > 0 else 0) if condition() else -1
+    "#,
+);
+
+// Regression tests for https://github.com/facebook/pyrefly/issues/2382
+// Walrus operator in if-statement test conditions
+
+// The first `if` test always evaluates, so walrus bindings should be in base flow.
+testcase!(
+    test_walrus_in_if_basic,
+    r#"
+def f(a: int) -> int:
+    if (x := a) > 0:
+        pass
+    return x
+    "#,
+);
+
+testcase!(
+    test_walrus_in_if_both_branches,
+    r#"
+def f(a: int) -> int:
+    if (x := a) > 0:
+        result = x + 1
+    else:
+        result = x - 1
+    return result
+    "#,
+);
+
+testcase!(
+    test_walrus_in_if_with_narrowing,
+    r#"
+def get() -> int | None: ...
+def f() -> int:
+    if (x := get()) is not None:
+        return x
+    return 0
+    "#,
+);
+
+// elif condition only executes if the first `if` was False — walrus may not run.
+testcase!(
+    test_walrus_in_elif,
+    r#"
+def condition() -> bool: ...
+def f() -> bool:
+    if condition():
+        pass
+    elif (x := condition()):
+        pass
+    return x  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_walrus_in_if_no_else,
+    r#"
+def f(a: int) -> int:
+    if (x := a) > 0:
+        return x
+    return x
     "#,
 );
 
