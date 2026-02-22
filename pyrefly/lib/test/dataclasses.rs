@@ -1754,3 +1754,20 @@ class DC3:
         self.y = 3
 "#,
 );
+
+testcase!(
+    test_dataclass_protocol_dataclass_fields,
+    r#"
+from dataclasses import dataclass, Field
+from typing import Any, ClassVar, Protocol
+
+class P(Protocol):
+    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
+
+@dataclass
+class C(P):
+    x: int
+
+C(42)
+"#,
+);
