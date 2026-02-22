@@ -4,7 +4,8 @@
     "description": "Python autocomplete, typechecking, code navigation and more! Powered by Pyrefly, an open-source language server",
     "icon": "images/pyrefly-symbol.png",
     "extensionKind": [
-        "workspace"
+        "workspace",
+        "ui"
     ],
     "author": "Facebook",
     "license": "Apache2",
@@ -32,6 +33,7 @@
         "vscode": "^1.94.0"
     },
     "main": "./dist/extension",
+    "browser": "./dist/extension-web",
     "activationEvents": [
         "onLanguage:python",
         "onNotebook:jupyter-notebook"
@@ -246,10 +248,11 @@
     },
     "scripts": {
         "compile": "npm run check-types && node esbuild.js",
-        "check-types": "tsc --noEmit",
+        "check-types": "tsc --noEmit --project tsconfig.json && tsc --noEmit --project tsconfig.web.json",
         "watch": "npm-run-all -p watch:*",
         "watch:esbuild": "node esbuild.js --watch",
-        "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+        "watch:tsc-node": "tsc --noEmit --watch --project tsconfig.json",
+        "watch:tsc-web": "tsc --noEmit --watch --project tsconfig.web.json",
         "vscode:prepublish": "npm run package",
         "package": "npm run check-types && node esbuild.js --production",
         "test": "vscode-test"
@@ -270,7 +273,7 @@
         "vsce": "^2.15.0",
         "vscode-languageclient": "9.0.1"
     },
-    "extensionDependencies": [
+    "extensionPack": [
         "ms-python.python"
     ]
 }
