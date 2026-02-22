@@ -3226,6 +3226,7 @@ impl<'a> CancellableTransaction<'a> {
         sys_info: &SysInfo,
         definition_kind: DefinitionMetadata,
         definition: TextRangeWithModule,
+        include_declaration: bool,
     ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
         let results = self.process_rdeps_with_definition(
             sys_info,
@@ -3246,7 +3247,20 @@ impl<'a> CancellableTransaction<'a> {
                 if !references.is_empty()
                     && let Some(module_info) = transaction.as_ref().get_module_info(handle)
                 {
-                    module_refs.push((module_info, references));
+                    // If asked to not include the declaration, filter it out. Only iterate twice
+                    // if necessary.
+                    if !include_declaration && definition.module == module_info {
+                        module_refs.push((
+                            module_info,
+                            references
+                                .iter()
+                                .filter(|reference| reference != &&definition.range)
+                                .copied()
+                                .collect(),
+                        ));
+                    } else {
+                        module_refs.push((module_info, references));
+                    }
                 }
 
                 // Search for child class reimplementations using the parent_methods_map

@@ -3745,6 +3745,7 @@ impl Server {
         handle: Handle,
         uri: &Url,
         position: Position,
+        include_declaration: bool,
         map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) {
         let path_remapper = self.path_remapper.clone();
@@ -3758,7 +3759,7 @@ impl Server {
                 import_behavior: ImportBehavior::StopAtRenamedImports,
                 ..Default::default()
             },
-            |transaction, handle, definition| {
+            move |transaction, handle, definition| {
                 let FindDefinitionItemWithDocstring {
                     metadata,
                     definition_range,
@@ -3770,6 +3771,7 @@ impl Server {
                     handle.sys_info(),
                     metadata,
                     TextRangeWithModule::new(module, definition_range),
+                    include_declaration,
                 )
             },
             move |results: Vec<(ModuleInfo, Vec<TextRange>)>| {
@@ -3801,6 +3803,7 @@ impl Server {
             handle,
             uri,
             params.text_document_position.position,
+            params.context.include_declaration,
             move |results| {
                 let mut locations = Vec::new();
                 for (uri, ranges) in results {
@@ -3832,6 +3835,7 @@ impl Server {
             handle,
             uri,
             params.text_document_position.position,
+            true,
             move |results| {
                 let mut changes = HashMap::new();
                 for (uri, ranges) in results {
