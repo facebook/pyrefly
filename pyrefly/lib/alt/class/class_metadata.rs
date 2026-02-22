@@ -1339,6 +1339,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut abstract_members = SmallSet::new();
         for field_name in fields_to_check {
+            // If the class has a synthesized concrete implementation (e.g., `__dataclass_fields__`
+            // from @dataclass), that satisfies any protocol requirement for this field.
+            if self
+                .get_class_member(cls, &field_name)
+                .is_some_and(|f| !f.is_abstract() && !f.is_uninit_class_var())
+            {
+                continue;
+            }
             if let Some(field) =
                 self.get_non_synthesized_class_member_and_defining_class(cls, &field_name)
                 && (field.value.is_abstract() ||
