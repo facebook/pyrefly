@@ -1,0 +1,3 @@
+myproject (https://github.com/example/myproject)
+- ERROR src/utils.py:10:5-20: Unexpected type `str` for argument 1 of `process` [bad-argument]
+- ERROR src/utils.py:15:3-30: Object of class `Foo` has no attribute `bar` [missing-attribute]

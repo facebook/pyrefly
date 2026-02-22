@@ -1,0 +1,9 @@
+Tanjun (https://github.com/FasterSpeeding/Tanjun)
+- ERROR tanjun/clients.py:2587:33-56: Argument `type[FailedModuleLoad]` is not assignable to parameter with type `(*args: Any, **kwds: Any) -> Exception` in function `_WrapLoadError.__init__` [bad-argument-type]
+- ERROR tanjun/clients.py:2600:33-56: Argument `type[FailedModuleLoad]` is not assignable to parameter with type `(*args: Any, **kwds: Any) -> Exception` in function `_WrapLoadError.__init__` [bad-argument-type]
+- ERROR tanjun/clients.py:2614:33-58: Argument `type[FailedModuleImport]` is not assignable to parameter with type `(*args: Any, **kwds: Any) -> Exception` in function `_WrapLoadError.__init__` [bad-argument-type]
+- ERROR tanjun/clients.py:2637:33-58: Argument `type[FailedModuleImport]` is not assignable to parameter with type `(*args: Any, **kwds: Any) -> Exception` in function `_WrapLoadError.__init__` [bad-argument-type]
+- ERROR tanjun/clients.py:2665:33-58: Argument `type[FailedModuleUnload]` is not assignable to parameter with type `(*args: Any, **kwds: Any) -> Exception` in function `_WrapLoadError.__init__` [bad-argument-type]
+- ERROR tanjun/clients.py:2709:29-54: Argument `type[FailedModuleUnload]` is not assignable to parameter with type `(*args: Any, **kwds: Any) -> Exception` in function `_WrapLoadError.__init__` [bad-argument-type]
+- ERROR tanjun/clients.py:2731:33-56: Argument `type[FailedModuleLoad]` is not assignable to parameter with type `(*args: Any, **kwds: Any) -> Exception` in function `_WrapLoadError.__init__` [bad-argument-type]
+- ERROR tanjun/clients.py:2754:33-56: Argument `type[FailedModuleLoad]` is not assignable to parameter with type `(*args: Any, **kwds: Any) -> Exception` in function `_WrapLoadError.__init__` [bad-argument-type]

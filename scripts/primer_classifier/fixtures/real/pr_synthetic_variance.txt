@@ -1,0 +1,4 @@
+mylib (https://github.com/example/mylib)
++ WARN mylib/containers.py:25:1-60:1: Type variable `T` in class `Stack` is declared as invariant, but could be covariant based on its usage [variance-mismatch]
++ WARN mylib/containers.py:80:1-120:1: Type variable `K` in class `Registry` is declared as invariant, but could be contravariant based on its usage [variance-mismatch]
+

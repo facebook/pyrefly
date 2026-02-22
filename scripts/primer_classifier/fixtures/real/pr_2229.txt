@@ -1,0 +1,78 @@
+optuna (https://github.com/optuna/optuna)
+- ERROR optuna/storages/_rdb/storage.py:1035:39-86: `None` is not assignable to attribute `heartbeat` with type `Column[datetime] | MappedColumn[Any]` [bad-assignment]
++ ERROR optuna/storages/_rdb/storage.py:1035:39-86: `Column[datetime] | MappedColumn[Any] | None` is not assignable to attribute `heartbeat` with type `Column[datetime] | MappedColumn[Any]` [bad-assignment]
+- ::error file=optuna/storages/_rdb/storage.py,line=1035,col=39,endLine=1035,endColumn=86,title=Pyrefly bad-assignment::`None` is not assignable to attribute `heartbeat` with type `Column[datetime] | MappedColumn[Any]`
++ ::error file=optuna/storages/_rdb/storage.py,line=1035,col=39,endLine=1035,endColumn=86,title=Pyrefly bad-assignment::`Column[datetime] | MappedColumn[Any] | None` is not assignable to attribute `heartbeat` with type `Column[datetime] | MappedColumn[Any]`
+
+aioredis (https://github.com/aio-libs/aioredis)
+- ERROR aioredis/client.py:3190:35-59: `list[bytes | memoryview[int] | str]` is not assignable to `list[EncodableT]` [bad-assignment]
+- ::error file=aioredis/client.py,line=3190,col=35,endLine=3190,endColumn=59,title=Pyrefly bad-assignment::`list[bytes | memoryview[int] | str]` is not assignable to `list[EncodableT]`
+
+tornado (https://github.com/tornadoweb/tornado)
++ ERROR tornado/queues.py:385:29-42: `_T` is not assignable to upper bound `SupportsDunderGT[Any] | SupportsDunderLT[Any]` of type variable `SupportsRichComparisonT` [bad-specialization]
++ ::error file=tornado/queues.py,line=385,col=29,endLine=385,endColumn=42,title=Pyrefly bad-specialization::`_T` is not assignable to upper bound `SupportsDunderGT[Any] | SupportsDunderLT[Any]` of type variable `SupportsRichComparisonT`
+
+prefect (https://github.com/PrefectHQ/prefect)
+- ERROR src/prefect/cli/deploy/_core.py:362:23-78: Argument `None` is not assignable to parameter `job_variables` with type `Mapping[str, Any]` in function `prefect.deployments.runner.RunnerDeployment.__init__` [bad-argument-type]
++ ERROR src/prefect/cli/deploy/_core.py:362:23-78: Argument `Mapping[str, Any] | None` is not assignable to parameter `job_variables` with type `Mapping[str, Any]` in function `prefect.deployments.runner.RunnerDeployment.__init__` [bad-argument-type]
++ ERROR src/prefect/server/api/deployments.py:832:54-56: `StateCreate | None` is not assignable to upper bound `State` of type variable `_State` [bad-specialization]
++ ERROR src/prefect/server/api/flow_runs.py:94:55-57: `State | None` is not assignable to upper bound `State` of type variable `_State` [bad-specialization]
++ ERROR src/prefect/server/api/task_runs.py:76:48-50: `StateCreate | None` is not assignable to upper bound `State` of type variable `_State` [bad-specialization]
++ ERROR src/prefect/server/orchestration/core_policy.py:628:43-634:22: `State | None` is not assignable to upper bound `State` of type variable `_State` [bad-specialization]
++ ERROR src/prefect/server/orchestration/core_policy.py:642:43-644:22: `State | None` is not assignable to upper bound `State` of type variable `_State` [bad-specialization]
++ ERROR src/prefect/server/orchestration/core_policy.py:805:35-808:14: `State | None` is not assignable to upper bound `State` of type variable `_State` [bad-specialization]
++ ERROR src/prefect/server/orchestration/core_policy.py:1791:39-41: `State | None` is not assignable to upper bound `State` of type variable `_State` [bad-specialization]
++ ERROR src/prefect/server/orchestration/core_policy.py:1799:39-41: `State | None` is not assignable to upper bound `State` of type variable `_State` [bad-specialization]
+- ::error file=src/prefect/cli/deploy/_core.py,line=362,col=23,endLine=362,endColumn=78,title=Pyrefly bad-argument-type::Argument `None` is not assignable to parameter `job_variables` with type `Mapping[str, Any]` in function `prefect.deployments.runner.RunnerDeployment.__init__`
++ ::error file=src/prefect/cli/deploy/_core.py,line=362,col=23,endLine=362,endColumn=78,title=Pyrefly bad-argument-type::Argument `Mapping[str, Any] | None` is not assignable to parameter `job_variables` with type `Mapping[str, Any]` in function `prefect.deployments.runner.RunnerDeployment.__init__`
++ ::error file=src/prefect/server/api/deployments.py,line=832,col=54,endLine=832,endColumn=56,title=Pyrefly bad-specialization::`StateCreate | None` is not assignable to upper bound `State` of type variable `_State`
++ ::error file=src/prefect/server/api/flow_runs.py,line=94,col=55,endLine=94,endColumn=57,title=Pyrefly bad-specialization::`State | None` is not assignable to upper bound `State` of type variable `_State`
++ ::error file=src/prefect/server/api/task_runs.py,line=76,col=48,endLine=76,endColumn=50,title=Pyrefly bad-specialization::`StateCreate | None` is not assignable to upper bound `State` of type variable `_State`
++ ::error file=src/prefect/server/orchestration/core_policy.py,line=628,col=43,endLine=634,endColumn=22,title=Pyrefly bad-specialization::`State | None` is not assignable to upper bound `State` of type variable `_State`
++ ::error file=src/prefect/server/orchestration/core_policy.py,line=642,col=43,endLine=644,endColumn=22,title=Pyrefly bad-specialization::`State | None` is not assignable to upper bound `State` of type variable `_State`
++ ::error file=src/prefect/server/orchestration/core_policy.py,line=805,col=35,endLine=808,endColumn=14,title=Pyrefly bad-specialization::`State | None` is not assignable to upper bound `State` of type variable `_State`
++ ::error file=src/prefect/server/orchestration/core_policy.py,line=1791,col=39,endLine=1791,endColumn=41,title=Pyrefly bad-specialization::`State | None` is not assignable to upper bound `State` of type variable `_State`
++ ::error file=src/prefect/server/orchestration/core_policy.py,line=1799,col=39,endLine=1799,endColumn=41,title=Pyrefly bad-specialization::`State | None` is not assignable to upper bound `State` of type variable `_State`
+
+ibis (https://github.com/ibis-project/ibis)
++ ERROR ibis/backends/impala/tests/test_window.py:114:34-39: `Unknown | None` is not assignable to upper bound `Value` of type variable `V` [bad-specialization]
++ ERROR ibis/expr/tests/test_newrels.py:1713:30-41: `Column | Deferred | Selector | Sequence[Column | Deferred | Selector | str] | str` is not assignable to upper bound `Value` of type variable `V` [bad-specialization]
++ ERROR ibis/expr/types/relations.py:3362:51-58: `Column | Deferred | Selector | Sequence[Column | Deferred | Selector | str] | str` is not assignable to upper bound `Value` of type variable `V` [bad-specialization]
++ ERROR ibis/expr/types/relations.py:5348:32-38: `Column | Deferred | Selector | Sequence[Column | Deferred | Selector | str] | str` is not assignable to upper bound `Value` of type variable `V` [bad-specialization]
++ ERROR ibis/tests/expr/test_window_frames.py:435:56-61: `Unknown | None` is not assignable to upper bound `Value` of type variable `V` [bad-specialization]
++ ::error file=ibis/backends/impala/tests/test_window.py,line=114,col=34,endLine=114,endColumn=39,title=Pyrefly bad-specialization::`Unknown | None` is not assignable to upper bound `Value` of type variable `V`
++ ::error file=ibis/expr/tests/test_newrels.py,line=1713,col=30,endLine=1713,endColumn=41,title=Pyrefly bad-specialization::`Column | Deferred | Selector | Sequence[Column | Deferred | Selector | str] | str` is not assignable to upper bound `Value` of type variable `V`
++ ::error file=ibis/expr/types/relations.py,line=3362,col=51,endLine=3362,endColumn=58,title=Pyrefly bad-specialization::`Column | Deferred | Selector | Sequence[Column | Deferred | Selector | str] | str` is not assignable to upper bound `Value` of type variable `V`
++ ::error file=ibis/expr/types/relations.py,line=5348,col=32,endLine=5348,endColumn=38,title=Pyrefly bad-specialization::`Column | Deferred | Selector | Sequence[Column | Deferred | Selector | str] | str` is not assignable to upper bound `Value` of type variable `V`
++ ::error file=ibis/tests/expr/test_window_frames.py,line=435,col=56,endLine=435,endColumn=61,title=Pyrefly bad-specialization::`Unknown | None` is not assignable to upper bound `Value` of type variable `V`
+
+vision (https://github.com/pytorch/vision)
++ ERROR references/depth/stereo/cascade_evaluation.py:234:44-84: Cannot set item in `dict[str, Unknown | None]` [unsupported-operation]
++ ERROR references/depth/stereo/cascade_evaluation.py:235:9-55: Cannot set item in `None` [unsupported-operation]
++ ERROR references/depth/stereo/cascade_evaluation.py:252:33-65: Type `None` is not iterable [not-iterable]
++ ERROR references/depth/stereo/cascade_evaluation.py:254:27-73: `None` is not subscriptable [unsupported-operation]
++ ::error file=references/depth/stereo/cascade_evaluation.py,line=234,col=44,endLine=234,endColumn=84,title=Pyrefly unsupported-operation::Cannot set item in `dict[str, Unknown | None]`%0A  Argument `dict[@_, @_] | Unknown | None` is not assignable to parameter `value` with type `Unknown | None` in function `dict.__setitem__`
++ ::error file=references/depth/stereo/cascade_evaluation.py,line=235,col=9,endLine=235,endColumn=55,title=Pyrefly unsupported-operation::Cannot set item in `None`%0A  Object of class `NoneType` has no attribute `__setitem__`
++ ::error file=references/depth/stereo/cascade_evaluation.py,line=252,col=33,endLine=252,endColumn=65,title=Pyrefly not-iterable::Type `None` is not iterable
++ ::error file=references/depth/stereo/cascade_evaluation.py,line=254,col=27,endLine=254,endColumn=73,title=Pyrefly unsupported-operation::`None` is not subscriptable
+
+static-frame (https://github.com/static-frame/static-frame)
++ ERROR static_frame/test/unit/test_store_config.py:19:28-76: Argument `tuple[int | str | None, ...]` is not assignable to parameter `source` with type `tuple[Any]` in function `static_frame.core.store_config.label_encode_tuple` [bad-argument-type]
++ ::error file=static_frame/test/unit/test_store_config.py,line=19,col=28,endLine=19,endColumn=76,title=Pyrefly bad-argument-type::Argument `tuple[int | str | None, ...]` is not assignable to parameter `source` with type `tuple[Any]` in function `static_frame.core.store_config.label_encode_tuple`
+
+core (https://github.com/home-assistant/core)
++ ERROR homeassistant/components/feedreader/coordinator.py:115:45-58: `str | None` is not assignable to upper bound `bytes | str` of type variable `AnyStr` [bad-specialization]
++ ERROR homeassistant/components/lametric/notify.py:62:38-68: `Unknown | None` is not assignable to upper bound `Enum` of type variable `_EnumT` [bad-specialization]
++ ERROR homeassistant/components/lametric/notify.py:63:38-75: `Unknown | None` is not assignable to upper bound `Enum` of type variable `_EnumT` [bad-specialization]
++ ERROR homeassistant/components/lametric/services.py:124:34-69: `Unknown | None` is not assignable to upper bound `Enum` of type variable `_EnumT` [bad-specialization]
++ ERROR homeassistant/components/lametric/services.py:125:34-76: `Unknown | None` is not assignable to upper bound `Enum` of type variable `_EnumT` [bad-specialization]
++ ERROR homeassistant/components/togrill/select.py:78:36-66: `Unknown | None` is not assignable to upper bound `Enum` of type variable `_ENUM` [bad-specialization]
++ ERROR homeassistant/components/togrill/select.py:78:88-80:10: `Unknown | None` is not assignable to upper bound `Enum` of type variable `_ENUM` [bad-specialization]
++ ::error file=homeassistant/components/feedreader/coordinator.py,line=115,col=45,endLine=115,endColumn=58,title=Pyrefly bad-specialization::`str | None` is not assignable to upper bound `bytes | str` of type variable `AnyStr`
++ ::error file=homeassistant/components/lametric/notify.py,line=62,col=38,endLine=62,endColumn=68,title=Pyrefly bad-specialization::`Unknown | None` is not assignable to upper bound `Enum` of type variable `_EnumT`
++ ::error file=homeassistant/components/lametric/notify.py,line=63,col=38,endLine=63,endColumn=75,title=Pyrefly bad-specialization::`Unknown | None` is not assignable to upper bound `Enum` of type variable `_EnumT`
++ ::error file=homeassistant/components/lametric/services.py,line=124,col=34,endLine=124,endColumn=69,title=Pyrefly bad-specialization::`Unknown | None` is not assignable to upper bound `Enum` of type variable `_EnumT`
++ ::error file=homeassistant/components/lametric/services.py,line=125,col=34,endLine=125,endColumn=76,title=Pyrefly bad-specialization::`Unknown | None` is not assignable to upper bound `Enum` of type variable `_EnumT`
++ ::error file=homeassistant/components/togrill/select.py,line=78,col=36,endLine=78,endColumn=66,title=Pyrefly bad-specialization::`Unknown | None` is not assignable to upper bound `Enum` of type variable `_ENUM`
++ ::error file=homeassistant/components/togrill/select.py,line=78,col=88,endLine=80,endColumn=10,title=Pyrefly bad-specialization::`Unknown | None` is not assignable to upper bound `Enum` of type variable `_ENUM`
+

@@ -1,0 +1,62 @@
+openlibrary (https://github.com/internetarchive/openlibrary)
+- ERROR openlibrary/plugins/openlibrary/lists.py:811:43-813:18: Cannot set item in `dict[str, list[dict[Unknown, Unknown]]]` [unsupported-operation]
+- ERROR openlibrary/plugins/openlibrary/lists.py:818:40-88: Cannot set item in `dict[str, list[dict[Unknown, Unknown]]]` [unsupported-operation]
+- ERROR openlibrary/plugins/openlibrary/lists.py:823:42-825:18: Cannot set item in `dict[str, list[dict[Unknown, Unknown]]]` [unsupported-operation]
+- ERROR openlibrary/plugins/upstream/tests/test_merge_authors.py:142:12-52: Object of class `NoneType` has no attribute `key` [missing-attribute]
+- ::error file=openlibrary/plugins/openlibrary/lists.py,line=811,col=43,endLine=813,endColumn=18,title=Pyrefly unsupported-operation::Cannot set item in `dict[str, list[dict[Unknown, Unknown]]]`%0A  Argument `list[Thing | Unknown]` is not assignable to parameter `value` with type `list[dict[Unknown, Unknown]]` in function `dict.__setitem__`
+- ::error file=openlibrary/plugins/openlibrary/lists.py,line=818,col=40,endLine=818,endColumn=88,title=Pyrefly unsupported-operation::Cannot set item in `dict[str, list[dict[Unknown, Unknown]]]`%0A  Argument `list[Thing | Unknown]` is not assignable to parameter `value` with type `list[dict[Unknown, Unknown]]` in function `dict.__setitem__`
+- ::error file=openlibrary/plugins/openlibrary/lists.py,line=823,col=42,endLine=825,endColumn=18,title=Pyrefly unsupported-operation::Cannot set item in `dict[str, list[dict[Unknown, Unknown]]]`%0A  Argument `list[Thing | Unknown]` is not assignable to parameter `value` with type `list[dict[Unknown, Unknown]]` in function `dict.__setitem__`
+- ::error file=openlibrary/plugins/upstream/tests/test_merge_authors.py,line=37,col=9,endLine=37,endColumn=12,title=Pyrefly bad-override::Class member `MockSite.get` overrides parent class `Site` in an inconsistent manner%0A  `MockSite.get` has type `BoundMethod[MockSite, (self: MockSite, key: Unknown) -> Thing | Unknown]`, which is not assignable to `BoundMethod[MockSite, (self: MockSite, key: Unknown, revision: Unknown | None = None, lazy: bool | Unknown = False) -> Thing | Unknown | None]`, the type of `Site.get`
++ ::error file=openlibrary/plugins/upstream/tests/test_merge_authors.py,line=37,col=9,endLine=37,endColumn=12,title=Pyrefly bad-override::Class member `MockSite.get` overrides parent class `Site` in an inconsistent manner%0A  `MockSite.get` has type `BoundMethod[MockSite, (self: MockSite, key: Unknown) -> Unknown]`, which is not assignable to `BoundMethod[MockSite, (self: MockSite, key: Unknown, revision: Unknown | None = None, lazy: bool | Unknown = False) -> Unknown | None]`, the type of `Site.get`
+- ::error file=openlibrary/plugins/upstream/tests/test_merge_authors.py,line=142,col=12,endLine=142,endColumn=52,title=Pyrefly missing-attribute::Object of class `NoneType` has no attribute `key`
+
+zulip (https://github.com/zulip/zulip)
+- ERROR corporate/views/support.py:941:13-42: Object of class `RemoteZulipServer` has no attribute `remoterealm_set` [missing-attribute]
+- ERROR zerver/actions/create_user.py:822:26-52: Object of class `UserProfile` has no attribute `direct_groups` [missing-attribute]
++ ERROR zerver/actions/create_user.py:835:28-55: Object of class `UserGroup` has no attribute `named_user_group` [missing-attribute]
+- ERROR zerver/actions/uploads.py:136:44-66: Object of class `Message` has no attribute `attachment_set`
++ ERROR zerver/actions/uploads.py:136:44-66: Object of class `ScheduledMessage` has no attribute `attachment_set` [missing-attribute]
+- Object of class `ScheduledMessage` has no attribute `attachment_set` [missing-attribute]
+- ERROR zerver/actions/uploads.py:145:9-31: Object of class `Message` has no attribute `attachment_set`
++ ERROR zerver/actions/uploads.py:145:9-31: Object of class `ScheduledMessage` has no attribute `attachment_set` [missing-attribute]
+- Object of class `ScheduledMessage` has no attribute `attachment_set` [missing-attribute]
+- ERROR zerver/actions/uploads.py:157:35-57: Object of class `Message` has no attribute `attachment_set`
++ ERROR zerver/actions/uploads.py:157:35-57: Object of class `ScheduledMessage` has no attribute `attachment_set` [missing-attribute]
+- Object of class `ScheduledMessage` has no attribute `attachment_set` [missing-attribute]
+- ERROR zerver/actions/users.py:433:35-61: Object of class `UserProfile` has no attribute `direct_groups` [missing-attribute]
+- ERROR zerver/lib/user_groups.py:778:17-43: Object of class `UserProfile` has no attribute `direct_groups` [missing-attribute]
+- ERROR zerver/lib/user_groups.py:862:21-47: Object of class `UserProfile` has no attribute `direct_groups` [missing-attribute]
+- ERROR zerver/lib/widget.py:142:12-34: Object of class `Message` has no attribute `submessage_set` [missing-attribute]
+- ERROR zerver/management/commands/export_search.py:300:35-57: Object of class `Message` has no attribute `attachment_set` [missing-attribute]
+- ERROR zerver/models/realms.py:1378:17-38: Object of class `Realm` has no attribute `realmdomain_set` [missing-attribute]
++ ERROR zerver/models/realms.py:1378:16-76: No matching overload found for function `list.__init__` called with arguments: (QuerySet[RealmDomain, dict[str, Any]]) [no-matching-overload]
+- ERROR zerver/tests/test_custom_profile_data.py:477:26-66: Object of class `UserProfile` has no attribute `customprofilefieldvalue_set` [missing-attribute]
+- ERROR zerver/tests/test_custom_profile_data.py:482:26-66: Object of class `UserProfile` has no attribute `customprofilefieldvalue_set` [missing-attribute]
+- ERROR zerver/tests/test_message_fetch.py:5655:25-43: Object of class `Message` has no attribute `attachment_set` [missing-attribute]
+- ERROR zerver/tests/test_message_fetch.py:5656:26-44: Object of class `Message` has no attribute `attachment_set` [missing-attribute]
+- ERROR zerver/tests/test_message_fetch.py:5660:25-43: Object of class `Message` has no attribute `attachment_set` [missing-attribute]
+- ERROR zerver/tests/test_message_fetch.py:5661:26-44: Object of class `Message` has no attribute `attachment_set` [missing-attribute]
+- ERROR zerver/tests/test_message_fetch.py:5665:26-44: Object of class `Message` has no attribute `attachment_set` [missing-attribute]
+- ::error file=corporate/views/support.py,line=941,col=13,endLine=941,endColumn=42,title=Pyrefly missing-attribute::Object of class `RemoteZulipServer` has no attribute `remoterealm_set`
+- ::error file=zerver/actions/create_user.py,line=822,col=26,endLine=822,endColumn=52,title=Pyrefly missing-attribute::Object of class `UserProfile` has no attribute `direct_groups`
++ ::error file=zerver/actions/create_user.py,line=835,col=28,endLine=835,endColumn=55,title=Pyrefly missing-attribute::Object of class `UserGroup` has no attribute `named_user_group`
+- ::error file=zerver/actions/uploads.py,line=136,col=44,endLine=136,endColumn=66,title=Pyrefly missing-attribute::Object of class `Message` has no attribute `attachment_set`%0AObject of class `ScheduledMessage` has no attribute `attachment_set`
++ ::error file=zerver/actions/uploads.py,line=136,col=44,endLine=136,endColumn=66,title=Pyrefly missing-attribute::Object of class `ScheduledMessage` has no attribute `attachment_set`
+- ::error file=zerver/actions/uploads.py,line=145,col=9,endLine=145,endColumn=31,title=Pyrefly missing-attribute::Object of class `Message` has no attribute `attachment_set`%0AObject of class `ScheduledMessage` has no attribute `attachment_set`
++ ::error file=zerver/actions/uploads.py,line=145,col=9,endLine=145,endColumn=31,title=Pyrefly missing-attribute::Object of class `ScheduledMessage` has no attribute `attachment_set`
+- ::error file=zerver/actions/uploads.py,line=157,col=35,endLine=157,endColumn=57,title=Pyrefly missing-attribute::Object of class `Message` has no attribute `attachment_set`%0AObject of class `ScheduledMessage` has no attribute `attachment_set`
++ ::error file=zerver/actions/uploads.py,line=157,col=35,endLine=157,endColumn=57,title=Pyrefly missing-attribute::Object of class `ScheduledMessage` has no attribute `attachment_set`
+- ::error file=zerver/actions/users.py,line=433,col=35,endLine=433,endColumn=61,title=Pyrefly missing-attribute::Object of class `UserProfile` has no attribute `direct_groups`
+- ::error file=zerver/lib/user_groups.py,line=778,col=17,endLine=778,endColumn=43,title=Pyrefly missing-attribute::Object of class `UserProfile` has no attribute `direct_groups`
+- ::error file=zerver/lib/user_groups.py,line=862,col=21,endLine=862,endColumn=47,title=Pyrefly missing-attribute::Object of class `UserProfile` has no attribute `direct_groups`
+- ::error file=zerver/lib/widget.py,line=142,col=12,endLine=142,endColumn=34,title=Pyrefly missing-attribute::Object of class `Message` has no attribute `submessage_set`
+- ::error file=zerver/management/commands/export_search.py,line=300,col=35,endLine=300,endColumn=57,title=Pyrefly missing-attribute::Object of class `Message` has no attribute `attachment_set`
+- ::error file=zerver/models/realms.py,line=1378,col=17,endLine=1378,endColumn=38,title=Pyrefly missing-attribute::Object of class `Realm` has no attribute `realmdomain_set`
++ ::error file=zerver/models/realms.py,line=1378,col=16,endLine=1378,endColumn=76,title=Pyrefly no-matching-overload::No matching overload found for function `list.__init__` called with arguments: (QuerySet[RealmDomain, dict[str, Any]])%0A  Possible overloads:%0A  () -> None%0A  (iterable: Iterable[RealmDomainDict], /) -> None [closest match]
+- ::error file=zerver/tests/test_custom_profile_data.py,line=477,col=26,endLine=477,endColumn=66,title=Pyrefly missing-attribute::Object of class `UserProfile` has no attribute `customprofilefieldvalue_set`
+- ::error file=zerver/tests/test_custom_profile_data.py,line=482,col=26,endLine=482,endColumn=66,title=Pyrefly missing-attribute::Object of class `UserProfile` has no attribute `customprofilefieldvalue_set`
+- ::error file=zerver/tests/test_message_fetch.py,line=5655,col=25,endLine=5655,endColumn=43,title=Pyrefly missing-attribute::Object of class `Message` has no attribute `attachment_set`
+- ::error file=zerver/tests/test_message_fetch.py,line=5656,col=26,endLine=5656,endColumn=44,title=Pyrefly missing-attribute::Object of class `Message` has no attribute `attachment_set`
+- ::error file=zerver/tests/test_message_fetch.py,line=5660,col=25,endLine=5660,endColumn=43,title=Pyrefly missing-attribute::Object of class `Message` has no attribute `attachment_set`
+- ::error file=zerver/tests/test_message_fetch.py,line=5661,col=26,endLine=5661,endColumn=44,title=Pyrefly missing-attribute::Object of class `Message` has no attribute `attachment_set`
+- ::error file=zerver/tests/test_message_fetch.py,line=5665,col=26,endLine=5665,endColumn=44,title=Pyrefly missing-attribute::Object of class `Message` has no attribute `attachment_set`

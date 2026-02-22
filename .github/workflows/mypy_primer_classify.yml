@@ -1,0 +1,81 @@
+name: Classify mypy_primer diff
+
+on:
+  workflow_dispatch:
+    inputs:
+      primer_run_id:
+        description: "Run ID of the completed 'Run mypy_primer' workflow"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  classify:
+    name: Classify primer diff
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    if: ${{ inputs.primer_run_id != '' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/primer_classifier
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Download diffs
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               run_id: ${{ inputs.primer_run_id }},
+            });
+            const [matchArtifact] = artifacts.data.artifacts.filter((artifact) =>
+              artifact.name == "mypy_primer_diffs");
+
+            const download = await github.rest.actions.downloadArtifact({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               artifact_id: matchArtifact.id,
+               archive_format: "zip",
+            });
+            fs.writeFileSync("diff.zip", Buffer.from(download.data));
+
+      - run: unzip diff.zip
+      - run: cat diff_*.txt | tee fulldiff.txt
+
+      - name: Classify diff
+        run: |
+          python -m scripts.primer_classifier \
+            --diff-file fulldiff.txt \
+            --output-format markdown \
+            | tee classification.md
+        env:
+          CLASSIFIER_API_KEY: ${{ secrets.PRIMER_CLASSIFIER_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post classification comment
+        if: ${{ hashFiles('classification.md') != '' }}
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs')
+            const body = fs.readFileSync('classification.md', { encoding: 'utf8' })
+            if (body.trim()) {
+              const prNumber = parseInt(fs.readFileSync("pr_number.txt", { encoding: "utf8" }))
+              await github.rest.issues.createComment({
+                issue_number: prNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body
+              })
+            }
