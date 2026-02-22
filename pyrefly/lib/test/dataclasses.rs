@@ -1754,3 +1754,21 @@ class DC3:
         self.y = 3
 "#,
 );
+
+testcase!(
+    bug = "False positive bad-instantiation due to abstract __dataclass_fields__ from protocol",
+    test_dataclass_protocol_dataclass_fields,
+    r#"
+from dataclasses import dataclass, Field
+from typing import Any, ClassVar, Protocol
+
+class P(Protocol):
+    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
+
+@dataclass
+class C(P):
+    x: int
+
+C(42)  # E: Cannot instantiate `C` because the following members are abstract: `__dataclass_fields__` [bad-instantiation]
+"#,
+);
