@@ -36,6 +36,10 @@ use lsp_types::CodeActionParams;
 use lsp_types::CodeActionProviderCapability;
 use lsp_types::CodeActionResponse;
 use lsp_types::CodeActionTriggerKind;
+use lsp_types::CodeLens;
+use lsp_types::CodeLensOptions;
+use lsp_types::CodeLensParams;
+use lsp_types::Command;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionList;
 use lsp_types::CompletionOptions;
@@ -148,6 +152,7 @@ use lsp_types::request::CallHierarchyIncomingCalls;
 use lsp_types::request::CallHierarchyOutgoingCalls;
 use lsp_types::request::CallHierarchyPrepare;
 use lsp_types::request::CodeActionRequest;
+use lsp_types::request::CodeLensRequest;
 use lsp_types::request::Completion;
 use lsp_types::request::DocumentDiagnosticRequest;
 use lsp_types::request::DocumentHighlightRequest;
@@ -240,6 +245,7 @@ use crate::lsp::non_wasm::call_hierarchy::find_function_at_position_in_ast;
 use crate::lsp::non_wasm::call_hierarchy::prepare_call_hierarchy_item;
 use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
 use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
+use crate::lsp::non_wasm::code_lens::CodeLensKind;
 use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_actions;
 use crate::lsp::non_wasm::external_references::ExternalReferences;
 use crate::lsp::non_wasm::lsp::apply_change_events;
@@ -898,6 +904,9 @@ pub fn capabilities(
             ]),
             ..Default::default()
         })),
+        code_lens_provider: Some(CodeLensOptions {
+            resolve_provider: Some(false),
+        }),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some(vec![".".to_owned(), "'".to_owned(), "\"".to_owned()]),
             resolve_provider: Some(true),
@@ -1660,6 +1669,18 @@ impl Server {
                         self.send_response(new_response(
                             x.id,
                             Ok(self.inlay_hints(&transaction, params).unwrap_or_default()),
+                        ));
+                    }
+                } else if let Some(params) = as_request::<CodeLensRequest>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<CodeLensRequest>(
+                            params, &x.id,
+                        )
+                    {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self.code_lens(&transaction, params).unwrap_or_default()),
                         ));
                     }
                 } else if let Some(params) = as_request::<SemanticTokensFullRequest>(&x) {
@@ -3967,6 +3988,66 @@ impl Server {
             })
             .collect();
         Some(res)
+    }
+
+    fn code_lens(
+        &self,
+        transaction: &Transaction<'_>,
+        params: CodeLensParams,
+    ) -> Option<Vec<CodeLens>> {
+        let uri = &params.text_document.uri;
+        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let handle = self.make_handle_if_enabled(uri, Some(CodeLensRequest::METHOD))?;
+        let info = transaction.get_module_info(&handle)?;
+        let entries = transaction.code_lens_entries(&handle)?;
+
+        let mut lenses = Vec::new();
+        for entry in entries {
+            if info.to_cell_for_lsp(entry.range.start()) != maybe_cell_idx {
+                continue;
+            }
+            let range = info.to_lsp_range(entry.range);
+            let (title, command, arguments) = match entry.kind {
+                CodeLensKind::Run => (
+                    "Run",
+                    "pyrefly.runMain",
+                    Some(vec![serde_json::json!({ "uri": uri.to_string() })]),
+                ),
+                CodeLensKind::Test => {
+                    let mut args = serde_json::Map::new();
+                    args.insert("uri".to_owned(), serde_json::json!(uri.to_string()));
+                    args.insert(
+                        "position".to_owned(),
+                        serde_json::json!({
+                            "line": range.start.line,
+                            "character": range.start.character,
+                        }),
+                    );
+                    if let Some(test_name) = entry.test_name {
+                        args.insert("testName".to_owned(), serde_json::json!(test_name));
+                    }
+                    if let Some(class_name) = entry.class_name {
+                        args.insert("className".to_owned(), serde_json::json!(class_name));
+                    }
+                    args.insert(
+                        "isUnittest".to_owned(),
+                        serde_json::json!(entry.is_unittest),
+                    );
+                    ("Test", "pyrefly.runTest", Some(vec![Value::Object(args)]))
+                }
+            };
+            lenses.push(CodeLens {
+                range,
+                command: Some(Command {
+                    title: title.to_owned(),
+                    command: command.to_owned(),
+                    arguments,
+                }),
+                data: None,
+            });
+        }
+
+        Some(lenses)
     }
 
     fn semantic_tokens_full(
