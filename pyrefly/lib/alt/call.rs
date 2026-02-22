@@ -1187,7 +1187,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 //   (2) if no overload expansion applies, the already-typed args are reused in
                 //       the fallback callable_infer without re-evaluating, which would emit
                 //       duplicate errors.
-                if tparams.is_some() {
+                //
+                // Only do this for "polymorphic callables" — generic functions that actually
+                // accept a Callable-typed parameter. This avoids unnecessary pre-evaluation
+                // overhead for generic functions like `identity[T](x: T)` that don't take
+                // callable arguments, and preserves contextual typing for lambdas passed to
+                // such functions.
+                let has_callable_param = match &callable.params {
+                    Params::ParamSpec(..) => true,
+                    Params::List(list) => list
+                        .items()
+                        .iter()
+                        .any(|p| matches!(p.as_type(), Type::Callable(_))),
+                    _ => false,
+                };
+                if tparams.is_some() && has_callable_param {
                     let call = CallWithTypes::new();
                     let typed_args = call.vec_call_arg(args, self, errors);
                     let typed_kws = call.vec_call_keyword(keywords, self, errors);
