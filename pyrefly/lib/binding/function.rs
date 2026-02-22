@@ -22,6 +22,7 @@ use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Parameter;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtExpr;
@@ -32,6 +33,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
@@ -97,6 +99,9 @@ fn is_annotated<T>(returns: &Option<T>, params: &Parameters) -> bool {
     }
     false
 }
+
+type ConstrainedTypeVarParams = SmallMap<Name, SmallSet<Name>>;
+
 struct SelfAttrNames<'a> {
     self_name: &'a Name,
     names: SmallMap<Name, TextRange>,
@@ -366,6 +371,67 @@ impl<'a> BindingsBuilder<'a> {
             Key::ReturnImplicit(ShortIdentifier::new(func_name)),
             Binding::ReturnImplicit(ReturnImplicit { last_exprs }),
         )
+    }
+
+    fn constrained_typevar_params(&self, parameters: &Parameters) -> ConstrainedTypeVarParams {
+        let mut constrained = ConstrainedTypeVarParams::new();
+        let mut consider_param = |param: &Parameter| {
+            let Some(annotation) = param.annotation() else {
+                return;
+            };
+            let Expr::Name(typevar_name) = annotation else {
+                return;
+            };
+            let Some(constraints) = self.typevar_constraints_for_name(&typevar_name.id) else {
+                return;
+            };
+            constrained.insert(param.name().id.clone(), constraints);
+        };
+        for param in parameters.iter_non_variadic_params() {
+            consider_param(&param.parameter);
+        }
+        if let Some(vararg) = &parameters.vararg {
+            consider_param(vararg);
+        }
+        if let Some(kwarg) = &parameters.kwarg {
+            consider_param(kwarg);
+        }
+        constrained
+    }
+
+    fn typevar_constraints_for_name(&self, name: &Name) -> Option<SmallSet<Name>> {
+        let (idx, _) = self.scopes.binding_idx_for_name(name)?;
+        let (_, binding) = self.get_original_binding(idx)?;
+        let binding = binding?;
+        let Binding::TypeVar(_, _, call) = binding else {
+            return None;
+        };
+        Self::typevar_constraints_from_call(call)
+    }
+
+    fn typevar_constraints_from_call(call: &ExprCall) -> Option<SmallSet<Name>> {
+        if call
+            .arguments
+            .keywords
+            .iter()
+            .any(|kw| kw.arg.as_ref().is_some_and(|id| id.id == "bound"))
+        {
+            return None;
+        }
+        let mut args = call.arguments.args.iter();
+        let _name_arg = args.next()?;
+        let mut constraints = SmallSet::new();
+        for arg in args {
+            let Expr::Name(name) = arg else {
+                return None;
+            };
+            constraints.insert(name.id.clone());
+        }
+        if constraints.len() < 2 {
+            None
+        } else {
+            Some(constraints)
+        }
     }
 
     /// Handles both checking yield / return expressions and binding the return type.
@@ -646,7 +712,7 @@ impl<'a> BindingsBuilder<'a> {
                     self_assignments
                 }
                 UntypedDefBehavior::CheckAndInferReturnAny => {
-                    let implicit_return = self.implicit_return(&body, func_name);
+                    let implicit_return = self.implicit_return(&body, func_name, parameters);
                     let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
                         self.function_body_scope(
                             parameters,
@@ -678,7 +744,7 @@ impl<'a> BindingsBuilder<'a> {
                     self_assignments
                 }
                 UntypedDefBehavior::CheckAndInferReturnType => {
-                    let implicit_return = self.implicit_return(&body, func_name);
+                    let implicit_return = self.implicit_return(&body, func_name, parameters);
                     let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
                         self.function_body_scope(
                             parameters,
@@ -791,6 +857,47 @@ impl<'a> BindingsBuilder<'a> {
     }
 }
 
+fn extract_isinstance_test(test: &Expr) -> Option<(Name, SmallSet<Name>)> {
+    let Expr::Call(ExprCall {
+        func, arguments, ..
+    }) = test
+    else {
+        return None;
+    };
+    let Expr::Name(func_name) = func.as_ref() else {
+        return None;
+    };
+    if func_name.id.as_str() != "isinstance" {
+        return None;
+    }
+    if !arguments.keywords.is_empty() || arguments.args.len() != 2 {
+        return None;
+    }
+    let Expr::Name(subject) = &arguments.args[0] else {
+        return None;
+    };
+    let mut types = SmallSet::new();
+    match &arguments.args[1] {
+        Expr::Name(name) => {
+            types.insert(name.id.clone());
+        }
+        Expr::Tuple(tuple) => {
+            for elt in &tuple.elts {
+                let Expr::Name(name) = elt else {
+                    return None;
+                };
+                types.insert(name.id.clone());
+            }
+        }
+        _ => return None,
+    }
+    if types.is_empty() {
+        None
+    } else {
+        Some((subject.id.clone(), types))
+    }
+}
+
 /// Given the body of a function, what are the potential expressions that
 /// could be the last ones to be executed, where the function then falls off the end.
 ///
@@ -800,8 +907,14 @@ impl<'a> BindingsBuilder<'a> {
 fn function_last_expressions<'a>(
     x: &'a [Stmt],
     sys_info: &SysInfo,
+    constrained_typevars: Option<&ConstrainedTypeVarParams>,
 ) -> Option<Vec<(LastStmt, &'a Expr)>> {
-    fn f<'a>(sys_info: &SysInfo, x: &'a [Stmt], res: &mut Vec<(LastStmt, &'a Expr)>) -> Option<()> {
+    fn f<'a>(
+        sys_info: &SysInfo,
+        x: &'a [Stmt],
+        res: &mut Vec<(LastStmt, &'a Expr)>,
+        constrained_typevars: Option<&ConstrainedTypeVarParams>,
+    ) -> Option<()> {
         fn loop_body_has_break_statement(statement: &Stmt, has_break: &mut bool) {
             match statement {
                 Stmt::Break(_) => {
@@ -822,7 +935,7 @@ fn function_last_expressions<'a>(
                 for y in &x.items {
                     res.push((LastStmt::With(kind), &y.context_expr));
                 }
-                f(sys_info, &x.body, res)?;
+                f(sys_info, &x.body, res, constrained_typevars)?;
             }
             Stmt::While(x) => {
                 // Infinite loops with no breaks cannot fall through
@@ -843,13 +956,36 @@ fn function_last_expressions<'a>(
                 if has_break || x.orelse.is_empty() {
                     return None;
                 }
-                f(sys_info, &x.orelse, res)?;
+                f(sys_info, &x.orelse, res, constrained_typevars)?;
             }
             Stmt::If(x) => {
                 let mut last_test = None;
+                let mut chain_var = None;
+                let mut covered = SmallSet::new();
+                let mut chain_valid = constrained_typevars.is_some();
                 for (test, body) in sys_info.pruned_if_branches(x) {
                     last_test = test;
-                    f(sys_info, body, res)?;
+                    if let (Some(test), true) = (test, chain_valid) {
+                        // Special-case isinstance chains over constrained TypeVars to avoid
+                        // false missing-return errors when all constraints are covered.
+                        if let Some((var, types)) = extract_isinstance_test(test) {
+                            if let Some(existing) = &chain_var {
+                                if existing != &var {
+                                    chain_valid = false;
+                                }
+                            } else {
+                                chain_var = Some(var);
+                            }
+                            if chain_valid {
+                                for ty in types {
+                                    covered.insert(ty);
+                                }
+                            }
+                        } else {
+                            chain_valid = false;
+                        }
+                    }
+                    f(sys_info, body, res, constrained_typevars)?;
                 }
                 if last_test.is_some() {
                     // The if/elif chain has no else clause, so it's not syntactically exhaustive.
@@ -870,16 +1006,18 @@ fn function_last_expressions<'a>(
                         .iter()
                         .any(|stmt| matches!(stmt, Stmt::Return(_)))
                 {
-                    f(sys_info, &x.finalbody, res)?;
+                    f(sys_info, &x.finalbody, res, constrained_typevars)?;
                 } else {
                     if x.orelse.is_empty() {
-                        f(sys_info, &x.body, res)?;
+                        f(sys_info, &x.body, res, constrained_typevars)?;
                     } else {
-                        f(sys_info, &x.orelse, res)?;
+                        f(sys_info, &x.orelse, res, constrained_typevars)?;
                     }
                     for handler in &x.handlers {
                         match handler {
-                            ExceptHandler::ExceptHandler(x) => f(sys_info, &x.body, res)?,
+                            ExceptHandler::ExceptHandler(x) => {
+                                f(sys_info, &x.body, res, constrained_typevars)?
+                            }
                         }
                     }
                     // If we don't have a matching handler, we raise an exception, which is fine.
@@ -888,7 +1026,7 @@ fn function_last_expressions<'a>(
             Stmt::Match(x) => {
                 let mut syntactically_exhaustive = false;
                 for case in x.cases.iter() {
-                    f(sys_info, &case.body, res)?;
+                    f(sys_info, &case.body, res, constrained_typevars)?;
                     if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
                         syntactically_exhaustive = true;
                         break;
@@ -911,7 +1049,7 @@ fn function_last_expressions<'a>(
     }
 
     let mut res = Vec::new();
-    f(sys_info, x, &mut res)?;
+    f(sys_info, x, &mut res, constrained_typevars)?;
     Some(res)
 }
 
