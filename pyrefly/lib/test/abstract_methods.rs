@@ -448,6 +448,23 @@ class B(A):
 );
 
 testcase!(
+    test_abstract_method_non_abc,
+    r#"
+from abc import abstractmethod
+
+class A:
+    @abstractmethod
+    def foo(self):
+        raise NotImplementedError()
+
+class B(A):
+    def foo(self):
+        x = 1
+        print(x)
+"#,
+);
+
+testcase!(
     test_abstract_method_abc_transitive,
     r#"
 from abc import ABC

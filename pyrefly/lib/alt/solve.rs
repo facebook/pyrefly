@@ -3128,6 +3128,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 yield_froms,
                 body_is_trivial,
                 class_metadata_key,
+                is_abstract_method,
             } => {
                 let is_generator = !(yields.is_empty() && yield_froms.is_empty());
                 let returns = returns.iter().map(|k| self.get_idx(*k).arc_clone_ty());
@@ -3145,12 +3146,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .collect(),
                     )
                 };
-                // If this is a method with a trivial body (e.g., `raise NotImplementedError()`)
-                // in a class that extends ABC, treat it as an abstract method and return Any
-                // instead of Never. This handles transitive ABC inheritance.
+                // If this is a method with a trivial body (e.g., `raise NotImplementedError()`),
+                // treat it as abstract and return Any instead of Never. This handles methods that
+                // opt into abstraction via `@abstractmethod`, as well as ABC subclasses.
                 let is_abstract_method = *body_is_trivial
                     && return_ty.is_never()
-                    && class_metadata_key.is_some_and(|key| self.get_idx(key).extends_abc());
+                    && (*is_abstract_method
+                        || class_metadata_key.is_some_and(|key| self.get_idx(key).extends_abc()));
                 let return_ty = if is_abstract_method {
                     self.heap.mk_any_implicit()
                 } else {
