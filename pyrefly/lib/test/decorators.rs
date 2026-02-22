@@ -434,6 +434,23 @@ def f0(arg: Callable[..., int]) -> Callable[..., int]: ...
     "#,
 );
 
+testcase!(
+    test_decorator_error_uses_union_alias,
+    r#"
+from typing import Callable
+
+ResponseReturnValue = int | str | bytes | dict[str, int] | list[int]
+
+def login_required(func: Callable[..., ResponseReturnValue]) -> Callable[..., ResponseReturnValue]: ...
+def setup_required(view: Callable[..., int]) -> Callable[..., int]: ...
+
+@setup_required  # E: Argument `(...) -> ResponseReturnValue` is not assignable to parameter `view` with type `(...) -> int` in function `setup_required`
+@login_required
+def handler() -> int:
+    return 0
+    "#,
+);
+
 // Reported in https://github.com/facebook/pyrefly/issues/491
 testcase!(
     test_total_ordering,
