@@ -364,7 +364,7 @@ def g(x: int, y: str):
 x1 = f(g, lambda x, y: None)
 reveal_type(x1) # E: revealed type: (x: int, y: str) -> None
 
-x2 = f(g, lambda x, z: None) # E: Argument `(x: int, z: Unknown) -> None` is not assignable to parameter `g` with type `(x: int, y: str) -> None`
+x2 = f(g, lambda x, z: None) # E: Argument `(x: Unknown, z: Unknown) -> None` is not assignable to parameter `g` with type `(x: int, y: str) -> None`
 reveal_type(x2) # E: revealed type: (x: int, y: str) -> None
 "#,
 );
@@ -692,7 +692,7 @@ f(({"x": 0},))
 );
 
 testcase!(
-    bug = "The dict literal `{\"x\": 0}` should be contextually typed as TD when matched against `tuple[T: TD, ...]`, but is instead inferred as `dict[str, int]`",
+    bug = "`TD` should be used as a hint when typing `{'x': 0}`",
     test_typed_dict_hint_in_typevar_bound,
     r#"
 from typing import TypedDict
@@ -700,6 +700,6 @@ class TD(TypedDict):
     x: int
 def f[T: TD](x: tuple[T, ...]) -> T:
     return x[0]
-f(({"x": 0},))  # E: `dict[str, int]` is not assignable to upper bound `TD` of type variable `T`
+f(({"x": 0},))  # E: `dict[str, int]` is not assignable to upper bound `TD`
     "#,
 );
