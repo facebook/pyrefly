@@ -3915,13 +3915,12 @@ impl Server {
         let res = t
             .into_iter()
             .filter_map(|hint_data| {
-                let text_size = hint_data.position;
                 let label_parts = hint_data.label_parts;
                 // If the url is a notebook cell, filter out inlay hints for other cells
-                if info.to_cell_for_lsp(text_size) != maybe_cell_idx {
+                if info.to_cell_for_lsp(hint_data.position) != maybe_cell_idx {
                     return None;
                 }
-                let position = info.to_lsp_position(text_size);
+                let position = info.to_lsp_position(hint_data.position);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {
                     let label = InlayHintLabel::LabelParts(
@@ -3943,10 +3942,23 @@ impl Server {
                     );
 
                     let text_edits = if hint_data.insertable {
-                        Some(vec![TextEdit {
+                        let label_text = label_parts
+                            .iter()
+                            .map(|(text, _)| text.as_str())
+                            .collect::<String>();
+                        let mut edits = Vec::with_capacity(1 + hint_data.import_edits.len());
+                        edits.push(TextEdit {
                             range: Range::new(position, position),
-                            new_text: label_parts.iter().map(|(text, _)| text.as_str()).collect(),
-                        }])
+                            new_text: label_text,
+                        });
+                        for (import_pos, import_text) in hint_data.import_edits {
+                            let import_position = info.to_lsp_position(import_pos);
+                            edits.push(TextEdit {
+                                range: Range::new(import_position, import_position),
+                                new_text: import_text,
+                            });
+                        }
+                        Some(edits)
                     } else {
                         None
                     };

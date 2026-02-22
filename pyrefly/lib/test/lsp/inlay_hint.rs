@@ -22,18 +22,19 @@ fn generate_inlay_hint_report(code: &str, hint_config: InlayHintConfig) -> Strin
         report.push_str(name);
         report.push_str(".py\n");
         let handle = handles.get(name).unwrap();
-        for hint_data in state
+        for hint in state
             .transaction()
             .inlay_hints(handle, hint_config)
             .unwrap()
         {
-            let pos = hint_data.position;
-            let label_parts = hint_data.label_parts;
-            report.push_str(&code_frame_of_source_at_position(code, pos));
+            report.push_str(&code_frame_of_source_at_position(code, hint.position));
             report.push_str(" inlay-hint: `");
-            // Concatenate label parts into a single string
-            let hint: String = label_parts.iter().map(|(text, _)| text.as_str()).collect();
-            report.push_str(&hint);
+            let label = hint
+                .label_parts
+                .iter()
+                .map(|(text, _)| text.as_str())
+                .collect::<String>();
+            report.push_str(&label);
             report.push_str("`\n\n");
         }
         report.push('\n');
@@ -108,7 +109,7 @@ imported = ssl.VerifyMode.CERT_NONE
         r#"
 # main.py
 9 | xa2 = xa
-       ^ inlay-hint: `: Literal[X.A]`
+       ^ inlay-hint: `: typing.Literal[X.A]`
 "#
         .trim(),
         generate_inlay_hint_report(code, Default::default()).trim()
@@ -129,13 +130,13 @@ z = a
         r#"
 # main.py
 5 | x, y = (a, b)
-     ^ inlay-hint: `: Literal[1]`
+     ^ inlay-hint: `: typing.Literal[1]`
 
 5 | x, y = (a, b)
-        ^ inlay-hint: `: Literal[1]`
+        ^ inlay-hint: `: typing.Literal[1]`
 
 6 | z = a
-     ^ inlay-hint: `: Literal[1]`
+     ^ inlay-hint: `: typing.Literal[1]`
 "#
         .trim(),
         generate_inlay_hint_report(code, Default::default()).trim()
