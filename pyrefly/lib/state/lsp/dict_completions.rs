@@ -303,15 +303,19 @@ impl<'a> super::Transaction<'a> {
         })
     }
 
+    /// Adds dict key completions for the given position. Returns `true` if this function
+    /// claimed the position (i.e., we are inside a dict/TypedDict key string literal), in
+    /// which case the caller should skip overload-based literal completions to avoid showing
+    /// redundant entries.
     pub(crate) fn add_dict_key_completions(
         &self,
         handle: &Handle,
         module: &ModModule,
         position: TextSize,
         completions: &mut Vec<RankedCompletion>,
-    ) {
+    ) -> bool {
         let Some(context) = self.dict_key_literal_context(handle, module, position) else {
-            return;
+            return false;
         };
         let literal_range = context.literal_range();
         // Allow the cursor to sit a few characters before the literal (e.g. between nested
@@ -322,7 +326,7 @@ impl<'a> super::Transaction<'a> {
             .checked_sub(allowance)
             .unwrap_or_else(|| TextSize::new(0));
         if position < lower_bound || position > literal_range.end() {
-            return;
+            return false;
         }
         let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
 
@@ -381,7 +385,7 @@ impl<'a> super::Transaction<'a> {
         }
 
         if suggestions.is_empty() {
-            return;
+            return false;
         }
 
         for (label, ty_opt) in suggestions {
@@ -393,5 +397,6 @@ impl<'a> super::Transaction<'a> {
                 ..Default::default()
             }));
         }
+        true
     }
 }
