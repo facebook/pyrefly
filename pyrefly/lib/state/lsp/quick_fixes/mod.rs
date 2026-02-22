@@ -19,5 +19,6 @@ pub(crate) mod introduce_parameter;
 pub(crate) mod invert_boolean;
 pub(crate) mod move_members;
 pub(crate) mod move_module;
+pub(crate) mod pyrefly_ignore;
 pub(crate) mod redundant_cast;
 pub(crate) mod types;

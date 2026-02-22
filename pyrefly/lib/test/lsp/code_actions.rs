@@ -578,6 +578,15 @@ class my_export:
     pass
 my_export
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+my_export
+# ^
+## After:
+# pyrefly: ignore [unknown-name]
+my_export
+# ^
 
 
 
@@ -645,6 +654,15 @@ class BytesIO:
     pass
 BytesIO
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+BytesIO
+# ^
+## After:
+# pyrefly: ignore [unknown-name]
+BytesIO
+# ^
 "#
         .trim(),
         report.trim(),
@@ -701,6 +719,15 @@ my_module
 ## After:
 class my_module:
     pass
+my_module
+# ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+my_module
+# ^
+## After:
+# pyrefly: ignore [unknown-name]
 my_module
 # ^
 "#
@@ -806,6 +833,134 @@ class my_export:
     pass
 my_export
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+# i am a comment
+my_export
+# ^
+## After:
+# i am a comment
+# pyrefly: ignore [unknown-name]
+my_export
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn quickfix_add_pyrefly_ignore_code() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", "x: int = \"hello\"\n#         ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+1 | x: int = "hello"
+              ^
+Code Actions Results:
+# Title: Add `# pyrefly: ignore [bad-assignment]`
+
+## Before:
+x: int = "hello"
+#         ^
+## After:
+# pyrefly: ignore [bad-assignment]
+x: int = "hello"
+#         ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn quickfix_add_pyrefly_ignore_code_with_existing_comment() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "x: int = \"hello\" # intentional error\n#         ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+1 | x: int = "hello" # intentional error
+              ^
+Code Actions Results:
+# Title: Add `# pyrefly: ignore [bad-assignment]`
+
+## Before:
+x: int = "hello" # intentional error
+#         ^
+## After:
+# pyrefly: ignore [bad-assignment]
+x: int = "hello" # intentional error
+#         ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn quickfix_merge_pyrefly_ignore_codes() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "x: int = \"hello\"  # pyrefly: ignore [bad-return]\n#         ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+1 | x: int = "hello"  # pyrefly: ignore [bad-return]
+              ^
+Code Actions Results:
+# Title: Add `# pyrefly: ignore [bad-assignment]`
+
+## Before:
+x: int = "hello"  # pyrefly: ignore [bad-return]
+#         ^
+## After:
+x: int = "hello"  # pyrefly: ignore [bad-assignment, bad-return]
+#         ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn quickfix_merge_pyrefly_ignore_codes_comment_line_above() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "    # pyrefly: ignore [bad-return]\n    x: int = \"hello\"\n#             ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 |     x: int = "hello"
+                  ^
+Code Actions Results:
+# Title: Add `# pyrefly: ignore [bad-assignment]`
+
+## Before:
+    # pyrefly: ignore [bad-return]
+    x: int = "hello"
+#             ^
+## After:
+    # pyrefly: ignore [bad-assignment, bad-return]
+    x: int = "hello"
+#             ^
 "#
         .trim(),
         report.trim()
@@ -874,6 +1029,17 @@ my_export
 from typing import List
 class my_export:
     pass
+my_export
+# ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+from typing import List
+my_export
+# ^
+## After:
+from typing import List
+# pyrefly: ignore [unknown-name]
 my_export
 # ^
 "#
@@ -945,6 +1111,17 @@ my_export
 from a import another_thing
 class my_export:
     pass
+my_export
+# ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+from a import another_thing
+my_export
+# ^
+## After:
+from a import another_thing
+# pyrefly: ignore [unknown-name]
 my_export
 # ^
 "#
@@ -1136,6 +1313,15 @@ TypeVar('T')
 class TypeVar:
     def __init__(self, arg1: str):
         pass
+TypeVar('T')
+# ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+# pyrefly: ignore [unknown-name]
 TypeVar('T')
 # ^
 "#
@@ -1682,6 +1868,15 @@ class my_func:
     pass
 my_func()
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+my_func()
+# ^
+## After:
+# pyrefly: ignore [unknown-name]
+my_func()
+# ^
 "#
         .trim(),
         report.trim()
@@ -1733,6 +1928,17 @@ def foo():
 def foo():
     class undef_var:
         pass
+    print(undef_var)
+#         ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+def foo():
+    print(undef_var)
+#         ^
+## After:
+def foo():
+    # pyrefly: ignore [unknown-name]
     print(undef_var)
 #         ^
 "#
