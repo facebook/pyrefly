@@ -1419,6 +1419,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                     )
                 }
+                Some(CalleeKind::Function(FunctionKind::SqlAlchemyMappedColumn)) => self
+                    .call_sqlalchemy_mapped_column(
+                        ty.clone(),
+                        &args,
+                        &kws,
+                        x.func.range(),
+                        x.arguments.range,
+                        x,
+                        hint,
+                        errors,
+                    ),
                 // Treat assert_type and reveal_type like pseudo-builtins for convenience. Note that we still
                 // log a name-not-found error, but we also assert/reveal the type as requested.
                 None if ty.is_error() && is_special_name(&x.func, "assert_type") => self
