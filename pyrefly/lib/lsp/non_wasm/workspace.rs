@@ -65,6 +65,7 @@ pub struct Workspace {
     pub disable_language_services: bool,
     pub disabled_language_services: Option<DisabledLanguageServices>,
     pub display_type_errors: Option<DisplayTypeErrors>,
+    pub include_declaration: bool,
     pub lsp_analysis_config: Option<LspAnalysisConfig>,
 }
 
@@ -173,6 +174,7 @@ struct PyreflyClientConfig {
     display_type_errors: Option<DisplayTypeErrors>,
     disable_language_services: Option<bool>,
     extra_paths: Option<Vec<PathBuf>>,
+    include_declaration: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
     #[serde(default)]
@@ -389,6 +391,9 @@ impl Workspaces {
             if let Some(disabled_language_services) = pyrefly.disabled_language_services {
                 self.update_disabled_language_services(scope_uri, disabled_language_services);
             }
+            if let Some(include_declaration) = pyrefly.include_declaration {
+                self.update_include_declaration(scope_uri, include_declaration);
+            }
             self.update_display_type_errors(modified, scope_uri, pyrefly.display_type_errors);
             // Handle analysis config nested under pyrefly (e.g., pyrefly.analysis)
             if let Some(analysis) = pyrefly.analysis {
@@ -437,6 +442,23 @@ impl Workspaces {
             }
             None => {
                 self.default.write().disabled_language_services = Some(disabled_language_services);
+            }
+        }
+    }
+
+    /// Update includeDeclaration setting for scope_uri, None if default workspace
+    fn update_include_declaration(&self, scope_uri: &Option<Url>, include_declaration: bool) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
+                    workspace.include_declaration = include_declaration;
+                }
+            }
+            None => {
+                self.default.write().include_declaration = include_declaration;
             }
         }
     }

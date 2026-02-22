@@ -3745,13 +3745,15 @@ impl Server {
         let Some(handle) = self.make_handle_if_enabled(uri, Some(Rename::METHOD)) else {
             return self.send_response(new_response::<Option<WorkspaceEdit>>(request_id, Ok(None)));
         };
+        let path = self.path_for_uri(uri).unwrap();
         self.async_find_references_helper(
             request_id,
             transaction,
             handle,
             uri,
             params.text_document_position.position,
-            true,
+            self.workspaces
+                .get_with(path, |(_, workspace)| workspace.include_declaration),
             move |results| {
                 let mut changes = HashMap::new();
                 for (uri, ranges) in results {
