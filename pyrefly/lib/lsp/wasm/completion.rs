@@ -1022,6 +1022,14 @@ impl Transaction<'_> {
                         position,
                         &mut result,
                     );
+                    let mut endpoint_items = Vec::new();
+                    self.add_endpoint_completions(
+                        handle,
+                        mod_module.as_ref(),
+                        position,
+                        &mut endpoint_items,
+                    );
+                    result.extend(endpoint_items.into_iter().map(RankedCompletion::new));
                     // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
                     // in foo(<>), the first containing node is AnyNodeRef::ExprCall
                     if let Some(first) = nodes.first()
