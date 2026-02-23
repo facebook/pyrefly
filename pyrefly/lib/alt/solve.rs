@@ -3117,6 +3117,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 yields,
                 yield_froms,
                 body_is_trivial,
+                body_is_raise_not_implemented_error,
                 class_metadata_key,
                 is_abstract_method,
             } => {
@@ -3135,6 +3136,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .chain(iter::once(implicit_return.arc_clone_ty()))
                             .collect(),
                     )
+                };
+                let return_ty = if return_ty.is_never() && *body_is_raise_not_implemented_error {
+                    self.heap.mk_any_implicit()
+                } else {
+                    return_ty
                 };
                 // If this is a method with a trivial body (e.g., `raise NotImplementedError()`),
                 // treat it as abstract and return Any instead of Never. This handles methods that

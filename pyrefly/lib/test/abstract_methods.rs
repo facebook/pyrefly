@@ -465,6 +465,19 @@ class B(A):
 );
 
 testcase!(
+    test_raise_not_implemented_infers_any,
+    r#"
+class A:
+    def foo(self):
+        raise NotImplementedError()
+
+class B(A):
+    def foo(self) -> int:
+        return 1
+"#,
+);
+
+testcase!(
     test_abstract_method_abc_transitive,
     r#"
 from abc import ABC
