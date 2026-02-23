@@ -186,6 +186,17 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     tensor_shapes: Option<bool>,
+    /// Whether to strictly check callable subtyping for signatures with `*args: Any, **kwargs: Any`.
+    /// When false (the default), callables with `*args: Any, **kwargs: Any` are treated as
+    /// compatible with any signature (similar to `...` behavior).
+    /// When true, parameter list compatibility is checked strictly even when `*args: Any, **kwargs: Any` is present.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    strict_callable_subtyping: Option<bool>,
 }
 
 impl ConfigOverrideArgs {
@@ -367,6 +378,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.tensor_shapes {
             config.root.tensor_shapes = Some(*x);
+        }
+        if let Some(x) = &self.strict_callable_subtyping {
+            config.root.strict_callable_subtyping = Some(*x);
         }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
             for error_kind in &self.error {

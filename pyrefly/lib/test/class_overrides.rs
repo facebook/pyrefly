@@ -215,10 +215,11 @@ class Derived(Base):
 testcase!(
     test_override_parameter_kinds,
     r#"
-from typing import assert_type, override
+from typing import assert_type, override, Any
 
 class Base:
     def g(self, /, x: int, *args: str, y: bool, **kwargs: float) -> None: ...
+    def method(self, a: int, /, *args: Any, k: str, **kwargs: Any) -> None: ...
 
 class Derived(Base):
     @override
@@ -227,6 +228,76 @@ class Derived(Base):
         assert_type(args, tuple[str, ...])
         assert_type(y, bool)
         assert_type(kwargs, dict[str, float])
+    @override
+    def method(self, a: float, /, b: int, *, k: str, m: str) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_basic,
+    r#"
+from typing import override, Any
+
+class GradualBase:
+    def method1(self, a: int, /, *args: Any, k: int, **kwargs: Any) -> None: ...
+
+class Child(GradualBase):
+    @override
+    def method1(self) -> None: ...
+
+class Base:
+    def method1(self) -> None: ...
+
+class GradualChild(Base):
+    @override
+    def method1(self, a: int, /, *args: Any, k: int, **kwargs: Any) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_abstract,
+    r#"
+from abc import ABC, abstractmethod
+from typing import Any
+
+class Processor(ABC):
+    @abstractmethod
+    def process(self, *args: Any, **kwargs: Any) -> Any:
+        pass
+
+class ConcreteProcessor(Processor):
+    def process(self, data: str, count: int = 1) -> str:
+        return data * count
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_parent_overload,
+    r#"
+from argparse import ArgumentParser as BaseArgumentParser
+from typing import Any
+
+class ArgumentParser(BaseArgumentParser):
+    def add_subparsers(self, *args: Any, **kwargs: Any):
+        return super().add_subparsers(*args, **kwargs)
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_child_overload,
+    r#"
+from typing import overload, Any
+class Base:
+    def test(self, *args: Any, **kwargs: Any):
+        pass
+
+class Child(Base):
+    @overload
+    def test(self, x: int): pass
+    @overload
+    def test(self, x: str): pass
+    def test(self, x):
+        pass
     "#,
 );
 

@@ -1310,7 +1310,7 @@ class Proto7(Protocol):
 def test(p4: Proto4[...], p7: Proto7):
     # Both should be OK per conformance spec - pyrefly incorrectly errors
     ok10: Proto3 = p4  # E: `Proto4[Ellipsis]` is not assignable to `Proto3`
-    ok11: Proto6 = p7  # E: `Proto7` is not assignable to `Proto6`
+    ok11: Proto6 = p7
 "#,
 );
 

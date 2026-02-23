@@ -319,6 +319,7 @@ pub struct Solver {
     pub infer_with_first_use: bool,
     pub heap: TypeHeap,
     pub tensor_shapes: bool,
+    pub strict_callable_subtyping: bool,
 }
 
 impl Display for Solver {
@@ -336,13 +337,18 @@ const TYPE_LIMIT: usize = 20;
 
 impl Solver {
     /// Create a new solver.
-    pub fn new(infer_with_first_use: bool, tensor_shapes: bool) -> Self {
+    pub fn new(
+        infer_with_first_use: bool,
+        tensor_shapes: bool,
+        strict_callable_subtyping: bool,
+    ) -> Self {
         Self {
             variables: Default::default(),
             instantiation_errors: Default::default(),
             infer_with_first_use,
             heap: TypeHeap::new(),
             tensor_shapes,
+            strict_callable_subtyping,
         }
     }
 

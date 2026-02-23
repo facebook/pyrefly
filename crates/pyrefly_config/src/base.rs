@@ -125,6 +125,13 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recursion_overflow_handler: Option<RecursionOverflowHandler>,
 
+    /// Whether to strictly check callable subtyping for signatures with `*args: Any, **kwargs: Any`.
+    /// When false (the default), callables with `*args: Any, **kwargs: Any` are treated as
+    /// compatible with any signature (similar to `...` behavior).
+    /// When true, parameter list compatibility is checked strictly even when `*args: Any, **kwargs: Any` is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict_callable_subtyping: Option<bool>,
+
     /// Any unknown config items
     #[serde(default, flatten)]
     pub(crate) extras: ExtraConfigs,
@@ -202,5 +209,9 @@ impl ConfigBase {
                 })
             }
         })
+    }
+
+    pub fn get_strict_callable_subtyping(base: &Self) -> Option<bool> {
+        base.strict_callable_subtyping
     }
 }
