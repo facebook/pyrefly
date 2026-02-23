@@ -21,10 +21,11 @@ from .code_fetcher import fetch_files_by_path, fetch_source_context
 from .llm_client import CategoryVerdict, LLMError, classify_with_llm
 from .parser import ErrorEntry, ProjectDiff
 
-# Rough token estimation: ~3 chars per token (conservative for code, which
-# tokenizes into shorter tokens than English prose). We target 170K tokens
-# to leave headroom below Anthropic's 200K limit.
-_CHARS_PER_TOKEN = 3
+# Rough token estimation: ~2 chars per token. Code tokenizes into shorter
+# tokens than prose (brackets, operators, short identifiers each consume a
+# full token), so 2 is genuinely conservative. We target 170K tokens to
+# leave headroom below Anthropic's 200K limit.
+_CHARS_PER_TOKEN = 2
 _MAX_PROMPT_TOKENS = 170_000
 _MAX_PROMPT_CHARS = _MAX_PROMPT_TOKENS * _CHARS_PER_TOKEN
 
@@ -54,16 +55,23 @@ class ClassificationResult:
     ambiguous: int = 0
 
 
-def _is_all_removals(project: ProjectDiff) -> bool:
-    """Check if a project has only removed errors (no additions)."""
-    return len(project.removed) > 0 and len(project.added) == 0
-
-
 def _is_all_internal_errors(project: ProjectDiff) -> bool:
     """Check if all added errors are internal-error (pyrefly bug/panic)."""
     return (
         len(project.added) > 0
         and all(e.error_kind == "internal-error" for e in project.added)
+    )
+
+
+_INFERENCE_FAILURE_MARKERS = ("Never", "@_")
+
+
+def _has_inference_failure_markers(entries: list[ErrorEntry]) -> bool:
+    """Check if any entries contain Never or @_ types (inference failures)."""
+    return any(
+        marker in e.message
+        for e in entries
+        for marker in _INFERENCE_FAILURE_MARKERS
     )
 
 
@@ -73,10 +81,19 @@ def _is_wording_change(project: ProjectDiff) -> bool:
     A wording change means: for every added error, there's a removed error
     at the same file:line with the same error kind, and vice versa. The
     message text differs, but the error kind and location are the same.
+
+    Does NOT classify as wording change if new messages introduce Never or @_
+    types, since that indicates a type inference regression even at the same
+    location.
     """
     if not project.added or not project.removed:
         return False
     if len(project.added) != len(project.removed):
+        return False
+
+    # If new messages contain inference failure markers, this isn't a
+    # simple wording change — the type checker's behavior changed materially.
+    if _has_inference_failure_markers(project.added):
         return False
 
     # Build sets of (file, line, error_kind) for added and removed
@@ -93,9 +110,13 @@ def _is_near_wording_change(project: ProjectDiff) -> bool:
     few unmatched entries that don't alter the overall picture.
 
     Returns True when >= 80% of entries on each side match a counterpart,
-    and the unmatched count is <= 2 on each side.
+    and the unmatched count is <= 2 on each side. Returns False if new
+    messages introduce Never or @_ types (inference regression signals).
     """
     if not project.added or not project.removed:
+        return False
+
+    if _has_inference_failure_markers(project.added):
         return False
 
     added_keys = [(e.file_path, e.line_number, e.error_kind) for e in project.added]
@@ -310,8 +331,8 @@ def _compute_structural_signals(project: ProjectDiff) -> str:
     """Compute structural signals about the project and errors for the LLM.
 
     Returns a string of signals to append to the user prompt, helping the
-    LLM make better decisions about test files, stubs projects, inference
-    failures, and net direction.
+    LLM make better decisions about test files, stubs projects, and inference
+    failures.
     """
     signals: list[str] = []
 
@@ -350,21 +371,6 @@ def _compute_structural_signals(project: ProjectDiff) -> str:
             f"STRUCTURAL SIGNAL: {never_count}/{len(project.added)} new error(s) contain "
             "`Never` or `@_` types — these strongly suggest type inference failures, not real bugs."
         )
-
-    # Net direction signal
-    if project.added and project.removed:
-        ratio = len(project.removed) / len(project.added) if project.added else 0
-        if ratio >= 3:
-            signals.append(
-                f"STRUCTURAL SIGNAL: Net direction is strongly toward improvement "
-                f"({len(project.removed)} removed vs {len(project.added)} added). "
-                f"The PR fixed many more problems than it introduced."
-            )
-        elif len(project.added) >= 3 * len(project.removed) and len(project.added) >= 5:
-            signals.append(
-                f"STRUCTURAL SIGNAL: Net direction is strongly toward regression "
-                f"({len(project.added)} added vs {len(project.removed)} removed)."
-            )
 
     return "\n".join(signals)
 
@@ -419,17 +425,7 @@ def classify_project(
         removed_count=len(project.removed),
     )
 
-    # Heuristic 1: All removals → improvement (removed false positives)
-    if _is_all_removals(project):
-        base.verdict = "improvement"
-        base.reason = (
-            f"Removed {len(project.removed)} error(s) — "
-            "no new errors introduced. Likely removed false positives."
-        )
-        base.method = "heuristic"
-        return base
-
-    # Heuristic 2: All additions are internal-error → regression
+    # Heuristic 1: All additions are internal-error → regression
     if _is_all_internal_errors(project):
         base.verdict = "regression"
         base.reason = (
@@ -439,7 +435,7 @@ def classify_project(
         base.method = "heuristic"
         return base
 
-    # Heuristic 3: Wording change (same file:line:kind, different message)
+    # Heuristic 2: Wording change (same file:line:kind, different message)
     if _is_wording_change(project):
         base.verdict = "neutral"
         base.reason = (
@@ -449,7 +445,7 @@ def classify_project(
         base.method = "heuristic"
         return base
 
-    # Heuristic 4: Near-wording change (>= 80% matched locations, <= 2 unmatched)
+    # Heuristic 3: Near-wording change (>= 80% matched locations, <= 2 unmatched)
     if _is_near_wording_change(project):
         base.verdict = "neutral"
         base.reason = (

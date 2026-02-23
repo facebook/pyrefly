@@ -23,7 +23,6 @@ from .classifier import (
     _extract_class_name,
     _format_errors_for_llm,
     _is_all_internal_errors,
-    _is_all_removals,
     _is_wording_change,
     _truncate_source_context,
     classify_all,
@@ -149,19 +148,6 @@ class TestHeuristics:
             raw_line=f"ERROR src/foo.py:10:5-20: {msg} [{kind}]",
         )
 
-    def test_all_removals(self):
-        p = ProjectDiff(name="test", removed=[self._make_entry()])
-        assert _is_all_removals(p) is True
-        assert _is_all_internal_errors(p) is False
-
-    def test_all_removals_false_when_has_additions(self):
-        p = ProjectDiff(
-            name="test",
-            added=[self._make_entry()],
-            removed=[self._make_entry()],
-        )
-        assert _is_all_removals(p) is False
-
     def test_all_internal_errors(self):
         e = self._make_entry(kind="internal-error", msg="panicked")
         p = ProjectDiff(name="test", added=[e])
@@ -212,10 +198,10 @@ class TestClassifyProject:
             raw_line=f"ERROR src/foo.py:10:5-20: {msg} [{kind}]",
         )
 
-    def test_all_removals_classified_as_improvement(self):
+    def test_all_removals_without_llm_is_ambiguous(self):
         p = ProjectDiff(name="test", removed=[self._make_entry()])
         result = classify_project(p, fetch_code=False, use_llm=False)
-        assert result.verdict == "improvement"
+        assert result.verdict == "ambiguous"
         assert result.method == "heuristic"
 
     def test_internal_errors_classified_as_regression(self):
@@ -260,22 +246,22 @@ class TestClassifyAll:
 
     def test_counts(self):
         projects = [
-            ProjectDiff(name="a", removed=[self._make_entry()]),  # improvement
+            ProjectDiff(name="a", removed=[self._make_entry()]),  # ambiguous (no LLM)
             ProjectDiff(name="b", added=[self._make_entry(kind="internal-error")]),  # regression
             ProjectDiff(name="c", added=[self._make_entry()]),  # ambiguous (no LLM)
         ]
         result = classify_all(projects, fetch_code=False, use_llm=False)
         assert result.total_projects == 3
-        assert result.improvements == 1
+        assert result.improvements == 0
         assert result.regressions == 1
-        assert result.ambiguous == 1
+        assert result.ambiguous == 2
 
 
 class TestClassifyFromFixtures:
     def test_all_removals_fixture(self):
         projects = parse_primer_diff(_load_fixture("all_removals.txt"))
         result = classify_all(projects, fetch_code=False, use_llm=False)
-        assert result.improvements == 1
+        assert result.ambiguous == 1
         assert result.regressions == 0
 
     def test_internal_errors_fixture(self):
@@ -293,14 +279,14 @@ class TestClassifyFromFixtures:
         projects = parse_primer_diff(_load_fixture("multi_project.txt"))
         result = classify_all(projects, fetch_code=False, use_llm=False)
         assert result.total_projects == 4
-        # project_a: all removals -> improvement
+        # project_a: all removals -> ambiguous (needs LLM to determine FP vs FN)
         # project_b: internal-error -> regression
         # project_c: wording change -> neutral
         # project_d: non-trivial -> ambiguous
-        assert result.improvements == 1
+        assert result.improvements == 0
         assert result.regressions == 1
         assert result.neutrals == 1
-        assert result.ambiguous == 1
+        assert result.ambiguous == 2
 
     def test_empty_fixture(self):
         projects = parse_primer_diff(_load_fixture("empty.txt"))
@@ -321,7 +307,7 @@ class TestClassifyFromFixtures:
 class TestRealFixtureParsing:
     """Verify that real primer diffs from actual PRs parse without errors."""
 
-    REAL_DIR = FIXTURES_DIR / "real"
+    REAL_DIR = Path(__file__).parent / "fixtures" / "real"
 
     def test_parse_all_real_fixtures(self):
         if not self.REAL_DIR.exists():
