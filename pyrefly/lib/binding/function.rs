@@ -379,7 +379,6 @@ impl<'a> BindingsBuilder<'a> {
         should_infer_return_type: bool,
         stub_or_impl: FunctionStubOrImpl,
         decorators: Box<[Idx<KeyDecorator>]>,
-        is_abstract_method: bool,
         body_is_trivial: bool,
         body_is_raise_not_implemented_error: bool,
         class_metadata_key: Option<Idx<KeyClassMetadata>>,
@@ -466,7 +465,6 @@ impl<'a> BindingsBuilder<'a> {
                         body_is_trivial,
                         body_is_raise_not_implemented_error,
                         class_metadata_key,
-                        is_abstract_method,
                     }
                 }
                 (None, _) => {
@@ -648,7 +646,6 @@ impl<'a> BindingsBuilder<'a> {
                         false, // this disables return type inference
                         stub_or_impl,
                         decorators.decorators.clone(),
-                        decorators.is_abstract_method,
                         body_is_trivial,
                         body_is_raise_not_implemented_error,
                         metadata_key,
@@ -682,7 +679,6 @@ impl<'a> BindingsBuilder<'a> {
                         false, // this disables return type inference
                         stub_or_impl,
                         decorators.decorators.clone(),
-                        decorators.is_abstract_method,
                         body_is_trivial,
                         body_is_raise_not_implemented_error,
                         metadata_key,
@@ -716,7 +712,6 @@ impl<'a> BindingsBuilder<'a> {
                         true,
                         stub_or_impl,
                         decorators.decorators.clone(),
-                        decorators.is_abstract_method,
                         body_is_trivial,
                         body_is_raise_not_implemented_error,
                         metadata_key,

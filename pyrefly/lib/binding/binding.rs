@@ -1760,8 +1760,6 @@ pub enum ReturnTypeKind {
         body_is_raise_not_implemented_error: bool,
         /// The class metadata key, if this function is a method. Used to check if the class extends ABC.
         class_metadata_key: Option<Idx<KeyClassMetadata>>,
-        /// Whether this method is decorated with `@abstractmethod`.
-        is_abstract_method: bool,
     },
 }
 
