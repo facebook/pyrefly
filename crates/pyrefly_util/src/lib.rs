@@ -32,6 +32,7 @@ pub mod arc_id;
 pub mod args;
 pub mod assert_size;
 pub mod display;
+pub mod editable_install;
 pub mod events;
 pub mod exclusive_lock;
 pub mod forgetter;
