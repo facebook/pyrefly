@@ -23,10 +23,6 @@ fn flatten_and_dedup(xs: Vec<Type>, heap: &TypeHeap) -> Vec<Type> {
     fn flatten(xs: Vec<Type>, res: &mut Vec<Type>) {
         for x in xs {
             match x {
-                x @ Type::Union(box Union {
-                    display_name: Some(_),
-                    ..
-                }) => res.push(x),
                 Type::Union(box Union { members, .. }) => flatten(members, res),
                 Type::Never(_) => {}
                 _ => res.push(x),
@@ -71,12 +67,68 @@ fn simplify_intersections(xs: &mut [Type], heap: &TypeHeap) {
     }
 }
 
+fn large_alias_union_display_name(xs: &[Type]) -> Option<Box<str>> {
+    const PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS: usize = 6;
+
+    let mut alias_name: Option<String> = None;
+    let mut alias_members: Option<Vec<Type>> = None;
+    let mut alias_count = 0;
+    let mut other_branches = Vec::new();
+    for x in xs.iter().cloned() {
+        match x {
+            Type::Union(box Union {
+                members,
+                display_name: Some(name),
+            }) if members.len() >= PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS => {
+                alias_count += 1;
+                if alias_name.is_none() {
+                    alias_name = Some(name.into_string());
+                    alias_members = Some(members.clone());
+                }
+            }
+            t => other_branches.push(t),
+        }
+    }
+
+    if alias_count == 1 && !other_branches.is_empty() {
+        let overlaps_alias_member = |t: &Type| {
+            let Some(alias_members) = alias_members.as_ref() else {
+                return false;
+            };
+            fn has_overlap(t: &Type, alias_members: &[Type]) -> bool {
+                match t {
+                    Type::Union(box Union { members, .. }) => {
+                        members.iter().any(|m| has_overlap(m, alias_members))
+                    }
+                    t => alias_members.contains(t),
+                }
+            }
+            has_overlap(t, alias_members)
+        };
+        if other_branches.iter().any(overlaps_alias_member) {
+            return None;
+        }
+
+        other_branches.sort();
+        other_branches.dedup();
+        let other = other_branches
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        alias_name.map(|name| format!("{name} | {other}").into_boxed_str())
+    } else {
+        None
+    }
+}
+
 fn unions_internal(
     xs: Vec<Type>,
     stdlib: Option<&Stdlib>,
     enum_members: Option<&dyn Fn(&Class) -> Option<usize>>,
     heap: &TypeHeap,
 ) -> Type {
+    let large_alias_display_name = large_alias_union_display_name(&xs);
     try_collapse(xs, heap).unwrap_or_else(|xs| {
         let mut res = flatten_and_dedup(xs, heap);
         if let Some(stdlib) = stdlib {
@@ -86,7 +138,13 @@ fn unions_internal(
         collapse_tuple_unions_with_empty(&mut res, heap);
         collapse_builtins_type(&mut res, heap);
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
-        try_collapse(res, heap).unwrap_or_else(|members| heap.mk_union(members))
+        try_collapse(res, heap).unwrap_or_else(|members| {
+            if let Some(name) = large_alias_display_name.clone() {
+                heap.mk_union_with_name(members, name)
+            } else {
+                heap.mk_union(members)
+            }
+        })
     })
 }
 

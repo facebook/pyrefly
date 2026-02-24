@@ -97,7 +97,7 @@ from __future__ import annotations
 from controllers.console.wraps import setup_required
 from libs.login import login_required
 
-@setup_required  # E: Argument `(*args: Unknown, **kwargs: Unknown) -> ResponseReturnValue | int` is not assignable to parameter `view` with type `(...) -> int` in function `controllers.console.wraps.setup_required`
+@setup_required  # E: Argument `(*args: Unknown, **kwargs: Unknown) -> ResponseReturnValue | R` is not assignable to parameter `view` with type `(...) -> int` in function `controllers.console.wraps.setup_required`
 @login_required
 def handler(*args, **kwargs) -> int:
     return 0
