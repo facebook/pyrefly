@@ -68,7 +68,7 @@ fn simplify_intersections(xs: &mut [Type], heap: &TypeHeap) {
 }
 
 fn large_alias_union_display_name(xs: &[Type]) -> Option<Box<str>> {
-    const PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS: usize = 6;
+    const PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS: usize = 2;
 
     let mut alias_name: Option<String> = None;
     let mut alias_members: Option<Vec<Type>> = None;
