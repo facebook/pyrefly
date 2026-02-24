@@ -211,16 +211,13 @@ impl TArgs {
     /// Returns the number of type arguments to display, stripping trailing args
     /// that match their parameter defaults (WYSIWYG display per issue #2461).
     pub fn display_count(&self) -> usize {
-        let paired: Vec<_> = self.iter_paired().collect();
-        let mut count = paired.len();
-        for (param, arg) in paired.iter().rev() {
-            if param.default().is_some() && *arg == &param.as_gradual_type() {
-                count -= 1;
-            } else {
-                break;
+        let mut last_non_default = 0;
+        for (i, (param, arg)) in self.iter_paired().enumerate() {
+            if param.default().is_none() || arg != &param.as_gradual_type() {
+                last_non_default = i + 1;
             }
         }
-        count
+        last_non_default
     }
 
     /// Apply a substitution to type arguments.

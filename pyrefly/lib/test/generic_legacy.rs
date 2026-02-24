@@ -515,6 +515,20 @@ U = TypeVar('U', default=int)
 V = TypeVar('V')
 class MyClass(Generic[T, U, V]):  # E: Type parameter `V` without a default cannot follow type parameter `U` with a default
     ...
+def f(x: MyClass[str, int, bool]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass[str, int, bool]
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_explicit_args_match_defaults,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T', default=int)
+U = TypeVar('U', default=str)
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass[int, str]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass
     "#,
 );
 
