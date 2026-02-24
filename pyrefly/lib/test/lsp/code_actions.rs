@@ -241,6 +241,28 @@ fn compute_invert_boolean_actions_allow_errors(
     (module_info, edit_sets, titles)
 }
 
+fn compute_dict_definition_actions(
+    code: &str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .dict_definition_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
 fn assert_no_invert_boolean_action_allow_errors(code: &str, selection: TextRange) {
     let (_, actions, _) = compute_invert_boolean_actions_allow_errors(code, selection);
     assert!(
@@ -1738,6 +1760,121 @@ def foo():
 "#
         .trim(),
         report.trim()
+    );
+}
+
+#[test]
+fn dict_definition_code_actions_basic() {
+    let code = r#"def build():
+    data = {"a": 1, "b": [1, 2]}
+    return data
+"#;
+    let dict_start = find_nth_range(code, "{", 1).start();
+    let selection = TextRange::new(dict_start, dict_start);
+    let (module_info, actions, titles) = compute_dict_definition_actions(code, selection);
+    assert_eq!(3, actions.len());
+    assert_eq!(
+        vec![
+            "Create TypedDict `Data`",
+            "Create dataclass `Data`",
+            "Create pydantic model `Data`",
+        ],
+        titles
+    );
+
+    let typed_dict_result = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected_typed_dict = r#"from typing import TypedDict
+def build():
+    class Data(TypedDict):
+        a: int
+        b: list[int]
+    data = {"a": 1, "b": [1, 2]}
+    return data
+"#;
+    assert_eq!(expected_typed_dict.trim(), typed_dict_result.trim());
+
+    let dataclass_result = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected_dataclass = r#"from dataclasses import dataclass
+def build():
+    @dataclass
+    class Data:
+        a: int
+        b: list[int]
+    data = {"a": 1, "b": [1, 2]}
+    return data
+"#;
+    assert_eq!(expected_dataclass.trim(), dataclass_result.trim());
+
+    let pydantic_result = apply_refactor_edits_for_module(&module_info, &actions[2]);
+    let expected_pydantic = r#"from pydantic import BaseModel
+def build():
+    class Data(BaseModel):
+        a: int
+        b: list[int]
+    data = {"a": 1, "b": [1, 2]}
+    return data
+"#;
+    assert_eq!(expected_pydantic.trim(), pydantic_result.trim());
+}
+
+#[test]
+fn dict_definition_includes_any_imports() {
+    let code = r#"def build(value):
+    data = {"a": value}
+    return data
+"#;
+    let dict_start = find_nth_range(code, "{", 1).start();
+    let selection = TextRange::new(dict_start, dict_start);
+    let (module_info, actions, _) = compute_dict_definition_actions(code, selection);
+    assert_eq!(3, actions.len());
+
+    let typed_dict_result = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected_typed_dict = r#"from typing import TypedDict, Any
+def build(value):
+    class Data(TypedDict):
+        a: Any
+    data = {"a": value}
+    return data
+"#;
+    assert_eq!(expected_typed_dict.trim(), typed_dict_result.trim());
+
+    let dataclass_result = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected_dataclass = r#"from typing import Any
+from dataclasses import dataclass
+def build(value):
+    @dataclass
+    class Data:
+        a: Any
+    data = {"a": value}
+    return data
+"#;
+    assert_eq!(expected_dataclass.trim(), dataclass_result.trim());
+
+    let pydantic_result = apply_refactor_edits_for_module(&module_info, &actions[2]);
+    let expected_pydantic = r#"from typing import Any
+from pydantic import BaseModel
+def build(value):
+    class Data(BaseModel):
+        a: Any
+    data = {"a": value}
+    return data
+"#;
+    assert_eq!(expected_pydantic.trim(), pydantic_result.trim());
+}
+
+#[test]
+fn dict_definition_rejects_non_literal_keys() {
+    let code = r#"def build(extra):
+    data = {"a": 1, **extra}
+    return data
+"#;
+    let dict_start = find_nth_range(code, "{", 1).start();
+    let selection = TextRange::new(dict_start, dict_start);
+    let (_, actions, _) = compute_dict_definition_actions(code, selection);
+    assert!(
+        actions.is_empty(),
+        "expected no dict definition actions, found {}",
+        actions.len()
     );
 }
 
