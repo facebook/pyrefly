@@ -29,7 +29,10 @@ _VERDICT_LABEL = {
 def format_markdown(result: ClassificationResult) -> str:
     """Render classification results as a GitHub PR comment in markdown."""
     if not result.classifications:
-        return "## Primer Diff Classification\n\n" "No diffs to classify. All clear."
+        return (
+            "## Primer Diff Classification\n\n"
+            "No diffs to classify. All clear."
+        )
 
     lines: list[str] = []
     lines.append("## Primer Diff Classification\n")
@@ -47,8 +50,12 @@ def format_markdown(result: ClassificationResult) -> str:
     if result.neutrals:
         parts.append(f"{_VERDICT_EMOJI['neutral']} {result.neutrals} neutral")
     if result.ambiguous:
-        parts.append(f"{_VERDICT_EMOJI['ambiguous']} {result.ambiguous} needs review")
-    lines.append(" | ".join(parts) + f" | {result.total_projects} project(s) total\n")
+        parts.append(
+            f"{_VERDICT_EMOJI['ambiguous']} {result.ambiguous} needs review"
+        )
+    lines.append(
+        " | ".join(parts) + f" | {result.total_projects} project(s) total\n"
+    )
 
     # Group by verdict for easier scanning
     for verdict in ("regression", "improvement", "neutral", "ambiguous"):
@@ -61,12 +68,16 @@ def format_markdown(result: ClassificationResult) -> str:
         lines.append(f"### {emoji} {label} ({len(group)})\n")
 
         for c in group:
-            change_summary = _format_change_counts(c.added_count, c.removed_count)
+            change_summary = _format_change_counts(
+                c.added_count, c.removed_count
+            )
             lines.append(f"**{c.project_name}** ({change_summary})")
             if c.categories:
                 for cat in c.categories:
                     cat_emoji = _VERDICT_EMOJI.get(cat.verdict, "")
-                    lines.append(f"> {cat_emoji} **{cat.category}**: {cat.reason}")
+                    lines.append(
+                        f"> {cat_emoji} **{cat.category}**: {cat.reason}"
+                    )
                 if c.reason:
                     lines.append(f">\n> *Overall:* {c.reason}\n")
                 else:
@@ -77,7 +88,8 @@ def format_markdown(result: ClassificationResult) -> str:
     # Footer
     lines.append("---")
     lines.append(
-        "<sub>Classification by primer-classifier" f" ({_method_summary(result)})</sub>"
+        "<sub>Classification by primer-classifier"
+        f" ({_method_summary(result)})</sub>"
     )
 
     return "\n".join(lines)
@@ -95,7 +107,9 @@ def _format_change_counts(added: int, removed: int) -> str:
 
 def _method_summary(result: ClassificationResult) -> str:
     """Summarize which classification methods were used."""
-    heuristic = sum(1 for c in result.classifications if c.method == "heuristic")
+    heuristic = sum(
+        1 for c in result.classifications if c.method == "heuristic"
+    )
     llm = sum(1 for c in result.classifications if c.method == "llm")
     parts = []
     if heuristic:

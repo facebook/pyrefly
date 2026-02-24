@@ -35,4 +35,3 @@ static-frame (https://github.com/static-frame/static-frame)
 + ::error file=static_frame/core/index_datetime.py,line=518,col=25,endLine=518,endColumn=51,title=Pyrefly not-callable::Expected a callable, got `Literal[SortStatus.from_range_step]`
 + ::error file=static_frame/core/index_datetime.py,line=543,col=25,endLine=543,endColumn=51,title=Pyrefly not-callable::Expected a callable, got `Literal[SortStatus.from_range_step]`
 + ::error file=static_frame/core/index_datetime.py,line=568,col=25,endLine=568,endColumn=51,title=Pyrefly not-callable::Expected a callable, got `Literal[SortStatus.from_range_step]`
-

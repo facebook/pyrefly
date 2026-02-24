@@ -13,4 +13,3 @@ asynq (https://github.com/quora/asynq)
 hydra-zen (https://github.com/mit-ll-responsible-ai/hydra-zen)
 + ERROR src/hydra_zen/structured_configs/_implementations.py:1315:20-1323:14: Returned type `list[Unknown] | tuple[Unknown, ...]` is not assignable to declared return type `_T` [bad-return]
 + ::error file=src/hydra_zen/structured_configs/_implementations.py,line=1315,col=20,endLine=1323,endColumn=14,title=Pyrefly bad-return::Returned type `list[Unknown] | tuple[Unknown, ...]` is not assignable to declared return type `_T`
-

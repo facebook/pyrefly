@@ -133,4 +133,3 @@ static-frame (https://github.com/static-frame/static-frame)
 - ERROR static_frame/test/unit/test_frame_via_fill_value.py:387:45-46: Expected a type form, got instance of `Literal[1]` [not-a-type]
 
 ... (truncated 1096 lines) ...
-

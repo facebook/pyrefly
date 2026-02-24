@@ -5,4 +5,3 @@ core (https://github.com/home-assistant/core)
 mkdocs (https://github.com/mkdocs/mkdocs)
 + ERROR mkdocs/plugins.py:493:7-23: Class `PluginCollection` has inconsistent type arguments for base class `MutableMapping`: `MutableMapping[Unknown, Unknown]` and `MutableMapping[str, BasePlugin[Unknown]]` [invalid-inheritance]
 + ::error file=mkdocs/plugins.py,line=493,col=7,endLine=493,endColumn=23,title=Pyrefly invalid-inheritance::Class `PluginCollection` has inconsistent type arguments for base class `MutableMapping`: `MutableMapping[Unknown, Unknown]` and `MutableMapping[str, BasePlugin[Unknown]]`
-

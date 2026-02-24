@@ -275,4 +275,3 @@ mitmproxy (https://github.com/mitmproxy/mitmproxy)
 + ::warning file=mitmproxy/certs.py,line=297,col=22,endLine=297,endColumn=39,title=Pyrefly redundant-cast::Redundant cast: `list[str]` is the same type as `list[str]`
 - ::error file=mitmproxy/http.py,line=601,col=33,endLine=601,endColumn=64,title=Pyrefly no-matching-overload::No matching overload found for function `mitmproxy.utils.strutils.always_bytes` called with arguments: (bytes | str | tuple[bytes, bytes], Literal['utf-8'], Literal['surrogateescape'])%0A  Possible overloads:%0A  (str_or_bytes: None, *encode_args: Unknown) -> None [closest match]%0A  (str_or_bytes: bytes | str, *encode_args: Unknown) -> bytes
 + ::error file=mitmproxy/http.py,line=1080,col=17,endLine=1084,endColumn=44,title=Pyrefly bad-argument-type::Argument `Generator[tuple[None, None], None, None]` is not assignable to parameter `fields` with type `Iterable[tuple[bytes, bytes]]` in function `Headers.__init__`
-

@@ -204,7 +204,9 @@ def _build_user_prompt(
             f"Source code at error location (line marked with >>>):\n{source_context}\n"
         )
     else:
-        parts.append("Source code: not available (could not fetch from GitHub)\n")
+        parts.append(
+            "Source code: not available (could not fetch from GitHub)\n"
+        )
 
     return "\n".join(parts)
 
@@ -314,7 +316,9 @@ def _extract_text_from_response(backend: str, result: dict) -> str:
             # Anthropic format: content[0].text
             return result["content"][0]["text"]
     except (KeyError, IndexError) as e:
-        raise LLMError(f"Unexpected {backend} API response structure: {result}") from e
+        raise LLMError(
+            f"Unexpected {backend} API response structure: {result}"
+        ) from e
 
 
 def _parse_classification(text: str) -> dict:
@@ -389,7 +393,9 @@ def classify_with_llm(
     if backend == "llama":
         result = _call_llama_api(api_key, system_prompt, user_prompt, model)
     else:
-        result = _call_anthropic_api(api_key, system_prompt, user_prompt, model)
+        result = _call_anthropic_api(
+            api_key, system_prompt, user_prompt, model
+        )
 
     text = _extract_text_from_response(backend, result)
     classification = _parse_classification(text)
@@ -430,5 +436,8 @@ def classify_with_llm(
         )
 
     return LLMResponse(
-        verdict=verdict, reason=reason, categories=categories, raw_response=result
+        verdict=verdict,
+        reason=reason,
+        categories=categories,
+        raw_response=result,
     )

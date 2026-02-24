@@ -29,4 +29,3 @@ pandera (https://github.com/pandera-dev/pandera)
 pip (https://github.com/pypa/pip)
 - ::error file=src/pip/_vendor/pygments/token.py,line=44,col=16,endLine=44,endColumn=46,title=Pyrefly unsupported-operation::`+` is not supported between `Literal['Token']` and `Self@_TokenType`%0A  Expected `__radd__` to be a callable, got `_TokenType | Any`
 + ::error file=src/pip/_vendor/pygments/token.py,line=44,col=16,endLine=44,endColumn=46,title=Pyrefly unsupported-operation::`+` is not supported between `Literal['Token']` and `Self@_TokenType`%0A  No matching overload found for function `str.__add__` called with arguments: (Self@_TokenType)%0A  Possible overloads:%0A  (value: LiteralString, /) -> LiteralString [closest match]%0A  (value: str, /) -> str
-

@@ -57,4 +57,3 @@ dd-trace-py (https://github.com/DataDog/dd-trace-py)
 + ERROR tests/contrib/asgi/test_asgi.py:550:24-57: Cannot index into `tuple[str, int]` [bad-index]
 + ERROR tests/contrib/langchain/conftest.py:119:17-50: Object of class `NoneType` has no attribute `OpenAIEmbeddings` [missing-attribute]
 + ERROR tests/llmobs/conftest.py:270:25-82: No matching overload found for function `typing.MutableMapping.update` called with arguments: (dict[str, str | None]) [no-matching-overload]
-

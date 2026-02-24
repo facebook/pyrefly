@@ -75,4 +75,3 @@ core (https://github.com/home-assistant/core)
 + ::error file=homeassistant/components/lametric/services.py,line=125,col=34,endLine=125,endColumn=76,title=Pyrefly bad-specialization::`Unknown | None` is not assignable to upper bound `Enum` of type variable `_EnumT`
 + ::error file=homeassistant/components/togrill/select.py,line=78,col=36,endLine=78,endColumn=66,title=Pyrefly bad-specialization::`Unknown | None` is not assignable to upper bound `Enum` of type variable `_ENUM`
 + ::error file=homeassistant/components/togrill/select.py,line=78,col=88,endLine=80,endColumn=10,title=Pyrefly bad-specialization::`Unknown | None` is not assignable to upper bound `Enum` of type variable `_ENUM`
-
