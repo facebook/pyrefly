@@ -947,7 +947,7 @@ x4: TA | C = object()  # E: `object` is not assignable to `C | int | str`
 x5: TA | C = val1
 x6: TA | C = val2
 x7: TA | C = C()
-c2: Callable[[int], int] = f2  # E: `(x: C | int | str) -> C | int | str` is not assignable to `(int) -> int`
+c2: Callable[[int], int] = f2  # E: `(x: TA | C) -> TA | C` is not assignable to `(int) -> int`
     "#,
 );
 
