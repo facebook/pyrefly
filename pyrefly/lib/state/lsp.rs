@@ -10,7 +10,6 @@ use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::LazyLock;
 
 use dupe::Dupe;
 use fuzzy_matcher::FuzzyMatcher;
@@ -32,6 +31,7 @@ use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::types::Union;
+use pyrefly_util::editable_install::get_editable_source_paths;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
@@ -134,28 +134,6 @@ pub struct InlayHintConfig {
     #[serde(default = "default_true")]
     pub variable_types: bool,
 }
-
-/// PEP 610 direct_url.json structure for detecting editable installs.
-#[allow(dead_code)]
-#[derive(Deserialize)]
-struct DirectUrl {
-    url: String,
-    #[serde(default)]
-    dir_info: DirInfo,
-}
-
-#[allow(dead_code)]
-#[derive(Deserialize, Default)]
-struct DirInfo {
-    #[serde(default)]
-    editable: bool,
-}
-
-/// Cache for editable source paths, keyed by sorted site-packages paths.
-/// This avoids re-scanning site-packages on every check.
-#[allow(dead_code)]
-static EDITABLE_PATHS_CACHE: LazyLock<Mutex<SmallMap<Vec<PathBuf>, Vec<PathBuf>>>> =
-    LazyLock::new(|| Mutex::new(SmallMap::new()));
 
 impl Default for InlayHintConfig {
     fn default() -> Self {
@@ -2516,9 +2494,9 @@ impl<'a> Transaction<'a> {
                 }
             }
 
-            // Check editable packages detected via direct_url.json (PEP 610)
+            // Check editable packages detected via direct_url.json (PEP 610), .pth, or .egg-link files.
             let site_packages: Vec<PathBuf> = config.site_package_path().cloned().collect();
-            let editable_paths = Self::get_editable_source_paths(&site_packages);
+            let editable_paths = get_editable_source_paths(&site_packages);
             for editable_path in &editable_paths {
                 if module_path.as_path().starts_with(editable_path) {
                     return true;
@@ -2527,86 +2505,6 @@ impl<'a> Transaction<'a> {
         }
 
         false
-    }
-
-    /// Detect editable packages by scanning site-packages for direct_url.json files (PEP 610).
-    #[allow(dead_code)]
-    fn detect_editable_packages(site_packages: &[PathBuf]) -> Vec<PathBuf> {
-        let mut editable_paths = Vec::new();
-
-        for sp in site_packages {
-            let Ok(entries) = std::fs::read_dir(sp) else {
-                continue;
-            };
-
-            for entry in entries.filter_map(|e| e.ok()) {
-                let path = entry.path();
-
-                // Look for .dist-info directories
-                if !path.is_dir() {
-                    continue;
-                }
-                if path.extension().is_none_or(|ext| ext != "dist-info") {
-                    continue;
-                }
-
-                let direct_url_path = path.join("direct_url.json");
-                let Ok(content) = std::fs::read_to_string(&direct_url_path) else {
-                    continue;
-                };
-                let Ok(direct_url) = serde_json::from_str::<DirectUrl>(&content) else {
-                    continue;
-                };
-
-                if !direct_url.dir_info.editable {
-                    continue;
-                }
-
-                // Parse the file:// URL and extract the path
-                let Ok(url) = lsp_types::Url::parse(&direct_url.url) else {
-                    continue;
-                };
-                if url.scheme() != "file" {
-                    continue;
-                }
-
-                let path_str = url.path();
-
-                // On Windows, file URLs look like file:///C:/path
-                // url.path() returns "/C:/path", we need to strip the leading "/"
-                #[cfg(windows)]
-                let path_str = path_str.strip_prefix('/').unwrap_or(path_str);
-
-                // Decode percent-encoded characters (e.g., %20 -> space)
-                let Ok(decoded) = percent_encoding::percent_decode_str(path_str).decode_utf8()
-                else {
-                    continue;
-                };
-
-                let source_path = PathBuf::from(decoded.as_ref());
-                if source_path.is_dir() {
-                    editable_paths.push(source_path);
-                }
-            }
-        }
-
-        editable_paths
-    }
-
-    /// Get editable source paths for the given site-packages, using cache.
-    #[allow(dead_code)]
-    fn get_editable_source_paths(site_packages: &[PathBuf]) -> Vec<PathBuf> {
-        let mut key: Vec<PathBuf> = site_packages.to_vec();
-        key.sort();
-
-        let mut cache = EDITABLE_PATHS_CACHE.lock();
-        if let Some(paths) = cache.get(&key) {
-            return paths.clone();
-        }
-
-        let paths = Self::detect_editable_packages(site_packages);
-        cache.insert(key, paths.clone());
-        paths
     }
 
     pub fn prepare_rename(&self, handle: &Handle, position: TextSize) -> Option<TextRange> {
@@ -3627,8 +3525,6 @@ impl<'a> CancellableTransaction<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use pyrefly_types::heap::TypeHeap;
     use ruff_python_ast::name::Name;
 
@@ -3688,95 +3584,5 @@ mod tests {
     fn match_summary(params: &[Param], idx: usize) -> Option<(&str, bool)> {
         Transaction::<'static>::param_name_for_positional_argument(params, idx)
             .map(|match_| (match_.name.as_str(), match_.is_vararg_repeat))
-    }
-
-    #[test]
-    fn test_get_editable_source_paths_finds_editable_package() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let site_packages = temp_dir.path().join("site-packages");
-        fs::create_dir(&site_packages).unwrap();
-
-        let dist_info = site_packages.join("mypackage-1.0.0.dist-info");
-        fs::create_dir(&dist_info).unwrap();
-
-        let source_dir = temp_dir.path().join("mypackage_source");
-        fs::create_dir(&source_dir).unwrap();
-
-        // Use Url::from_file_path to construct a proper file URL that works on all platforms
-        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
-        let direct_url_content = format!(
-            r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
-            source_url.as_str()
-        );
-        fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
-
-        let result =
-            Transaction::<'static>::get_editable_source_paths(std::slice::from_ref(&site_packages));
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0], source_dir);
-    }
-
-    #[test]
-    fn test_get_editable_source_paths_ignores_non_editable_package() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let site_packages = temp_dir.path().join("site-packages");
-        fs::create_dir(&site_packages).unwrap();
-
-        let dist_info = site_packages.join("requests-2.28.0.dist-info");
-        fs::create_dir(&dist_info).unwrap();
-
-        let source_dir = temp_dir.path().join("requests_source");
-        fs::create_dir(&source_dir).unwrap();
-
-        // Use Url::from_file_path to construct a proper file URL that works on all platforms
-        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
-        let direct_url_content = format!(
-            r#"{{"url": "{}", "dir_info": {{"editable": false}}}}"#,
-            source_url.as_str()
-        );
-        fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
-
-        let result = Transaction::<'static>::get_editable_source_paths(&[site_packages]);
-
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_get_editable_source_paths_ignores_missing_direct_url_json() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let site_packages = temp_dir.path().join("site-packages");
-        fs::create_dir(&site_packages).unwrap();
-
-        let dist_info = site_packages.join("somepackage-1.0.0.dist-info");
-        fs::create_dir(&dist_info).unwrap();
-
-        let result = Transaction::<'static>::get_editable_source_paths(&[site_packages]);
-
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_get_editable_source_paths_ignores_nonexistent_source_directory() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let site_packages = temp_dir.path().join("site-packages");
-        fs::create_dir(&site_packages).unwrap();
-
-        let dist_info = site_packages.join("mypackage-1.0.0.dist-info");
-        fs::create_dir(&dist_info).unwrap();
-
-        let nonexistent_path = temp_dir.path().join("does_not_exist");
-
-        // Use Url::from_file_path to construct a proper file URL that works on all platforms
-        let nonexistent_url = lsp_types::Url::from_file_path(&nonexistent_path).unwrap();
-        let direct_url_content = format!(
-            r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
-            nonexistent_url.as_str()
-        );
-        fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
-
-        let result = Transaction::<'static>::get_editable_source_paths(&[site_packages]);
-
-        assert!(result.is_empty());
     }
 }
