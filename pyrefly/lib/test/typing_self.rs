@@ -309,6 +309,6 @@ class A(Generic[X]):
     pass
 
 class B(A[Y1 | Y2], Generic[Y1, Y2]):
-    def __new__(cls, A: A[Y1], B: A[Y2]) -> Self: ... # E: Type variable `Y1` is not in scope
+    def __new__(cls, A: A[Y1], B: A[Y2]) -> Self: ...
     "#,
 );

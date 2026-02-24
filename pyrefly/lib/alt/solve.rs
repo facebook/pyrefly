@@ -4344,6 +4344,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
+        if let Type::SelfType(_) = ty {
+            // Skip scoping check for `Self` since there is no type variable in the syntax.
+            return;
+        }
         let mut names = Vec::new();
         ty.collect_raw_legacy_type_variables(&mut names);
         for name in names {
