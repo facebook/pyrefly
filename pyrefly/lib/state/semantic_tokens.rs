@@ -18,6 +18,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit as _;
 use ruff_python_ast::Arguments;
@@ -289,8 +290,10 @@ impl SemanticTokenBuilder {
                 x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
             }
             Expr::Attribute(attr) => {
-                // todo(samzhou19815): if the class's base is Enum, it should be ENUM_MEMBER
                 let kind = match get_type_of_attribute(attr.range()) {
+                    Some(Type::Literal(lit)) if matches!(lit.value, Lit::Enum(_)) => {
+                        SemanticTokenType::ENUM_MEMBER
+                    }
                     Some(ty) if ty.is_toplevel_callable() => {
                         let is_method = ty.visit_toplevel_func_metadata(&|meta| {
                             matches!(&meta.kind, FunctionKind::Def(func) if func.cls.is_some())

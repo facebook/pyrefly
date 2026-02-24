@@ -369,6 +369,44 @@ token-type: property
 }
 
 #[test]
+fn enum_member_attribute_test() {
+    let code = r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+
+Color.RED
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 5, length: 4, text: enum
+token-type: namespace
+
+line: 1, column: 17, length: 4, text: Enum
+token-type: class
+
+line: 3, column: 6, length: 5, text: Color
+token-type: class
+
+line: 3, column: 12, length: 4, text: Enum
+token-type: class
+
+line: 4, column: 4, length: 3, text: RED
+token-type: variable, token-modifiers: [readonly]
+
+line: 6, column: 0, length: 5, text: Color
+token-type: class
+
+line: 6, column: 6, length: 3, text: RED
+token-type: enumMember
+"#,
+    );
+}
+
+#[test]
 fn type_alias_test() {
     let code = r#"
 type A = int
