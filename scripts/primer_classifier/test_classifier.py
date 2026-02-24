@@ -18,32 +18,24 @@ from unittest.mock import patch
 import pytest
 
 from .classifier import (
-    Classification,
     _extract_class_name,
     _format_errors_for_llm,
     _is_all_internal_errors,
     _is_wording_change,
     _truncate_source_context,
+    Classification,
     classify_all,
     classify_project,
 )
-from .code_fetcher import (
-    _extract_referenced_modules,
-    _github_url_to_owner_repo,
-)
+from .code_fetcher import _extract_referenced_modules, _github_url_to_owner_repo
 from .formatter import format_json, format_markdown
 from .llm_client import (
-    CategoryVerdict,
     _extract_text_from_response,
     _get_backend,
     _parse_classification,
+    CategoryVerdict,
 )
-from .parser import (
-    ErrorEntry,
-    ProjectDiff,
-    parse_error_line,
-    parse_primer_diff,
-)
+from .parser import ErrorEntry, parse_error_line, parse_primer_diff, ProjectDiff
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "unit"
 
@@ -122,9 +114,7 @@ class TestParsePrimerDiff:
         assert names == ["project_a", "project_b", "project_c", "project_d"]
 
     def test_github_actions_format(self):
-        projects = parse_primer_diff(
-            _load_fixture("github_actions_format.txt")
-        )
+        projects = parse_primer_diff(_load_fixture("github_actions_format.txt"))
         assert len(projects) == 1
         assert len(projects[0].added) == 1
         assert len(projects[0].removed) == 1
@@ -147,9 +137,7 @@ class TestParsePrimerDiff:
 
 
 class TestHeuristics:
-    def _make_entry(
-        self, kind: str = "bad-return", msg: str = "msg"
-    ) -> ErrorEntry:
+    def _make_entry(self, kind: str = "bad-return", msg: str = "msg") -> ErrorEntry:
         return ErrorEntry(
             severity="ERROR",
             file_path="src/foo.py",
@@ -199,9 +187,7 @@ class TestHeuristics:
 
 
 class TestClassifyProject:
-    def _make_entry(
-        self, kind: str = "bad-return", msg: str = "msg"
-    ) -> ErrorEntry:
+    def _make_entry(self, kind: str = "bad-return", msg: str = "msg") -> ErrorEntry:
         return ErrorEntry(
             severity="ERROR",
             file_path="src/foo.py",
@@ -259,15 +245,11 @@ class TestClassifyAll:
 
     def test_counts(self):
         projects = [
-            ProjectDiff(
-                name="a", removed=[self._make_entry()]
-            ),  # ambiguous (no LLM)
+            ProjectDiff(name="a", removed=[self._make_entry()]),  # ambiguous (no LLM)
             ProjectDiff(
                 name="b", added=[self._make_entry(kind="internal-error")]
             ),  # regression
-            ProjectDiff(
-                name="c", added=[self._make_entry()]
-            ),  # ambiguous (no LLM)
+            ProjectDiff(name="c", added=[self._make_entry()]),  # ambiguous (no LLM)
         ]
         result = classify_all(projects, fetch_code=False, use_llm=False)
         assert result.total_projects == 3
@@ -351,8 +333,7 @@ class TestRealFixtureParsing:
 class TestCategorization:
     def test_extract_class_name(self):
         assert (
-            _extract_class_name("Object of class `Foo` has no attribute `bar`")
-            == "Foo"
+            _extract_class_name("Object of class `Foo` has no attribute `bar`") == "Foo"
         )
         assert _extract_class_name("no class here") is None
 
@@ -468,7 +449,9 @@ class TestParseClassification:
         assert result["verdict"] == "improvement"
 
     def test_json_embedded_in_text(self):
-        text = 'Here is my analysis:\n{"verdict": "neutral", "reason": "wording"}\nDone.'
+        text = (
+            'Here is my analysis:\n{"verdict": "neutral", "reason": "wording"}\nDone.'
+        )
         result = _parse_classification(text)
         assert result["verdict"] == "neutral"
 
@@ -508,21 +491,15 @@ class TestParseClassification:
 
 class TestGitHubUrlParsing:
     def test_valid_url(self):
-        result = _github_url_to_owner_repo(
-            "https://github.com/facebook/pyrefly"
-        )
+        result = _github_url_to_owner_repo("https://github.com/facebook/pyrefly")
         assert result == ("facebook", "pyrefly")
 
     def test_url_with_git_suffix(self):
-        result = _github_url_to_owner_repo(
-            "https://github.com/facebook/pyrefly.git"
-        )
+        result = _github_url_to_owner_repo("https://github.com/facebook/pyrefly.git")
         assert result == ("facebook", "pyrefly")
 
     def test_non_github_url(self):
-        assert (
-            _github_url_to_owner_repo("https://gitlab.com/user/repo") is None
-        )
+        assert _github_url_to_owner_repo("https://gitlab.com/user/repo") is None
 
     def test_invalid_url(self):
         assert _github_url_to_owner_repo("not a url") is None
@@ -620,9 +597,7 @@ class TestFormatMarkdown:
                         CategoryVerdict(
                             "missing-attr", "regression", "false positives"
                         ),
-                        CategoryVerdict(
-                            "bad-return", "improvement", "real bugs"
-                        ),
+                        CategoryVerdict("bad-return", "improvement", "real bugs"),
                     ],
                 ),
             ],

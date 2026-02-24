@@ -98,9 +98,7 @@ def _fetch_file_from_github(
         req.add_header("Authorization", f"token {token}")
 
     try:
-        with urllib.request.urlopen(
-            req, timeout=15, context=get_ssl_context()
-        ) as resp:
+        with urllib.request.urlopen(req, timeout=15, context=get_ssl_context()) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError:
         return None
@@ -117,9 +115,7 @@ def _resolve_project_ref(owner: str, repo: str) -> str:
     if token:
         req.add_header("Authorization", f"token {token}")
     try:
-        with urllib.request.urlopen(
-            req, timeout=10, context=get_ssl_context()
-        ) as resp:
+        with urllib.request.urlopen(req, timeout=10, context=get_ssl_context()) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return data.get("default_branch", "main")
     except (urllib.error.HTTPError, urllib.error.URLError):
@@ -138,9 +134,7 @@ def _extract_referenced_modules(entry: ErrorEntry) -> list[str]:
     to a potential file path.
     """
     # Match backtick-quoted dotted names like `foo.bar.Baz`
-    refs = re.findall(
-        r"`([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)+)`", entry.message
-    )
+    refs = re.findall(r"`([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)+)`", entry.message)
     paths = []
     for ref in refs:
         # Convert dotted module path to file path (e.g. foo.bar.baz -> foo/bar/baz.py)
@@ -208,12 +202,9 @@ def fetch_source_context(
             ref_lines = ref_content.splitlines()
             if len(ref_lines) <= MAX_FILE_LINES:
                 numbered = "\n".join(
-                    f"{i + 1:5d}     {line}"
-                    for i, line in enumerate(ref_lines)
+                    f"{i + 1:5d}     {line}" for i, line in enumerate(ref_lines)
                 )
-                snippet += (
-                    f"\n\n--- Referenced file: {ref_path} ---\n{numbered}"
-                )
+                snippet += f"\n\n--- Referenced file: {ref_path} ---\n{numbered}"
 
     return SourceContext(
         file_content=content,
@@ -260,8 +251,6 @@ def fetch_files_by_path(
                 numbered = "\n".join(
                     f"{i + 1:5d}     {line}" for i, line in enumerate(lines)
                 )
-                snippets.append(
-                    f"--- Requested file: {file_path} ---\n{numbered}"
-                )
+                snippets.append(f"--- Requested file: {file_path} ---\n{numbered}")
 
     return "\n\n".join(snippets) if snippets else None

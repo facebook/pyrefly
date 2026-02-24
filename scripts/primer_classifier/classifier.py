@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .code_fetcher import fetch_files_by_path, fetch_source_context
-from .llm_client import CategoryVerdict, LLMError, classify_with_llm
+from .llm_client import CategoryVerdict, classify_with_llm, LLMError
 from .parser import ErrorEntry, ProjectDiff
 
 # Rough token estimation: ~2 chars per token. Code tokenizes into shorter
@@ -68,9 +68,7 @@ _INFERENCE_FAILURE_MARKERS = ("Never", "@_")
 def _has_inference_failure_markers(entries: list[ErrorEntry]) -> bool:
     """Check if any entries contain Never or @_ types (inference failures)."""
     return any(
-        marker in e.message
-        for e in entries
-        for marker in _INFERENCE_FAILURE_MARKERS
+        marker in e.message for e in entries for marker in _INFERENCE_FAILURE_MARKERS
     )
 
 
@@ -96,12 +94,8 @@ def _is_wording_change(project: ProjectDiff) -> bool:
         return False
 
     # Build sets of (file, line, error_kind) for added and removed
-    added_keys = {
-        (e.file_path, e.line_number, e.error_kind) for e in project.added
-    }
-    removed_keys = {
-        (e.file_path, e.line_number, e.error_kind) for e in project.removed
-    }
+    added_keys = {(e.file_path, e.line_number, e.error_kind) for e in project.added}
+    removed_keys = {(e.file_path, e.line_number, e.error_kind) for e in project.removed}
     return added_keys == removed_keys
 
 
@@ -122,12 +116,8 @@ def _is_near_wording_change(project: ProjectDiff) -> bool:
     if _has_inference_failure_markers(project.added):
         return False
 
-    added_keys = [
-        (e.file_path, e.line_number, e.error_kind) for e in project.added
-    ]
-    removed_keys = [
-        (e.file_path, e.line_number, e.error_kind) for e in project.removed
-    ]
+    added_keys = [(e.file_path, e.line_number, e.error_kind) for e in project.added]
+    removed_keys = [(e.file_path, e.line_number, e.error_kind) for e in project.removed]
 
     # Count how many added entries have a matching removed entry
     removed_multiset: dict[tuple[str, int, str], int] = {}
@@ -153,9 +143,7 @@ def _is_near_wording_change(project: ProjectDiff) -> bool:
 
     # At least 80% of each side must be matched
     added_ratio = matched_added / len(project.added) if project.added else 0
-    removed_ratio = (
-        matched_removed / len(project.removed) if project.removed else 0
-    )
+    removed_ratio = matched_removed / len(project.removed) if project.removed else 0
     return added_ratio >= 0.8 and removed_ratio >= 0.8
 
 
@@ -164,9 +152,7 @@ def _is_stubs_project(project: ProjectDiff) -> bool:
     return project.name.endswith("-stubs")
 
 
-_CATEGORY_THRESHOLD = (
-    5  # Use categories instead of individual errors above this
-)
+_CATEGORY_THRESHOLD = 5  # Use categories instead of individual errors above this
 
 
 def _extract_class_name(message: str) -> Optional[str]:
@@ -206,11 +192,7 @@ def _categorize_errors(entries: list[ErrorEntry], prefix: str) -> str:
                 {
                     m.group(1)
                     for e in group_entries
-                    if (
-                        m := re.search(
-                            r"revealed type: (.+?)(?:\s*\[|$)", e.message
-                        )
-                    )
+                    if (m := re.search(r"revealed type: (.+?)(?:\s*\[|$)", e.message))
                 }
             )
             types_str = ", ".join(types_seen[:8])
@@ -228,9 +210,7 @@ def _categorize_errors(entries: list[ErrorEntry], prefix: str) -> str:
                 }
             )
             example = group_entries[0].message
-            line = (
-                f"{prefix} [{kind}] on `{cls}`: {len(group_entries)} error(s)"
-            )
+            line = f"{prefix} [{kind}] on `{cls}`: {len(group_entries)} error(s)"
             line += f"\n    Example: {example}"
             if attrs:
                 attr_str = ", ".join(f"`{a}`" for a in attrs[:6])
@@ -269,9 +249,7 @@ def _format_errors_for_llm(project: ProjectDiff) -> str:
 
     # For reveal-type changes, note the type transitions factually
     added_reveal = [e for e in project.added if e.error_kind == "reveal-type"]
-    removed_reveal = [
-        e for e in project.removed if e.error_kind == "reveal-type"
-    ]
+    removed_reveal = [e for e in project.removed if e.error_kind == "reveal-type"]
     if added_reveal and removed_reveal:
         removed_types = {
             m.group(1)
@@ -339,9 +317,7 @@ def _truncate_source_context(
         f"to ~{len(truncated) // _CHARS_PER_TOKEN} tokens to stay within API limits.",
         file=sys.stderr,
     )
-    return (
-        truncated + "\n\n[... source context truncated due to token limit ...]"
-    )
+    return truncated + "\n\n[... source context truncated due to token limit ...]"
 
 
 def _determine_change_type(project: ProjectDiff) -> str:
@@ -533,9 +509,7 @@ def classify_project(
                 f"  LLM requested files: {llm_result.needs_files}",
                 file=sys.stderr,
             )
-            extra_context = fetch_files_by_path(
-                project, llm_result.needs_files
-            )
+            extra_context = fetch_files_by_path(project, llm_result.needs_files)
             if not extra_context:
                 break
             if combined_context:
