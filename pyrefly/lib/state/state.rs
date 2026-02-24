@@ -43,6 +43,8 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::demand_tree::DemandCollector;
 use pyrefly_util::demand_tree::DemandEdge;
 use pyrefly_util::demand_tree::DemandSpan;
+use pyrefly_util::editable_install::clear_editable_source_paths_cache;
+use pyrefly_util::editable_install::is_editable_metadata_file;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lock::Mutex;
@@ -2359,6 +2361,9 @@ impl<'a> Transaction<'a> {
         let watched_metadata_changed = events
             .iter()
             .any(|path| ConfigFile::is_watched_metadata(path));
+        if events.iter().any(|path| is_editable_metadata_file(path)) {
+            clear_editable_source_paths_cache();
+        }
 
         // If any files were added or removed, we need to invalidate the find step.
         if !events.created.is_empty() || !events.removed.is_empty() || !events.unknown.is_empty() {
