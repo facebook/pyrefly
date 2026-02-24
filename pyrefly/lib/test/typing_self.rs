@@ -293,3 +293,22 @@ child1: Child = Child.create()  # OK - cls() returns Self
 child2: Child = Child.create_annotated()  # OK with explicit Self annotation
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2526
+testcase!(
+    bug = "Should not error due to type var scope when Self is used",
+    test_self_no_invalid_typevar,
+    r#"
+from typing import Generic, Self, TypeVar
+
+X = TypeVar("X")
+Y1 = TypeVar("Y1")
+Y2 = TypeVar("Y2", default=Y1) # default value is important here
+
+class A(Generic[X]):
+    pass
+
+class B(A[Y1 | Y2], Generic[Y1, Y2]):
+    def __new__(cls, A: A[Y1], B: A[Y2]) -> Self: ... # E: Type variable `Y1` is not in scope
+    "#,
+);
