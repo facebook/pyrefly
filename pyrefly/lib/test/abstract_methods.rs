@@ -465,11 +465,15 @@ class B(A):
 );
 
 testcase!(
-    test_raise_not_implemented_infers_any,
+    test_raise_not_implemented_infers_never_but_allows_override,
     r#"
+from typing import Never, assert_type
+
 class A:
     def foo(self):
         raise NotImplementedError()
+
+assert_type(A().foo(), Never)
 
 class B(A):
     def foo(self) -> int:

@@ -380,7 +380,6 @@ impl<'a> BindingsBuilder<'a> {
         stub_or_impl: FunctionStubOrImpl,
         decorators: Box<[Idx<KeyDecorator>]>,
         body_is_trivial: bool,
-        body_is_raise_not_implemented_error: bool,
         class_metadata_key: Option<Idx<KeyClassMetadata>>,
     ) {
         let is_generator =
@@ -463,7 +462,6 @@ impl<'a> BindingsBuilder<'a> {
                         yields: yield_keys,
                         yield_froms: yield_from_keys,
                         body_is_trivial,
-                        body_is_raise_not_implemented_error,
                         class_metadata_key,
                     }
                 }
@@ -550,20 +548,16 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             body.as_slice()
         };
-        let body_is_raise_not_implemented_error = matches!(
-            body_no_docstring,
+        let body_is_trivial = match body_no_docstring {
+            [] => true,
+            [Stmt::Pass(_)] => true,
+            // raise NotImplementedError(...)
             [
                 Stmt::Raise(StmtRaise {
                     exc: Some(box Expr::Call(ExprCall { box func, .. })),
                     ..
                 }),
-            ] if self.as_special_export(func) == Some(SpecialExport::NotImplementedError)
-        );
-        let body_is_trivial = match body_no_docstring {
-            [] => true,
-            [Stmt::Pass(_)] => true,
-            // raise NotImplementedError(...)
-            _ if body_is_raise_not_implemented_error => true,
+            ] if self.as_special_export(func) == Some(SpecialExport::NotImplementedError) => true,
             // return NotImplemented
             [
                 Stmt::Return(StmtReturn {
@@ -647,7 +641,6 @@ impl<'a> BindingsBuilder<'a> {
                         stub_or_impl,
                         decorators.decorators.clone(),
                         body_is_trivial,
-                        body_is_raise_not_implemented_error,
                         metadata_key,
                     );
                     self_assignments
@@ -680,7 +673,6 @@ impl<'a> BindingsBuilder<'a> {
                         stub_or_impl,
                         decorators.decorators.clone(),
                         body_is_trivial,
-                        body_is_raise_not_implemented_error,
                         metadata_key,
                     );
                     self_assignments
@@ -713,7 +705,6 @@ impl<'a> BindingsBuilder<'a> {
                         stub_or_impl,
                         decorators.decorators.clone(),
                         body_is_trivial,
-                        body_is_raise_not_implemented_error,
                         metadata_key,
                     );
                     self_assignments

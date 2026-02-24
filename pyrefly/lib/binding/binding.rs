@@ -1755,9 +1755,6 @@ pub enum ReturnTypeKind {
         /// Whether the function body is trivial (e.g., `pass`, `raise NotImplementedError()`).
         /// Used to detect abstract methods in ABC subclasses.
         body_is_trivial: bool,
-        /// Whether the function body is exactly `raise NotImplementedError(...)`.
-        /// Used to avoid inferring `Never` for unimplemented stubs.
-        body_is_raise_not_implemented_error: bool,
         /// The class metadata key, if this function is a method. Used to check if the class extends ABC.
         class_metadata_key: Option<Idx<KeyClassMetadata>>,
     },

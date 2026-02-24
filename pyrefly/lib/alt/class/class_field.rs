@@ -3062,6 +3062,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &want_class_field,
                 &Instance::of_protocol(parent, self.instantiate(cls)),
             );
+            // If parent return type was inferred as Never (for example a method that only raises),
+            // skip override consistency checks so we preserve reachability behavior without
+            // producing noisy bad-override diagnostics.
+            if !want_class_field.has_explicit_annotation()
+                && want_attribute
+                    .clone()
+                    .as_instance_method()
+                    .and_then(|ty| ty.callable_return_type(self.heap))
+                    .is_some_and(|ret| ret.is_never())
+            {
+                continue;
+            }
             if got_attribute.is_none() {
                 // Optimisation: Only compute the `got_attr` once, and only if we actually need it.
                 got_attribute = Some(self.as_instance_attribute(
