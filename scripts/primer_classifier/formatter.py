@@ -69,11 +69,15 @@ def format_markdown(result: ClassificationResult) -> str:
                     cat_emoji = _VERDICT_EMOJI.get(cat.verdict, "")
                     lines.append(f"> {cat_emoji} **{cat.category}**: {cat.reason}")
                 if c.reason:
-                    lines.append(f">\n> *Overall:* {c.reason}\n")
-                else:
-                    lines.append("")
+                    lines.append(f">\n> *Overall:* {c.reason}")
+                if c.pr_attribution and c.pr_attribution != "N/A":
+                    lines.append(f">\n> **Attribution:** {c.pr_attribution}")
+                lines.append("")
             else:
-                lines.append(f"> {c.reason}\n")
+                lines.append(f"> {c.reason}")
+                if c.pr_attribution and c.pr_attribution != "N/A":
+                    lines.append(f"> **Attribution:** {c.pr_attribution}")
+                lines.append("")
 
     # Footer
     lines.append("---")
@@ -124,6 +128,7 @@ def format_json(result: ClassificationResult) -> str:
                 "added_count": c.added_count,
                 "removed_count": c.removed_count,
                 "method": c.method,
+                "pr_attribution": c.pr_attribution,
                 "categories": (
                     [
                         {

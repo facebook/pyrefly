@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .code_fetcher import fetch_files_by_path, fetch_source_context
-from .llm_client import CategoryVerdict, classify_with_llm, LLMError
+from .llm_client import assign_verdict_with_llm, CategoryVerdict, classify_with_llm, LLMError
 from .parser import ErrorEntry, ProjectDiff
 
 # Rough token estimation: ~2 chars per token. Code tokenizes into shorter
@@ -42,6 +42,7 @@ class Classification:
     removed_count: int = 0
     method: str = "heuristic"  # "heuristic" or "llm"
     categories: list[CategoryVerdict] = field(default_factory=list)
+    pr_attribution: str = ""
 
 
 @dataclass
@@ -283,18 +284,21 @@ def _format_errors_for_llm(project: ProjectDiff) -> str:
 def _truncate_source_context(
     source_context: Optional[str],
     errors_text: str,
+    pyrefly_diff_len: int = 0,
 ) -> Optional[str]:
     """Truncate source context if the combined prompt would exceed API limits.
 
-    The errors text is kept intact (it's essential and already categorized).
+    The errors text and pyrefly diff are kept intact (they're essential).
     Source context is progressively truncated if needed.
     """
     if source_context is None:
         return None
 
-    # Budget for source context = total limit - errors - system prompt overhead
+    # Budget for source context = total limit - errors - diff - system prompt overhead
     overhead_chars = 4000 * _CHARS_PER_TOKEN  # system prompt + formatting
-    available_chars = _MAX_PROMPT_CHARS - len(errors_text) - overhead_chars
+    available_chars = (
+        _MAX_PROMPT_CHARS - len(errors_text) - pyrefly_diff_len - overhead_chars
+    )
 
     if available_chars <= 0:
         print(
@@ -425,16 +429,46 @@ def _get_best_source_context(
     return "\n\n".join(contexts) if contexts else None
 
 
+def _truncate_pyrefly_diff(pyrefly_diff: str, errors_text: str) -> str:
+    """Truncate the pyrefly PR diff if it would exceed API limits.
+
+    The PR diff gets priority over source context but must still fit
+    within the overall token budget alongside the errors text.
+    """
+    overhead_chars = 4000 * _CHARS_PER_TOKEN  # system prompt + formatting
+    # Leave room for at least some source context
+    max_diff_chars = _MAX_PROMPT_CHARS - len(errors_text) - overhead_chars
+    # Reserve up to half the remaining budget for source context
+    max_diff_chars = min(max_diff_chars, (_MAX_PROMPT_CHARS - overhead_chars) // 2)
+
+    if max_diff_chars <= 0 or len(pyrefly_diff) <= max_diff_chars:
+        return pyrefly_diff
+
+    truncated = pyrefly_diff[:max_diff_chars]
+    last_newline = truncated.rfind("\n")
+    if last_newline > max_diff_chars // 2:
+        truncated = truncated[:last_newline]
+
+    print(
+        f"Warning: truncated pyrefly PR diff from ~{len(pyrefly_diff) // _CHARS_PER_TOKEN} "
+        f"to ~{len(truncated) // _CHARS_PER_TOKEN} tokens to stay within API limits.",
+        file=sys.stderr,
+    )
+    return truncated + "\n\n[... pyrefly PR diff truncated due to token limit ...]"
+
+
 def classify_project(
     project: ProjectDiff,
     fetch_code: bool = True,
     use_llm: bool = True,
     model: Optional[str] = None,
+    pyrefly_diff: Optional[str] = None,
 ) -> Classification:
     """Classify a single project's changes.
 
     Applies heuristics first. If the case is non-trivial and use_llm is True,
-    fetches source code and delegates to the LLM.
+    fetches source code and delegates to the LLM. When pyrefly_diff is provided,
+    it is included in each LLM call for PR attribution.
     """
     base = Classification(
         project_name=project.name,
@@ -486,7 +520,15 @@ def classify_project(
 
     errors_text = _format_errors_for_llm(project)
     source_context = _get_best_source_context(project, fetch_code)
-    source_context = _truncate_source_context(source_context, errors_text)
+
+    # Truncate pyrefly diff if needed, then account for its size in source budget
+    truncated_diff = None
+    diff_len = 0
+    if pyrefly_diff:
+        truncated_diff = _truncate_pyrefly_diff(pyrefly_diff, errors_text)
+        diff_len = len(truncated_diff)
+
+    source_context = _truncate_source_context(source_context, errors_text, diff_len)
     change_type = _determine_change_type(project)
     structural_signals = _compute_structural_signals(project)
 
@@ -497,6 +539,7 @@ def classify_project(
             change_type=change_type,
             model=model,
             structural_signals=structural_signals,
+            pyrefly_diff=truncated_diff,
         )
 
         # Multi-pass: if the LLM requests additional files, fetch and retry
@@ -516,13 +559,16 @@ def classify_project(
             if combined_context:
                 combined_context += "\n\n"
             combined_context += extra_context
-            truncated = _truncate_source_context(combined_context, errors_text)
+            truncated = _truncate_source_context(
+                combined_context, errors_text, diff_len
+            )
             llm_result = classify_with_llm(
                 errors_text=errors_text,
                 source_context=truncated,
                 change_type=change_type,
                 model=model,
                 structural_signals=structural_signals,
+                pyrefly_diff=truncated_diff,
             )
 
         # If the LLM still wants files after all passes, give up
@@ -536,10 +582,16 @@ def classify_project(
             base.method = "llm"
             return base
 
-        base.verdict = llm_result.verdict
+        # Pass 2: assign verdict based on reasoning
+        verdict, categories_with_verdicts = assign_verdict_with_llm(
+            llm_result.reason, llm_result.categories, model
+        )
+
+        base.verdict = verdict
         base.reason = llm_result.reason
         base.method = "llm"
-        base.categories = llm_result.categories
+        base.categories = categories_with_verdicts
+        base.pr_attribution = llm_result.pr_attribution
     except LLMError as e:
         print(
             f"Warning: LLM classification failed for {project.name}: {e}",
@@ -561,11 +613,13 @@ def classify_all(
     fetch_code: bool = True,
     use_llm: bool = True,
     model: Optional[str] = None,
+    pyrefly_diff: Optional[str] = None,
 ) -> ClassificationResult:
     """Classify all projects in a primer diff.
 
     Returns a ClassificationResult with per-project classifications
-    and summary counts.
+    and summary counts. When pyrefly_diff is provided, it is passed
+    to each per-project LLM call for PR attribution.
     """
     result = ClassificationResult(total_projects=len(projects))
 
@@ -575,6 +629,7 @@ def classify_all(
             fetch_code=fetch_code,
             use_llm=use_llm,
             model=model,
+            pyrefly_diff=pyrefly_diff,
         )
         result.classifications.append(classification)
 

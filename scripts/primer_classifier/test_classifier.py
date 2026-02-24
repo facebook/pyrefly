@@ -31,10 +31,15 @@ from .classifier import (
 from .code_fetcher import _extract_referenced_modules, _github_url_to_owner_repo
 from .formatter import format_json, format_markdown
 from .llm_client import (
+    _build_user_prompt,
+    _build_verdict_prompt,
+    _build_verdict_system_prompt,
     _extract_text_from_response,
     _get_backend,
     _parse_classification,
+    assign_verdict_with_llm,
     CategoryVerdict,
+    LLMResponse,
 )
 from .parser import ErrorEntry, parse_error_line, parse_primer_diff, ProjectDiff
 
@@ -484,6 +489,28 @@ class TestParseClassification:
         with pytest.raises(LLMError):
             _parse_classification("this is not json at all")
 
+    def test_pass1_response_without_verdict(self):
+        """Pass 1 responses have reason but no verdict — should parse OK."""
+        text = json.dumps({
+            "spec_check": "N/A",
+            "runtime_behavior": "N/A",
+            "mypy_pyright": "N/A",
+            "removal_assessment": "These were false positives",
+            "pr_attribution": "N/A",
+            "reason": "The removed errors were false positives from inference failures",
+            "categories": [{"category": "missing-attr", "reason": "false positives"}],
+        })
+        result = _parse_classification(text)
+        assert "verdict" not in result
+        assert result["reason"] == "The removed errors were false positives from inference failures"
+        assert len(result["categories"]) == 1
+
+    def test_pass1_embedded_in_text_without_verdict(self):
+        """Pass 1 response embedded in text should be found by reason key."""
+        text = 'Analysis:\n{"reason": "false positives removed", "pr_attribution": "N/A"}\nDone.'
+        result = _parse_classification(text)
+        assert result["reason"] == "false positives removed"
+
 
 # ---------------------------------------------------------------------------
 # Code fetcher tests
@@ -629,3 +656,455 @@ class TestFormatJson:
         assert data["summary"]["total_projects"] == 1
         assert len(data["classifications"]) == 1
         assert data["classifications"][0]["verdict"] == "improvement"
+
+
+# ---------------------------------------------------------------------------
+# PR diff attribution tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildUserPromptWithDiff:
+    def test_includes_diff_when_provided(self):
+        prompt = _build_user_prompt(
+            errors_text="+ ERROR a.py:1:1: msg [bad-return]",
+            source_context=None,
+            change_type="additions only",
+            pyrefly_diff="diff --git a/alt/answers.rs\n+fn new_logic() {}",
+        )
+        assert "Pyrefly PR diff" in prompt
+        assert "alt/answers.rs" in prompt
+
+    def test_omits_diff_when_none(self):
+        prompt = _build_user_prompt(
+            errors_text="+ ERROR a.py:1:1: msg [bad-return]",
+            source_context=None,
+            change_type="additions only",
+            pyrefly_diff=None,
+        )
+        assert "Pyrefly PR diff" not in prompt
+
+    def test_omits_diff_when_empty(self):
+        prompt = _build_user_prompt(
+            errors_text="+ ERROR a.py:1:1: msg [bad-return]",
+            source_context=None,
+            change_type="additions only",
+            pyrefly_diff="",
+        )
+        assert "Pyrefly PR diff" not in prompt
+
+
+class TestPrAttributionParsing:
+    def test_pr_attribution_parsed_from_response(self):
+        text = json.dumps({
+            "spec_check": "N/A",
+            "runtime_behavior": "N/A",
+            "mypy_pyright": "N/A",
+            "removal_assessment": "N/A",
+            "pr_attribution": "Change to overload_resolution() in alt/answers.rs",
+            "reason": "Fixed false positives",
+            "verdict": "improvement",
+        })
+        result = _parse_classification(text)
+        assert result["pr_attribution"] == "Change to overload_resolution() in alt/answers.rs"
+
+    def test_pr_attribution_defaults_to_empty(self):
+        text = json.dumps({
+            "reason": "test",
+            "verdict": "regression",
+        })
+        result = _parse_classification(text)
+        assert result.get("pr_attribution", "") == ""
+
+
+class TestLLMResponsePrAttribution:
+    def test_pr_attribution_field(self):
+        resp = LLMResponse(
+            verdict="improvement",
+            reason="removed false positives",
+            pr_attribution="Change in alt/answers.rs fixed overload resolution",
+        )
+        assert resp.pr_attribution == "Change in alt/answers.rs fixed overload resolution"
+
+    def test_pr_attribution_default_empty(self):
+        resp = LLMResponse(verdict="neutral", reason="wording change")
+        assert resp.pr_attribution == ""
+
+
+class TestClassificationPrAttribution:
+    def test_pr_attribution_field(self):
+        c = Classification(
+            project_name="test",
+            verdict="improvement",
+            reason="good",
+            pr_attribution="Change in solver.rs",
+        )
+        assert c.pr_attribution == "Change in solver.rs"
+
+    def test_pr_attribution_default_empty(self):
+        c = Classification(
+            project_name="test",
+            verdict="neutral",
+            reason="wording",
+        )
+        assert c.pr_attribution == ""
+
+
+class TestClassifyAllWithDiff:
+    def _make_entry(self, kind: str = "bad-return") -> ErrorEntry:
+        return ErrorEntry(
+            severity="ERROR",
+            file_path="src/foo.py",
+            location="10:5-20",
+            message="msg",
+            error_kind=kind,
+            raw_line=f"ERROR src/foo.py:10:5-20: msg [{kind}]",
+        )
+
+    def test_pyrefly_diff_accepted(self):
+        """classify_all accepts pyrefly_diff without error."""
+        projects = [
+            ProjectDiff(
+                name="b", added=[self._make_entry(kind="internal-error")]
+            ),
+        ]
+        result = classify_all(
+            projects,
+            fetch_code=False,
+            use_llm=False,
+            pyrefly_diff="diff --git a/foo.rs",
+        )
+        assert result.total_projects == 1
+        assert result.regressions == 1
+
+
+class TestFormatterPrAttribution:
+    def test_markdown_shows_attribution(self):
+        from .classifier import ClassificationResult
+
+        result = ClassificationResult(
+            total_projects=1,
+            improvements=1,
+            classifications=[
+                Classification(
+                    project_name="proj",
+                    verdict="improvement",
+                    reason="removed false positives",
+                    method="llm",
+                    pr_attribution="Change in alt/answers.rs fixed overload resolution",
+                ),
+            ],
+        )
+        md = format_markdown(result)
+        assert "**Attribution:**" in md
+        assert "alt/answers.rs" in md
+
+    def test_markdown_hides_na_attribution(self):
+        from .classifier import ClassificationResult
+
+        result = ClassificationResult(
+            total_projects=1,
+            improvements=1,
+            classifications=[
+                Classification(
+                    project_name="proj",
+                    verdict="improvement",
+                    reason="removed false positives",
+                    method="llm",
+                    pr_attribution="N/A",
+                ),
+            ],
+        )
+        md = format_markdown(result)
+        assert "Attribution" not in md
+
+    def test_markdown_hides_empty_attribution(self):
+        from .classifier import ClassificationResult
+
+        result = ClassificationResult(
+            total_projects=1,
+            improvements=1,
+            classifications=[
+                Classification(
+                    project_name="proj",
+                    verdict="improvement",
+                    reason="removed false positives",
+                    method="llm",
+                ),
+            ],
+        )
+        md = format_markdown(result)
+        assert "Attribution" not in md
+
+    def test_json_includes_attribution(self):
+        from .classifier import ClassificationResult
+
+        result = ClassificationResult(
+            total_projects=1,
+            improvements=1,
+            classifications=[
+                Classification(
+                    project_name="proj",
+                    verdict="improvement",
+                    reason="good",
+                    method="llm",
+                    pr_attribution="Change in solver.rs",
+                ),
+            ],
+        )
+        output = format_json(result)
+        data = json.loads(output)
+        assert data["classifications"][0]["pr_attribution"] == "Change in solver.rs"
+
+    def test_json_includes_empty_attribution(self):
+        from .classifier import ClassificationResult
+
+        result = ClassificationResult(
+            total_projects=1,
+            improvements=1,
+            classifications=[
+                Classification(
+                    project_name="proj",
+                    verdict="improvement",
+                    reason="good",
+                    method="heuristic",
+                ),
+            ],
+        )
+        output = format_json(result)
+        data = json.loads(output)
+        assert data["classifications"][0]["pr_attribution"] == ""
+
+
+class TestTruncateSourceContextWithDiff:
+    def test_diff_len_reduces_budget(self):
+        """Source context budget should shrink when pyrefly_diff is present."""
+        from .classifier import _MAX_PROMPT_CHARS
+
+        # Create a source context large enough that the diff budget matters.
+        # The context must be close to the limit so that adding diff_len
+        # forces truncation.
+        errors = "x" * 1000
+        ctx = "a" * (_MAX_PROMPT_CHARS - 20_000)
+
+        # Without diff len, context should pass through (or be truncated less)
+        result_no_diff = _truncate_source_context(ctx, errors, pyrefly_diff_len=0)
+        # With a large diff len, context should be truncated further or dropped
+        result_with_diff = _truncate_source_context(
+            ctx, errors, pyrefly_diff_len=_MAX_PROMPT_CHARS // 2
+        )
+
+        assert result_no_diff is not None
+        if result_with_diff is None:
+            # Budget exhausted entirely — diff ate the remaining space
+            pass
+        else:
+            assert len(result_with_diff) < len(result_no_diff)
+
+
+# ---------------------------------------------------------------------------
+# Two-pass classification tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildVerdictPrompt:
+    def test_includes_reasoning(self):
+        reason = "The removed errors were false positives from inference failures"
+        categories = [
+            CategoryVerdict("missing-attr", "", "attributes exist via inheritance"),
+            CategoryVerdict("bad-return", "", "return type mismatch is real"),
+        ]
+        prompt = _build_verdict_prompt(reason, categories)
+        assert reason in prompt
+        assert "missing-attr" in prompt
+        assert "attributes exist via inheritance" in prompt
+        assert "bad-return" in prompt
+
+    def test_empty_categories(self):
+        prompt = _build_verdict_prompt("simple reasoning", [])
+        assert "simple reasoning" in prompt
+        assert "Per-category" not in prompt
+
+
+class TestBuildVerdictSystemPrompt:
+    def test_contains_verdict_rules(self):
+        prompt = _build_verdict_system_prompt()
+        assert "improvement" in prompt
+        assert "regression" in prompt
+        assert "neutral" in prompt
+        assert "verdict" in prompt
+
+
+class TestTwoPassClassifyProject:
+    def _make_entry(self, kind: str = "bad-return", msg: str = "msg") -> ErrorEntry:
+        return ErrorEntry(
+            severity="ERROR",
+            file_path="src/foo.py",
+            location="10:5-20",
+            message=msg,
+            error_kind=kind,
+            raw_line=f"ERROR src/foo.py:10:5-20: {msg} [{kind}]",
+        )
+
+    def test_pass1_returns_empty_verdict(self):
+        """classify_with_llm (pass 1) should return empty verdict."""
+        pass1_response = {
+            "reason": "Removed errors were false positives",
+            "pr_attribution": "N/A",
+            "categories": [{"category": "missing-attr", "reason": "FP"}],
+        }
+        # Mock the API call to return a pass 1 response (no verdict)
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
+            with patch(
+                "primer_classifier.llm_client._call_anthropic_api",
+                return_value={"content": [{"text": json.dumps(pass1_response)}]},
+            ):
+                from .llm_client import classify_with_llm
+
+                result = classify_with_llm(
+                    errors_text="+ ERROR a.py:1:1: msg [bad-return]",
+                )
+                assert result.verdict == ""
+                assert result.reason == "Removed errors were false positives"
+                assert len(result.categories) == 1
+                assert result.categories[0].verdict == ""
+
+    def test_assign_verdict_improvement(self):
+        """assign_verdict_with_llm should assign 'improvement' for false-positive reasoning."""
+        verdict_response = {
+            "verdict": "improvement",
+            "categories": [{"category": "missing-attr", "verdict": "improvement"}],
+        }
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
+            with patch(
+                "primer_classifier.llm_client._call_anthropic_api",
+                return_value={"content": [{"text": json.dumps(verdict_response)}]},
+            ):
+                categories = [CategoryVerdict("missing-attr", "", "false positives")]
+                verdict, updated_cats = assign_verdict_with_llm(
+                    "Removed errors were false positives from inference failures",
+                    categories,
+                )
+                assert verdict == "improvement"
+                assert updated_cats[0].verdict == "improvement"
+                assert updated_cats[0].reason == "false positives"
+
+    def test_assign_verdict_regression(self):
+        """assign_verdict_with_llm should assign 'regression' for real-bug reasoning."""
+        verdict_response = {"verdict": "regression"}
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
+            with patch(
+                "primer_classifier.llm_client._call_anthropic_api",
+                return_value={"content": [{"text": json.dumps(verdict_response)}]},
+            ):
+                verdict, _ = assign_verdict_with_llm(
+                    "Removed errors were catching real bugs",
+                    [],
+                )
+                assert verdict == "regression"
+
+    def test_two_pass_end_to_end(self):
+        """Full two-pass flow: classify_project calls pass 1 then pass 2."""
+        pass1_response = {
+            "reason": "These missing-attribute errors are false positives",
+            "pr_attribution": "Change in solver.rs",
+            "spec_check": "N/A",
+            "runtime_behavior": "N/A",
+            "mypy_pyright": "N/A",
+            "removal_assessment": "False positives",
+        }
+        pass2_response = {"verdict": "improvement"}
+
+        p = ProjectDiff(name="test", removed=[self._make_entry()])
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
+            with patch(
+                "primer_classifier.llm_client._call_anthropic_api",
+            ) as mock_api:
+                mock_api.side_effect = [
+                    # Pass 1: reasoning
+                    {"content": [{"text": json.dumps(pass1_response)}]},
+                    # Pass 2: verdict
+                    {"content": [{"text": json.dumps(pass2_response)}]},
+                ]
+                result = classify_project(p, fetch_code=False, use_llm=True)
+                assert result.verdict == "improvement"
+                assert result.reason == "These missing-attribute errors are false positives"
+                assert result.pr_attribution == "Change in solver.rs"
+                assert result.method == "llm"
+                # Verify both passes were called
+                assert mock_api.call_count == 2
+
+    def test_two_pass_with_categories(self):
+        """Two-pass flow with per-category verdicts."""
+        pass1_response = {
+            "reason": "Mixed results",
+            "pr_attribution": "N/A",
+            "categories": [
+                {"category": "missing-attr", "reason": "false positives from inheritance"},
+                {"category": "bad-return", "reason": "real type errors caught"},
+            ],
+        }
+        pass2_response = {
+            "verdict": "regression",
+            "categories": [
+                {"category": "missing-attr", "verdict": "improvement"},
+                {"category": "bad-return", "verdict": "regression"},
+            ],
+        }
+
+        # Use different error kinds so the wording-change heuristic doesn't match
+        p = ProjectDiff(
+            name="test",
+            added=[self._make_entry(kind="missing-attribute", msg="no attr x")],
+            removed=[self._make_entry(kind="bad-return", msg="wrong return")],
+        )
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
+            with patch(
+                "primer_classifier.llm_client._call_anthropic_api",
+            ) as mock_api:
+                mock_api.side_effect = [
+                    {"content": [{"text": json.dumps(pass1_response)}]},
+                    {"content": [{"text": json.dumps(pass2_response)}]},
+                ]
+                result = classify_project(p, fetch_code=False, use_llm=True)
+                assert result.verdict == "regression"
+                assert len(result.categories) == 2
+                assert result.categories[0].verdict == "improvement"
+                assert result.categories[0].reason == "false positives from inheritance"
+                assert result.categories[1].verdict == "regression"
+
+    def test_two_pass_with_file_request(self):
+        """Multi-pass file fetching still works, verdict assigned after final pass."""
+        needs_files_response = {"needs_files": ["foo/bar.py"]}
+        pass1_response = {
+            "reason": "After seeing source: false positives",
+            "pr_attribution": "N/A",
+        }
+        pass2_response = {"verdict": "improvement"}
+
+        p = ProjectDiff(
+            name="test",
+            url="https://github.com/example/test",
+            removed=[self._make_entry()],
+        )
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
+            with patch(
+                "primer_classifier.llm_client._call_anthropic_api",
+            ) as mock_api:
+                mock_api.side_effect = [
+                    # Pass 1, attempt 1: needs files
+                    {"content": [{"text": json.dumps(needs_files_response)}]},
+                    # Pass 1, attempt 2 (with files): reasoning
+                    {"content": [{"text": json.dumps(pass1_response)}]},
+                    # Pass 2: verdict
+                    {"content": [{"text": json.dumps(pass2_response)}]},
+                ]
+                with patch(
+                    "primer_classifier.classifier.fetch_files_by_path",
+                    return_value="def bar(): pass",
+                ):
+                    result = classify_project(p, fetch_code=True, use_llm=True)
+                    assert result.verdict == "improvement"
+                    assert mock_api.call_count == 3

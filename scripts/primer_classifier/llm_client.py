@@ -62,6 +62,7 @@ class LLMResponse:
     needs_files: list[str] = field(
         default_factory=list
     )  # file paths the LLM wants to see
+    pr_attribution: str = ""  # which part of the PR diff caused the change
     raw_response: Optional[dict] = None
 
 
@@ -119,7 +120,7 @@ When ALL changes are removals ('-'), the most common explanation is that pyrefly
 
 KEY RULES:
 1. If a new error ('+') correctly identifies a real bug in the source code, that is an IMPROVEMENT — pyrefly is catching something it should catch. Even if the code is buggy, pyrefly finding it is a good thing.
-2. BEFORE choosing your verdict, re-read your own analysis. If your explanation describes a genuine type error, inconsistency, or bug in the code, the verdict MUST be "improvement" — not "regression". Only choose "regression" if the code is actually correct and pyrefly is wrong. SIMILARLY for removed errors: if your explanation describes the removed errors as false positives, inference failures, or incorrect checks, the verdict MUST be "improvement" — removing wrong errors means pyrefly got better. Only choose "regression" for removals if the errors were genuinely catching real bugs.
+2. Keep your reasoning internally consistent. If your analysis describes a genuine type error, inconsistency, or bug in the code, that points toward "improvement" — not "regression". If your analysis describes the removed errors as false positives, inference failures, or incorrect checks, that points toward "improvement" — removing wrong errors means pyrefly got better. Only reason toward "regression" for removals if the errors were genuinely catching real bugs.
 3. A "bad-override" where the child class truly has an inconsistent type signature vs the parent is a REAL bug — that is an improvement, not a regression.
 4. MISSING-ATTRIBUTE PATTERN: When you see many `missing-attribute` errors across a well-known, well-tested project (e.g., mypy, discord.py, xarray, dulwich), and the errors claim attributes like `data`, `dims`, `fullname`, `parents`, etc. are missing from core classes, this is almost always a regression. These are fundamental attributes that the project uses extensively — they are defined somewhere (often via `__slots__` in parent classes, descriptors, or dynamic assignment). The type checker is failing to resolve them through the class hierarchy. Be especially skeptical when:
    - The same class has many "missing" attributes (suggests the checker can't see the class's attribute definitions)
@@ -171,21 +172,26 @@ CRITICAL — MYPY/PYRIGHT CROSS-CHECK: Before classifying a new error as "improv
 
 OUTPUT FORMAT:
 
-When errors are grouped into categories, provide a verdict for EACH category separately, plus an overall verdict. Different categories within the same project may have different verdicts (e.g., one category is a regression, another is an improvement).
+Do NOT include a "verdict" field — your job in this pass is ONLY to analyze and reason. A separate step will assign the verdict based on your reasoning.
+
+When errors are grouped into categories, provide reasoning for EACH category separately. Different categories within the same project may have different conclusions.
 
 REQUESTING ADDITIONAL FILES:
 
-If you cannot confidently determine the verdict because you need to see source code from another file (e.g., a parent class definition, a module that defines __slots__, a base class with the overridden method), you may request those files instead of guessing. Respond with:
+If you cannot confidently determine the answer because you need to see source code from another file (e.g., a parent class definition, a module that defines __slots__, a base class with the overridden method), you may request those files instead of guessing. Respond with:
 {"needs_files": ["path/to/parent_class.py", "path/to/base.py"]}
 
-Use the project's file paths (e.g., "dulwich/objects.py", "discord/permissions.py"). Request at most 3 files. Only request files when you genuinely need them to verify the verdict — if the pattern is clear enough (e.g., 100+ missing-attribute errors on core classes of a well-tested project), classify directly without requesting files.
+Use the project's file paths (e.g., "dulwich/objects.py", "discord/permissions.py"). Request at most 3 files. Only request files when you genuinely need them to verify the conclusion — if the pattern is clear enough (e.g., 100+ missing-attribute errors on core classes of a well-tested project), classify directly without requesting files.
 
-If you have enough context to classify, respond with the verdict. IMPORTANT: the "reason" field comes BEFORE "verdict" so you must reason through the evidence fully before committing to a verdict:
-{"spec_check": "which typing spec rule applies, with a link, AND what is its scope — which constructs does it apply to?", "runtime_behavior": "would this cause an actual runtime error or crash? trace the execution path", "mypy_pyright": "would mypy/pyright flag this? yes/no and why", "reason": "explanation — if a typing spec rule is relevant, include the link (e.g., https://typing.readthedocs.io/en/latest/spec/...) so reviewers can verify", "verdict": "regression|improvement|neutral", "categories": [{"category": "short label", "verdict": "regression|improvement|neutral", "reason": "explanation"}, ...]}
+If you have enough context, respond with your analysis. IMPORTANT: reason through the evidence fully:
+{"spec_check": "which typing spec rule applies, with a link, AND what is its scope — which constructs does it apply to?", "runtime_behavior": "would this cause an actual runtime error or crash? trace the execution path", "mypy_pyright": "would mypy/pyright flag this? yes/no and why", "removal_assessment": "For removed errors ('-'): were they correct (catching real bugs) or incorrect (false positives/too strict)? State which and why. Write 'N/A' if there are no removed errors.", "pr_attribution": "Which specific change(s) in the pyrefly PR diff caused this project's errors to change? Reference specific files, functions, or code patterns from the diff. Write 'N/A' if no PR diff was provided.", "reason": "explanation — if a typing spec rule is relevant, include the link (e.g., https://typing.readthedocs.io/en/latest/spec/...) so reviewers can verify", "categories": [{"category": "short label", "reason": "explanation"}, ...]}
 
-The "spec_check", "runtime_behavior", and "mypy_pyright" fields force you to think through the evidence before concluding. If the spec doesn't require the check here AND there's no runtime impact AND mypy/pyright wouldn't flag it, it's almost certainly "too strict" (regression). The "categories" field is optional — omit it for small diffs with no categories. When present, each entry should correspond to an error category from the input. The top-level "verdict" should reflect the overall assessment (if all categories agree, use that; if mixed, use the dominant direction or "regression" if any regressions are present).
+The "spec_check", "runtime_behavior", and "mypy_pyright" fields force you to think through the evidence. If the spec doesn't require the check here AND there's no runtime impact AND mypy/pyright wouldn't flag it, it's almost certainly "too strict". The "categories" field is optional — omit it for small diffs with no categories. When present, each entry should correspond to an error category from the input.
 
-In the reason fields, keep explanations concise. When your verdict depends on a typing spec rule, you MUST include the relevant spec link in the reason field (e.g., "per the [typing spec](https://typing.readthedocs.io/en/latest/spec/generics.html#variance), variance inference is only required for protocols")."""
+PR DIFF ATTRIBUTION:
+When a pyrefly PR diff is provided, identify which specific code change(s) in the diff caused the primer errors to appear or disappear. Reference the file path and function/method from the diff. Be specific — e.g., "the change to `overload_resolution()` in `alt/answers.rs` relaxed the constraint on callable types, which removed the false positive `not-callable` errors." If no PR diff is provided, write "N/A" for pr_attribution.
+
+In the reason fields, keep explanations concise. When your analysis depends on a typing spec rule, you MUST include the relevant spec link in the reason field (e.g., "per the [typing spec](https://typing.readthedocs.io/en/latest/spec/generics.html#variance), variance inference is only required for protocols")."""
 
 
 def _build_user_prompt(
@@ -193,6 +199,7 @@ def _build_user_prompt(
     source_context: Optional[str],
     change_type: str,
     structural_signals: Optional[str] = None,
+    pyrefly_diff: Optional[str] = None,
 ) -> str:
     parts = [
         f"Change type: {change_type} ('+' = new error on PR branch, '-' = removed error)\n",
@@ -206,6 +213,10 @@ def _build_user_prompt(
         )
     else:
         parts.append("Source code: not available (could not fetch from GitHub)\n")
+    if pyrefly_diff:
+        parts.append(
+            f"Pyrefly PR diff (the code changes that caused the primer results above):\n{pyrefly_diff}\n"
+        )
 
     return "\n".join(parts)
 
@@ -351,7 +362,9 @@ def _parse_classification(text: str) -> dict:
                         try:
                             parsed = json.loads(candidate)
                             if isinstance(parsed, dict) and (
-                                "verdict" in parsed or "needs_files" in parsed
+                                "verdict" in parsed
+                                or "needs_files" in parsed
+                                or "reason" in parsed
                             ):
                                 return parsed
                         except json.JSONDecodeError:
@@ -367,8 +380,13 @@ def classify_with_llm(
     change_type: str = "mixed",
     model: Optional[str] = None,
     structural_signals: Optional[str] = None,
+    pyrefly_diff: Optional[str] = None,
 ) -> LLMResponse:
-    """Send errors + context to the LLM for classification.
+    """Pass 1: Send errors + context to the LLM for reasoning (no verdict).
+
+    The LLM produces reasoning, pr_attribution, and per-category analysis,
+    but does NOT assign a verdict. Call assign_verdict_with_llm() afterward
+    to get the verdict based on the reasoning.
 
     Uses Llama API if LLAMA_API_KEY is set, otherwise Anthropic.
     Raises LLMError if the API call fails or the response is unparsable.
@@ -382,10 +400,10 @@ def classify_with_llm(
 
     system_prompt = _build_system_prompt()
     user_prompt = _build_user_prompt(
-        errors_text, source_context, change_type, structural_signals
+        errors_text, source_context, change_type, structural_signals, pyrefly_diff
     )
 
-    print(f"Using {backend} backend for classification", file=sys.stderr)
+    print(f"Using {backend} backend for classification (pass 1: reasoning)", file=sys.stderr)
 
     if backend == "llama":
         result = _call_llama_api(api_key, system_prompt, user_prompt, model)
@@ -405,34 +423,116 @@ def classify_with_llm(
             raw_response=result,
         )
 
-    verdict = classification.get("verdict", "").lower().strip()
     reason = classification.get("reason", "No reason provided")
 
-    if verdict not in ("regression", "improvement", "neutral"):
-        print(
-            f"Warning: LLM returned unexpected verdict '{verdict}', treating as ambiguous",
-            file=sys.stderr,
-        )
-        verdict = "neutral"
-        reason = f"[Ambiguous LLM verdict: '{classification.get('verdict')}']. {reason}"
-
-    # Parse per-category verdicts if present
+    # Parse per-category reasoning (no verdicts in pass 1)
     categories: list[CategoryVerdict] = []
     for cat_data in classification.get("categories", []):
-        cat_verdict = cat_data.get("verdict", "").lower().strip()
-        if cat_verdict not in ("regression", "improvement", "neutral"):
-            cat_verdict = "neutral"
         categories.append(
             CategoryVerdict(
                 category=cat_data.get("category", "unknown"),
-                verdict=cat_verdict,
+                verdict="",  # verdict assigned in pass 2
                 reason=cat_data.get("reason", ""),
             )
         )
 
+    # Parse pr_attribution if present
+    pr_attribution = classification.get("pr_attribution", "")
+
     return LLMResponse(
-        verdict=verdict,
+        verdict="",  # verdict assigned in pass 2
         reason=reason,
         categories=categories,
+        pr_attribution=pr_attribution,
         raw_response=result,
     )
+
+
+def _build_verdict_system_prompt() -> str:
+    """Build the system prompt for pass 2: assigning a verdict from reasoning."""
+    return """You are assigning a verdict based on reasoning about pyrefly type checker changes. Pyrefly is a Python type checker. You are evaluating whether pyrefly got BETTER or WORSE.
+
+You will receive reasoning from a prior analysis pass. Your job is to read that reasoning and assign the correct verdict.
+
+Rules:
+- If the reasoning describes removed errors as false positives, inference failures, too strict, or incorrect → "improvement" (pyrefly got better by removing wrong errors)
+- If the reasoning describes removed errors as catching real bugs, genuine type errors, or valid checks → "regression" (pyrefly lost a real check)
+- If the reasoning describes new errors as correctly catching real bugs → "improvement" (pyrefly is now smarter)
+- If the reasoning describes new errors as wrong, false positives, or too strict → "regression" (pyrefly got worse)
+- If the reasoning describes only message wording changes → "neutral"
+
+Respond with JSON only:
+{"verdict": "regression|improvement|neutral", "categories": [{"category": "short label", "verdict": "regression|improvement|neutral"}, ...]}
+
+The "categories" field is optional — omit it if there are no categories in the reasoning. When present, each entry should match a category from the reasoning."""
+
+
+def _build_verdict_prompt(reason: str, categories: list[CategoryVerdict]) -> str:
+    """Build the user prompt for pass 2: the reasoning from pass 1."""
+    parts = [f"Reasoning from analysis:\n{reason}\n"]
+    if categories:
+        parts.append("Per-category reasoning:")
+        for cat in categories:
+            parts.append(f"- {cat.category}: {cat.reason}")
+    return "\n".join(parts)
+
+
+def assign_verdict_with_llm(
+    reason: str,
+    categories: list[CategoryVerdict],
+    model: Optional[str] = None,
+) -> tuple[str, list[CategoryVerdict]]:
+    """Pass 2: Assign a verdict based on the reasoning from pass 1.
+
+    Makes a small, cheap API call (~500 tokens in, ~100 tokens out) that
+    reads the reasoning and assigns verdicts. Returns (overall_verdict,
+    categories_with_verdicts).
+    """
+    backend, api_key = _get_backend()
+    if backend == "none":
+        raise LLMError(
+            "No API key found. Set LLAMA_API_KEY (Meta internal) "
+            "or CLASSIFIER_API_KEY / ANTHROPIC_API_KEY."
+        )
+
+    system_prompt = _build_verdict_system_prompt()
+    user_prompt = _build_verdict_prompt(reason, categories)
+
+    print(f"Using {backend} backend for verdict assignment (pass 2)", file=sys.stderr)
+
+    if backend == "llama":
+        result = _call_llama_api(api_key, system_prompt, user_prompt, model)
+    else:
+        result = _call_anthropic_api(api_key, system_prompt, user_prompt, model)
+
+    text = _extract_text_from_response(backend, result)
+    parsed = _parse_classification(text)
+
+    verdict = parsed.get("verdict", "").lower().strip()
+    if verdict not in ("regression", "improvement", "neutral"):
+        print(
+            f"Warning: verdict pass returned unexpected verdict '{verdict}', "
+            "treating as ambiguous",
+            file=sys.stderr,
+        )
+        verdict = "neutral"
+
+    # Merge per-category verdicts back into the category objects
+    verdict_by_category: dict[str, str] = {}
+    for cat_data in parsed.get("categories", []):
+        cat_verdict = cat_data.get("verdict", "").lower().strip()
+        if cat_verdict not in ("regression", "improvement", "neutral"):
+            cat_verdict = "neutral"
+        verdict_by_category[cat_data.get("category", "")] = cat_verdict
+
+    updated_categories = []
+    for cat in categories:
+        updated_categories.append(
+            CategoryVerdict(
+                category=cat.category,
+                verdict=verdict_by_category.get(cat.category, verdict),
+                reason=cat.reason,
+            )
+        )
+
+    return verdict, updated_categories
