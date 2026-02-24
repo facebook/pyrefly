@@ -11,12 +11,11 @@ import json
 
 from .classifier import ClassificationResult
 
-
 _VERDICT_EMOJI = {
-    "regression": "\u274c",    # red X
-    "improvement": "\u2705",   # green check
-    "neutral": "\u2796",       # heavy minus
-    "ambiguous": "\u2753",     # question mark
+    "regression": "\u274c",  # red X
+    "improvement": "\u2705",  # green check
+    "neutral": "\u2796",  # heavy minus
+    "ambiguous": "\u2753",  # question mark
 }
 
 _VERDICT_LABEL = {
@@ -30,10 +29,7 @@ _VERDICT_LABEL = {
 def format_markdown(result: ClassificationResult) -> str:
     """Render classification results as a GitHub PR comment in markdown."""
     if not result.classifications:
-        return (
-            "## Primer Diff Classification\n\n"
-            "No diffs to classify. All clear."
-        )
+        return "## Primer Diff Classification\n\n" "No diffs to classify. All clear."
 
     lines: list[str] = []
     lines.append("## Primer Diff Classification\n")
@@ -41,9 +37,13 @@ def format_markdown(result: ClassificationResult) -> str:
     # Summary line
     parts = []
     if result.regressions:
-        parts.append(f"{_VERDICT_EMOJI['regression']} {result.regressions} regression(s)")
+        parts.append(
+            f"{_VERDICT_EMOJI['regression']} {result.regressions} regression(s)"
+        )
     if result.improvements:
-        parts.append(f"{_VERDICT_EMOJI['improvement']} {result.improvements} improvement(s)")
+        parts.append(
+            f"{_VERDICT_EMOJI['improvement']} {result.improvements} improvement(s)"
+        )
     if result.neutrals:
         parts.append(f"{_VERDICT_EMOJI['neutral']} {result.neutrals} neutral")
     if result.ambiguous:
@@ -77,8 +77,7 @@ def format_markdown(result: ClassificationResult) -> str:
     # Footer
     lines.append("---")
     lines.append(
-        "<sub>Classification by primer-classifier"
-        f" ({_method_summary(result)})</sub>"
+        "<sub>Classification by primer-classifier" f" ({_method_summary(result)})</sub>"
     )
 
     return "\n".join(lines)
@@ -124,14 +123,18 @@ def format_json(result: ClassificationResult) -> str:
                 "added_count": c.added_count,
                 "removed_count": c.removed_count,
                 "method": c.method,
-                "categories": [
-                    {
-                        "category": cat.category,
-                        "verdict": cat.verdict,
-                        "reason": cat.reason,
-                    }
-                    for cat in c.categories
-                ] if c.categories else [],
+                "categories": (
+                    [
+                        {
+                            "category": cat.category,
+                            "verdict": cat.verdict,
+                            "reason": cat.reason,
+                        }
+                        for cat in c.categories
+                    ]
+                    if c.categories
+                    else []
+                ),
             }
             for c in result.classifications
         ],

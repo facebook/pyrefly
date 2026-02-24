@@ -19,7 +19,6 @@ import pytest
 
 from .classifier import (
     Classification,
-    _categorize_errors,
     _extract_class_name,
     _format_errors_for_llm,
     _is_all_internal_errors,
@@ -247,7 +246,9 @@ class TestClassifyAll:
     def test_counts(self):
         projects = [
             ProjectDiff(name="a", removed=[self._make_entry()]),  # ambiguous (no LLM)
-            ProjectDiff(name="b", added=[self._make_entry(kind="internal-error")]),  # regression
+            ProjectDiff(
+                name="b", added=[self._make_entry(kind="internal-error")]
+            ),  # regression
             ProjectDiff(name="c", added=[self._make_entry()]),  # ambiguous (no LLM)
         ]
         result = classify_all(projects, fetch_code=False, use_llm=False)
@@ -314,10 +315,14 @@ class TestRealFixtureParsing:
             pytest.skip("No real fixtures directory")
         for fixture in sorted(self.REAL_DIR.glob("*.txt")):
             projects = parse_primer_diff(fixture.read_text())
-            assert len(projects) > 0, f"{fixture.name} should parse into at least one project"
+            assert (
+                len(projects) > 0
+            ), f"{fixture.name} should parse into at least one project"
             for p in projects:
                 assert p.name, f"Project in {fixture.name} has no name"
-                assert p.added or p.removed, f"Project {p.name} in {fixture.name} has no changes"
+                assert (
+                    p.added or p.removed
+                ), f"Project {p.name} in {fixture.name} has no changes"
 
 
 # ---------------------------------------------------------------------------
@@ -327,13 +332,22 @@ class TestRealFixtureParsing:
 
 class TestCategorization:
     def test_extract_class_name(self):
-        assert _extract_class_name("Object of class `Foo` has no attribute `bar`") == "Foo"
+        assert (
+            _extract_class_name("Object of class `Foo` has no attribute `bar`") == "Foo"
+        )
         assert _extract_class_name("no class here") is None
 
     def test_format_below_threshold_is_raw(self):
         """Below _CATEGORY_THRESHOLD, errors are listed individually."""
         entries = [
-            ErrorEntry("ERROR", "a.py", "1:1", "msg", "bad-return", "ERROR a.py:1:1: msg [bad-return]"),
+            ErrorEntry(
+                "ERROR",
+                "a.py",
+                "1:1",
+                "msg",
+                "bad-return",
+                "ERROR a.py:1:1: msg [bad-return]",
+            ),
         ]
         p = ProjectDiff(name="test", added=entries)
         text = _format_errors_for_llm(p)
@@ -343,7 +357,14 @@ class TestCategorization:
     def test_format_above_threshold_uses_categories(self):
         """Above _CATEGORY_THRESHOLD, errors are grouped into categories."""
         entries = [
-            ErrorEntry("ERROR", f"f{i}.py", f"{i}:1", f"Object of class `X` has no attribute `a{i}`", "missing-attribute", f"raw{i}")
+            ErrorEntry(
+                "ERROR",
+                f"f{i}.py",
+                f"{i}:1",
+                f"Object of class `X` has no attribute `a{i}`",
+                "missing-attribute",
+                f"raw{i}",
+            )
             for i in range(10)
         ]
         p = ProjectDiff(name="test", added=entries)
@@ -363,7 +384,7 @@ class TestCategorization:
     def test_truncate_source_context_too_large(self):
         """Oversized context should be truncated with a marker."""
         # Create context that is larger than the budget allows
-        from .classifier import _CHARS_PER_TOKEN, _MAX_PROMPT_CHARS
+        from .classifier import _MAX_PROMPT_CHARS
 
         # Make errors text consume most of the budget
         huge_errors = "x" * (_MAX_PROMPT_CHARS - 100)
@@ -380,7 +401,9 @@ class TestCategorization:
 
 class TestGetBackend:
     def test_llama_preferred(self):
-        with patch.dict(os.environ, {"LLAMA_API_KEY": "key1", "ANTHROPIC_API_KEY": "key2"}):
+        with patch.dict(
+            os.environ, {"LLAMA_API_KEY": "key1", "ANTHROPIC_API_KEY": "key2"}
+        ):
             backend, key = _get_backend()
             assert backend == "llama"
             assert key == "key1"
@@ -426,7 +449,9 @@ class TestParseClassification:
         assert result["verdict"] == "improvement"
 
     def test_json_embedded_in_text(self):
-        text = 'Here is my analysis:\n{"verdict": "neutral", "reason": "wording"}\nDone.'
+        text = (
+            'Here is my analysis:\n{"verdict": "neutral", "reason": "wording"}\nDone.'
+        )
         result = _parse_classification(text)
         assert result["verdict"] == "neutral"
 
@@ -435,7 +460,11 @@ class TestParseClassification:
             "verdict": "regression",
             "reason": "overall bad",
             "categories": [
-                {"category": "missing-attr", "verdict": "regression", "reason": "false positives"}
+                {
+                    "category": "missing-attr",
+                    "verdict": "regression",
+                    "reason": "false positives",
+                }
             ],
         }
         text = json.dumps(obj)
@@ -565,7 +594,9 @@ class TestFormatMarkdown:
                     added_count=10,
                     method="llm",
                     categories=[
-                        CategoryVerdict("missing-attr", "regression", "false positives"),
+                        CategoryVerdict(
+                            "missing-attr", "regression", "false positives"
+                        ),
                         CategoryVerdict("bad-return", "improvement", "real bugs"),
                     ],
                 ),

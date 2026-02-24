@@ -57,9 +57,8 @@ class ClassificationResult:
 
 def _is_all_internal_errors(project: ProjectDiff) -> bool:
     """Check if all added errors are internal-error (pyrefly bug/panic)."""
-    return (
-        len(project.added) > 0
-        and all(e.error_kind == "internal-error" for e in project.added)
+    return len(project.added) > 0 and all(
+        e.error_kind == "internal-error" for e in project.added
     )
 
 
@@ -69,9 +68,7 @@ _INFERENCE_FAILURE_MARKERS = ("Never", "@_")
 def _has_inference_failure_markers(entries: list[ErrorEntry]) -> bool:
     """Check if any entries contain Never or @_ types (inference failures)."""
     return any(
-        marker in e.message
-        for e in entries
-        for marker in _INFERENCE_FAILURE_MARKERS
+        marker in e.message for e in entries for marker in _INFERENCE_FAILURE_MARKERS
     )
 
 
@@ -134,7 +131,9 @@ def _is_near_wording_change(project: ProjectDiff) -> bool:
             matched_added += 1
             remaining[k] -= 1
 
-    matched_removed = sum(removed_multiset[k] - remaining.get(k, 0) for k in removed_multiset)
+    matched_removed = sum(
+        removed_multiset[k] - remaining.get(k, 0) for k in removed_multiset
+    )
 
     unmatched_added = len(project.added) - matched_added
     unmatched_removed = len(project.removed) - matched_removed
@@ -162,9 +161,7 @@ def _extract_class_name(message: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def _categorize_errors(
-    entries: list[ErrorEntry], prefix: str
-) -> str:
+def _categorize_errors(entries: list[ErrorEntry], prefix: str) -> str:
     """Group errors by (error_kind, class_name) and produce a category summary.
 
     Instead of listing 131 individual errors, output something like:
@@ -191,11 +188,13 @@ def _categorize_errors(
         # For reveal-type, show the actual revealed types so the LLM can
         # assess whether type resolution improved or degraded.
         if kind == "reveal-type":
-            types_seen = sorted(set(
-                m.group(1)
-                for e in group_entries
-                if (m := re.search(r"revealed type: (.+?)(?:\s*\[|$)", e.message))
-            ))
+            types_seen = sorted(
+                set(
+                    m.group(1)
+                    for e in group_entries
+                    if (m := re.search(r"revealed type: (.+?)(?:\s*\[|$)", e.message))
+                )
+            )
             types_str = ", ".join(types_seen[:8])
             if len(types_seen) > 8:
                 types_str += f", ... ({len(types_seen)} total)"
@@ -243,7 +242,9 @@ def _format_errors_for_llm(project: ProjectDiff) -> str:
         return "\n".join(lines)
 
     # Large project: categorize
-    parts = [f"Error summary ({len(project.added)} added, {len(project.removed)} removed):"]
+    parts = [
+        f"Error summary ({len(project.added)} added, {len(project.removed)} removed):"
+    ]
     parts.append("")
 
     # For reveal-type changes, note the type transitions factually
@@ -251,11 +252,13 @@ def _format_errors_for_llm(project: ProjectDiff) -> str:
     removed_reveal = [e for e in project.removed if e.error_kind == "reveal-type"]
     if added_reveal and removed_reveal:
         removed_types = set(
-            m.group(1) for e in removed_reveal
+            m.group(1)
+            for e in removed_reveal
             if (m := re.search(r"revealed type: (.+?)(?:\s*\[|$)", e.message))
         )
         added_types = set(
-            m.group(1) for e in added_reveal
+            m.group(1)
+            for e in added_reveal
             if (m := re.search(r"revealed type: (.+?)(?:\s*\[|$)", e.message))
         )
         if "@_" in removed_types and "@_" not in added_types:
@@ -349,10 +352,18 @@ def _compute_structural_signals(project: ProjectDiff) -> str:
     # so this is a soft signal, not a hard rule.
     all_entries = project.added + project.removed
     test_entries = [
-        e for e in all_entries
-        if any(p in e.file_path for p in ("/tests/", "/test_", "_test.py", "conftest.py", "/testing/"))
+        e
+        for e in all_entries
+        if any(
+            p in e.file_path
+            for p in ("/tests/", "/test_", "_test.py", "conftest.py", "/testing/")
+        )
     ]
-    if test_entries and len(test_entries) == len(all_entries) and len(all_entries) >= 10:
+    if (
+        test_entries
+        and len(test_entries) == len(all_entries)
+        and len(all_entries) >= 10
+    ):
         signals.append(
             "STRUCTURAL SIGNAL: All errors are in test files. Consider whether these are "
             "genuine type issues (e.g., wrong fixture return types, missing attributes on real objects) "
@@ -363,7 +374,8 @@ def _compute_structural_signals(project: ProjectDiff) -> str:
     # signals. Unknown on its own is ambiguous: it can indicate untyped code
     # that is *correctly* flagged as incompatible with a typed API.
     never_count = sum(
-        1 for e in project.added
+        1
+        for e in project.added
         if any(marker in e.message for marker in ("Never", "@_"))
     )
     if never_count > 0:
@@ -439,7 +451,7 @@ def classify_project(
     if _is_wording_change(project):
         base.verdict = "neutral"
         base.reason = (
-            f"Same errors at same locations with same error kinds — "
+            "Same errors at same locations with same error kinds — "
             "message wording changed, no behavioral impact."
         )
         base.method = "heuristic"
@@ -449,7 +461,7 @@ def classify_project(
     if _is_near_wording_change(project):
         base.verdict = "neutral"
         base.reason = (
-            f"Most errors at same locations with same error kinds — "
+            "Most errors at same locations with same error kinds — "
             "message wording changed with minor residual noise, no significant behavioral impact."
         )
         base.method = "heuristic"
@@ -522,7 +534,10 @@ def classify_project(
         base.method = "llm"
         base.categories = llm_result.categories
     except LLMError as e:
-        print(f"Warning: LLM classification failed for {project.name}: {e}", file=sys.stderr)
+        print(
+            f"Warning: LLM classification failed for {project.name}: {e}",
+            file=sys.stderr,
+        )
         base.verdict = "ambiguous"
         base.reason = (
             f"LLM classification failed: {e}. "

@@ -149,7 +149,10 @@ def _extract_referenced_modules(entry: ErrorEntry) -> list[str]:
 
 
 def _fetch_and_cache(
-    owner: str, repo: str, file_path: str, ref: str,
+    owner: str,
+    repo: str,
+    file_path: str,
+    ref: str,
 ) -> Optional[str]:
     """Fetch a file with caching."""
     cache_key = f"{owner}/{repo}/{ref}/{file_path}"

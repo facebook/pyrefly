@@ -58,7 +58,9 @@ class LLMResponse:
     verdict: str  # "regression", "improvement", "neutral"
     reason: str  # human-readable explanation
     categories: list[CategoryVerdict] = field(default_factory=list)
-    needs_files: list[str] = field(default_factory=list)  # file paths the LLM wants to see
+    needs_files: list[str] = field(
+        default_factory=list
+    )  # file paths the LLM wants to see
     raw_response: Optional[dict] = None
 
 
@@ -77,12 +79,13 @@ def _get_backend() -> tuple[str, str]:
     if llama_key:
         return "llama", llama_key
 
-    anthropic_key = os.environ.get("CLASSIFIER_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    anthropic_key = os.environ.get("CLASSIFIER_API_KEY") or os.environ.get(
+        "ANTHROPIC_API_KEY"
+    )
     if anthropic_key:
         return "anthropic", anthropic_key
 
     return "none", ""
-
 
 
 def _build_system_prompt() -> str:
@@ -197,7 +200,9 @@ def _build_user_prompt(
     if structural_signals:
         parts.append(f"\n{structural_signals}\n")
     if source_context:
-        parts.append(f"Source code at error location (line marked with >>>):\n{source_context}\n")
+        parts.append(
+            f"Source code at error location (line marked with >>>):\n{source_context}\n"
+        )
     else:
         parts.append("Source code: not available (could not fetch from GitHub)\n")
 
@@ -241,8 +246,11 @@ def _call_llama_api(
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace") if e.fp else ""
             if e.code == 429 and attempt < MAX_RETRIES:
-                delay = RETRY_BASE_DELAY * (2 ** attempt)
-                print(f"  Rate limited, retrying in {delay:.0f}s (attempt {attempt + 1}/{MAX_RETRIES})...", file=sys.stderr)
+                delay = RETRY_BASE_DELAY * (2**attempt)
+                print(
+                    f"  Rate limited, retrying in {delay:.0f}s (attempt {attempt + 1}/{MAX_RETRIES})...",
+                    file=sys.stderr,
+                )
                 time.sleep(delay)
                 last_error = LLMError(f"Llama API returned {e.code}: {body}")
                 continue
@@ -362,7 +370,7 @@ def classify_with_llm(
     """Send errors + context to the LLM for classification.
 
     Uses Llama API if LLAMA_API_KEY is set, otherwise Anthropic.
-    Raises LLMError if the API call fails or the response is unparseable.
+    Raises LLMError if the API call fails or the response is unparsable.
     """
     backend, api_key = _get_backend()
     if backend == "none":
@@ -372,7 +380,9 @@ def classify_with_llm(
         )
 
     system_prompt = _build_system_prompt()
-    user_prompt = _build_user_prompt(errors_text, source_context, change_type, structural_signals)
+    user_prompt = _build_user_prompt(
+        errors_text, source_context, change_type, structural_signals
+    )
 
     print(f"Using {backend} backend for classification", file=sys.stderr)
 
@@ -411,12 +421,14 @@ def classify_with_llm(
         cat_verdict = cat_data.get("verdict", "").lower().strip()
         if cat_verdict not in ("regression", "improvement", "neutral"):
             cat_verdict = "neutral"
-        categories.append(CategoryVerdict(
-            category=cat_data.get("category", "unknown"),
-            verdict=cat_verdict,
-            reason=cat_data.get("reason", ""),
-        ))
+        categories.append(
+            CategoryVerdict(
+                category=cat_data.get("category", "unknown"),
+                verdict=cat_verdict,
+                reason=cat_data.get("reason", ""),
+            )
+        )
 
-    return LLMResponse(verdict=verdict, reason=reason, categories=categories, raw_response=result)
-
-
+    return LLMResponse(
+        verdict=verdict, reason=reason, categories=categories, raw_response=result
+    )
