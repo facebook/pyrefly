@@ -23,6 +23,10 @@ fn flatten_and_dedup(xs: Vec<Type>, heap: &TypeHeap) -> Vec<Type> {
     fn flatten(xs: Vec<Type>, res: &mut Vec<Type>) {
         for x in xs {
             match x {
+                x @ Type::Union(box Union {
+                    display_name: Some(_),
+                    ..
+                }) => res.push(x),
                 Type::Union(box Union { members, .. }) => flatten(members, res),
                 Type::Never(_) => {}
                 _ => res.push(x),
