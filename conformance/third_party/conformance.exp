@@ -7364,28 +7364,6 @@
     {
       "code": -2,
       "column": 8,
-      "concise_description": "Unpacked argument cannot be used for type parameter T1",
-      "description": "Unpacked argument cannot be used for type parameter T1",
-      "line": 153,
-      "name": "bad-unpacking",
-      "severity": "error",
-      "stop_column": 29,
-      "stop_line": 153
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed",
-      "description": "assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed",
-      "line": 157,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 49,
-      "stop_line": 157
-    },
-    {
-      "code": -2,
-      "column": 8,
       "concise_description": "Unpacked argument cannot be used for type parameter T",
       "description": "Unpacked argument cannot be used for type parameter T",
       "line": 163,

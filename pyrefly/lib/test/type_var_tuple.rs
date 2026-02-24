@@ -375,7 +375,6 @@ def func6(b: VariadicTuple[float]):
 );
 
 testcase!(
-    bug = "conformance: TypeVarTuple with unbounded tuple should work with type aliases",
     test_typevartuple_specialization_unbounded,
     r#"
 from typing import TypeVar, TypeVarTuple, assert_type
@@ -384,10 +383,10 @@ T1 = TypeVar("T1")
 Ts = TypeVarTuple("Ts")
 
 TA9 = tuple[*Ts, T1]
-TA10 = TA9[*tuple[int, ...]]  # E: Unpacked argument cannot be used for type parameter T1
+TA10 = TA9[*tuple[int, ...]]
 
 def func11(a: TA10, b: TA9[*tuple[int, ...], str]):
-    assert_type(a, tuple[*tuple[int, ...], int])  # E: assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed
+    assert_type(a, tuple[*tuple[int, ...], int])
     assert_type(b, tuple[*tuple[int, ...], str])
 "#,
 );

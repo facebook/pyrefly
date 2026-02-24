@@ -355,24 +355,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         validate_restriction: bool,
         errors: &ErrorCollector,
     ) -> TArgs {
-        let targs = self.expand_unpacked_targs(targs);
+        let mut targs = self.expand_unpacked_targs(targs);
         let nparams = tparams.len();
-        let nargs = targs.len();
         let mut checked_targs = Vec::new();
         let mut targ_idx = 0;
         let mut name_to_idx = SmallMap::new();
         for (param_idx, param) in tparams.iter().enumerate() {
-            if let Some(arg) = targs.get(targ_idx) {
+            if targ_idx < targs.len() {
                 // Get next type argument
                 match param.kind() {
                     QuantifiedKind::TypeVarTuple => {
+                        if let Some(Type::Unpack(inner)) = targs.get(targ_idx)
+                            && let Type::Tuple(Tuple::Unbounded(elt)) = &**inner
+                        {
+                            let elt = (**elt).clone();
+                            // `*tuple[T, ...]` can satisfy trailing required type params after a
+                            // `TypeVarTuple`, so materialize those as `T` for matching.
+                            let params_end = self
+                                .peek_next_paramspec_param(param_idx + 1, &tparams)
+                                .unwrap_or(tparams.len());
+                            let n_trailing_params = params_end.saturating_sub(param_idx + 1);
+                            if n_trailing_params > 0 {
+                                let args_end = self
+                                    .peek_next_paramspec_arg(targ_idx, &targs)
+                                    .unwrap_or(targs.len());
+                                let n_available_args = args_end.saturating_sub(targ_idx + 1);
+                                let n_missing_args =
+                                    n_trailing_params.saturating_sub(n_available_args);
+                                for _ in 0..n_missing_args {
+                                    targs.insert(targ_idx + 1, elt.clone());
+                                }
+                            }
+                        }
                         // We know that ParamSpec params must be matched by ParamSpec args, so chop off both params and args
                         // at the next ParamSpec when computing how many args the TypeVarTuple should consume.
                         let paramspec_param_idx =
                             self.peek_next_paramspec_param(param_idx + 1, &tparams);
                         let paramspec_arg_idx = self.peek_next_paramspec_arg(targ_idx, &targs);
                         let nparams_for_tvt = paramspec_param_idx.unwrap_or(nparams);
-                        let nargs_for_tvt = paramspec_arg_idx.unwrap_or(nargs);
+                        let nargs_for_tvt = paramspec_arg_idx.unwrap_or(targs.len());
                         let args_to_consume = self.num_typevartuple_args_to_consume(
                             param_idx,
                             nparams_for_tvt,
@@ -387,18 +408,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ));
                         targ_idx = new_targ_idx;
                     }
-                    QuantifiedKind::ParamSpec if nparams == 1 && !arg.is_kind_param_spec() => {
+                    QuantifiedKind::ParamSpec
+                        if nparams == 1 && !targs[targ_idx].is_kind_param_spec() =>
+                    {
                         // If the only type param is a ParamSpec and the type argument
                         // is not a parameter expression, then treat the entire type argument list
                         // as a parameter list
                         checked_targs.push(self.create_paramspec_value(&targs));
-                        targ_idx = nargs;
+                        targ_idx = targs.len();
                     }
                     QuantifiedKind::ParamSpec => {
+                        let arg = &targs[targ_idx];
                         checked_targs.push(self.create_next_paramspec_arg(arg, range, errors));
                         targ_idx += 1;
                     }
                     QuantifiedKind::TypeVar => {
+                        let arg = &targs[targ_idx];
                         checked_targs.push(self.create_next_typevar_arg(
                             param,
                             arg,
@@ -416,7 +441,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &tparams,
                     param_idx,
                     &checked_targs,
-                    nargs,
+                    targs.len(),
                     &name_to_idx,
                     range,
                     errors,
@@ -425,7 +450,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             name_to_idx.insert(param.name(), param_idx);
         }
-        if targ_idx < nargs {
+        if targ_idx < targs.len() {
             self.error(
                 errors,
                 range,
@@ -434,7 +459,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     "Expected {} for `{}`, got {}",
                     count(nparams, "type argument"),
                     name,
-                    nargs
+                    targs.len()
                 ),
             );
         }
