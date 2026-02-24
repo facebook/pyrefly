@@ -8,6 +8,9 @@
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use pyrefly_python::module_name::ModuleName;
+use ruff_python_ast::name::Name;
+
 use crate::class::Class;
 use crate::class::ClassType;
 use crate::heap::TypeHeap;
@@ -30,7 +33,6 @@ fn flatten_and_dedup(xs: Vec<Type>, heap: &TypeHeap) -> Vec<Type> {
     fn flatten(xs: Vec<Type>, res: &mut Vec<Type>) {
         for x in xs {
             match x {
-                Type::Union(u) if u.display_name.is_some() => res.push(Type::Union(u)),
                 Type::Union(u) => flatten(u.members, res),
                 Type::Never(_) => {}
                 _ => res.push(x),
@@ -85,6 +87,52 @@ fn simplify_intersections(xs: &mut [Type], heap: &TypeHeap) {
     }
 }
 
+fn large_alias_union_display_name(xs: &[Type]) -> Option<(ModuleName, Name)> {
+    const PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS: usize = 6;
+
+    let mut alias_name: Option<(ModuleName, Name)> = None;
+    let mut alias_members: Option<Vec<Type>> = None;
+    let mut alias_count = 0;
+    let mut other_branches = Vec::new();
+    for x in xs.iter().cloned() {
+        match x {
+            Type::Union(u)
+                if u.display_name.is_some()
+                    && u.members.len() >= PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS =>
+            {
+                alias_count += 1;
+                if alias_name.is_none() {
+                    alias_name = u.display_name.clone();
+                    alias_members = Some(u.members.clone());
+                }
+            }
+            t => other_branches.push(t),
+        }
+    }
+
+    if alias_count == 1 && !other_branches.is_empty() {
+        let overlaps_alias_member = |t: &Type| {
+            let Some(alias_members) = alias_members.as_ref() else {
+                return false;
+            };
+            fn has_overlap(t: &Type, alias_members: &[Type]) -> bool {
+                match t {
+                    Type::Union(u) => u.members.iter().any(|m| has_overlap(m, alias_members)),
+                    t => alias_members.contains(t),
+                }
+            }
+            has_overlap(t, alias_members)
+        };
+        if other_branches.iter().any(overlaps_alias_member) {
+            return None;
+        }
+
+        alias_name
+    } else {
+        None
+    }
+}
+
 /// After literal/enum squashing, a union with more than this many members is widened to
 /// `Any` to bound type complexity.
 static MAX_UNION_MEMBERS: usize = 4096;
@@ -95,6 +143,7 @@ fn unions_internal(
     enum_members: Option<&dyn Fn(&Class) -> Option<usize>>,
     heap: &TypeHeap,
 ) -> Type {
+    let large_alias_display_name = large_alias_union_display_name(&xs);
     try_collapse(xs, heap).unwrap_or_else(|xs| {
         let mut res = flatten_and_dedup(xs, heap);
         if let Some(stdlib) = stdlib {
@@ -111,7 +160,13 @@ fn unions_internal(
             return heap.mk_any_implicit();
         }
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
-        try_collapse(res, heap).unwrap_or_else(|members| heap.mk_union(members))
+        try_collapse(res, heap).unwrap_or_else(|members| {
+            if let Some(name) = large_alias_display_name.clone() {
+                heap.mk_union_with_name(members, name)
+            } else {
+                heap.mk_union(members)
+            }
+        })
     })
 }
 
