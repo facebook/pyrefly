@@ -205,7 +205,7 @@ impl TypeCheckKind {
             // TODO(stroxler): In an unpacked assignment to a name we would ideally provide the name in
             // the error message, but without a refactor of `bind_target` we don't have easy access to
             // that information when creating the binding, so we're stuck with just types for now.
-            Self::AnnAssign | Self::UnpackedAssign => format!(
+            Self::AnnAssign | Self::DictLiteralItem | Self::UnpackedAssign => format!(
                 "`{}` is not assignable to `{}`",
                 ctx.display(got),
                 ctx.display(want)
