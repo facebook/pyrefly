@@ -1,5 +1,5 @@
 ---
-title: pandas' public API is now type-complete!
+title: pandas' Public API Is Now Type-Complete!
 description: We tell the story of how we helped make pandas' public API type-complete, and to avoid that this regresses
 slug: pandas-type-completeness
 authors: [marcogorelli]
@@ -7,14 +7,16 @@ tags: [typechecking, news]
 hide_table_of_contents: false
 ---
 
-pandas is one of the most widely used Python libraries. At time of writing, it is [downloaded about half-a-billion times per month from PyPI](https://pypistats.org/packages/pandas), is supported by nearly all Python data science packages, and is generally required learning in data science curriculums. Despite modern alternatives existing, pandas' impact cannot be minimised or understated.
+At time of writing, pandas is one of the most widely used Python libraries. It is [downloaded about half-a-billion times per month from PyPI](https://pypistats.org/packages/pandas), is supported by nearly all Python data science packages, and is generally required learning in data science curriculums. Despite modern alternatives existing, pandas' impact cannot be minimised or understated.
 
-In order to improve the developer experience for pandas' users across the ecosystem, we decided to focus on improving pandas' typing. Why? Because better type hints mean:
+In order to improve the developer experience for pandas' users across the ecosystem, we at Quansight Labs (with support from the Pyrefly team at Meta) decided to focus on improving pandas' typing. Why? Because better type hints mean:
 
 - More accurate and useful auto-completions from VSCode / PyCharm / NeoVIM / Positron / other IDEs.
 - More robust pipelines, as some categories of bugs can be caught without even needing to execute your code.
 
 By supporting the pandas community, pandas' public API is now type-complete (as measured by Pyright), up from 47% when we started the effort last year. We'll tell the story of how it happened - but first, we need to talk more about type completeness, and how we measure it.
+
+<!-- truncate -->
 
 ## But first - how is type-completeness measured?
 
