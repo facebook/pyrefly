@@ -14,6 +14,7 @@ import re
 from .classifier import ClassificationResult
 
 _GITHUB_BASE_URL = "https://github.com/facebook/pyrefly/blob/main/"
+_GITHUB_SEARCH_URL = "https://github.com/facebook/pyrefly/search?q=filename%3A"
 
 _VERDICT_EMOJI = {
     "regression": "\u274c",  # red X
@@ -29,91 +30,99 @@ _VERDICT_LABEL = {
     "ambiguous": "Needs Review",
 }
 
-# Matches paths that look like pyrefly source files (ending in .rs, .py, .toml, etc.)
+# Matches full pyrefly source paths (starting with pyrefly/, crates/, or lsp/)
 _SOURCE_FILE_PATTERN = re.compile(
     r"(?:pyrefly/|crates/|lsp/)[\w/]+\.\w+"
 )
 
-# Matches function-name patterns like `word_word()` in text
-_FUNCTION_NAME_PATTERN = re.compile(r"(\w+)\(\)")
+# Matches function names that look like pyrefly internals: must contain an
+# underscore (e.g. check_for_imported_final_reassignment, attr_subset_check).
+# This filters out Python builtins like reveal_type(), map(), build(), get().
+_INTERNAL_FUNCTION_PATTERN = re.compile(r"(\w+_\w+)\(\)")
+
+
+def _is_pyrefly_source_path(path: str) -> bool:
+    """Check if a path looks like a real pyrefly source file."""
+    return bool(_SOURCE_FILE_PATTERN.match(path))
 
 
 def _linkify_file(path: str) -> str:
     """Convert a pyrefly source file path to a GitHub markdown link.
 
-    Turns 'pyrefly/lib/alt/class/variance.rs' into
-    '[`pyrefly/lib/alt/class/variance.rs`](https://github.com/...)'
+    Only linkifies paths that look like real pyrefly source files.
+    Non-matching paths (e.g., "artigraph source files") are returned as-is.
     """
-    return f"[`{path}`]({_GITHUB_BASE_URL}{path})"
+    if _is_pyrefly_source_path(path):
+        return f"[`{path}`]({_GITHUB_BASE_URL}{path})"
+    return f"`{path}`"
 
 
 def _extract_file_from_text(text: str) -> str | None:
-    """Find the first pyrefly source file path in a string.
-
-    Used to associate function names with their containing file when
-    both appear in the same text.
-    """
+    """Find the first pyrefly source file path in a string."""
     m = _SOURCE_FILE_PATTERN.search(text)
     return m.group(0) if m else None
 
 
-def _linkify_function_in_text(text: str, file_path: str | None = None) -> str:
-    """Replace function-name patterns like `func()` with GitHub-linked markdown.
-
-    If file_path is provided, links the function name to that file's GitHub URL.
-    If not, attempts to extract a file path from the surrounding text first.
-    """
-    resolved_file = file_path or _extract_file_from_text(text)
-
-    def replacer(match: re.Match) -> str:
-        func_name = match.group(1)
-        # Skip common non-function words that happen to precede ()
-        if func_name in ("e", "i", "s", "x", "a", "the"):
-            return match.group(0)
-        if resolved_file:
-            url = f"{_GITHUB_BASE_URL}{resolved_file}"
-            return f"[`{func_name}()`]({url})"
-        return f"`{func_name}()`"
-
-    return _FUNCTION_NAME_PATTERN.sub(replacer, text)
-
-
 def _linkify_files_in_text(text: str) -> str:
-    """Replace pyrefly source file paths and function names in text with GitHub links.
+    """Replace pyrefly source file paths and internal function names with GitHub links.
 
-    Linkifies paths that look like pyrefly source files (starting with
-    pyrefly/, crates/, or lsp/). Also linkifies function names when a file
-    path is found in the same text. Avoids double-linkifying paths already
-    inside markdown links.
+    Only linkifies:
+    - Full paths starting with pyrefly/, crates/, or lsp/
+    - Function names containing underscores (pyrefly internals)
+
+    Skips text already inside markdown link constructs to avoid double-linkification.
     """
+    # Strip any existing backtick wrapping around paths before processing,
+    # so we don't end up with nested backticks like [`\`path\``](url)
+    text = re.sub(r"`((?:pyrefly/|crates/|lsp/)[\w/]+\.\w+)`", r"\1", text)
+
     file_path = _extract_file_from_text(text)
 
-    def replacer(match: re.Match) -> str:
+    # Step 1: linkify full source file paths
+    def file_replacer(match: re.Match) -> str:
         path = match.group(0)
-        # Check if already inside a markdown link [...](...)
         start = match.start()
         preceding = text[:start]
-        if preceding.endswith("`") or preceding.endswith("("):
+        # Skip if already inside a markdown link
+        if preceding.endswith("(") or preceding.endswith("["):
             return path
-        return _linkify_file(path)
+        return f"[`{path}`]({_GITHUB_BASE_URL}{path})"
 
-    result = _SOURCE_FILE_PATTERN.sub(replacer, text)
-    result = _linkify_function_in_text(result, file_path)
+    result = _SOURCE_FILE_PATTERN.sub(file_replacer, text)
+
+    # Step 2: linkify internal function names (must contain underscore)
+    if file_path:
+        def func_replacer(match: re.Match) -> str:
+            func_name = match.group(1)
+            full_match = match.group(0)
+            start = match.start()
+            preceding = result[:start]
+            # Skip if already inside a markdown link
+            if preceding.endswith("(") or preceding.endswith("["):
+                return full_match
+            # Skip if already wrapped in backtick-link
+            if preceding.endswith("`"):
+                return full_match
+            url = f"{_GITHUB_BASE_URL}{file_path}"
+            return f"[`{func_name}()`]({url})"
+
+        result = _INTERNAL_FUNCTION_PATTERN.sub(func_replacer, result)
+
     return result
 
 
 def _extract_root_cause(c) -> str:
     """Extract a linkified root cause string from a classification's pr_attribution.
 
-    Looks for function names and file paths in the attribution text. If found,
-    returns the function name linked to the file's GitHub URL. Otherwise returns
-    a truncated attribution string.
+    Looks for internal function names and file paths in the attribution text.
+    If found, returns the function name linked to the file's GitHub URL.
+    Otherwise returns a truncated attribution string.
     """
     attr = c.pr_attribution
     if not attr or attr == "N/A":
         return ""
     file_path = _extract_file_from_text(attr)
-    func_match = _FUNCTION_NAME_PATTERN.search(attr)
+    func_match = _INTERNAL_FUNCTION_PATTERN.search(attr)
     if func_match and file_path:
         func_name = func_match.group(1)
         url = f"{_GITHUB_BASE_URL}{file_path}"
@@ -310,7 +319,9 @@ def format_json(result: ClassificationResult) -> str:
                     "description": s.description,
                     "files": s.files,
                     "file_urls": [
-                        f"{_GITHUB_BASE_URL}{f}" for f in s.files
+                        f"{_GITHUB_BASE_URL}{f}"
+                        for f in s.files
+                        if _is_pyrefly_source_path(f)
                     ],
                     "confidence": s.confidence,
                     "reasoning": s.reasoning,

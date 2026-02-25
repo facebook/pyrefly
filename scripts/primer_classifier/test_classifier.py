@@ -4,9 +4,11 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Unit tests for the primer classifier.
+"""Deterministic unit tests for the primer classifier (no real API calls).
 
 Run with: python -m pytest scripts/primer_classifier/test_classifier.py -v
+
+For live LLM tests, see test_llm_live.py.
 """
 
 from __future__ import annotations
@@ -47,12 +49,34 @@ from .llm_client import (
     LLMResponse,
 )
 from .parser import ErrorEntry, parse_error_line, parse_primer_diff, ProjectDiff
+from .test_helpers import (
+    MOCK_GT_SCENARIO_A_RESPONSE,
+    MOCK_GT_SCENARIO_B_RESPONSE,
+    MOCK_MIXED_SCENARIO_RESPONSE,
+    MOCK_OVERRIDE_SCENARIO_RESPONSE,
+    MOCK_TYPE_CHECKING_SCENARIO_RESPONSE,
+    MOCK_VARIANCE_SCENARIO_RESPONSE,
+    MOCK_VARIANCE_SUGGESTION_RESPONSE,
+    GT_BAD_OVERRIDE_ARGS_DIFF,
+    GT_PROTOCOL_SUBTYPING_DIFF,
+    GT_TYPE_CHECKING_DIFF,
+    TYPE_CHECKING_DIFF,
+    VARIANCE_DIFF,
+    build_all_improvements_scenario,
+    build_classification_result,
+    build_gt_all_neutral_scenario,
+    build_gt_bad_override_args_scenario,
+    build_gt_protocol_subtyping_scenario,
+    build_gt_pure_improvement_scenario,
+    build_gt_type_checking_scenario,
+    build_override_scenario,
+    build_type_checking_scenario,
+    build_variance_scenario,
+    load_fixture,
+    make_error_entry,
+)
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "unit"
-
-
-def _load_fixture(name: str) -> str:
-    return (FIXTURES_DIR / name).read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +135,7 @@ class TestParsePrimerDiff:
         assert parse_primer_diff("   \n  \n  ") == []
 
     def test_all_removals(self):
-        projects = parse_primer_diff(_load_fixture("all_removals.txt"))
+        projects = parse_primer_diff(load_fixture("all_removals.txt"))
         assert len(projects) == 1
         assert projects[0].name == "myproject"
         assert projects[0].url == "https://github.com/example/myproject"
@@ -119,13 +143,13 @@ class TestParsePrimerDiff:
         assert len(projects[0].removed) == 2
 
     def test_multi_project(self):
-        projects = parse_primer_diff(_load_fixture("multi_project.txt"))
+        projects = parse_primer_diff(load_fixture("multi_project.txt"))
         assert len(projects) == 4
         names = [p.name for p in projects]
         assert names == ["project_a", "project_b", "project_c", "project_d"]
 
     def test_github_actions_format(self):
-        projects = parse_primer_diff(_load_fixture("github_actions_format.txt"))
+        projects = parse_primer_diff(load_fixture("github_actions_format.txt"))
         assert len(projects) == 1
         assert len(projects[0].added) == 1
         assert len(projects[0].removed) == 1
@@ -271,24 +295,24 @@ class TestClassifyAll:
 
 class TestClassifyFromFixtures:
     def test_all_removals_fixture(self):
-        projects = parse_primer_diff(_load_fixture("all_removals.txt"))
+        projects = parse_primer_diff(load_fixture("all_removals.txt"))
         result = classify_all(projects, fetch_code=False, use_llm=False)
         assert result.ambiguous == 1
         assert result.regressions == 0
 
     def test_internal_errors_fixture(self):
-        projects = parse_primer_diff(_load_fixture("internal_errors.txt"))
+        projects = parse_primer_diff(load_fixture("internal_errors.txt"))
         result = classify_all(projects, fetch_code=False, use_llm=False)
         assert result.regressions == 1
         assert result.improvements == 0
 
     def test_wording_changes_fixture(self):
-        projects = parse_primer_diff(_load_fixture("wording_changes.txt"))
+        projects = parse_primer_diff(load_fixture("wording_changes.txt"))
         result = classify_all(projects, fetch_code=False, use_llm=False)
         assert result.neutrals == 1
 
     def test_multi_project_fixture(self):
-        projects = parse_primer_diff(_load_fixture("multi_project.txt"))
+        projects = parse_primer_diff(load_fixture("multi_project.txt"))
         result = classify_all(projects, fetch_code=False, use_llm=False)
         assert result.total_projects == 4
         # project_a: all removals -> ambiguous (needs LLM to determine FP vs FN)
@@ -301,17 +325,17 @@ class TestClassifyFromFixtures:
         assert result.ambiguous == 2
 
     def test_empty_fixture(self):
-        projects = parse_primer_diff(_load_fixture("empty.txt"))
+        projects = parse_primer_diff(load_fixture("empty.txt"))
         result = classify_all(projects, fetch_code=False, use_llm=False)
         assert result.total_projects == 0
 
     def test_mixed_changes_fixture(self):
-        projects = parse_primer_diff(_load_fixture("mixed_changes.txt"))
+        projects = parse_primer_diff(load_fixture("mixed_changes.txt"))
         assert len(projects) == 1
         assert projects[0].name == "mixedproject"
         assert len(projects[0].added) == 2
         assert len(projects[0].removed) == 1
-        # Non-trivial mixed change without LLM → ambiguous
+        # Non-trivial mixed change without LLM -> ambiguous
         result = classify_all(projects, fetch_code=False, use_llm=False)
         assert result.ambiguous == 1
 
@@ -394,7 +418,6 @@ class TestCategorization:
 
     def test_truncate_source_context_too_large(self):
         """Oversized context should be truncated with a marker."""
-        # Create context that is larger than the budget allows
         from .classifier import _MAX_PROMPT_CHARS
 
         # Make errors text consume most of the budget
@@ -571,8 +594,6 @@ class TestExtractReferencedModules:
 
 class TestFormatMarkdown:
     def _make_result(self):
-        from .classifier import ClassificationResult
-
         return ClassificationResult(
             total_projects=2,
             regressions=1,
@@ -631,14 +652,10 @@ class TestFormatMarkdown:
         assert "check_for_imported_final_reassignment()" in md
 
     def test_empty_result(self):
-        from .classifier import ClassificationResult
-
         md = format_markdown(ClassificationResult())
         assert "No diffs" in md or "All clear" in md
 
     def test_with_categories(self):
-        from .classifier import ClassificationResult
-
         result = ClassificationResult(
             total_projects=1,
             regressions=1,
@@ -665,8 +682,6 @@ class TestFormatMarkdown:
 
 class TestFormatJson:
     def test_valid_json(self):
-        from .classifier import ClassificationResult
-
         result = ClassificationResult(
             total_projects=1,
             improvements=1,
@@ -807,8 +822,6 @@ class TestClassifyAllWithDiff:
 
 class TestFormatterPrAttribution:
     def test_markdown_shows_attribution(self):
-        from .classifier import ClassificationResult
-
         result = ClassificationResult(
             total_projects=1,
             improvements=1,
@@ -827,8 +840,6 @@ class TestFormatterPrAttribution:
         assert "alt/answers.rs" in md
 
     def test_markdown_hides_na_attribution(self):
-        from .classifier import ClassificationResult
-
         result = ClassificationResult(
             total_projects=1,
             improvements=1,
@@ -846,8 +857,6 @@ class TestFormatterPrAttribution:
         assert "Attribution" not in md
 
     def test_markdown_hides_empty_attribution(self):
-        from .classifier import ClassificationResult
-
         result = ClassificationResult(
             total_projects=1,
             improvements=1,
@@ -864,8 +873,6 @@ class TestFormatterPrAttribution:
         assert "Attribution" not in md
 
     def test_json_includes_attribution(self):
-        from .classifier import ClassificationResult
-
         result = ClassificationResult(
             total_projects=1,
             improvements=1,
@@ -884,8 +891,6 @@ class TestFormatterPrAttribution:
         assert data["classifications"][0]["pr_attribution"] == "Change in solver.rs"
 
     def test_json_includes_empty_attribution(self):
-        from .classifier import ClassificationResult
-
         result = ClassificationResult(
             total_projects=1,
             improvements=1,
@@ -909,8 +914,6 @@ class TestTruncateSourceContextWithDiff:
         from .classifier import _MAX_PROMPT_CHARS
 
         # Create a source context large enough that the diff budget matters.
-        # The context must be close to the limit so that adding diff_len
-        # forces truncation.
         errors = "x" * 1000
         ctx = "a" * (_MAX_PROMPT_CHARS - 20_000)
 
@@ -1139,223 +1142,38 @@ class TestTwoPassClassifyProject:
 
 
 # ---------------------------------------------------------------------------
-# Pass 3: Suggestion generation tests
+# Pass 3: Suggestion generation tests (all mocked)
 # ---------------------------------------------------------------------------
-
-
-# -- Shared test helpers --
-
-
-def _make_error_entry(
-    kind: str = "bad-return",
-    msg: str = "msg",
-    file_path: str = "src/foo.py",
-) -> ErrorEntry:
-    """Create an ErrorEntry for use in test scenarios."""
-    return ErrorEntry(
-        severity="ERROR",
-        file_path=file_path,
-        location="10:5-20",
-        message=msg,
-        error_kind=kind,
-        raw_line=f"ERROR {file_path}:10:5-20: {msg} [{kind}]",
-    )
-
-
-def _build_classification_result(
-    n_projects: int,
-    verdict: str,
-    error_kind: str,
-    reason: str,
-    attribution: str,
-    project_prefix: str = "project",
-) -> ClassificationResult:
-    """Build a ClassificationResult with N identical project results."""
-    classifications = []
-    for i in range(n_projects):
-        classifications.append(
-            Classification(
-                project_name=f"{project_prefix}_{i}",
-                verdict=verdict,
-                reason=reason,
-                added_count=5 if verdict == "regression" else 0,
-                removed_count=0 if verdict == "regression" else 5,
-                method="llm",
-                pr_attribution=attribution,
-                categories=[
-                    CategoryVerdict(error_kind, verdict, reason),
-                ],
-            )
-        )
-    regressions = n_projects if verdict == "regression" else 0
-    improvements = n_projects if verdict == "improvement" else 0
-    neutrals = n_projects if verdict == "neutral" else 0
-    ambiguous = n_projects if verdict == "ambiguous" else 0
-    return ClassificationResult(
-        classifications=classifications,
-        total_projects=n_projects,
-        regressions=regressions,
-        improvements=improvements,
-        neutrals=neutrals,
-        ambiguous=ambiguous,
-    )
-
-
-def _build_variance_scenario() -> ClassificationResult:
-    """5 projects with variance-mismatch regressions on regular classes."""
-    return _build_classification_result(
-        n_projects=5,
-        verdict="regression",
-        error_kind="variance-mismatch",
-        reason="Variance check applied to regular classes, not just protocols. "
-        "Per the typing spec, variance inference is only required for protocols.",
-        attribution="Removed is_protocol() guard in alt/class/variance.rs",
-        project_prefix="variance_proj",
-    )
-
-
-def _build_variance_diff() -> str:
-    """Synthetic diff: removed is_protocol() guard in variance checking."""
-    return """diff --git a/pyrefly/lib/alt/class/variance.rs b/pyrefly/lib/alt/class/variance.rs
---- a/pyrefly/lib/alt/class/variance.rs
-+++ b/pyrefly/lib/alt/class/variance.rs
-@@ -120,8 +120,6 @@ fn check_variance(&self, cls: &ClassType) {
--        if !cls.is_protocol() {
--            return;
--        }
-         for param in cls.type_params() {
-             self.check_param_variance(param, cls);
-         }
-"""
-
-
-def _build_type_checking_scenario() -> ClassificationResult:
-    """4 projects with TYPE_CHECKING bad-assignment regressions."""
-    projects = ["urllib3", "trio", "zulip", "ibis"]
-    classifications = []
-    for name in projects:
-        classifications.append(
-            Classification(
-                project_name=name,
-                verdict="regression",
-                reason="Cannot assign to TYPE_CHECKING because imported as final. "
-                "This is a well-known pattern that mypy/pyright exempt.",
-                added_count=3,
-                removed_count=0,
-                method="llm",
-                pr_attribution="Stricter final-variable checking in binding/stmt.rs",
-                categories=[
-                    CategoryVerdict(
-                        "bad-assignment",
-                        "regression",
-                        "TYPE_CHECKING reassignment is a standard pattern",
-                    ),
-                ],
-            )
-        )
-    return ClassificationResult(
-        classifications=classifications,
-        total_projects=len(projects),
-        regressions=len(projects),
-    )
-
-
-def _build_type_checking_diff() -> str:
-    """Synthetic diff: stricter final variable checking."""
-    return """diff --git a/pyrefly/lib/binding/stmt.rs b/pyrefly/lib/binding/stmt.rs
---- a/pyrefly/lib/binding/stmt.rs
-+++ b/pyrefly/lib/binding/stmt.rs
-@@ -200,6 +200,10 @@ fn check_assignment(&mut self, target: &Expr, value: &Expr) {
-+        // Check for final variable reassignment
-+        if self.is_final_variable(target) {
-+            self.error(target.range(), "Cannot assign to final variable");
-+        }
-"""
-
-
-def _build_override_scenario() -> ClassificationResult:
-    """4 projects with bad-override regressions."""
-    projects = ["jax", "bokeh", "poetry", "artigraph"]
-    classifications = []
-    for name in projects:
-        classifications.append(
-            Classification(
-                project_name=name,
-                verdict="regression",
-                reason="Override check is too strict, flagging methods that are "
-                "compatible by Liskov substitution principle.",
-                added_count=8,
-                removed_count=0,
-                method="llm",
-                pr_attribution="Stricter override checking in alt/class/override.rs",
-                categories=[
-                    CategoryVerdict(
-                        "bad-override",
-                        "regression",
-                        "Override check scope is too broad",
-                    ),
-                ],
-            )
-        )
-    return ClassificationResult(
-        classifications=classifications,
-        total_projects=len(projects),
-        regressions=len(projects),
-    )
-
-
-def _build_all_improvements_scenario() -> ClassificationResult:
-    """3 projects with only improvements (no regressions)."""
-    return _build_classification_result(
-        n_projects=3,
-        verdict="improvement",
-        error_kind="missing-attribute",
-        reason="Removed false positive missing-attribute errors. "
-        "Attributes exist via inheritance from parent class.",
-        attribution="Improved class hierarchy resolution in alt/class/resolve.rs",
-        project_prefix="improved_proj",
-    )
-
-
-# -- Tier 1: Unit tests (no LLM calls, all mocked) --
 
 
 class TestBuildSuggestionUserPromptFormatting:
     """Verify the serialized prompt contains project names, verdicts, reasons, counts, diff."""
 
     def test_contains_project_info(self):
-        result = _build_variance_scenario()
-        diff = _build_variance_diff()
-        prompt = _build_suggestion_user_prompt(result, diff)
-        # Should contain project names
+        result = build_variance_scenario()
+        prompt = _build_suggestion_user_prompt(result, VARIANCE_DIFF)
         assert "variance_proj_0" in prompt
         assert "variance_proj_4" in prompt
-        # Should contain verdict
         assert "REGRESSION" in prompt
-        # Should contain reason
         assert "variance" in prompt.lower()
         assert "protocol" in prompt.lower()
-        # Should contain counts
         assert "+5/-0" in prompt
-        # Should contain diff
         assert "variance.rs" in prompt
         assert "is_protocol" in prompt
 
     def test_contains_attribution(self):
-        result = _build_type_checking_scenario()
-        diff = _build_type_checking_diff()
-        prompt = _build_suggestion_user_prompt(result, diff)
+        result = build_type_checking_scenario()
+        prompt = _build_suggestion_user_prompt(result, TYPE_CHECKING_DIFF)
         assert "Stricter final-variable checking" in prompt
 
     def test_mixed_verdicts_shown(self):
         """Both regressions and improvements appear in the prompt."""
-        regression = _build_classification_result(
+        regression = build_classification_result(
             2, "regression", "variance-mismatch", "too broad", "diff", "reg"
         )
-        improvement = _build_classification_result(
+        improvement = build_classification_result(
             1, "improvement", "missing-attribute", "FP removed", "diff", "imp"
         )
-        # Merge them
         merged = ClassificationResult(
             classifications=regression.classifications + improvement.classifications,
             total_projects=3,
@@ -1373,24 +1191,13 @@ class TestGenerateSuggestionsParsing:
     """Mock API to return known JSON, verify it parses into SuggestionResult."""
 
     def test_parses_suggestions(self):
-        api_response = {
-            "summary": "Variance check needs protocol guard",
-            "suggestions": [
-                {
-                    "description": "Restore is_protocol() guard in variance checking",
-                    "files": ["pyrefly/lib/alt/class/variance.rs"],
-                    "confidence": "high",
-                    "reasoning": "The guard was removed, applying variance checks too broadly",
-                },
-            ],
-        }
-        result = _build_variance_scenario()
+        result = build_variance_scenario()
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(api_response)}]},
+                return_value={"content": [{"text": json.dumps(MOCK_VARIANCE_SUGGESTION_RESPONSE)}]},
             ):
-                suggestion = generate_suggestions(result, _build_variance_diff())
+                suggestion = generate_suggestions(result, VARIANCE_DIFF)
                 assert len(suggestion.suggestions) == 1
                 assert suggestion.suggestions[0].confidence == "high"
                 assert "variance.rs" in suggestion.suggestions[0].files[0]
@@ -1402,7 +1209,7 @@ class TestGenerateSuggestionsSkipsWhenNoRegressions:
     """Verify generate_suggestions() returns early without calling the API."""
 
     def test_skips_api_call(self):
-        result = _build_all_improvements_scenario()
+        result = build_all_improvements_scenario()
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
@@ -1434,7 +1241,7 @@ class TestClassifyAllWithSuggestFlag:
             ],
         }
 
-        entry = _make_error_entry(kind="variance-mismatch", msg="variance issue")
+        entry = make_error_entry(kind="variance-mismatch", msg="variance issue")
         projects = [ProjectDiff(name="test_proj", added=[entry])]
 
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
@@ -1573,42 +1380,30 @@ class TestSuggestionOmittedWhenNone:
         assert "suggestion" not in data
 
 
-# -- Tier 2: Known-good-answer scenario tests (mock LLM, verify right data reaches it) --
+# ---------------------------------------------------------------------------
+# Known-good-answer scenario tests (mock LLM, verify right data reaches it)
+# ---------------------------------------------------------------------------
 
 
 class TestScenarioVarianceToBroad:
     """Scenario 1: Variance inference too broad — removed is_protocol() guard."""
 
     def test_prompt_contains_regression_details(self):
-        result = _build_variance_scenario()
-        diff = _build_variance_diff()
-        prompt = _build_suggestion_user_prompt(result, diff)
+        result = build_variance_scenario()
+        prompt = _build_suggestion_user_prompt(result, VARIANCE_DIFF)
         assert "variance" in prompt.lower()
         assert "protocol" in prompt.lower()
         assert "is_protocol" in prompt
         assert "variance.rs" in prompt
 
     def test_mock_suggestion_parses_correctly(self):
-        api_response = {
-            "summary": "Restore is_protocol() guard to limit variance checking to protocols",
-            "suggestions": [
-                {
-                    "description": "Restore the is_protocol() guard in check_variance()",
-                    "files": ["pyrefly/lib/alt/class/variance.rs"],
-                    "confidence": "high",
-                    "reasoning": "Variance inference per the typing spec is only required "
-                    "for protocols. The PR removed the guard, causing variance checks on "
-                    "all classes.",
-                },
-            ],
-        }
-        result = _build_variance_scenario()
+        result = build_variance_scenario()
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(api_response)}]},
+                return_value={"content": [{"text": json.dumps(MOCK_VARIANCE_SCENARIO_RESPONSE)}]},
             ):
-                suggestion = generate_suggestions(result, _build_variance_diff())
+                suggestion = generate_suggestions(result, VARIANCE_DIFF)
                 assert len(suggestion.suggestions) == 1
                 s = suggestion.suggestions[0]
                 assert "protocol" in s.reasoning.lower()
@@ -1620,9 +1415,8 @@ class TestScenarioTypeCheckingExempt:
     """Scenario 2: TYPE_CHECKING final assignment regressions."""
 
     def test_prompt_contains_all_projects(self):
-        result = _build_type_checking_scenario()
-        diff = _build_type_checking_diff()
-        prompt = _build_suggestion_user_prompt(result, diff)
+        result = build_type_checking_scenario()
+        prompt = _build_suggestion_user_prompt(result, TYPE_CHECKING_DIFF)
         assert "urllib3" in prompt
         assert "trio" in prompt
         assert "zulip" in prompt
@@ -1631,25 +1425,13 @@ class TestScenarioTypeCheckingExempt:
         assert "bad-assignment" in prompt
 
     def test_mock_suggestion_correct(self):
-        api_response = {
-            "summary": "Exempt TYPE_CHECKING from final variable reassignment check",
-            "suggestions": [
-                {
-                    "description": "Exempt TYPE_CHECKING reassignment from final check",
-                    "files": ["pyrefly/lib/binding/stmt.rs"],
-                    "confidence": "high",
-                    "reasoning": "TYPE_CHECKING = True is a standard Python pattern. "
-                    "mypy and pyright explicitly allow it.",
-                },
-            ],
-        }
-        result = _build_type_checking_scenario()
+        result = build_type_checking_scenario()
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(api_response)}]},
+                return_value={"content": [{"text": json.dumps(MOCK_TYPE_CHECKING_SCENARIO_RESPONSE)}]},
             ):
-                suggestion = generate_suggestions(result, _build_type_checking_diff())
+                suggestion = generate_suggestions(result, TYPE_CHECKING_DIFF)
                 assert len(suggestion.suggestions) == 1
                 text = suggestion.suggestions[0].description + " " + suggestion.suggestions[0].reasoning
                 assert any(
@@ -1662,7 +1444,7 @@ class TestScenarioBadOverride:
     """Scenario 3: bad-override flood across multiple projects."""
 
     def test_prompt_contains_override_info(self):
-        result = _build_override_scenario()
+        result = build_override_scenario()
         diff = "diff --git a/pyrefly/lib/alt/class/override.rs\n+stricter checks"
         prompt = _build_suggestion_user_prompt(result, diff)
         assert "bad-override" in prompt
@@ -1672,23 +1454,11 @@ class TestScenarioBadOverride:
         assert "artigraph" in prompt
 
     def test_mock_suggestion_references_override(self):
-        api_response = {
-            "summary": "Narrow override check scope",
-            "suggestions": [
-                {
-                    "description": "Narrow the override check to exclude compatible overrides",
-                    "files": ["pyrefly/lib/alt/class/override.rs"],
-                    "confidence": "medium",
-                    "reasoning": "The override check is flagging methods that are "
-                    "compatible by Liskov substitution.",
-                },
-            ],
-        }
-        result = _build_override_scenario()
+        result = build_override_scenario()
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(api_response)}]},
+                return_value={"content": [{"text": json.dumps(MOCK_OVERRIDE_SCENARIO_RESPONSE)}]},
             ):
                 suggestion = generate_suggestions(result, "diff override.rs")
                 assert len(suggestion.suggestions) >= 1
@@ -1699,7 +1469,7 @@ class TestScenarioPureImprovement:
     """Scenario 4: Pure improvement — no suggestion needed."""
 
     def test_skips_api_and_returns_empty(self):
-        result = _build_all_improvements_scenario()
+        result = build_all_improvements_scenario()
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
@@ -1714,10 +1484,10 @@ class TestScenarioMixed:
     """Scenario 5: Mixed — regressions + improvements."""
 
     def test_prompt_contains_both(self):
-        reg = _build_classification_result(
+        reg = build_classification_result(
             2, "regression", "variance-mismatch", "too broad", "variance.rs", "reg"
         )
-        imp = _build_classification_result(
+        imp = build_classification_result(
             3, "improvement", "missing-attribute", "FP removed", "resolve.rs", "imp"
         )
         merged = ClassificationResult(
@@ -1734,10 +1504,10 @@ class TestScenarioMixed:
         assert "imp_0" in prompt
 
     def test_suggestion_targets_regression(self):
-        reg = _build_classification_result(
+        reg = build_classification_result(
             2, "regression", "variance-mismatch", "too broad", "variance.rs", "reg"
         )
-        imp = _build_classification_result(
+        imp = build_classification_result(
             3, "improvement", "missing-attribute", "FP removed", "resolve.rs", "imp"
         )
         merged = ClassificationResult(
@@ -1746,21 +1516,10 @@ class TestScenarioMixed:
             regressions=2,
             improvements=3,
         )
-        api_response = {
-            "summary": "Variance check too broad",
-            "suggestions": [
-                {
-                    "description": "Fix variance check scope",
-                    "files": ["variance.rs"],
-                    "confidence": "high",
-                    "reasoning": "Only the variance regressions need fixing",
-                },
-            ],
-        }
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(api_response)}]},
+                return_value={"content": [{"text": json.dumps(MOCK_MIXED_SCENARIO_RESPONSE)}]},
             ):
                 suggestion = generate_suggestions(merged, "diff variance.rs")
                 assert len(suggestion.suggestions) >= 1
@@ -1769,424 +1528,17 @@ class TestScenarioMixed:
                 assert "variance" in suggestion.suggestions[0].description.lower()
 
 
-# -- Tier 3: Live LLM quality tests (real API calls) --
-
-
-@pytest.mark.slow
-class TestSuggestionQualityLive:
-    """Live LLM tests — requires ANTHROPIC_API_KEY.
-
-    Run with: python -m pytest scripts/primer_classifier/test_classifier.py -v -m slow
-    """
-
-    def test_variance_too_broad_live(self):
-        result = _build_variance_scenario()
-        diff = _build_variance_diff()
-        suggestion = generate_suggestions(result, diff)
-        assert len(suggestion.suggestions) >= 1
-        text = " ".join(
-            s.description + " " + s.reasoning for s in suggestion.suggestions
-        )
-        assert "protocol" in text.lower(), f"Expected 'protocol', got: {text}"
-        # Should reference the actual file from the diff
-        all_files = [f for s in suggestion.suggestions for f in s.files]
-        assert any(
-            "variance" in f for f in all_files
-        ), f"Expected variance file reference, got: {all_files}"
-
-    def test_type_checking_exempt_live(self):
-        result = _build_type_checking_scenario()
-        diff = _build_type_checking_diff()
-        suggestion = generate_suggestions(result, diff)
-        assert len(suggestion.suggestions) >= 1
-        text = " ".join(
-            s.description + " " + s.reasoning for s in suggestion.suggestions
-        )
-        assert any(
-            kw in text.lower() for kw in ["type_checking", "exempt", "final"]
-        ), f"Expected TYPE_CHECKING/exempt/final, got: {text}"
-        # Should reference the actual file from the diff
-        all_files = [f for s in suggestion.suggestions for f in s.files]
-        assert any(
-            "stmt" in f or "binding" in f for f in all_files
-        ), f"Expected stmt/binding file reference, got: {all_files}"
-
-    def test_no_regressions_skips_live(self):
-        result = _build_all_improvements_scenario()
-        suggestion = generate_suggestions(result, "diff --git a/foo.rs")
-        assert suggestion.suggestions == []
-        assert not suggestion.has_regressions
-
-
 # ---------------------------------------------------------------------------
-# Ground-truth scenario builders (real data from pyrefly git history)
+# Ground-truth scenario tests (mock LLM)
 # ---------------------------------------------------------------------------
-
-
-def _assert_actionable(suggestion: Suggestion) -> None:
-    """Verify a suggestion names a function, lists projects, and lists error kinds."""
-    import re
-
-    assert re.search(r"\w+[\(_]", suggestion.description), (
-        f"Must name a function in description, got: {suggestion.description}"
-    )
-    assert suggestion.affected_projects, (
-        f"Must list affected projects, got: {suggestion.affected_projects}"
-    )
-    assert suggestion.error_kinds_fixed, (
-        f"Must list error kinds, got: {suggestion.error_kinds_fixed}"
-    )
-
-
-def _build_gt_protocol_subtyping_scenario() -> ClassificationResult:
-    """Ground-truth Scenario A: PR #2428 → #2492.
-
-    Regression in protocol subtyping: calculate_abstract_members() in class_metadata.rs
-    used class_body_fields() instead of fields(), which excluded synthesized fields
-    like __dataclass_fields__. The fix (PR #2492) added a guard using get_class_member()
-    to detect synthesized concrete implementations.
-
-    Real data from fixtures/real/pr_2428.txt.
-    """
-    classifications = [
-        Classification(
-            project_name="jax",
-            verdict="regression",
-            reason="bad-override errors on BarrierType.type and ClusterBarrierType.type "
-            "overriding ExtendedDType — these are protocol subtyping false positives "
-            "caused by synthesized field exclusion in calculate_abstract_members().",
-            added_count=2,
-            removed_count=0,
-            method="llm",
-            pr_attribution="Change in calculate_abstract_members() in class_metadata.rs "
-            "switched from fields() to class_body_fields(), excluding synthesized fields",
-            categories=[
-                CategoryVerdict("bad-override", "regression", "Protocol subtyping false positives"),
-            ],
-        ),
-        Classification(
-            project_name="bokeh",
-            verdict="regression",
-            reason="bad-override errors on Alias.readonly and Alias.serialized overriding "
-            "Property — false positives from same protocol subtyping regression.",
-            added_count=2,
-            removed_count=0,
-            method="llm",
-            pr_attribution="Same calculate_abstract_members() change in class_metadata.rs",
-            categories=[
-                CategoryVerdict("bad-override", "regression", "Protocol subtyping false positives"),
-            ],
-        ),
-        Classification(
-            project_name="poetry",
-            verdict="regression",
-            reason="bad-override errors on plugin command overrides — false positives "
-            "from protocol subtyping regression.",
-            added_count=3,
-            removed_count=0,
-            method="llm",
-            pr_attribution="calculate_abstract_members() in class_metadata.rs",
-            categories=[
-                CategoryVerdict("bad-override", "regression", "Protocol subtyping false positives"),
-            ],
-        ),
-        Classification(
-            project_name="artigraph",
-            verdict="regression",
-            reason="bad-override errors on Producer subclass overrides — false positives.",
-            added_count=2,
-            removed_count=0,
-            method="llm",
-            pr_attribution="calculate_abstract_members() in class_metadata.rs",
-            categories=[
-                CategoryVerdict("bad-override", "regression", "Protocol subtyping false positives"),
-            ],
-        ),
-        Classification(
-            project_name="hydra-zen",
-            verdict="improvement",
-            reason="reveal-type changed from @_ (unresolved) to concrete types "
-            "(A, int, str, type[str], etc.) — type inference improved.",
-            added_count=22,
-            removed_count=30,
-            method="llm",
-            pr_attribution="Improved protocol handling resolved previously unresolved types",
-            categories=[
-                CategoryVerdict("reveal-type", "improvement", "Type inference improved from @_ to concrete"),
-            ],
-        ),
-    ]
-    return ClassificationResult(
-        classifications=classifications,
-        total_projects=5,
-        regressions=4,
-        improvements=1,
-    )
-
-
-def _build_gt_protocol_subtyping_diff() -> str:
-    """Actual diff from commit d8e14367f (PR #2428) — the regression source."""
-    return """diff --git a/pyrefly/lib/alt/class/class_metadata.rs b/pyrefly/lib/alt/class/class_metadata.rs
---- a/pyrefly/lib/alt/class/class_metadata.rs
-+++ b/pyrefly/lib/alt/class/class_metadata.rs
-@@ -395,7 +395,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-             )
-         }) {
-             Some(ProtocolMetadata {
--                members: cls.fields().cloned().collect(),
-+                members: cls.class_body_fields().cloned().collect(),
-                 is_runtime_checkable: false,
-             })
-         } else {
-@@ -1339,6 +1339,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-         let mut abstract_members = SmallSet::new();
-         for field_name in fields_to_check {
-+            // Use get_non_synthesized_class_member to find abstract requirements
-             if let Some(field) =
-                 self.get_non_synthesized_class_member_and_defining_class(cls, &field_name)
-                 && (field.value.is_abstract() ||
-"""
-
-
-def _build_gt_type_checking_scenario() -> ClassificationResult:
-    """Ground-truth Scenario B: PR #2389 TYPE_CHECKING (UNRESOLVED).
-
-    Regression from check_for_imported_final_reassignment() in bindings.rs.
-    No fix exists yet, but we know the function that needs changing.
-    It doesn't exempt TYPE_CHECKING from the final reassignment check.
-
-    Real data from fixtures/real/pr_2389.txt.
-    """
-    classifications = [
-        Classification(
-            project_name="urllib3",
-            verdict="regression",
-            reason="Cannot assign to HAS_NEVER_CHECK_COMMON_NAME because imported as final — "
-            "false positive, this is a feature-detection reassignment in a try/except block.",
-            added_count=1,
-            removed_count=0,
-            method="llm",
-            pr_attribution="check_for_imported_final_reassignment() in bindings.rs "
-            "does not exempt feature-detection patterns in try/except blocks",
-            categories=[
-                CategoryVerdict("bad-assignment", "regression", "Final reassignment false positive"),
-            ],
-        ),
-        Classification(
-            project_name="trio",
-            verdict="regression",
-            reason="Cannot assign to TYPE_CHECKING because imported as final — "
-            "false positive, TYPE_CHECKING = True is a standard Python pattern.",
-            added_count=1,
-            removed_count=0,
-            method="llm",
-            pr_attribution="check_for_imported_final_reassignment() in bindings.rs "
-            "does not exempt TYPE_CHECKING reassignment",
-            categories=[
-                CategoryVerdict("bad-assignment", "regression", "TYPE_CHECKING reassignment FP"),
-            ],
-        ),
-        Classification(
-            project_name="zulip",
-            verdict="regression",
-            reason="Cannot assign to TYPE_CHECKING because imported as final — "
-            "same TYPE_CHECKING false positive.",
-            added_count=1,
-            removed_count=0,
-            method="llm",
-            pr_attribution="check_for_imported_final_reassignment() in bindings.rs",
-            categories=[
-                CategoryVerdict("bad-assignment", "regression", "TYPE_CHECKING reassignment FP"),
-            ],
-        ),
-        Classification(
-            project_name="ibis",
-            verdict="regression",
-            reason="Cannot assign to TYPE_CHECKING because imported as final — "
-            "14 false positives across ibis/expr/ files.",
-            added_count=14,
-            removed_count=0,
-            method="llm",
-            pr_attribution="check_for_imported_final_reassignment() in bindings.rs",
-            categories=[
-                CategoryVerdict("bad-assignment", "regression", "TYPE_CHECKING reassignment FP"),
-            ],
-        ),
-    ]
-    return ClassificationResult(
-        classifications=classifications,
-        total_projects=4,
-        regressions=4,
-    )
-
-
-def _build_gt_type_checking_diff() -> str:
-    """Actual diff from commit a6d9bc12a (PR #2389) — the regression source."""
-    return """diff --git a/pyrefly/lib/binding/bindings.rs b/pyrefly/lib/binding/bindings.rs
---- a/pyrefly/lib/binding/bindings.rs
-+++ b/pyrefly/lib/binding/bindings.rs
-@@ -1335,6 +1335,7 @@ impl<'a> BindingsBuilder<'a> {
-         style: FlowStyle,
-     ) -> Option<Idx<KeyAnnotation>> {
-         self.check_for_type_alias_redefinition(name, idx);
-+        self.check_for_imported_final_reassignment(name, idx);
-         let name = Hashed::new(name);
-
-@@ -1374,6 +1375,20 @@ impl<'a> BindingsBuilder<'a> {
-         }
-     }
-
-+    fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
-+        let prev_idx = self.scopes.current_flow_idx(name);
-+        if let Some(prev_idx) = prev_idx
-+            && let Some(Binding::Import(module, original_name, _)) = self.idx_to_binding(prev_idx)
-+            && self.lookup.is_final(*module, original_name)
-+        {
-+            self.error(
-+                self.idx_to_key(idx).range(),
-+                ErrorInfo::Kind(ErrorKind::BadAssignment),
-+                format!("Cannot assign to `{name}` because it is imported as final"),
-+            );
-+        }
-+    }
-"""
-
-
-def _build_gt_bad_override_args_scenario() -> ClassificationResult:
-    """Ground-truth Scenario C: Bad-override *args/**kwargs (CONFIRMED FIX via #2322).
-
-    Fix was has_any_args_and_kwargs() in solver/subset.rs to treat
-    *args: Any, **kwargs: Any as compatible with any signature.
-
-    Uses the same projects from pr_2428.txt (bad-override regressions) since
-    the override checking tightening affected the same projects.
-    """
-    classifications = [
-        Classification(
-            project_name="jax",
-            verdict="regression",
-            reason="bad-override errors where child methods have *args: Any, **kwargs: Any "
-            "but parent has specific parameters — should be treated as compatible.",
-            added_count=2,
-            removed_count=0,
-            method="llm",
-            pr_attribution="Stricter override checking in solver/subset.rs without "
-            "*args: Any, **kwargs: Any escape hatch",
-            categories=[
-                CategoryVerdict("bad-override", "regression", "*args/**kwargs override FP"),
-            ],
-        ),
-        Classification(
-            project_name="bokeh",
-            verdict="regression",
-            reason="bad-override errors where overrides use *args: Any, **kwargs: Any pattern.",
-            added_count=2,
-            removed_count=0,
-            method="llm",
-            pr_attribution="solver/subset.rs override checking too strict",
-            categories=[
-                CategoryVerdict("bad-override", "regression", "*args/**kwargs override FP"),
-            ],
-        ),
-        Classification(
-            project_name="poetry",
-            verdict="regression",
-            reason="bad-override errors on plugin command overrides with *args/**kwargs.",
-            added_count=3,
-            removed_count=0,
-            method="llm",
-            pr_attribution="solver/subset.rs override checking",
-            categories=[
-                CategoryVerdict("bad-override", "regression", "*args/**kwargs override FP"),
-            ],
-        ),
-    ]
-    return ClassificationResult(
-        classifications=classifications,
-        total_projects=3,
-        regressions=3,
-    )
-
-
-def _build_gt_bad_override_args_diff() -> str:
-    """Diff showing stricter override checking WITHOUT the *args/**kwargs escape hatch.
-
-    This represents the state before PR #2322 added has_any_args_and_kwargs().
-    """
-    return """diff --git a/pyrefly/lib/solver/subset.rs b/pyrefly/lib/solver/subset.rs
---- a/pyrefly/lib/solver/subset.rs
-+++ b/pyrefly/lib/solver/subset.rs
-@@ -108,6 +108,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
-     fn is_subset_param_list(
-         &mut self,
-         l_args: &[Param],
-         u_args: &[Param],
-     ) -> Result<(), SubsetError> {
-         let mut l_args = l_args.iter();
-         let mut u_args = u_args.iter();
-+        // Strict parameter-by-parameter comparison without special-casing
-+        // *args: Any, **kwargs: Any. This means overrides with *args: Any,
-+        // **kwargs: Any are checked against the full parent signature.
-"""
-
-
-def _build_gt_pure_improvement_scenario() -> ClassificationResult:
-    """Ground-truth Scenario D: Pure improvement — no suggestion needed.
-
-    One project (hydra-zen) with reveal-type improvements from @_ to concrete types.
-    No regressions at all.
-    """
-    classifications = [
-        Classification(
-            project_name="hydra-zen",
-            verdict="improvement",
-            reason="22 reveal-type results changed from @_ (unresolved) to concrete types. "
-            "Type inference improved across the board.",
-            added_count=22,
-            removed_count=30,
-            method="llm",
-            pr_attribution="Protocol handling improvements resolved previously unresolved types",
-            categories=[
-                CategoryVerdict("reveal-type", "improvement", "Type inference improved"),
-            ],
-        ),
-    ]
-    return ClassificationResult(
-        classifications=classifications,
-        total_projects=1,
-        improvements=1,
-    )
-
-
-def _build_gt_all_neutral_scenario() -> ClassificationResult:
-    """Ground-truth Scenario E: All neutral (wording changes only)."""
-    classifications = [
-        Classification(
-            project_name="myproject",
-            verdict="neutral",
-            reason="Message wording changes only, same errors at same locations.",
-            added_count=5,
-            removed_count=5,
-            method="heuristic",
-        ),
-    ]
-    return ClassificationResult(
-        classifications=classifications,
-        total_projects=1,
-        neutrals=1,
-    )
-
-
-# -- Ground-truth: Unit tests (mock LLM, verify data reaches it correctly) --
 
 
 class TestGroundTruthPromptConstruction:
     """Verify ground-truth scenario data appears correctly in the user prompt."""
 
     def test_scenario_a_prompt_has_real_projects(self):
-        result = _build_gt_protocol_subtyping_scenario()
-        diff = _build_gt_protocol_subtyping_diff()
-        prompt = _build_suggestion_user_prompt(result, diff)
+        result = build_gt_protocol_subtyping_scenario()
+        prompt = _build_suggestion_user_prompt(result, GT_PROTOCOL_SUBTYPING_DIFF)
         assert "jax" in prompt
         assert "bokeh" in prompt
         assert "poetry" in prompt
@@ -2196,17 +1548,15 @@ class TestGroundTruthPromptConstruction:
         assert "calculate_abstract_members" in prompt or "class_body_fields" in prompt
 
     def test_scenario_a_prompt_has_aggregate_info(self):
-        result = _build_gt_protocol_subtyping_scenario()
-        diff = _build_gt_protocol_subtyping_diff()
-        prompt = _build_suggestion_user_prompt(result, diff)
+        result = build_gt_protocol_subtyping_scenario()
+        prompt = _build_suggestion_user_prompt(result, GT_PROTOCOL_SUBTYPING_DIFF)
         assert "Regression error kinds:" in prompt
         assert "bad-override" in prompt
         assert "Affected projects:" in prompt
 
     def test_scenario_b_prompt_has_type_checking(self):
-        result = _build_gt_type_checking_scenario()
-        diff = _build_gt_type_checking_diff()
-        prompt = _build_suggestion_user_prompt(result, diff)
+        result = build_gt_type_checking_scenario()
+        prompt = _build_suggestion_user_prompt(result, GT_TYPE_CHECKING_DIFF)
         assert "urllib3" in prompt
         assert "trio" in prompt
         assert "zulip" in prompt
@@ -2215,17 +1565,15 @@ class TestGroundTruthPromptConstruction:
         assert "check_for_imported_final_reassignment" in prompt
 
     def test_scenario_b_prompt_has_aggregate_info(self):
-        result = _build_gt_type_checking_scenario()
-        diff = _build_gt_type_checking_diff()
-        prompt = _build_suggestion_user_prompt(result, diff)
+        result = build_gt_type_checking_scenario()
+        prompt = _build_suggestion_user_prompt(result, GT_TYPE_CHECKING_DIFF)
         assert "Regression error kinds:" in prompt
         assert "bad-assignment" in prompt
         assert "Affected projects:" in prompt
 
     def test_scenario_c_prompt_has_override_info(self):
-        result = _build_gt_bad_override_args_scenario()
-        diff = _build_gt_bad_override_args_diff()
-        prompt = _build_suggestion_user_prompt(result, diff)
+        result = build_gt_bad_override_args_scenario()
+        prompt = _build_suggestion_user_prompt(result, GT_BAD_OVERRIDE_ARGS_DIFF)
         assert "jax" in prompt
         assert "bad-override" in prompt
         assert "subset.rs" in prompt
@@ -2235,32 +1583,13 @@ class TestGroundTruthMockParsing:
     """Mock API returns ground-truth-quality answers; verify parsing + new fields."""
 
     def test_scenario_a_parses_with_new_fields(self):
-        api_response = {
-            "summary": "Protocol subtyping regression from calculate_abstract_members() "
-            "excluding synthesized fields like __dataclass_fields__",
-            "suggestions": [
-                {
-                    "description": "In calculate_abstract_members() in "
-                    "pyrefly/lib/alt/class/class_metadata.rs, add a guard using "
-                    "get_class_member() to check for synthesized concrete implementations "
-                    "before falling through to get_non_synthesized_class_member_and_defining_class()",
-                    "files": ["pyrefly/lib/alt/class/class_metadata.rs"],
-                    "confidence": "high",
-                    "reasoning": "The change from fields() to class_body_fields() excluded "
-                    "synthesized fields like __dataclass_fields__. Adding a pre-check with "
-                    "get_class_member() eliminates 9 bad-override errors across 4 projects.",
-                    "affected_projects": ["jax", "bokeh", "poetry", "artigraph"],
-                    "error_kinds_fixed": ["bad-override"],
-                },
-            ],
-        }
-        result = _build_gt_protocol_subtyping_scenario()
+        result = build_gt_protocol_subtyping_scenario()
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(api_response)}]},
+                return_value={"content": [{"text": json.dumps(MOCK_GT_SCENARIO_A_RESPONSE)}]},
             ):
-                suggestion = generate_suggestions(result, _build_gt_protocol_subtyping_diff())
+                suggestion = generate_suggestions(result, GT_PROTOCOL_SUBTYPING_DIFF)
                 assert len(suggestion.suggestions) == 1
                 s = suggestion.suggestions[0]
                 assert s.affected_projects == ["jax", "bokeh", "poetry", "artigraph"]
@@ -2269,30 +1598,13 @@ class TestGroundTruthMockParsing:
                 assert "calculate_abstract_members" in s.description
 
     def test_scenario_b_parses_with_new_fields(self):
-        api_response = {
-            "summary": "TYPE_CHECKING reassignment regression from "
-            "check_for_imported_final_reassignment() not exempting TYPE_CHECKING",
-            "suggestions": [
-                {
-                    "description": "In check_for_imported_final_reassignment() in "
-                    "pyrefly/lib/binding/bindings.rs, add an exemption: if the name "
-                    "being reassigned is TYPE_CHECKING, skip the final check",
-                    "files": ["pyrefly/lib/binding/bindings.rs"],
-                    "confidence": "high",
-                    "reasoning": "TYPE_CHECKING = True is a standard Python pattern. "
-                    "This eliminates 17 bad-assignment errors across 4 projects.",
-                    "affected_projects": ["urllib3", "trio", "zulip", "ibis"],
-                    "error_kinds_fixed": ["bad-assignment"],
-                },
-            ],
-        }
-        result = _build_gt_type_checking_scenario()
+        result = build_gt_type_checking_scenario()
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
-                return_value={"content": [{"text": json.dumps(api_response)}]},
+                return_value={"content": [{"text": json.dumps(MOCK_GT_SCENARIO_B_RESPONSE)}]},
             ):
-                suggestion = generate_suggestions(result, _build_gt_type_checking_diff())
+                suggestion = generate_suggestions(result, GT_TYPE_CHECKING_DIFF)
                 assert len(suggestion.suggestions) == 1
                 s = suggestion.suggestions[0]
                 assert s.affected_projects == ["urllib3", "trio", "zulip", "ibis"]
@@ -2304,7 +1616,7 @@ class TestGroundTruthSkipsWhenNoRegressions:
     """Scenarios D and E: no regressions should skip LLM call."""
 
     def test_scenario_d_pure_improvement_skips(self):
-        result = _build_gt_pure_improvement_scenario()
+        result = build_gt_pure_improvement_scenario()
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
@@ -2315,7 +1627,7 @@ class TestGroundTruthSkipsWhenNoRegressions:
                 mock_api.assert_not_called()
 
     def test_scenario_e_all_neutral_skips(self):
-        result = _build_gt_all_neutral_scenario()
+        result = build_gt_all_neutral_scenario()
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
@@ -2432,89 +1744,3 @@ class TestGroundTruthFormatterNewFields:
         md = format_markdown(result)
         assert "Affected projects:" not in md
         assert "Fixes:" not in md
-
-
-# -- Ground-truth: Live LLM quality tests (real API calls) --
-
-
-@pytest.mark.slow
-class TestGroundTruthLive:
-    """Live LLM tests with ground-truth scenarios — requires ANTHROPIC_API_KEY.
-
-    Run with: python -m pytest scripts/primer_classifier/test_classifier.py -v -m slow
-    """
-
-    def test_scenario_a_protocol_subtyping_live(self):
-        """PR #2428 → #2492: LLM should name calculate_abstract_members or class_metadata."""
-        result = _build_gt_protocol_subtyping_scenario()
-        diff = _build_gt_protocol_subtyping_diff()
-        suggestion = generate_suggestions(result, diff)
-        assert len(suggestion.suggestions) >= 1
-        text = " ".join(
-            s.description + " " + s.reasoning for s in suggestion.suggestions
-        )
-        assert any(
-            kw in text.lower()
-            for kw in ["calculate_abstract_members", "class_metadata", "synthesized", "class_body_fields"]
-        ), f"Expected function/file reference, got: {text}"
-        all_files = [f for s in suggestion.suggestions for f in s.files]
-        assert any(
-            "class_metadata" in f for f in all_files
-        ), f"Expected class_metadata file reference, got: {all_files}"
-        # Actionability check on first suggestion
-        _assert_actionable(suggestion.suggestions[0])
-
-    def test_scenario_b_type_checking_live(self):
-        """PR #2389: LLM should name check_for_imported_final_reassignment or bindings."""
-        result = _build_gt_type_checking_scenario()
-        diff = _build_gt_type_checking_diff()
-        suggestion = generate_suggestions(result, diff)
-        assert len(suggestion.suggestions) >= 1
-        text = " ".join(
-            s.description + " " + s.reasoning for s in suggestion.suggestions
-        )
-        assert any(
-            kw in text.lower()
-            for kw in ["check_for_imported_final_reassignment", "bindings", "type_checking"]
-        ), f"Expected function/file reference, got: {text}"
-        all_files = [f for s in suggestion.suggestions for f in s.files]
-        assert any(
-            "bindings" in f for f in all_files
-        ), f"Expected bindings file reference, got: {all_files}"
-        # Check affected projects
-        all_projects = [p for s in suggestion.suggestions for p in s.affected_projects]
-        for proj in ["urllib3", "trio", "zulip", "ibis"]:
-            assert proj in all_projects, (
-                f"Expected {proj} in affected_projects, got: {all_projects}"
-            )
-        # Actionability check
-        _assert_actionable(suggestion.suggestions[0])
-
-    def test_scenario_c_bad_override_args_live(self):
-        """PR #2322: LLM should reference subset.rs or args/kwargs/Any."""
-        result = _build_gt_bad_override_args_scenario()
-        diff = _build_gt_bad_override_args_diff()
-        suggestion = generate_suggestions(result, diff)
-        assert len(suggestion.suggestions) >= 1
-        text = " ".join(
-            s.description + " " + s.reasoning for s in suggestion.suggestions
-        )
-        assert any(
-            kw in text.lower()
-            for kw in ["subset", "args", "kwargs", "any"]
-        ), f"Expected override/args reference, got: {text}"
-        _assert_actionable(suggestion.suggestions[0])
-
-    def test_scenario_d_pure_improvement_skips_live(self):
-        """Pure improvement scenario should skip API call."""
-        result = _build_gt_pure_improvement_scenario()
-        suggestion = generate_suggestions(result, "diff --git a/foo.rs")
-        assert suggestion.suggestions == []
-        assert not suggestion.has_regressions
-
-    def test_scenario_e_all_neutral_skips_live(self):
-        """All neutral scenario should skip API call."""
-        result = _build_gt_all_neutral_scenario()
-        suggestion = generate_suggestions(result, "diff --git a/foo.rs")
-        assert suggestion.suggestions == []
-        assert not suggestion.has_regressions
