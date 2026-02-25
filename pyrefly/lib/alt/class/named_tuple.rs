@@ -65,6 +65,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub(crate) fn named_tuple_element_types(&self, cls: &ClassType) -> Option<Vec<Type>> {
         let class_metadata = self.get_metadata_for_class(cls.class_object());
         let named_tuple_metadata = class_metadata.named_tuple_metadata()?;
+        // If the namedtuple has dynamic fields, we can't know the element types statically.
+        // Return None so that tuple indexing falls back to regular tuple behavior.
+        if named_tuple_metadata.has_dynamic_fields {
+            return None;
+        }
         Some(
             named_tuple_metadata
                 .elements

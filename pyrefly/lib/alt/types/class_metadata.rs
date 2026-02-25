@@ -457,6 +457,9 @@ pub struct EnumMetadata {
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct NamedTupleMetadata {
     pub elements: SmallSet<Name>,
+    /// If true, the namedtuple fields were dynamically generated (e.g., using a
+    /// generator or variable) and couldn't be statically resolved.
+    pub has_dynamic_fields: bool,
 }
 
 /// Defaults for `init_by_name` and `init_by_default`, per-field flags that control the name of

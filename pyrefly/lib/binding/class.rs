@@ -583,12 +583,16 @@ impl<'a> BindingsBuilder<'a> {
     /// Parse fields for `collections.namedtuple`: string splitting, list/tuple of strings.
     /// `members` is a slice of the positional arguments after the name string.
     /// `error_range` is used for the fallback error.
+    ///
+    /// Returns a tuple of (fields, has_dynamic_fields) where has_dynamic_fields is true
+    /// if the fields couldn't be statically resolved.
     fn parse_collections_namedtuple_fields(
         &mut self,
         members: &[Expr],
         error_range: TextRange,
-    ) -> Vec<(String, TextRange, Option<Expr>)> {
-        match members {
+    ) -> (Vec<(String, TextRange, Option<Expr>)>, bool) {
+        let mut has_dynamic_fields = false;
+        let fields = match members {
             // namedtuple('Point', 'x y')
             // namedtuple('Point', 'x, y')
             [Expr::StringLiteral(x)] => {
@@ -625,23 +629,29 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 self.error(
                     error_range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                     "Expected valid functional named tuple definition".to_owned(),
                 );
+                has_dynamic_fields = true;
                 Vec::new()
             }
-        }
+        };
+        (fields, has_dynamic_fields)
     }
 
     /// Parse fields for `typing.NamedTuple`: list/tuple of (name, type) pairs.
     /// `members` is a slice of the positional arguments after the name string.
     /// `error_range` is used for the fallback error.
+    ///
+    /// Returns a tuple of (fields, has_dynamic_fields) where has_dynamic_fields is true
+    /// if the fields couldn't be statically resolved.
     fn parse_typing_namedtuple_fields(
         &mut self,
         members: &[Expr],
         error_range: TextRange,
-    ) -> Vec<(String, TextRange, Option<Expr>)> {
-        match members {
+    ) -> (Vec<(String, TextRange, Option<Expr>)>, bool) {
+        let mut has_dynamic_fields = false;
+        let fields = match members {
             // NamedTuple('Point', []), NamedTuple('Point', ())
             [Expr::List(ExprList { elts, .. }) | Expr::Tuple(ExprTuple { elts, .. })]
                 if elts.is_empty() =>
@@ -663,12 +673,14 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 self.error(
                     error_range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                     "Expected valid functional named tuple definition".to_owned(),
                 );
+                has_dynamic_fields = true;
                 Vec::new()
             }
-        }
+        };
+        (fields, has_dynamic_fields)
     }
 
     fn extract_string_literals(
@@ -1085,7 +1097,7 @@ impl<'a> BindingsBuilder<'a> {
             self.anon_class_object_and_indices(&class_name)
         };
         self.ensure_expr(func, class_object.usage());
-        let member_definitions =
+        let (member_definitions, has_dynamic_fields) =
             self.parse_collections_namedtuple_fields(members, class_name.range);
         let n_members = member_definitions.len();
         let mut illegal_identifier_handling = IllegalIdentifierHandling::Error;
@@ -1149,7 +1161,7 @@ impl<'a> BindingsBuilder<'a> {
             illegal_identifier_handling,
             false,
             SynthesizedClassKind::NamedTuple,
-            Some(BaseClass::NamedTuple(range)),
+            Some(BaseClass::NamedTuple(range, has_dynamic_fields)),
             bind_to_name,
         );
         class_indices.class_idx
@@ -1172,6 +1184,7 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(func, class_object.usage());
         let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> = self
             .parse_typing_namedtuple_fields(members, class_name.range)
+            .0
             .into_iter()
             .map(|(name, range, annotation)| {
                 if let Some(mut ann) = annotation {

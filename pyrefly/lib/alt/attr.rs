@@ -1373,6 +1373,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None if metadata.has_base_any() => {
                         acc.found_type(self.heap.mk_any_implicit(), base)
                     }
+                    None if metadata
+                        .named_tuple_metadata()
+                        .is_some_and(|m| m.has_dynamic_fields) =>
+                    {
+                        acc.found_type(self.heap.mk_any_implicit(), base)
+                    }
                     None => {
                         acc.not_found(NotFoundOn::ClassInstance(class.class_object().dupe(), base))
                     }

@@ -237,7 +237,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .any(|(_, metadata)| metadata.has_base_any());
 
-        let named_tuple_metadata = self.named_tuple_metadata(cls, &bases_with_metadata, errors);
+        let named_tuple_metadata =
+            self.named_tuple_metadata(cls, bases, &bases_with_metadata, errors);
         if named_tuple_metadata.is_some() && bases_with_metadata.len() > 1 {
             self.error(
                 errors,
@@ -463,9 +464,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn named_tuple_metadata(
         &self,
         cls: &Class,
+        bases: &[BaseClass],
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         errors: &ErrorCollector,
     ) -> Option<NamedTupleMetadata> {
+        // Check if any base is a NamedTuple with dynamic fields
+        let has_dynamic_fields = bases
+            .iter()
+            .any(|b| matches!(b, BaseClass::NamedTuple(_, true)));
+
         bases_with_metadata
             .iter()
             .find_map(|(base_class_object, metadata)| {
@@ -475,6 +482,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ) {
                     Some(NamedTupleMetadata {
                         elements: self.get_named_tuple_elements(cls, errors),
+                        has_dynamic_fields,
                     })
                 } else {
                     metadata.named_tuple_metadata().cloned()
