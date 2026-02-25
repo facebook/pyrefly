@@ -365,6 +365,7 @@ def _parse_classification(text: str) -> dict:
                                 "verdict" in parsed
                                 or "needs_files" in parsed
                                 or "reason" in parsed
+                                or "suggestions" in parsed
                             ):
                                 return parsed
                         except json.JSONDecodeError:
@@ -536,3 +537,168 @@ def assign_verdict_with_llm(
         )
 
     return verdict, updated_categories
+
+
+def _build_suggestion_system_prompt() -> str:
+    """Build the system prompt for Pass 3: aggregate suggestion generation."""
+    return """You are analyzing aggregate results from pyrefly's primer classifier. Pyrefly is a Python type checker written in Rust. You have the classification results for ALL projects affected by a PR, plus the PR's code diff.
+
+Your job: identify which specific code change(s) in the PR caused regressions, and suggest concrete source code fixes.
+
+ACTIONABILITY REQUIREMENTS — your suggestions MUST be specific:
+- Name the exact function or method from the diff that needs changing (e.g., "In calculate_abstract_members() in class_metadata.rs")
+- Describe what the fix looks like in pseudo-code (e.g., "add a guard: if field.is_synthesized() { include it in abstract_members }")
+- State the expected outcome (e.g., "eliminates 7 bad-override errors across 3 projects")
+- List which projects are affected and which error kinds would be fixed
+
+BAD (vague): "Add a guard condition to the override checking logic"
+GOOD (actionable): "In check_override_compatibility() in solver/subset.rs, add a short-circuit: when the overriding method has (*args: Any, **kwargs: Any), treat it as compatible with any parameter signature. This eliminates 8 bad-override errors across jax, bokeh, poetry, and artigraph."
+
+Rules:
+- Focus on regressions. Improvements are fine — don't suggest reverting them.
+- If a rule is applied too broadly (e.g., a protocol-only check applied to regular classes), suggest narrowing its scope with a guard condition, naming the specific function.
+- If type inference regressed, identify which inference path changed and suggest restoring the previous behavior for the affected cases.
+- Reference specific pyrefly source files and function names from the diff.
+- If no regressions exist, return empty suggestions.
+
+Respond with JSON only:
+{"summary": "one-sentence summary of the situation", "suggestions": [{"description": "In function_name() in path/to/file.rs, do X to fix Y", "files": ["path/to/file.rs"], "confidence": "high|medium|low", "reasoning": "Why this fixes the regressions + expected outcome: eliminates N errors across M projects", "affected_projects": ["project1", "project2"], "error_kinds_fixed": ["bad-override", "bad-assignment"]}]}
+
+If there are no regressions, respond with:
+{"summary": "No regressions detected.", "suggestions": []}"""
+
+
+def _build_suggestion_user_prompt(
+    result: "ClassificationResult",
+    pyrefly_diff: str,
+) -> str:
+    """Build the user prompt for Pass 3: serialize classification results + diff.
+
+    Uses forward reference to ClassificationResult to avoid circular imports.
+    """
+    parts: list[str] = []
+
+    # Summary stats
+    parts.append(
+        f"Classification summary: {result.regressions} regression(s), "
+        f"{result.improvements} improvement(s), {result.neutrals} neutral, "
+        f"{result.ambiguous} ambiguous out of {result.total_projects} project(s).\n"
+    )
+
+    # Aggregate: regression error kinds and affected projects
+    regression_kinds: set[str] = set()
+    affected_projects: list[str] = []
+    for c in result.classifications:
+        if c.verdict in ("regression", "ambiguous"):
+            affected_projects.append(c.project_name)
+            for cat in c.categories:
+                regression_kinds.add(cat.category)
+    if regression_kinds:
+        parts.append(f"Regression error kinds: {', '.join(sorted(regression_kinds))}")
+    if affected_projects:
+        parts.append(f"Affected projects: {', '.join(affected_projects)}")
+    if regression_kinds or affected_projects:
+        parts.append("")
+
+    # Group by verdict, regressions first
+    verdict_order = ["regression", "ambiguous", "improvement", "neutral"]
+    for verdict in verdict_order:
+        group = [c for c in result.classifications if c.verdict == verdict]
+        if not group:
+            continue
+        parts.append(f"--- {verdict.upper()} ({len(group)}) ---")
+        for c in group:
+            parts.append(
+                f"Project: {c.project_name} (+{c.added_count}/-{c.removed_count})"
+            )
+            parts.append(f"  Reason: {c.reason}")
+            if c.pr_attribution and c.pr_attribution != "N/A":
+                parts.append(f"  Attribution: {c.pr_attribution}")
+            if c.categories:
+                for cat in c.categories:
+                    parts.append(
+                        f"  Category [{cat.verdict}] {cat.category}: {cat.reason}"
+                    )
+            parts.append("")
+
+    # Pyrefly PR diff
+    if pyrefly_diff:
+        # Truncate diff if very large to stay within token limits
+        max_diff = 10000
+        if len(pyrefly_diff) > max_diff:
+            diff_text = pyrefly_diff[:max_diff] + "\n[... diff truncated ...]"
+        else:
+            diff_text = pyrefly_diff
+        parts.append(f"Pyrefly PR diff:\n{diff_text}")
+
+    return "\n".join(parts)
+
+
+def generate_suggestions(
+    result: "ClassificationResult",
+    pyrefly_diff: str,
+    model: Optional[str] = None,
+) -> "SuggestionResult":
+    """Pass 3: Generate aggregate suggestions based on all classification results.
+
+    Reads ALL per-project classifications and the pyrefly PR diff to produce
+    actionable source code suggestions. Makes exactly one LLM call per PR.
+
+    Skips the LLM call entirely if there are no regressions and no ambiguous
+    results, returning an empty SuggestionResult.
+
+    Uses forward references to avoid circular imports with classifier.py.
+    """
+    from .classifier import Suggestion, SuggestionResult
+
+    # Skip LLM call if no regressions or ambiguous results
+    has_regressions = result.regressions > 0
+    if not has_regressions and result.ambiguous == 0:
+        return SuggestionResult(
+            suggestions=[],
+            summary="No regressions detected.",
+            has_regressions=False,
+        )
+
+    backend, api_key = _get_backend()
+    if backend == "none":
+        raise LLMError(
+            "No API key found. Set LLAMA_API_KEY (Meta internal) "
+            "or CLASSIFIER_API_KEY / ANTHROPIC_API_KEY."
+        )
+
+    system_prompt = _build_suggestion_system_prompt()
+    user_prompt = _build_suggestion_user_prompt(result, pyrefly_diff)
+
+    print(
+        f"Using {backend} backend for suggestion generation (pass 3)",
+        file=sys.stderr,
+    )
+
+    if backend == "llama":
+        api_result = _call_llama_api(api_key, system_prompt, user_prompt, model)
+    else:
+        api_result = _call_anthropic_api(api_key, system_prompt, user_prompt, model)
+
+    text = _extract_text_from_response(backend, api_result)
+    parsed = _parse_classification(text)
+
+    suggestions = []
+    for s in parsed.get("suggestions", []):
+        suggestions.append(
+            Suggestion(
+                description=s.get("description", ""),
+                files=s.get("files", []),
+                confidence=s.get("confidence", "low"),
+                reasoning=s.get("reasoning", ""),
+                affected_projects=s.get("affected_projects", []),
+                error_kinds_fixed=s.get("error_kinds_fixed", []),
+            )
+        )
+
+    return SuggestionResult(
+        suggestions=suggestions,
+        summary=parsed.get("summary", ""),
+        has_regressions=has_regressions,
+        raw_response=api_result,
+    )

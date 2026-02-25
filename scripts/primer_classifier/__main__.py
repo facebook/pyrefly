@@ -64,6 +64,11 @@ def main() -> int:
         default=None,
         help="Path to file containing the pyrefly PR code diff (for attribution)",
     )
+    parser.add_argument(
+        "--suggest",
+        action="store_true",
+        help="Generate aggregate source code suggestions for fixing regressions (Pass 3)",
+    )
 
     args = parser.parse_args()
 
@@ -119,6 +124,7 @@ def main() -> int:
         use_llm=use_llm,
         model=args.model,
         pyrefly_diff=pyrefly_diff,
+        generate_suggestion=args.suggest,
     )
 
     # Output

@@ -19,7 +19,13 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .code_fetcher import fetch_files_by_path, fetch_source_context
-from .llm_client import assign_verdict_with_llm, CategoryVerdict, classify_with_llm, LLMError
+from .llm_client import (
+    assign_verdict_with_llm,
+    CategoryVerdict,
+    classify_with_llm,
+    generate_suggestions,
+    LLMError,
+)
 from .parser import ErrorEntry, ProjectDiff
 
 # Rough token estimation: ~2 chars per token. Code tokenizes into shorter
@@ -46,6 +52,28 @@ class Classification:
 
 
 @dataclass
+class Suggestion:
+    """A single actionable suggestion for fixing regressions."""
+
+    description: str  # What to change, in plain English
+    files: list[str]  # Pyrefly source files to modify
+    confidence: str  # "high", "medium", "low"
+    reasoning: str  # Why this fixes the regressions
+    affected_projects: list[str] = field(default_factory=list)  # Projects impacted
+    error_kinds_fixed: list[str] = field(default_factory=list)  # Error kinds addressed
+
+
+@dataclass
+class SuggestionResult:
+    """Aggregate suggestion result from Pass 3."""
+
+    suggestions: list[Suggestion]
+    summary: str
+    has_regressions: bool
+    raw_response: Optional[dict] = None
+
+
+@dataclass
 class ClassificationResult:
     """Full classification result across all projects."""
 
@@ -55,6 +83,7 @@ class ClassificationResult:
     improvements: int = 0
     neutrals: int = 0
     ambiguous: int = 0
+    suggestion: Optional[SuggestionResult] = None
 
 
 def _is_all_internal_errors(project: ProjectDiff) -> bool:
@@ -614,12 +643,16 @@ def classify_all(
     use_llm: bool = True,
     model: Optional[str] = None,
     pyrefly_diff: Optional[str] = None,
+    generate_suggestion: bool = False,
 ) -> ClassificationResult:
     """Classify all projects in a primer diff.
 
     Returns a ClassificationResult with per-project classifications
     and summary counts. When pyrefly_diff is provided, it is passed
     to each per-project LLM call for PR attribution.
+
+    When generate_suggestion is True and regressions or ambiguous results
+    exist, runs Pass 3 to produce an aggregate source code suggestion.
     """
     result = ClassificationResult(total_projects=len(projects))
 
@@ -641,5 +674,18 @@ def classify_all(
             result.neutrals += 1
         else:
             result.ambiguous += 1
+
+    # Pass 3: aggregate suggestion generation
+    if generate_suggestion and use_llm and (result.regressions > 0 or result.ambiguous > 0):
+        try:
+            suggestion_result = generate_suggestions(
+                result, pyrefly_diff or "", model
+            )
+            result.suggestion = suggestion_result
+        except Exception as e:
+            print(
+                f"Warning: suggestion generation failed: {e}",
+                file=sys.stderr,
+            )
 
     return result
