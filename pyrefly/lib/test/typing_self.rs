@@ -296,7 +296,6 @@ child2: Child = Child.create_annotated()  # OK with explicit Self annotation
 
 // Regression test for https://github.com/facebook/pyrefly/issues/2526
 testcase!(
-    bug = "Should not error due to type var scope when Self is used",
     test_self_no_invalid_typevar,
     r#"
 from typing import Generic, Self, TypeVar

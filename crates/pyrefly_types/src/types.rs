@@ -932,6 +932,9 @@ impl Type {
                 //   when visiting Vars. See https://github.com/facebook/pyrefly/issues/2016.
                 Type::ClassType(cls) => recurse_targs(cls.targs()),
                 Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs()),
+                // `Self` is a keyword, not a user-written type variable reference, so we don't
+                // recurse into it when looking for type variable references.
+                Type::SelfType(_) => {}
                 _ => ty.recurse(&mut |ty| visit(ty, f)),
             }
         }
@@ -1003,6 +1006,8 @@ impl Type {
             match ty {
                 Type::ClassType(cls) => recurse_targs(cls.targs_mut()),
                 Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs_mut()),
+                // `Self` is a keyword, not a user-written type variable reference.
+                Type::SelfType(_) => {}
                 _ => ty.recurse_mut(&mut |ty| visit(ty, f)),
             }
         }
