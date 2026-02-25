@@ -85,6 +85,62 @@ enum ParameterInsertStyle {
     KeywordOnly,
 }
 
+pub(crate) fn introduce_parameter_action_titles(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    selection: TextRange,
+) -> Option<Vec<String>> {
+    let module_info = transaction.get_module_info(handle)?;
+    let ast = transaction.get_ast(handle)?;
+    let selection_text = validate_non_empty_selection(selection, module_info.code_at(selection))?;
+    let (_, expression_text, _, expression_range) = split_selection(selection_text, selection)?;
+    if !is_exact_expression(ast.as_ref(), expression_range) {
+        return None;
+    }
+    let function_ctx = find_function_context(ast.as_ref(), expression_range)?;
+    if function_ctx
+        .function_def
+        .parameters
+        .range()
+        .contains_range(expression_range)
+    {
+        return None;
+    }
+    let param_info = ParamInfo::from_parameters(&function_ctx.function_def.parameters);
+    let param_names = param_info.all_names();
+    let name_refs = collect_expression_name_refs(ast.as_ref(), expression_range);
+    if expression_uses_local_names(
+        transaction,
+        handle,
+        module_info.path(),
+        function_ctx.function_def,
+        &name_refs,
+        &param_names,
+    ) {
+        return None;
+    }
+    if expression_uses_variadic_params(&name_refs, &param_info) {
+        return None;
+    }
+
+    let template =
+        ExpressionTemplate::new(expression_text, expression_range, &name_refs, &param_names);
+    let base_name = suggest_parameter_name(ast.as_ref(), expression_range, &param_names);
+    let param_name = unique_name(&base_name, |name| param_names.contains(name));
+    let occurrence_ranges = collect_matching_expression_ranges(
+        module_info.contents(),
+        &function_ctx.function_def.body,
+        &template.text,
+    );
+    let mut titles = vec![format!("Introduce parameter `{param_name}`")];
+    if occurrence_ranges.len() > 1 {
+        titles.push(format!(
+            "Introduce parameter `{param_name}` (replace all occurrences)"
+        ));
+    }
+    Some(titles)
+}
+
 /// Builds introduce-parameter refactor actions for a selected expression.
 pub(crate) fn introduce_parameter_code_actions(
     transaction: &Transaction<'_>,
@@ -169,8 +225,8 @@ pub(crate) fn introduce_parameter_code_actions(
     );
     if occurrence_ranges.len() > 1 {
         let replace_all_edits = occurrence_ranges
-            .into_iter()
-            .map(|range| (module_info.dupe(), range, param_name.clone()))
+            .iter()
+            .map(|range| (module_info.dupe(), *range, param_name.clone()))
             .collect::<Vec<_>>();
         actions.push(LocalRefactorCodeAction {
             title: format!("Introduce parameter `{param_name}` (replace all occurrences)"),

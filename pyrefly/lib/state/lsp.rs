@@ -2305,6 +2305,14 @@ impl<'a> Transaction<'a> {
         quick_fixes::inline_parameter::inline_parameter_code_actions(self, handle, selection)
     }
 
+    pub fn introduce_parameter_action_titles(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<String>> {
+        quick_fixes::introduce_parameter::introduce_parameter_action_titles(self, handle, selection)
+    }
+
     pub fn introduce_parameter_code_actions(
         &self,
         handle: &Handle,
