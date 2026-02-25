@@ -582,6 +582,21 @@ fun2(*{"1", "2", "3"})  # E: Expected 2 positional arguments, got 3
 );
 
 testcase!(
+    test_splat_unknown_length_with_keyword,
+    r#"
+def fun(a: str, b: str, c: int):
+    return
+
+def test(xs: list[str]):
+    # Unknown-length star args should stop consuming positional params
+    # when reaching a parameter that has a keyword argument.
+    fun(*xs, b="", c=1)  # OK
+    fun(*xs, c=1)  # OK
+    fun(*xs)  # E:
+"#,
+);
+
+testcase!(
     test_splat_unpacked_args,
     r#"
 from typing import assert_type

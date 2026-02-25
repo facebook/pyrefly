@@ -402,6 +402,18 @@ impl CallArgPreEval<'_> {
         }
     }
 
+    // Similar to post_skip but it skips to the end of any fixed length arguments.
+    fn mark_done(&mut self) {
+        match self {
+            Self::Type(_, done) | Self::Expr(_, done) | Self::Star(_, done) => {
+                *done = true;
+            }
+            Self::Fixed(tys, i) => {
+                *i = tys.len();
+            }
+        }
+    }
+
     fn post_infer<Ans: LookupAnswer>(
         &mut self,
         solver: &AnswersSolver<Ans>,
@@ -534,6 +546,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             )
         };
+
+        let keyword_arg_names: SmallSet<&Name> = keywords
+            .iter()
+            .filter_map(|kw| kw.arg.map(|id| &id.id))
+            .collect();
+
         let iargs = self_arg.iter().chain(args.iter());
         // Creates a reversed copy of the parameters that we iterate through from back to front,
         // so that we can easily peek at and pop from the end.
@@ -589,6 +607,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         name,
                         kind: kind @ (PosParamKind::PositionalOnly | PosParamKind::Positional),
                     }) => {
+                        // For unknown-length star args, stop consuming positional parameters
+                        // when we reach a one that has a corresponding keyword argument.
+                        // This is unsound, but prevents false positive "multiple values" errors.
+                        if arg_pre.is_star()
+                            && kind == PosParamKind::Positional
+                            && name.is_some_and(|n| keyword_arg_names.contains(n))
+                        {
+                            arg_pre.mark_done();
+                            break;
+                        }
                         num_positional_params += 1;
                         rparams.pop();
                         if let Some(name) = name
