@@ -314,10 +314,10 @@ def format_markdown(result: ClassificationResult) -> str:
 
     # Footer
     lines.append("---")
+    lines.append("Was this helpful? React with 👍 or 👎\n")
     lines.append(
         "<sub>Classification by primer-classifier"
-        f" ({_method_summary(result)})"
-        " · Was this helpful? React with 👍 or 👎</sub>"
+        f" ({_method_summary(result)})</sub>"
     )
 
     return "\n".join(lines)
