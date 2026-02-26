@@ -109,8 +109,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn is_final(&self, cls: &ClassType) -> bool {
-        let class = cls.class_object();
+    fn is_final(&self, class: &Class) -> bool {
         self.get_metadata_for_class(class).is_final()
             || (self.get_enum_from_class(class).is_some()
                 && !self.get_enum_members(class).is_empty())
@@ -146,7 +145,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 fallback
             } else if let Type::ClassType(left_cls) = left
                 && let Type::ClassType(right_cls) = right
-                && (self.is_final(left_cls) || self.is_final(right_cls))
+                && (self.is_final(left_cls.class_object())
+                    || self.is_final(right_cls.class_object()))
             {
                 // The only way for `left & right` to exist is if it is an instance of a class that
                 // multiply inherits from both `left` and `right`'s classes. But at least one of
@@ -301,6 +301,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.intersects(&res)
     }
 
+    /// Narrow `type(X) != Y`. We can only do negative narrowing if Y is final,
+    /// because otherwise X could still be a subclass of Y.
+    fn narrow_type_not_eq(&self, left: &Type, right_expr: &Expr, errors: &ErrorCollector) -> Type {
+        let right = self.expr_infer(right_expr, errors);
+        // Only narrow if the RHS is a final class type (e.g., `type(x) != bool`)
+        if let Type::ClassDef(cls) = &right
+            && self.is_final(cls)
+        {
+            self.distribute_over_union(left, |l| {
+                if let Some((tparams, unwrapped)) = self.unwrap_class_object_silently(&right) {
+                    let (vs, unwrapped) =
+                        self.solver()
+                            .fresh_quantified(&tparams, unwrapped, self.uniques);
+                    let result = self.subtract(l, &unwrapped);
+                    let _specialization_errors = self.solver().finish_quantified(vs, false);
+                    result
+                } else {
+                    l.clone()
+                }
+            })
+        } else {
+            left.clone()
+        }
+    }
+
     /// Turn an expression into a list of (type, allows_negative_narrow) pairs.
     /// allows_negative_narrow means that we can do `not isinstance`/`not issubclass` narrowing
     /// with the type. We allow negative narrowing as long as it is not definitely unsafe - that
@@ -332,7 +357,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Type::Type(box Type::ClassType(cls)) = &t {
                         // If `C` is not final, `type[C]` may be a subclass of `C`,
                         // making negative narrowing unsafe.
-                        let allows_negative_narrow = me.is_final(cls);
+                        let allows_negative_narrow = me.is_final(cls.class_object());
                         res.push((t, allows_negative_narrow));
                     } else {
                         for t in me.as_class_info(t) {
@@ -507,15 +532,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
+        // We narrow `X.__class__ == Y` the same way as `type(X) == Y`
         if let FacetKind::Attribute(attr) = facet
             && *attr == dunder::CLASS
         {
             match op {
                 AtomicNarrowOp::Is(v) | AtomicNarrowOp::Eq(v) => {
-                    // If X.__class__ == Y then X has to be exactly Y, not a subclass of Y
-                    // We can't model that, so we narrow it exactly like isinstance(X, Y)
                     let right = self.expr_infer(v, errors);
                     return Some(self.narrow_isinstance(base, &right));
+                }
+                AtomicNarrowOp::IsNot(v) | AtomicNarrowOp::NotEq(v) => {
+                    return Some(self.narrow_type_not_eq(base, v, errors));
                 }
                 _ => {}
             }
@@ -1032,8 +1059,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let right = self.expr_infer(v, errors);
                 self.narrow_isinstance(ty, &right)
             }
-            // Even if type(X) != Y, X can still be a subclass of Y so we can't do any negative refinement
-            AtomicNarrowOp::TypeNotEq(_) => ty.clone(),
+            // If type(X) != Y, X can still be a subclass of Y so we can't do negative refinement
+            // unless Y is final, in which case X cannot be a subclass of Y
+            AtomicNarrowOp::TypeNotEq(v) => self.narrow_type_not_eq(ty, v, errors),
             AtomicNarrowOp::IsSubclass(v) => {
                 let right = self.expr_infer(v, errors);
                 self.narrow_issubclass(ty, &right, v.range(), errors)
@@ -1618,7 +1646,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassType(cls) | Type::SelfType(cls) => {
                 // Final classes can't have subclasses, so they are exhaustible, with the exception
                 // of Flag enums, whose members can be combined into new members via bitwise ops
-                !self.is_flag_enum(cls) && self.is_final(cls)
+                !self.is_flag_enum(cls) && self.is_final(cls.class_object())
                     // bool is effectively Literal[True] | Literal[False]
                     || cls.is_builtin("bool")
             }
