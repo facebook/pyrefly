@@ -205,6 +205,31 @@ assert_type(Z(), str)
 );
 
 testcase!(
+    test_os_name,
+    r#"
+from typing import assert_type
+import os
+if os.name == "posix":
+    X = str
+else:
+    X = int
+assert_type(X(), str)
+
+if os.name == "nt":
+    Y = str
+else:
+    Y = int
+assert_type(Y(), int)
+
+if os.name != "posix":
+    Z = str
+else:
+    Z = int
+assert_type(Z(), int)
+"#,
+);
+
+testcase!(
     test_sys_version_subscript,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"

@@ -507,6 +507,32 @@ class E(NamedTuple("E", 42)):  # E: Expected valid functional named tuple defini
 );
 
 testcase!(
+    test_named_tuple_dynamic_fields,
+    r#"
+from collections import namedtuple
+from typing import assert_type, Any
+
+fields_map = (('x', int), ('y', str))
+foo1 = namedtuple('foo1', (name for name, _ in fields_map))  # E: Expected valid functional named tuple definition
+
+fields = [name for name, _ in fields_map]
+foo2 = namedtuple('foo2', fields)  # E: Expected valid functional named tuple definition
+
+instance1 = foo1()
+instance2 = foo2()
+
+# attribute access
+assert_type(instance1.x, Any)
+assert_type(instance1.anything, Any)
+assert_type(instance2.y, Any)
+
+# indexing
+assert_type(instance1[0], Any)
+assert_type(instance2[1], Any)
+    "#,
+);
+
+testcase!(
     bug = "namedtuple + mixin is valid in CPython but we reject it",
     test_named_tuple_base_class_call_with_mixin,
     r#"

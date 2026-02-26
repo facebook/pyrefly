@@ -205,6 +205,16 @@ impl PythonPlatform {
     pub fn mac() -> Self {
         Self("darwin".to_owned())
     }
+
+    /// Return the `os.name` value corresponding to this platform.
+    /// See <https://docs.python.org/3/library/os.html#os.name>.
+    pub fn os_name(&self) -> &str {
+        match self.0.as_str() {
+            "win32" => "nt",
+            "java" => "java",
+            _ => "posix",
+        }
+    }
 }
 
 /// Information available from the Python library `sys`, namely
@@ -503,6 +513,13 @@ impl SysInfo {
                     "version_info" => Some(Value::VersionInfo(self.0.version)),
                     _ => None,
                 }
+            }
+            Expr::Attribute(ExprAttribute { value, attr, .. })
+                if let Expr::Name(name) = &**value
+                    && &name.id == "os"
+                    && attr.as_str() == "name" =>
+            {
+                Some(Value::String(self.0.platform.os_name().to_owned()))
             }
             Expr::Name(name) if Self::is_type_checking_constant_name(name.id()) => {
                 Some(Value::Bool(self.type_checking()))

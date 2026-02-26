@@ -539,10 +539,60 @@ testcase!(
     r#"
 def test(x: int, y: int, z: int): ...
 test(*[1, 2, 3]) # OK
-test(*[1, 2]) # OK
-test(*[1, 2, 3, 4]) # OK
-test(*[1], 2) # E: Expected 3 positional arguments, got 4
-test(1, 2, 3, *[4]) # OK
+test(*[1, 2]) # E: Missing argument `z`
+test(*[1, 2, 3, 4]) # E: Expected 3 positional arguments, got 4
+test(*[1], 2) # E: Missing argument `z`
+test(1, 2, 3, *[4]) # E: Expected 3 positional arguments, got 4
+"#,
+);
+
+testcase!(
+    test_splat_list_literal_with_keyword,
+    r#"
+def fun1(a):
+    return
+
+def fun2(a, b):
+    return
+
+fun1(*[])  # E: Missing argument `a`
+fun1(*[""])  # OK
+fun2(*[""], b=None)  # OK
+fun2(*["", ""])  # OK
+fun2(*[""])  # E: Missing argument `b`
+fun2(*["", "", ""])  # E: Expected 2 positional arguments, got 3
+"#,
+);
+
+testcase!(
+    test_splat_set_literal_with_keyword,
+    r#"
+def fun1(a):
+    return
+
+def fun2(a, b):
+    return
+
+fun1(*{""})  # OK
+fun2(*{""}, b=None)  # OK
+fun2(*{"1", "2"})  # OK - note: set deduplicates at runtime, but type checker uses literal count
+fun2(*{""})  # E: Missing argument `b`
+fun2(*{"1", "2", "3"})  # E: Expected 2 positional arguments, got 3
+"#,
+);
+
+testcase!(
+    test_splat_unknown_length_with_keyword,
+    r#"
+def fun(a: str, b: str, c: int):
+    return
+
+def test(xs: list[str]):
+    # Unknown-length star args should stop consuming positional params
+    # when reaching a parameter that has a keyword argument.
+    fun(*xs, b="", c=1)  # OK
+    fun(*xs, c=1)  # OK
+    fun(*xs)  # E:
 "#,
 );
 
@@ -562,7 +612,7 @@ assert_type(test2(*(1, 2)), tuple[()])
 assert_type(test2(*(1, 2, 3, 4)), tuple[int, int])
 assert_type(test2(1, 2, *(3, 4), 5), tuple[int, int, int])
 assert_type(test2(1, *(2, 3), *("4", 5)), tuple[int, int, str])
-assert_type(test2(1, *[2, 3], 4), tuple[int, ...])
+assert_type(test2(1, *[2, 3], 4), tuple[int, int])
 test2(1, *(2, 3), *(4, "5"))  # E: Unpacked argument `tuple[Literal[1], Literal[2], Literal[3], Literal[4], Literal['5']]` is not assignable to parameter `*args` with type `tuple[int, *@_, int]` in function `test2`
 "#,
 );
@@ -1352,5 +1402,20 @@ class Class8(Generic[T]):
 r8 = accepts_callable(Class8)
 # pyrefly incorrectly errors on this - should be OK
 assert_type(r8([""], [""]), Class8[str])  # E: assert_type(Class8[Any], Class8[str]) failed
+"#,
+);
+
+testcase!(
+    test_callable_instance_with_unknown_base,
+    r#"
+class MyModel(BaseClass):  # E: Could not find name `BaseClass`
+    pass
+
+class Pipeline:
+    def __init__(self) -> None:
+        self.model = MyModel()
+
+    def run(self, data: object) -> object:
+        return self.model(data)
 "#,
 );

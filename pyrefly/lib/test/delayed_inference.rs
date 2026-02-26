@@ -81,6 +81,17 @@ assert_type(x, list[Literal[4]])
 "#,
 );
 
+testcase!(
+    test_empty_list_append_pow,
+    r#"
+from typing import assert_type
+def f(a: int, b: int, c: int) -> None:
+    x = []
+    x.append(pow(a, b, c))
+    assert_type(x, list[int])
+"#,
+);
+
 // NOTE(grievejia): There's also an argument to be made that `y` should be inferred as
 // `list[int] | list[Any]`, and `e` inferred as `int | Any`. The test case here is to ensure
 // that if we ever want to take the alternative behavior, an explicit acknowledgement (of

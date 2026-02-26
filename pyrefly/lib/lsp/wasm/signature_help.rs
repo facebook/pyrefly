@@ -316,7 +316,7 @@ impl Transaction<'_> {
                     let Some(param) = params.get(i) else {
                         return false; // More args than params
                     };
-                    self.ad_hoc_solve(handle, |solver| {
+                    self.ad_hoc_solve(handle, "filter_compatible_overloads", |solver| {
                         solver.is_subset_eq(arg_type, param.as_type())
                     })
                     .unwrap_or(true)

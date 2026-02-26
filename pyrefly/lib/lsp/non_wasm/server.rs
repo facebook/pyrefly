@@ -212,6 +212,7 @@ use pyrefly_util::telemetry::TelemetryFileStats;
 use pyrefly_util::telemetry::TelemetryFileWatcherStats;
 use pyrefly_util::telemetry::TelemetryServerState;
 use pyrefly_util::telemetry::TelemetryTaskId;
+use pyrefly_util::thread_pool::ThreadPool;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -254,6 +255,7 @@ use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::lsp::non_wasm::mru::CompletionMru;
 use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::protocol::read_lsp_message;
@@ -300,6 +302,11 @@ use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::PublishDiagnosticsSubscriber;
 use crate::types::class::ClassDefIndex;
+
+pub struct InitializeInfo {
+    pub params: InitializeParams,
+    pub supports_diagnostic_markdown: bool,
+}
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -366,7 +373,7 @@ pub trait TspInterface: Send + Sync {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &impl Telemetry,
+        telemetry: &'a impl Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
@@ -466,17 +473,29 @@ impl ServerConnection {
         diags: Vec<Diagnostic>,
         version: Option<i32>,
         source: DiagnosticSource,
+        diagnostic_markdown_support: bool,
     ) {
         if matches!(source, DiagnosticSource::Streaming) {
             info!("Streamed {} diagnostics for {}", diags.len(), uri);
         } else {
             info!("Published {} diagnostics for {}", diags.len(), uri);
         }
-        self.send(Message::Notification(
-            new_notification::<PublishDiagnostics>(PublishDiagnosticsParams::new(
-                uri, diags, version,
-            )),
-        ));
+        if diagnostic_markdown_support {
+            let mut params =
+                serde_json::to_value(PublishDiagnosticsParams::new(uri, diags, version)).unwrap();
+            apply_diagnostic_markup(&mut params);
+            self.send(Message::Notification(Notification {
+                method: PublishDiagnostics::METHOD.to_owned(),
+                params,
+                activity_key: None,
+            }));
+        } else {
+            self.send(Message::Notification(
+                new_notification::<PublishDiagnostics>(PublishDiagnosticsParams::new(
+                    uri, diags, version,
+                )),
+            ));
+        }
     }
 
     fn publish_diagnostics(
@@ -485,19 +504,166 @@ impl ServerConnection {
         notebook_cell_urls: SmallMap<PathBuf, Url>,
         version_info: HashMap<PathBuf, i32>,
         source: DiagnosticSource,
+        diagnostic_markdown_support: bool,
     ) {
         for (path, diags) in diags {
             if let Some(url) = notebook_cell_urls.get(&path) {
-                self.publish_diagnostics_for_uri(url.clone(), diags, None, source)
+                self.publish_diagnostics_for_uri(
+                    url.clone(),
+                    diags,
+                    None,
+                    source,
+                    diagnostic_markdown_support,
+                )
             } else {
                 let path = path.absolutize();
                 let version = version_info.get(&path).copied();
                 match Url::from_file_path(&path) {
-                    Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, version, source),
+                    Ok(uri) => self.publish_diagnostics_for_uri(
+                        uri,
+                        diags,
+                        version,
+                        source,
+                        diagnostic_markdown_support,
+                    ),
                     Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
                 }
             }
         }
+    }
+}
+
+fn diagnostic_markdown_support(params: &Value) -> bool {
+    let text_document = match params
+        .get("capabilities")
+        .and_then(|caps| caps.get("textDocument"))
+    {
+        Some(text_document) => text_document,
+        None => return false,
+    };
+
+    // First, honor the `textDocument.diagnostic.markupMessageSupport` setting if present.
+    if let Some(supported) = text_document
+        .get("diagnostic")
+        .and_then(|diagnostic| diagnostic.get("markupMessageSupport"))
+        .and_then(Value::as_bool)
+    {
+        return supported;
+    }
+
+    // Fall back to `textDocument.publishDiagnostics.markupMessageSupport`.
+    text_document
+        .get("publishDiagnostics")
+        .and_then(|publish_diagnostics| publish_diagnostics.get("markupMessageSupport"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn apply_diagnostic_markup(value: &mut Value) {
+    fn wrap_messages(diagnostics: &mut [Value]) {
+        for diagnostic in diagnostics {
+            let message = match diagnostic.get("message").and_then(|value| value.as_str()) {
+                Some(message) => format_diagnostic_message_for_markdown(message),
+                None => continue,
+            };
+            if let Some(obj) = diagnostic.as_object_mut() {
+                obj.insert(
+                    "message".to_owned(),
+                    serde_json::json!({"kind": "markdown", "value": message}),
+                );
+            }
+        }
+    }
+
+    if let Some(diagnostics) = value.get_mut("diagnostics").and_then(|v| v.as_array_mut()) {
+        wrap_messages(diagnostics);
+    }
+
+    if let Some(items) = value.get_mut("items").and_then(|v| v.as_array_mut()) {
+        wrap_messages(items);
+    }
+
+    if let Some(related_documents) = value.get_mut("relatedDocuments")
+        && let Some(related_documents) = related_documents.as_object_mut()
+    {
+        for report in related_documents.values_mut() {
+            apply_diagnostic_markup(report);
+        }
+    }
+}
+
+/// Escape markdown special characters in a diagnostic message, preserving
+/// backtick-delimited code spans. If backticks are unbalanced (odd count),
+/// all backticks are escaped as literals instead of being treated as code
+/// span delimiters.
+fn format_diagnostic_message_for_markdown(message: &str) -> String {
+    let balanced_backticks = message.chars().filter(|&c| c == '`').count() % 2 == 0;
+
+    let mut out = String::with_capacity(message.len());
+    let mut in_code_span = false;
+    for ch in message.chars() {
+        if ch == '`' && balanced_backticks {
+            in_code_span = !in_code_span;
+            out.push(ch);
+            continue;
+        }
+        if in_code_span {
+            out.push(ch);
+            continue;
+        }
+        match ch {
+            '\\' | '*' | '_' | '[' | ']' | '`' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_diagnostic_message_for_markdown;
+
+    #[test]
+    fn test_format_diagnostic_message_for_markdown() {
+        let input = "__init__ *args **kwargs list[int] `list[int]`";
+        let expected = "\\_\\_init\\_\\_ \\*args \\*\\*kwargs list\\[int\\] `list[int]`";
+        assert_eq!(format_diagnostic_message_for_markdown(input), expected);
+    }
+
+    #[test]
+    fn test_format_no_special_characters() {
+        assert_eq!(
+            format_diagnostic_message_for_markdown("hello world"),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn test_format_empty_string() {
+        assert_eq!(format_diagnostic_message_for_markdown(""), "");
+    }
+
+    #[test]
+    fn test_format_unmatched_backtick() {
+        // Odd backtick count: all backticks are escaped, no code spans.
+        let input = "Expected `int got *args";
+        let expected = "Expected \\`int got \\*args";
+        assert_eq!(format_diagnostic_message_for_markdown(input), expected);
+    }
+
+    #[test]
+    fn test_format_multiple_code_spans() {
+        let input = "`Foo` and `Bar` are incompatible";
+        let expected = "`Foo` and `Bar` are incompatible";
+        assert_eq!(format_diagnostic_message_for_markdown(input), expected);
+    }
+
+    #[test]
+    fn test_format_only_special_characters() {
+        assert_eq!(format_diagnostic_message_for_markdown("***"), "\\*\\*\\*");
     }
 }
 
@@ -568,6 +734,8 @@ pub struct Server {
     /// - Empty set means there is an ongoing recheck but all open files at the start of
     ///   the recheck were subsequently modified
     currently_streaming_diagnostics_for_handles: RwLock<Option<SmallSet<Handle>>>,
+    /// Whether the client supports markdown in diagnostic messages.
+    diagnostic_markdown_support: bool,
     /// Testing-only flag to prevent the next recheck from committing.
     /// When set, the recheck queue task will loop without committing the transaction.
     do_not_commit_recheck: AtomicBool,
@@ -622,7 +790,7 @@ pub fn shutdown_finish(connection: &Connection, id: RequestId) {
 // If we receive an unexpected shutdown notification, respond and wait for exit.
 pub fn initialize_start(
     connection: &Connection,
-) -> anyhow::Result<Option<(RequestId, InitializeParams)>> {
+) -> anyhow::Result<Option<(RequestId, InitializeInfo)>> {
     loop {
         let Ok(msg) = connection.receiver.recv() else {
             break;
@@ -630,8 +798,15 @@ pub fn initialize_start(
         match msg {
             Message::Request(x) => {
                 if x.method == Initialize::METHOD {
+                    let supports_diagnostic_markdown = diagnostic_markdown_support(&x.params);
                     let params = serde_json::from_value(x.params)?;
-                    return Ok(Some((x.id, params)));
+                    return Ok(Some((
+                        x.id,
+                        InitializeInfo {
+                            params,
+                            supports_diagnostic_markdown,
+                        },
+                    )));
                 }
 
                 error!("Unexpected request before initialize: {x:?}");
@@ -1011,7 +1186,7 @@ struct TypeHierarchyTarget {
 
 pub fn lsp_loop(
     connection: Connection,
-    initialization_params: InitializeParams,
+    initialization: InitializeInfo,
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     build_system_blocking: bool,
@@ -1025,7 +1200,8 @@ pub fn lsp_loop(
     let server = Server::new(
         connection,
         lsp_queue,
-        initialization_params,
+        initialization.params,
+        initialization.supports_diagnostic_markdown,
         indexing_mode,
         workspace_indexing_limit,
         build_system_blocking,
@@ -1034,9 +1210,57 @@ pub fn lsp_loop(
         external_references,
     );
     std::thread::scope(|scope| {
-        scope.spawn(|| {
-            dispatch_lsp_events(&server);
-        });
+        // Spawn the event processing loop on a thread with a large stack
+        // (10 MB by default). The event loop runs ad_hoc_solve for completions,
+        // hover, etc., which can recurse deeply through cross-module import
+        // chains (e.g. scipy). The default thread stack is too small for these
+        // deep chains.
+        std::thread::Builder::new()
+            .name("lsp-event-loop".into())
+            .stack_size(ThreadPool::stack_size())
+            .spawn_scoped(scope, || {
+                let mut ide_transaction_manager = TransactionManager::default();
+                let mut canceled_requests = HashSet::new();
+                while let Ok((subsequent_mutation, event, enqueue_time)) = server.lsp_queue.recv() {
+                    let (mut event_telemetry, queue_duration) = TelemetryEvent::new_dequeued(
+                        TelemetryEventKind::LspEvent(event.describe()),
+                        enqueue_time,
+                        server.telemetry_state(),
+                    );
+                    event_telemetry.set_task_stats(TelemetryTaskId::new("lsp_queue", None));
+                    let event_description = event.describe();
+                    let result = server.process_event(
+                        &mut ide_transaction_manager,
+                        &mut canceled_requests,
+                        telemetry,
+                        &mut event_telemetry,
+                        subsequent_mutation,
+                        event,
+                    );
+                    let process_duration =
+                        event_telemetry.finish_and_record(telemetry, result.as_ref().err());
+                    match result {
+                        Ok(ProcessEvent::Continue) => {
+                            info!(
+                                "Language server processed event `{}` in {:.2}s ({:.2}s waiting)",
+                                event_description,
+                                process_duration.as_secs_f32(),
+                                queue_duration.as_secs_f32()
+                            );
+                        }
+                        Ok(ProcessEvent::Exit) => break,
+                        Err(e) => {
+                            // Log the error and continue processing the next event
+                            error!("Error processing event `{}`: {:?}", event_description, e);
+                        }
+                    }
+                }
+                info!("waiting for connection to close");
+                server.recheck_queue.stop();
+                server.find_reference_queue.stop();
+                server.sourcedb_queue.stop();
+            })
+            .expect("failed to spawn LSP event loop thread");
         scope.spawn(|| {
             server.recheck_queue.run_until_stopped(&server, telemetry);
         });
@@ -1048,46 +1272,9 @@ pub fn lsp_loop(
         scope.spawn(|| {
             server.sourcedb_queue.run_until_stopped(&server, telemetry);
         });
-        let mut ide_transaction_manager = TransactionManager::default();
-        let mut canceled_requests = HashSet::new();
-        while let Ok((subsequent_mutation, event, enqueue_time)) = server.lsp_queue.recv() {
-            let (mut event_telemetry, queue_duration) = TelemetryEvent::new_dequeued(
-                TelemetryEventKind::LspEvent(event.describe()),
-                enqueue_time,
-                server.telemetry_state(),
-            );
-            event_telemetry.set_task_stats(TelemetryTaskId::new("lsp_queue", None));
-            let event_description = event.describe();
-            let result = server.process_event(
-                &mut ide_transaction_manager,
-                &mut canceled_requests,
-                telemetry,
-                &mut event_telemetry,
-                subsequent_mutation,
-                event,
-            );
-            let process_duration =
-                event_telemetry.finish_and_record(telemetry, result.as_ref().err());
-            match result {
-                Ok(ProcessEvent::Continue) => {
-                    info!(
-                        "Language server processed event `{}` in {:.2}s ({:.2}s waiting)",
-                        event_description,
-                        process_duration.as_secs_f32(),
-                        queue_duration.as_secs_f32()
-                    );
-                }
-                Ok(ProcessEvent::Exit) => break,
-                Err(e) => {
-                    // Log the error and continue processing the next event
-                    error!("Error processing event `{}`: {:?}", event_description, e);
-                }
-            }
-        }
-        info!("waiting for connection to close");
-        server.recheck_queue.stop();
-        server.find_reference_queue.stop();
-        server.sourcedb_queue.stop();
+        // Run dispatch on the main thread. This reads from the LSP connection
+        // and routes messages into the LspQueue.
+        dispatch_lsp_events(&server);
     });
     drop(server); // close connection
     Ok(())
@@ -1187,7 +1374,7 @@ impl Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &impl Telemetry,
+        telemetry: &'a impl Telemetry,
         telemetry_event: &mut TelemetryEvent,
         // After this event there is another mutation
         subsequent_mutation: bool,
@@ -1394,6 +1581,26 @@ impl Server {
 
                 let mut transaction =
                     ide_transaction_manager.non_committable_transaction(&self.state);
+
+                // Set up immediate per-call telemetry for ad-hoc solves. Each solve event is
+                // logged the instant it completes rather than batched.
+                {
+                    let server_state = self.telemetry_state();
+                    let activity_key = telemetry_event.activity_key.clone();
+                    transaction.set_ad_hoc_solve_recorder(Box::new(
+                        move |label, start, duration| {
+                            let mut event = TelemetryEvent::new_task(
+                                TelemetryEventKind::AdHocSolve(label.to_owned()),
+                                server_state.clone(),
+                                None,
+                                start,
+                            );
+                            // todo(kylei): add file stats
+                            event.set_activity_key(activity_key.clone());
+                            telemetry.record_event(event, duration, None);
+                        },
+                    ));
+                }
 
                 // As an over-approximation, validate open files. This request might be based on a transaction where we
                 // skipped this step due to a subsequent mutation. We might also have a stale saved state, which we needed
@@ -1733,10 +1940,17 @@ impl Server {
                         )
                     {
                         self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
-                        self.send_response(new_response(
-                            x.id,
-                            Ok(self.document_diagnostics(&transaction, params)),
-                        ));
+                        let mut result =
+                            serde_json::to_value(self.document_diagnostics(&transaction, params))
+                                .unwrap();
+                        if self.diagnostic_markdown_support {
+                            apply_diagnostic_markup(&mut result);
+                        }
+                        self.send_response(Response {
+                            id: x.id,
+                            result: Some(result),
+                            error: None,
+                        });
                     }
                 } else if let Some(params) = as_request::<ProvideType>(&x) {
                     if let Some(params) = self
@@ -1910,6 +2124,7 @@ impl Server {
         connection: Connection,
         lsp_queue: LspQueue,
         initialize_params: InitializeParams,
+        diagnostic_markdown_support: bool,
         indexing_mode: IndexingMode,
         workspace_indexing_limit: usize,
         build_system_blocking: bool,
@@ -1977,6 +2192,7 @@ impl Server {
             surface,
             comment_folding_ranges,
             currently_streaming_diagnostics_for_handles: RwLock::new(None),
+            diagnostic_markdown_support,
             do_not_commit_recheck: AtomicBool::new(false),
             // Will be set to true if we send a workspace/configuration request
             awaiting_initial_workspace_config: AtomicBool::new(should_request_workspace_settings),
@@ -2270,6 +2486,7 @@ impl Server {
             notebook_cell_urls,
             self.version_info.lock().clone(),
             source,
+            self.diagnostic_markdown_support,
         );
         if self
             .initialize_params
@@ -3031,6 +3248,7 @@ impl Server {
                             Vec::new(),
                             version,
                             DiagnosticSource::DidClose,
+                            self.diagnostic_markdown_support,
                         );
                         self.open_notebook_cells.write().remove(&cell);
                     }
@@ -3052,6 +3270,7 @@ impl Server {
                         Vec::new(),
                         version,
                         DiagnosticSource::DidClose,
+                        self.diagnostic_markdown_support,
                     );
                     entry.remove();
                 }
@@ -3451,6 +3670,11 @@ impl Server {
                 .iter()
                 .any(|kind| kind == &CodeActionKind::SOURCE_FIX_ALL)
         });
+        let allow_refactor = only_kinds.is_none_or(|kinds| {
+            kinds
+                .iter()
+                .any(|kind| kind.as_str().starts_with("refactor"))
+        });
         let mut actions = Vec::new();
         let server_state = self.telemetry_state();
         let start = Instant::now();
@@ -3532,40 +3756,42 @@ impl Server {
         {
             return (!actions.is_empty()).then_some(actions);
         }
-        let mut push_refactor_actions = |refactors: Vec<LocalRefactorCodeAction>| {
-            for action in refactors {
-                let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-                for (module, edit_range, new_text) in action.edits {
-                    let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
-                        module,
-                        range: edit_range,
-                    }) else {
+        if allow_refactor {
+            let mut push_refactor_actions = |refactors: Vec<LocalRefactorCodeAction>| {
+                for action in refactors {
+                    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                    for (module, edit_range, new_text) in action.edits {
+                        let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
+                            module,
+                            range: edit_range,
+                        }) else {
+                            continue;
+                        };
+                        changes.entry(lsp_location.uri).or_default().push(TextEdit {
+                            range: lsp_location.range,
+                            new_text,
+                        });
+                    }
+                    if changes.is_empty() {
                         continue;
-                    };
-                    changes.entry(lsp_location.uri).or_default().push(TextEdit {
-                        range: lsp_location.range,
-                        new_text,
-                    });
-                }
-                if changes.is_empty() {
-                    continue;
-                }
-                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: action.title,
-                    kind: Some(action.kind),
-                    edit: Some(WorkspaceEdit {
-                        changes: Some(changes),
+                    }
+                    actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                        title: action.title,
+                        kind: Some(action.kind),
+                        edit: Some(WorkspaceEdit {
+                            changes: Some(changes),
+                            ..Default::default()
+                        }),
                         ..Default::default()
-                    }),
-                    ..Default::default()
-                }));
-            }
-        };
-        macro_rules! timed_refactor_action {
-            ($name:expr, $call:expr) => {{
-                let start = Instant::now();
-                if let Some(refactors) = $call {
-                    push_refactor_actions(refactors);
+                    }));
+                }
+            };
+            macro_rules! timed_refactor_action {
+                ($name:expr, $call:expr) => {{
+                    let start = Instant::now();
+                    if let Some(refactors) = $call {
+                        push_refactor_actions(refactors);
+                    }
                     record_code_action_telemetry(
                         $name,
                         start,
@@ -3574,69 +3800,73 @@ impl Server {
                         activity_key,
                         file_stats,
                     );
-                }
-            }};
-        }
-        timed_refactor_action!(
-            "extract_field",
-            transaction.extract_field_code_actions(&handle, range)
-        );
-        timed_refactor_action!(
-            "extract_variable",
-            transaction.extract_variable_code_actions(&handle, range)
-        );
-        timed_refactor_action!(
-            "invert_boolean",
-            transaction.invert_boolean_code_actions(&handle, range)
-        );
-        timed_refactor_action!(
-            "extract_function",
-            transaction.extract_function_code_actions(&handle, range)
-        );
-        timed_refactor_action!(
-            "extract_superclass",
-            transaction.extract_superclass_code_actions(&handle, range)
-        );
-        timed_refactor_action!(
-            "inline_variable",
-            transaction.inline_variable_code_actions(&handle, range)
-        );
-        timed_refactor_action!(
-            "inline_method",
-            transaction.inline_method_code_actions(&handle, range)
-        );
-        timed_refactor_action!(
-            "inline_parameter",
-            transaction.inline_parameter_code_actions(&handle, range)
-        );
-        timed_refactor_action!(
-            "pull_members_up",
-            transaction.pull_members_up_code_actions(&handle, range)
-        );
-        timed_refactor_action!(
-            "push_members_down",
-            transaction.push_members_down_code_actions(&handle, range)
-        );
-        timed_refactor_action!(
-            "move_module_member",
-            transaction.move_module_member_code_actions(&handle, range, import_format)
-        );
-        timed_refactor_action!(
-            "make_local_function_top_level",
-            transaction.make_local_function_top_level_code_actions(&handle, range, import_format)
-        );
-        timed_refactor_action!(
-            "introduce_parameter",
-            transaction.introduce_parameter_code_actions(&handle, range)
-        );
-        timed_refactor_action!(
-            "convert_star_import",
-            transaction.convert_star_import_code_actions(&handle, range)
-        );
-        if let Some(action) =
-            convert_module_package_code_actions(&self.initialize_params.capabilities, uri)
-        {
-            actions.push(action);
+                }};
+            }
+            timed_refactor_action!(
+                "extract_field",
+                transaction.extract_field_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
+                "extract_variable",
+                transaction.extract_variable_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
+                "invert_boolean",
+                transaction.invert_boolean_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
+                "extract_function",
+                transaction.extract_function_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
+                "extract_superclass",
+                transaction.extract_superclass_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
+                "inline_variable",
+                transaction.inline_variable_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
+                "inline_method",
+                transaction.inline_method_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
+                "inline_parameter",
+                transaction.inline_parameter_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
+                "pull_members_up",
+                transaction.pull_members_up_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
+                "push_members_down",
+                transaction.push_members_down_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
+                "move_module_member",
+                transaction.move_module_member_code_actions(&handle, range, import_format)
+            );
+            timed_refactor_action!(
+                "make_local_function_top_level",
+                transaction.make_local_function_top_level_code_actions(
+                    &handle,
+                    range,
+                    import_format
+                )
+            );
+            timed_refactor_action!(
+                "introduce_parameter",
+                transaction.introduce_parameter_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
+                "convert_star_import",
+                transaction.convert_star_import_code_actions(&handle, range)
+            );
+            if let Some(action) =
+                convert_module_package_code_actions(&self.initialize_params.capabilities, uri)
+            {
+                actions.push(action);
+            }
         }
         (!actions.is_empty()).then_some(actions)
     }
@@ -3657,7 +3887,7 @@ impl Server {
             self.from_lsp_position(uri, &info, params.text_document_position_params.position);
         Some(
             transaction
-                .find_local_references(&handle, position)
+                .find_local_references(&handle, position, true)
                 .into_map(|range| DocumentHighlight {
                     range: info.to_lsp_range(range),
                     kind: None,
@@ -3745,6 +3975,7 @@ impl Server {
         handle: Handle,
         uri: &Url,
         position: Position,
+        include_declaration: bool,
         map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) {
         let path_remapper = self.path_remapper.clone();
@@ -3758,7 +3989,7 @@ impl Server {
                 import_behavior: ImportBehavior::StopAtRenamedImports,
                 ..Default::default()
             },
-            |transaction, handle, definition| {
+            move |transaction, handle, definition| {
                 let FindDefinitionItemWithDocstring {
                     metadata,
                     definition_range,
@@ -3770,6 +4001,7 @@ impl Server {
                     handle.sys_info(),
                     metadata,
                     TextRangeWithModule::new(module, definition_range),
+                    include_declaration,
                 )
             },
             move |results: Vec<(ModuleInfo, Vec<TextRange>)>| {
@@ -3801,6 +4033,7 @@ impl Server {
             handle,
             uri,
             params.text_document_position.position,
+            params.context.include_declaration,
             move |results| {
                 let mut locations = Vec::new();
                 for (uri, ranges) in results {
@@ -3832,6 +4065,7 @@ impl Server {
             handle,
             uri,
             params.text_document_position.position,
+            true,
             move |results| {
                 let mut changes = HashMap::new();
                 for (uri, ranges) in results {
@@ -4999,7 +5233,7 @@ impl TspInterface for Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &impl Telemetry,
+        telemetry: &'a impl Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,

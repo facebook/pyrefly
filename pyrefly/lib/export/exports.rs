@@ -30,6 +30,7 @@ use crate::export::definitions::DunderAllKind;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
 use crate::state::loader::FindingOrError;
+use crate::state::state::ModuleChanges;
 
 /// Find the exports of a given module. Beware: these APIs record dependencies between modules during lookups. Using the
 /// wrong API can lead to invalidation bugs.
@@ -176,71 +177,64 @@ impl Exports {
         self.wildcard.calculate(f).unwrap_or_default()
     }
 
-    /// Get the names that were added or removed between self and other.
-    /// Returns the symmetric difference: names that exist in one but not the other.
-    pub fn changed_names(&self, other: &Self) -> SmallSet<Name> {
-        let self_set = self.wildcard.get();
-        let other_set = other.wildcard.get();
-
-        let (self_set, other_set) = match (self_set, other_set) {
-            (Some(s), Some(o)) => (s, o),
-            (None, None) => return SmallSet::new(),
-            (Some(s), None) => return s.iter().cloned().collect(),
-            (None, Some(o)) => return o.iter().cloned().collect(),
-        };
-
-        // Compute symmetric difference: names in self but not other, plus names in other but not self
-        let mut result = SmallSet::new();
-        for name in self_set.iter() {
-            if !other_set.contains(name) {
-                result.insert(name.clone());
-            }
-        }
-        for name in other_set.iter() {
-            if !self_set.contains(name) {
-                result.insert(name.clone());
-            }
-        }
-        result
-    }
-
-    /// Get the names where metadata changed between self and other.
-    /// Checks: is_import status, implicitly_imported_submodules, deprecated, special_exports.
-    /// Only checks names that exist in both versions (existence changes tracked separately).
-    /// Ignores TextRange fields (range, docstring_range) per design doc.
-    pub fn changed_metadata_names(&self, other: &Self) -> SmallSet<Name> {
+    /// Diff two Exports and merge changes into `changed`.
+    ///
+    /// Checks three kinds of changes in a single pass over definitions:
+    /// - Name existence: name added or removed from the module's definitions.
+    ///   Recorded as a default NameDep (both flags false) — presence in the
+    ///   names map denotes an existence change, which overlaps with any dep
+    ///   on that name.
+    /// - Metadata: is_import status, implicitly_imported_submodules, deprecation,
+    ///   or special_exports changed for a name that exists in both. Sets the
+    ///   metadata flag.
+    /// - Wildcard set: the set of names exported via `from M import *` changed.
+    ///   Sets the wildcard flag. Only checked if the old wildcard was previously
+    ///   forced (meaning some rdep depends on it); if not, no rdep can be
+    ///   affected by wildcard changes.
+    pub fn changed_exports(
+        &self,
+        other: &Exports,
+        lookup: &dyn LookupExport,
+        changed: &mut ModuleChanges,
+    ) {
         let self_defs = &self.definitions;
         let other_defs = &other.definitions;
 
-        let mut changed = SmallSet::new();
-
-        // Check names that exist in both
+        // Single pass over old definitions: detect removals and metadata changes.
         for (name, self_def) in self_defs.definitions.iter() {
-            if let Some(other_def) = other_defs.definitions.get(name) {
-                // Check is_import status (is_reexport)
-                if self_def.style.is_import() != other_def.style.is_import() {
-                    changed.insert(name.clone());
-                    continue;
+            match other_defs.definitions.get(name) {
+                Some(other_def) => {
+                    // Name exists in both. Check metadata.
+                    if self_def.style.is_import() != other_def.style.is_import()
+                        || self_defs.implicitly_imported_submodules.contains(name)
+                            != other_defs.implicitly_imported_submodules.contains(name)
+                        || self_defs.deprecated.get(name) != other_defs.deprecated.get(name)
+                        || self_defs.special_exports.get(name)
+                            != other_defs.special_exports.get(name)
+                    {
+                        changed.0.names.entry(name.clone()).or_default().metadata = true;
+                    }
                 }
-                // Check implicitly_imported_submodules
-                let self_implicit = self_defs.implicitly_imported_submodules.contains(name);
-                let other_implicit = other_defs.implicitly_imported_submodules.contains(name);
-                if self_implicit != other_implicit {
-                    changed.insert(name.clone());
-                    continue;
-                }
-                // Check deprecated
-                if self_defs.deprecated.get(name) != other_defs.deprecated.get(name) {
-                    changed.insert(name.clone());
-                    continue;
-                }
-                // Check special_exports
-                if self_defs.special_exports.get(name) != other_defs.special_exports.get(name) {
-                    changed.insert(name.clone());
+                None => {
+                    // Name removed. Existence change.
+                    changed.0.names.entry(name.clone()).or_default();
                 }
             }
         }
-        changed
+
+        // Detect additions: names in new but not old. Existence change.
+        for name in other_defs.definitions.keys() {
+            if !self_defs.definitions.contains_key(name) {
+                changed.0.names.entry(name.clone()).or_default();
+            }
+        }
+
+        // Check wildcard set changes. Only compare if the old wildcard was
+        // forced (some rdep called get_wildcard and depends on the set).
+        if let Some(old_wildcard) = self.wildcard.get() {
+            let new_wildcard = other.wildcard(lookup);
+            changed.0.wildcard = old_wildcard != new_wildcard;
+        }
     }
 
     /// Get the docstring for this module.
@@ -296,8 +290,8 @@ impl Exports {
         lookup: &dyn LookupExport,
         module_info: &ModuleInfo,
     ) -> Vec<(TextRange, Name)> {
-        // Only validate if __all__ was explicitly defined by the user
-        if self.definitions.dunder_all.kind == DunderAllKind::Inferred {
+        // Only validate if __all__ was explicitly defined and resolvable
+        if self.definitions.dunder_all.kind != DunderAllKind::Specified {
             return Vec::new();
         }
         let mut invalid = Vec::new();
@@ -402,6 +396,14 @@ impl Exports {
             .definitions
             .get(name)
             .is_some_and(|definition| matches!(definition.style, DefinitionStyle::ImportAsEq(_)))
+    }
+
+    /// Returns the range of the unresolvable `__all__` RHS, if applicable.
+    pub fn unresolvable_dunder_all_range(&self) -> Option<TextRange> {
+        match self.definitions.dunder_all.kind {
+            DunderAllKind::Unresolvable(range) => Some(range),
+            _ => None,
+        }
     }
 }
 

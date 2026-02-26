@@ -100,12 +100,6 @@ enum Variable {
     LoopRecursive(Type, LoopBound),
     /// A variable that used to decompose a type, e.g. getting T from Awaitable[T]
     Unwrap,
-    /// A variable used for a parameter type (either a function or lambda parameter).
-    ///
-    /// These are created at binding time, and used so that two bindings (the parameter
-    /// and either the expression containing the lambda body or the function def)
-    /// can communicate out-of-band about the parameter type.
-    Parameter,
     /// A variable whose answer has been determined
     Answer(Type),
 }
@@ -153,7 +147,6 @@ impl Display for Variable {
             }
             Variable::LoopRecursive(t, _) => write!(f, "LoopRecursive(prior={t}, _)"),
             Variable::Recursive => write!(f, "Recursive"),
-            Variable::Parameter => write!(f, "Parameter"),
             Variable::Unwrap => write!(f, "Unwrap"),
             Variable::Answer(t) => write!(f, "{t}"),
         }
@@ -391,9 +384,6 @@ impl Solver {
             Variable::Unwrap => {
                 *variable = Variable::Answer(self.heap.mk_any_implicit());
                 None
-            }
-            Variable::Parameter => {
-                unreachable!("Unexpected Variable::Parameter")
             }
         }
     }
@@ -704,35 +694,6 @@ impl Solver {
         v
     }
 
-    /// Generate a fresh variable for out-of-band logic that allows two bindings to communicate
-    /// about a type without it being explicitly in a binding result. Used for function parameters,
-    /// where the var is created during the bindings phase, then solved during answers, where we
-    /// can determine whether the first argument should be Self or type[Self] based on decorators.
-    ///
-    /// Parameter vars must be solved before they appear in a constraint, by calling solve_parameter.
-    /// If a parameter var appears in a constraint, we will panic.
-    pub fn fresh_parameter(&self, uniques: &UniqueFactory) -> Var {
-        let v = Var::new(uniques);
-        self.variables.lock().insert_fresh(v, Variable::Parameter);
-        v
-    }
-
-    /// Solve a parameter var (created using fresh_parameter) to a concrete type. This must happen
-    /// before the var can appear in a constraint, or else we will panic.
-    pub fn solve_parameter(&self, v: Var, t: Type) {
-        let lock = self.variables.lock();
-        let mut v = lock.get_mut(v);
-        match &mut *v {
-            Variable::Answer(_) => {}
-            Variable::Parameter => {
-                *v = Variable::Answer(t);
-            }
-            _ => {
-                panic!("Expected a parameter, got {}", v);
-            }
-        }
-    }
-
     // Generate a fresh variable used to decompose a type, e.g. getting T from Awaitable[T]
     // Also used for lambda parameters, where the var is created during bindings, but solved during
     // the answers phase by contextually typing against an annotation.
@@ -825,6 +786,19 @@ impl Solver {
     pub fn has_instantiation_errors(&self, vs: &QuantifiedHandle) -> bool {
         let lock = self.instantiation_errors.read();
         vs.0.iter().any(|v| lock.contains_key(v))
+    }
+
+    /// Returns true if the given type is a Var that points to a partial
+    /// (PartialQuantified or PartialContained) variable.
+    pub fn is_partial(&self, ty: &Type) -> bool {
+        if let Type::Var(v) = ty {
+            matches!(
+                *self.variables.lock().get(*v),
+                Variable::PartialQuantified(_) | Variable::PartialContained(_)
+            )
+        } else {
+            false
+        }
     }
 
     /// Called after a quantified function has been called. Given `def f[T](x: int): list[T]`,
@@ -1397,10 +1371,6 @@ pub enum SubsetError {
 }
 
 impl SubsetError {
-    fn internal_error(msg: &str) -> Self {
-        Self::InternalError(msg.to_owned())
-    }
-
     pub fn to_error_msg(self) -> Option<String> {
         match self {
             SubsetError::PosParamName(got, want) => Some(format!(
@@ -1493,11 +1463,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variable2);
                         drop(variables);
                         self.is_subset_eq(got, &t2)
-                    }
-                    (Variable::Parameter, _) | (_, Variable::Parameter) => {
-                        Err(SubsetError::internal_error(
-                            "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
-                        ))
                     }
                     (Variable::Answer(t1), Variable::Answer(t2)) => {
                         let t1 = t1.clone();
@@ -1627,9 +1592,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 let variables = self.solver.variables.lock();
                 let v1_ref = variables.get(*v1);
                 match &*v1_ref {
-                    Variable::Parameter => Err(SubsetError::internal_error(
-                        "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
-                    )),
                     Variable::Answer(t1) => {
                         let t1 = t1.clone();
                         drop(v1_ref);
@@ -1723,9 +1685,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         self.is_subset_eq(t1, &t2)
                     }
-                    Variable::Parameter => Err(SubsetError::internal_error(
-                        "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
-                    )),
                     Variable::Answer(t2) => {
                         let t2 = t2.clone();
                         drop(v2_ref);

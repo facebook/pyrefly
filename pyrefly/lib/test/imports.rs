@@ -1165,3 +1165,110 @@ x = 10  # E: Cannot assign to `x` because it is imported as final
 y = 10  # E: Cannot assign to `y` because it is imported as final
 "#,
 );
+
+fn env_all_binop_add() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "base",
+        r#"
+__all__ = ["x", "y"]
+x: int = 1
+y: str = "hello"
+"#,
+    );
+    t.add(
+        "combined",
+        r#"
+import base
+from base import *
+a: float = 3.14
+__all__ = ["a"] + base.__all__
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_star_all_binop_add,
+    env_all_binop_add(),
+    r#"
+from typing import assert_type
+from combined import *
+assert_type(a, float)
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);
+
+fn env_all_starred() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "base",
+        r#"
+__all__ = ["x", "y"]
+x: int = 1
+y: str = "hello"
+"#,
+    );
+    t.add(
+        "combined",
+        r#"
+import base
+from base import *
+a: float = 3.14
+__all__ = [*base.__all__, "a"]
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_star_all_starred,
+    env_all_starred(),
+    r#"
+from typing import assert_type
+from combined import *
+assert_type(a, float)
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);
+
+fn env_all_unresolvable() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+def generate_all():
+    return ["x"]
+
+x: int = 1
+y: str = "hello"
+_private: float = 3.14
+__all__ = generate_all()  # E: `__all__` could not be statically analyzed
+"#,
+    )
+}
+
+testcase!(
+    test_import_star_all_unresolvable,
+    env_all_unresolvable(),
+    r#"
+from typing import assert_type
+from foo import *
+# Since __all__ is unresolvable, falls back to all public names
+assert_type(x, int)
+assert_type(y, str)
+_private  # E: Could not find name `_private`
+"#,
+);
+
+testcase!(
+    test_import_named_all_unresolvable,
+    env_all_unresolvable(),
+    r#"
+from typing import assert_type
+from foo import x, y
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);

@@ -254,13 +254,23 @@ impl ComputeGuard<'_> {
     }
 
     /// Compute a step under exclusive access, delegating to `StepsMut::compute`.
-    pub fn compute<Lookup: LookupExport + LookupAnswer>(
-        &self,
-        step: Step,
-        old: &mut Steps,
-        ctx: &Context<Lookup>,
-    ) {
-        self.state.steps.compute(step, old, ctx)
+    pub fn compute<Lookup: LookupExport + LookupAnswer>(&self, step: Step, ctx: &Context<Lookup>) {
+        self.state.steps.compute(step, ctx)
+    }
+
+    /// Take old exports saved before rebuild for diffing. Clears the slot.
+    pub fn take_old_exports(&self) -> Option<Arc<Exports>> {
+        self.state.steps.old_exports.swap(None)
+    }
+
+    /// Take old answers saved before rebuild for diffing. Clears the slot.
+    pub fn take_old_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
+        self.state.steps.old_answers.swap(None)
+    }
+
+    /// Take old solutions saved before rebuild for diffing. Clears the slot.
+    pub fn take_old_solutions(&self) -> Option<Arc<Solutions>> {
+        self.state.steps.old_solutions.swap(None)
     }
 
     /// Evict the AST after computing answers (if not needed for retention).

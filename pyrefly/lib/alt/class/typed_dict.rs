@@ -343,17 +343,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             signatures: vec1![
                 OverloadType::Function(Function {
                     signature: Callable::list(ParamList::new(kw_params), self.heap.mk_none()),
-                    metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
+                    metadata: FuncMetadata::def(
+                        self.module().dupe(),
+                        cls.dupe(),
+                        dunder::INIT,
+                        None
+                    ),
                 }),
                 OverloadType::Function(Function {
                     signature: Callable::list(ParamList::new(map_params), self.heap.mk_none()),
-                    metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
+                    metadata: FuncMetadata::def(
+                        self.module().dupe(),
+                        cls.dupe(),
+                        dunder::INIT,
+                        None
+                    ),
                 })
             ],
             metadata: Box::new(FuncMetadata::def(
                 self.module().dupe(),
                 cls.dupe(),
                 dunder::INIT,
+                None,
             )),
         });
         ClassSynthesizedField::new(ty)
@@ -364,7 +375,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> ClassSynthesizedField {
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), UPDATE_METHOD);
+        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), UPDATE_METHOD, None);
         let self_param = self.class_self_param(cls, true);
         let extra = if let ExtraItems::Extra(extra) = self.typed_dict_extra_items_for_cls(cls) {
             Some(extra.ty)
@@ -493,7 +504,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> ClassSynthesizedField {
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), GET_METHOD);
+        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), GET_METHOD, None);
         // Synthesizes signatures for each field and a fallback `(self, key: str, default: object = ...) -> object` signature.
         let self_param = self.class_self_param(cls, true);
         let object_ty = self.heap.mk_class_type(self.stdlib.object().clone());
@@ -614,7 +625,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> Option<ClassSynthesizedField> {
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), POP_METHOD);
+        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), POP_METHOD, None);
         let self_param = self.class_self_param(cls, true);
         let mut literal_signatures: Vec<OverloadType> = Vec::new();
         for (name, field) in self.names_to_fields(cls, fields) {
@@ -656,7 +667,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Synthesizes a `(self, k: Literal["key"], default: ValueType) -> ValueType` signature for each field.
         let fields_iter = self.names_to_fields(cls, fields);
         let self_param = self.class_self_param(cls, true);
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), SETDEFAULT_METHOD);
+        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), SETDEFAULT_METHOD, None);
         let make_overload = |name: Option<&Name>, read_only: bool, field_ty: Type| {
             if read_only {
                 None
@@ -771,7 +782,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.heap.mk_class_type(self.stdlib.str().clone()),
             self.get_typed_dict_value_type_from_fields(cls, fields),
         );
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), ITEMS_METHOD);
+        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), ITEMS_METHOD, None);
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(
                 ParamList::new(vec![self.class_self_param(cls, false)]),
@@ -791,7 +802,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.heap.mk_class_type(self.stdlib.str().clone()),
             self.get_typed_dict_value_type_from_fields(cls, fields),
         );
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), VALUES_METHOD);
+        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), VALUES_METHOD, None);
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(
                 ParamList::new(vec![self.class_self_param(cls, false)]),
@@ -825,7 +836,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ParamList::new(vec![self.class_self_param(cls, true)]),
                     self.heap.mk_none(),
                 ),
-                metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), CLEAR_METHOD),
+                metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), CLEAR_METHOD, None),
             },
         )))
     }
@@ -847,7 +858,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.get_typed_dict_value_type_from_fields(cls, fields),
                     ]),
                 ),
-                metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), POPITEM_METHOD),
+                metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), POPITEM_METHOD, None),
             },
         )))
     }

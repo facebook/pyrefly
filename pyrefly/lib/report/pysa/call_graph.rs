@@ -13,10 +13,12 @@ use std::ops::Not;
 use dupe::Dupe;
 use itertools::Either;
 use itertools::Itertools;
+use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
@@ -62,6 +64,7 @@ use vec1::Vec1;
 use crate::alt::call::CallTargetLookup;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::KeyDecoratedFunction;
+use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
 use crate::report::pysa::ast_visitor::AstScopedVisitor;
@@ -83,6 +86,7 @@ use crate::report::pysa::function::FunctionId;
 use crate::report::pysa::function::FunctionNode;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::WholeProgramFunctionDefinitions;
+use crate::report::pysa::function::get_exported_decorated_function;
 use crate::report::pysa::function::should_export_decorated_function;
 use crate::report::pysa::global_variable::GlobalVariableRef;
 use crate::report::pysa::global_variable::WholeProgramGlobalVariables;
@@ -1838,6 +1842,98 @@ impl<'a> CallGraphVisitor<'a> {
         }
     }
 
+    fn call_targets_from_callable_type(
+        &self,
+        function: &pyrefly_types::callable::Function,
+        callee_type: Option<&Type>,
+        callee_expr: Option<AnyNodeRef>,
+        return_type: ScalarTypeProperties,
+        callee_expr_suffix: Option<&str>,
+        unknown_callee_as_direct_call: bool,
+        exclude_object_methods: bool,
+    ) -> MaybeResolved<Vec1<CallTarget<FunctionRef>>> {
+        self.call_targets_from_callable_metadata(function, return_type, callee_expr_suffix)
+            .map(|target| MaybeResolved::Resolved(Vec1::new(target)))
+            .unwrap_or_else(|| {
+                // Fallback for static methods, which have a defining class to search within.
+                self.call_targets_from_method_name(
+                    &method_name_from_function(function),
+                    callee_type, // For static methods, we find them within the callee type
+                    callee_expr,
+                    callee_type,
+                    return_type,
+                    /* is_bound_method */ false,
+                    callee_expr_suffix,
+                    /* override_implicit_receiver*/ None,
+                    /* override_is_direct_call */ None,
+                    unknown_callee_as_direct_call,
+                    exclude_object_methods,
+                )
+            })
+    }
+
+    fn call_targets_from_callable_metadata(
+        &self,
+        function: &pyrefly_types::callable::Function,
+        return_type: ScalarTypeProperties,
+        callee_expr_suffix: Option<&str>,
+    ) -> Option<CallTarget<FunctionRef>> {
+        // Resolve a `CallTarget::Function` directly via its `FuncDefIndex`, bypassing
+        // name-based lookup. This handles module-level function aliases (e.g.,
+        // `fromstring = XML` in `xml.etree.ElementTree`) where the type carries the
+        // original definition's index.
+        let (module, def_index) = match &function.metadata.kind {
+            FunctionKind::Def(box pyrefly_types::callable::FuncId {
+                module,
+                cls: None, // Only handle module-level functions, not methods.
+                def_index: Some(def_index),
+                ..
+            }) => (module, *def_index),
+            _ => return None,
+        };
+
+        let handle = Handle::new(
+            module.name(),
+            module.path().dupe(),
+            self.module_context.handle.sys_info().dupe(),
+        );
+        let target_context = ModuleContext::create(
+            handle,
+            self.module_context.transaction,
+            self.module_context.module_ids,
+        )?;
+
+        let key = KeyUndecoratedFunctionRange(def_index);
+        let short_id = target_context
+            .bindings
+            .key_to_idx_hashed_opt(Hashed::new(&key))
+            .and_then(|idx| target_context.answers.get_idx(idx))?
+            .0;
+
+        let key = KeyDecoratedFunction(short_id);
+        let idx = target_context
+            .bindings
+            .key_to_idx_hashed_opt(Hashed::new(&key))?;
+        let decorated = get_exported_decorated_function(
+            idx,
+            /* skip_property_getter */ false,
+            &target_context,
+        );
+
+        let target = self.call_target_from_function_target(
+            Target::Function(FunctionRef::from_decorated_function(
+                &decorated,
+                &target_context,
+            )),
+            return_type,
+            /* receiver_type */ None,
+            callee_expr_suffix,
+            /* override_implicit_receiver */ None,
+        );
+
+        Some(target)
+    }
+
     fn call_target_from_function_target(
         &self,
         function_target: Target<FunctionRef>,
@@ -2267,19 +2363,12 @@ impl<'a> CallGraphVisitor<'a> {
                     .unwrap()
             }
             Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Function(function))) => {
-                // Sometimes this means calling a function (e.g., static method) on a class instance. Sometimes
-                // this could be simply calling a module top-level function, which can be handled when the stack
-                // of D85441657 enables uniquely identifying a definition from a type.
-                self.call_targets_from_method_name(
-                    &method_name_from_function(&function.1),
-                    callee_type, // For static methods, we find them within the callee type
-                    callee_expr,
+                self.call_targets_from_callable_type(
+                    &function.1,
                     callee_type,
+                    callee_expr,
                     return_type,
-                    /* is_bound_method */ false,
                     callee_expr_suffix,
-                    /* override_implicit_receiver*/ None,
-                    /* override_is_direct_call */ None,
                     unknown_callee_as_direct_call,
                     exclude_object_methods,
                 )
@@ -2322,15 +2411,19 @@ impl<'a> CallGraphVisitor<'a> {
                 let (init_method, new_method) = self
                     .module_context
                     .transaction
-                    .ad_hoc_solve(&self.module_context.handle, |solver| {
-                        let new_method = solver.get_dunder_new(&class_type);
-                        let overrides_new = new_method.is_some();
-                        let init_method = solver.get_dunder_init(
-                            &class_type,
-                            /* get_object_init */ !overrides_new,
-                        );
-                        (init_method, new_method)
-                    })
+                    .ad_hoc_solve(
+                        &self.module_context.handle,
+                        "call_graph_constructor",
+                        |solver| {
+                            let new_method = solver.get_dunder_new(&class_type);
+                            let overrides_new = new_method.is_some();
+                            let init_method = solver.get_dunder_init(
+                                &class_type,
+                                /* get_object_init */ !overrides_new,
+                            );
+                            (init_method, new_method)
+                        },
+                    )
                     .unwrap();
                 self.resolve_constructor_callees(
                     init_method,
@@ -2345,12 +2438,11 @@ impl<'a> CallGraphVisitor<'a> {
             Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::TypedDict(
                 typed_dict_inner,
             ))) => {
-                let init_method = self
-                    .module_context
-                    .transaction
-                    .ad_hoc_solve(&self.module_context.handle, |solver| {
-                        solver.get_typed_dict_dunder_init(&typed_dict_inner)
-                    });
+                let init_method = self.module_context.transaction.ad_hoc_solve(
+                    &self.module_context.handle,
+                    "call_graph_typed_dict_init",
+                    |solver| solver.get_typed_dict_dunder_init(&typed_dict_inner),
+                );
                 self.resolve_constructor_callees(
                     init_method,
                     /* new_method */ None,
@@ -2569,9 +2661,11 @@ impl<'a> CallGraphVisitor<'a> {
         let pyrefly_target = self
             .module_context
             .transaction
-            .ad_hoc_solve(&self.module_context.handle, |solver| {
-                expression_type.map(|type_| solver.as_call_target(type_.clone()))
-            })
+            .ad_hoc_solve(
+                &self.module_context.handle,
+                "call_graph_call_target",
+                |solver| expression_type.map(|type_| solver.as_call_target(type_.clone())),
+            )
             .flatten();
         self.resolve_pyrefly_target(
             pyrefly_target,
@@ -2603,22 +2697,26 @@ impl<'a> CallGraphVisitor<'a> {
             }
             self.module_context
                 .transaction
-                .ad_hoc_solve(&self.module_context.handle, |solver| {
-                    solver
-                        .type_of_magic_dunder_attr(
-                            base,
-                            attribute,
-                            range,
-                            &self.error_collector,
-                            None,
-                            resolve_context,
-                            /* allow_getattr_fallback */ true,
-                        )
-                        .map(|type_| ResolvedDunderAttr {
-                            target: solver.as_call_target(type_.clone()),
-                            attr_type: type_,
-                        })
-                })
+                .ad_hoc_solve(
+                    &self.module_context.handle,
+                    "call_graph_dunder_attr",
+                    |solver| {
+                        solver
+                            .type_of_magic_dunder_attr(
+                                base,
+                                attribute,
+                                range,
+                                &self.error_collector,
+                                None,
+                                resolve_context,
+                                /* allow_getattr_fallback */ true,
+                            )
+                            .map(|type_| ResolvedDunderAttr {
+                                target: solver.as_call_target(type_.clone()),
+                                attr_type: type_,
+                            })
+                    },
+                )
                 .flatten()
                 .map(
                     |ResolvedDunderAttr {
@@ -2665,35 +2763,6 @@ impl<'a> CallGraphVisitor<'a> {
                 callees: CallCallees::new_unresolved(reason),
                 attr_type: None,
             }
-        }
-    }
-
-    // Resolve the attribute access via `__getattr__`
-    fn resolve_magic_dunder_attr(
-        &self,
-        attribute: &Name,
-        receiver_type: Option<&Type>,
-        callee_expr: Option<AnyNodeRef>, // This is `base.attribute`
-        callee_range: TextRange,
-    ) -> AttributeAccessCallees<FunctionRef> {
-        let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
-            /* base */ receiver_type,
-            /* attribute */ Some(attribute),
-            callee_range,
-            callee_expr,
-            /* unknown_callee_as_direct_call */ true,
-            "resolve_magic_dunder_attr",
-            /* exclude_object_methods */ false,
-        );
-        // Treat attribute accesses that are not callables as regular attributes.
-        let is_attribute = callees.call_targets.is_empty() && *attribute != dunder::CLASS;
-        AttributeAccessCallees {
-            if_called: callees,
-            // Property getters and setters are always found via the normal attribute lookup
-            property_setters: vec![],
-            property_getters: vec![],
-            global_targets: vec![],
-            is_attribute,
         }
     }
 
@@ -2783,27 +2852,19 @@ impl<'a> CallGraphVisitor<'a> {
                 })
         });
 
-        let functions_from_go_to_def = go_to_definitions
-            .into_iter()
-            .filter_map(|definition| {
-                FunctionNode::exported_function_from_definition_item_with_docstring(
+        let (functions_from_go_to_def, unused_go_to_definitions): (Vec<_>, Vec<_>) =
+            go_to_definitions.into_iter().partition_map(|definition| {
+                let function = FunctionNode::exported_function_from_definition_item_with_docstring(
                     &definition,
                     /* skip_property_getter */ is_assignment_lhs,
                     self.module_context,
-                )
-            })
-            .map(|(function, context)| function.as_function_ref(&context))
-            .collect::<Vec<_>>();
-
-        if global_targets.is_empty() && functions_from_go_to_def.is_empty() {
-            // Fall back to using the callee type.
-            return self.resolve_magic_dunder_attr(
-                attribute,
-                receiver_type.as_ref(),
-                callee_expr,
-                callee_range,
-            );
-        }
+                );
+                match function {
+                    Some((function, context)) => Either::Left(function.as_function_ref(&context)),
+                    None => Either::Right(definition),
+                }
+            });
+        let has_non_function_definitions = !unused_go_to_definitions.is_empty();
 
         let (property_callees, non_property_callees): (Vec<FunctionRef>, Vec<FunctionRef>) =
             functions_from_go_to_def
@@ -2824,13 +2885,17 @@ impl<'a> CallGraphVisitor<'a> {
 
         let unknown_callee_as_direct_call = true;
         let if_called = if non_property_callees.is_empty() {
-            // If a property returns a callable, we can resolve its callees using the attribute access type.
-            self.resolve_callees_from_expression_type(
-                /* expression */ callee_expr,
-                /* expression_type */ callee_type,
-                return_type,
-                /* expression_suffix */ callee_expr_suffix,
-            )
+            // Fall back to using the callee type.
+            let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
+                /* base */ receiver_type.as_ref(),
+                /* attribute */ Some(attribute),
+                callee_range,
+                callee_expr,
+                /* unknown_callee_as_direct_call */ true,
+                "resolve_attribute_access",
+                /* exclude_object_methods */ false,
+            );
+            callees
         } else {
             CallCallees {
                 call_targets: non_property_callees
@@ -2856,8 +2921,10 @@ impl<'a> CallGraphVisitor<'a> {
             }
         };
         AttributeAccessCallees {
-            // Don't treat attributes that are functions (those are usually methods) as "regular" attributes so we don't propagate taint from the base to the attribute
-            is_attribute: (if_called.is_empty() && !has_property_callees)
+            // Don't treat attributes that are functions (those are usually methods) as "regular"
+            // attributes so we don't propagate taint from the base to the attribute.
+            is_attribute: has_non_function_definitions
+                || (if_called.is_empty() && !has_property_callees)
                 || !global_targets.is_empty(),
             if_called,
             property_setters: property_setters
@@ -3781,13 +3848,19 @@ impl<'a> CallGraphVisitor<'a> {
         let (init_method, new_method) = self
             .module_context
             .transaction
-            .ad_hoc_solve(&self.module_context.handle, |solver| {
-                let new_method = solver.get_dunder_new(&slice_class_type);
-                let overrides_new = new_method.is_some();
-                let init_method = solver
-                    .get_dunder_init(&slice_class_type, /* get_object_init */ !overrides_new);
-                (init_method, new_method)
-            })
+            .ad_hoc_solve(
+                &self.module_context.handle,
+                "call_graph_slice_constructor",
+                |solver| {
+                    let new_method = solver.get_dunder_new(&slice_class_type);
+                    let overrides_new = new_method.is_some();
+                    let init_method = solver.get_dunder_init(
+                        &slice_class_type,
+                        /* get_object_init */ !overrides_new,
+                    );
+                    (init_method, new_method)
+                },
+            )
             .unwrap();
         let callees = self.resolve_constructor_callees(
             init_method,

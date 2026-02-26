@@ -272,3 +272,24 @@ class C(type):
     def __mul__(cls, count: int) -> list[Self]: ... # E: `Self` cannot be used in a metaclass
     "#,
 );
+
+testcase!(
+    test_classmethod_cls_call_returns_self,
+    r#"
+from typing import Self
+
+class Base:
+    @classmethod
+    def create(cls):
+        return cls()
+
+    @classmethod
+    def create_annotated(cls) -> Self:
+        return cls()
+
+class Child(Base): pass
+
+child1: Child = Child.create()  # OK - cls() returns Self
+child2: Child = Child.create_annotated()  # OK with explicit Self annotation
+"#,
+);

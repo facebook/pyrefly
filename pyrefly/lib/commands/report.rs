@@ -33,11 +33,14 @@ use starlark_map::small_map::SmallMap;
 use crate::alt::answers::Answers;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
+use crate::binding::binding::BindingExport;
 use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMro;
+use crate::binding::binding::KeyExport;
 use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::Bindings;
 use crate::commands::check::Handles;
@@ -47,16 +50,9 @@ use crate::export::exports::ExportLocation;
 use crate::state::require::Require;
 use crate::state::state::State;
 
-/// Location information for code elements
+/// Location of a code element (start of its declaration)
 #[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 struct Location {
-    start: Position,
-    end: Position,
-}
-
-/// Position with line and column
-#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-struct Position {
     line: usize,
     column: usize,
 }
@@ -101,9 +97,18 @@ struct ReportClass {
     location: Location,
 }
 
+/// A top-level exported variable.
+#[derive(Debug, Serialize)]
+struct Variable {
+    name: String,
+    annotation: Option<String>,
+    location: Location,
+}
+
 /// File report
 #[derive(Debug, Serialize)]
 struct FileReport {
+    variables: Vec<Variable>,
     line_count: usize,
     functions: Vec<Function>,
     classes: Vec<ReportClass>,
@@ -150,24 +155,11 @@ impl ReportArgs {
         all_params
     }
 
-    /// Helper to convert byte offset to line and column position
-    fn offset_to_position(module: &Module, offset: ruff_text_size::TextSize) -> Position {
-        let location = module.lined_buffer().line_index().source_location(
-            offset,
-            module.lined_buffer().contents(),
-            ruff_source_file::PositionEncoding::Utf8,
-        );
-        Position {
-            line: location.line.get(),
-            column: location.character_offset.get(),
-        }
-    }
-
-    /// Helper to convert a text range to a Location
     fn range_to_location(module: &Module, range: TextRange) -> Location {
+        let pos = module.lined_buffer().display_pos(range.start(), None);
         Location {
-            start: Self::offset_to_position(module, range.start()),
-            end: Self::offset_to_position(module, range.end()),
+            line: pos.line_within_file().get() as usize,
+            column: pos.column().get() as usize,
         }
     }
 
@@ -195,20 +187,13 @@ impl ReportArgs {
                 if let Some(comment_start) = line.find('#') {
                     let line_number = line_idx + 1; // 1-indexed
                     let start_col = comment_start + 1; // 1-indexed column
-                    let end_col = line.len();
 
                     suppressions.push(Suppression {
                         kind: "ignore".to_owned(),
                         codes,
                         location: Location {
-                            start: Position {
-                                line: line_number,
-                                column: start_col,
-                            },
-                            end: Position {
-                                line: line_number,
-                                column: end_col,
-                            },
+                            line: line_number,
+                            column: start_col,
                         },
                     });
                 }
@@ -230,6 +215,71 @@ impl ReportArgs {
                 None => return false,
             }
         }
+    }
+
+    fn parse_variables(
+        module: &Module,
+        bindings: &Bindings,
+        exports: &SmallMap<Name, ExportLocation>,
+        functions: &[Function],
+        classes: &[ReportClass],
+    ) -> Vec<Variable> {
+        let module_prefix = if module.name() != ModuleName::unknown() {
+            format!("{}.", module.name())
+        } else {
+            String::new()
+        };
+        // Collect names already reported as functions or classes so we can skip them.
+        let reported_names: HashSet<&str> = functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .chain(classes.iter().map(|c| c.name.as_str()))
+            .collect();
+
+        let mut variables = Vec::new();
+        for idx in bindings.keys::<KeyExport>() {
+            let KeyExport(name) = bindings.idx_to_key(idx);
+            let qualified_name = format!("{module_prefix}{name}");
+            if reported_names.contains(qualified_name.as_str()) {
+                continue;
+            }
+            let BindingExport(binding) = bindings.get(idx);
+            let location = match exports.get(name) {
+                Some(ExportLocation::ThisModule(export)) => {
+                    Self::range_to_location(module, export.location)
+                }
+                _ => continue,
+            };
+            match binding {
+                Binding::AnnotatedType(annot_idx, _inner) => {
+                    let annotation_text = match bindings.get(*annot_idx) {
+                        BindingAnnotation::AnnotateExpr(_, expr, _) => {
+                            Some(module.code_at(expr.range()).to_owned())
+                        }
+                        _ => None,
+                    };
+                    variables.push(Variable {
+                        name: qualified_name,
+                        annotation: annotation_text,
+                        location,
+                    });
+                }
+                Binding::Forward(idx) => match bindings.get(*idx) {
+                    // Skip injected implicit globals
+                    Binding::Global(_) => {}
+                    _ => {
+                        variables.push(Variable {
+                            name: qualified_name,
+                            annotation: None,
+                            location,
+                        });
+                    }
+                },
+                _ => {}
+            }
+        }
+        variables.sort_by(|a, b| a.location.cmp(&b.location));
+        variables
     }
 
     fn parse_functions(
@@ -537,11 +587,14 @@ impl ReportArgs {
                 let exports = transaction.get_exports(handle);
                 let functions = Self::parse_functions(&module, bindings.dupe(), &exports);
                 let classes = Self::parse_classes(&module, bindings.dupe(), answers);
+                let variables =
+                    Self::parse_variables(&module, &bindings, &exports, &functions, &classes);
                 let suppressions = Self::parse_suppressions(&module);
 
                 report.insert(
                     handle.path().as_path().display().to_string(),
                     FileReport {
+                        variables,
                         line_count,
                         functions,
                         classes,
@@ -599,12 +652,93 @@ z = 3  # pyrefly: ignore[code1, code2]
         // Suppression with single error code
         assert_eq!(suppressions[0].kind, "ignore");
         assert_eq!(suppressions[0].codes, vec!["error-code"]);
-        assert_eq!(suppressions[0].location.start.line, 2);
+        assert_eq!(suppressions[0].location.line, 2);
 
         // Suppression with multiple error codes
         assert_eq!(suppressions[1].kind, "ignore");
         assert_eq!(suppressions[1].codes, vec!["code1", "code2"]);
-        assert_eq!(suppressions[1].location.start.line, 4);
+        assert_eq!(suppressions[1].location.line, 4);
+    }
+
+    #[test]
+    fn test_parse_variables() {
+        let code = r#"
+from typing import Callable, TypeVar
+from typing import List as MyList
+
+T = TypeVar("T")
+x = 42
+y: Callable[[int], int] = lambda n: n
+z: str = "hello"
+
+def some_func() -> None:
+    pass
+
+class SomeClass:
+    my_field = 42
+"#;
+        let (state, handle_fn) = TestEnv::one("test", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("test");
+        let transaction = state.transaction();
+
+        let module = transaction.get_module_info(&handle).unwrap();
+        let bindings = transaction.get_bindings(&handle).unwrap();
+        let answers = transaction.get_answers(&handle).unwrap();
+        let exports = transaction.get_exports(&handle);
+
+        let functions = ReportArgs::parse_functions(&module, bindings.dupe(), &exports);
+        let classes = ReportArgs::parse_classes(&module, bindings.dupe(), answers);
+        let variables =
+            ReportArgs::parse_variables(&module, &bindings, &exports, &functions, &classes);
+        // T (line 5), x (line 6), y (line 7), z (line 8)
+        assert_eq!(variables.len(), 4, "should have 4 variables: T, x, y, z");
+
+        // T (TypeVar) on line 5
+        assert_eq!(variables[0].name, "test.T");
+        assert_eq!(variables[0].annotation, None);
+        assert_eq!(variables[0].location.line, 5, "T should be on line 5");
+
+        // x has no annotation on line 6
+        assert_eq!(variables[1].name, "test.x");
+        assert_eq!(variables[1].annotation, None);
+        assert_eq!(variables[1].location.line, 6, "x should be on line 6");
+
+        // y has a Callable[[int], int] annotation on line 7
+        assert_eq!(variables[2].name, "test.y");
+        assert_eq!(
+            variables[2].annotation,
+            Some("Callable[[int], int]".to_owned())
+        );
+        assert_eq!(variables[2].location.line, 7, "y should be on line 7");
+
+        // z has a str annotation on line 8
+        assert_eq!(variables[3].name, "test.z");
+        assert_eq!(variables[3].annotation, Some("str".to_owned()));
+        assert_eq!(variables[3].location.line, 8, "z should be on line 8");
+
+        // Functions and classes should NOT appear as variables
+        assert!(
+            !variables.iter().any(|v| v.name.contains("some_func")),
+            "functions should not be reported as variables"
+        );
+        assert!(
+            !variables.iter().any(|v| v.name.contains("SomeClass")),
+            "classes should not be reported as variables"
+        );
+        assert!(
+            !variables.iter().any(|v| v.name.contains("Callable")),
+            "we should not report re-exported symbols as variables"
+        );
+        assert!(
+            !variables.iter().any(|v| v.name.contains("MyList")),
+            "we should not report re-exported symbols as variables"
+        );
+        assert!(
+            !variables.iter().any(|v| v.name.contains("my_field")),
+            "we should not report class fields as variables"
+        );
     }
 
     #[test]

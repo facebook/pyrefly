@@ -1077,3 +1077,27 @@ global_var2: list[T] = []  # E: Type variable `T` is not in scope
 list[T]()  # should error
 "#,
 );
+
+testcase!(
+    bug = "Follow-on errors on TypeVar usages inside nested class that shadows outer TypeVars",
+    test_nested_class_independent_typevar_adoption,
+    r#"
+from typing import Generic, Type, TypeVar
+
+_Deserialized = TypeVar("_Deserialized")
+_Serialized = TypeVar("_Serialized")
+
+class CustomCoercer(Generic[_Deserialized, _Serialized]):
+    # CoercerMapping uses the same TypeVars as CustomCoercer, which the spec forbids.
+    class CoercerMapping(
+        dict[
+            Type[_Deserialized],  # should error: _Deserialized already bound by CustomCoercer
+            Type["CustomCoercer[_Deserialized, _Serialized]"],  # should error: both TypeVars
+        ]
+    ):
+        def __getitem__(
+            self,
+            key: type[_Deserialized],
+        ) -> type[CustomCoercer[_Deserialized, _Serialized]]: ...
+"#,
+);

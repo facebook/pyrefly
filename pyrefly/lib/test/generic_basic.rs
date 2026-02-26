@@ -105,7 +105,7 @@ assert_type(classmethod[Any], type[classmethod[Any, ..., Any]])  # E: Expected 3
 # No error if it's a TypeVarTuple w/ nothing after, because a TypeVarTuple can be empty
 class C2[T, *Ts]: pass
 C2_Alias = C2[int]
-assert_type(C2[int], type[C2[int, *tuple[Any, ...]]])
+assert_type(C2[int], type[C2[int, *tuple[()]]])
 "#,
 );
 

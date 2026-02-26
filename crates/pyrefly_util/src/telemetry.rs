@@ -31,6 +31,7 @@ impl Telemetry for NoTelemetry {
 pub enum TelemetryEventKind {
     LspEvent(String),
     CodeAction(String),
+    AdHocSolve(String),
     SetMemory,
     InvalidateDisk,
     InvalidateFind,

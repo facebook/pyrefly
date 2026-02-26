@@ -721,7 +721,10 @@ def foo(b: bool):
                 ),
                 (
                     "9:3-9:6",
-                    unresolved_expression_callees(UnresolvedReason::UnsupportedFunctionTarget),
+                    regular_call_callees(vec![
+                        create_call_target("test.baz", TargetType::Function),
+                        create_call_target("test.bar", TargetType::Function),
+                    ]),
                 ),
             ],
         )]
@@ -1293,7 +1296,13 @@ def foo(c_or_d: C | D, c_or_e: C | E):
                 ),
                 (
                     "14:7-14:17",
-                    property_getter_callees(/* property_getters */ property_getters_c_or_e),
+                    ExpressionCallees::AttributeAccess(AttributeAccessCallees {
+                        if_called: CallCallees::empty(),
+                        property_setters: vec![],
+                        property_getters: property_getters_c_or_e,
+                        global_targets: vec![],
+                        is_attribute: true,
+                    }),
                 ),
             ],
         )]
@@ -2333,48 +2342,55 @@ def f(foo: Foo):
     g()
 "#,
     &|context: &ModuleContext| {
-        // TODO(T105570363): Resolve calls with mixed function and methods
-        let foo_bar = vec![
-            create_call_target("test.Foo.bar", TargetType::Function)
-                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
-                .with_receiver_class_for_test("test.Foo", context),
-        ];
-        let baz = vec![create_call_target("test.baz", TargetType::Function)];
-        let iter_targets = vec![
-            create_call_target("builtins.list.__iter__", TargetType::Function)
-                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
-                .with_receiver_class_for_test("builtins.list", context),
-        ];
-        let next_targets = vec![
-            create_call_target("typing.Iterator.__next__", TargetType::AllOverrides)
-                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
-                .with_receiver_class_for_test("typing.Iterator", context),
-        ];
         vec![(
             "test.f",
             vec![
                 (
                     "8:12-8:26|artificial-call|for-iter",
-                    regular_call_callees(iter_targets),
+                    regular_call_callees(vec![
+                        create_call_target("builtins.list.__iter__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.list", context),
+                    ]),
                 ),
                 (
                     "8:12-8:26|artificial-call|for-next",
-                    regular_call_callees(next_targets),
+                    regular_call_callees(vec![
+                        create_call_target("typing.Iterator.__next__", TargetType::AllOverrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("typing.Iterator", context),
+                    ]),
                 ),
                 (
                     "8:13-8:20",
-                    attribute_access_callable_callees(foo_bar.clone()),
+                    attribute_access_callable_callees(vec![
+                        create_call_target("test.Foo.bar", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("test.Foo", context),
+                    ]),
                 ),
-                ("8:22-8:25|identifier|baz", regular_identifier_callees(baz)),
+                (
+                    "8:22-8:25|identifier|baz",
+                    regular_identifier_callees(vec![create_call_target(
+                        "test.baz",
+                        TargetType::Function,
+                    )]),
+                ),
                 (
                     "9:5-9:8",
                     call_callees(
-                        /* call_targets */ foo_bar,
+                        /* call_targets */
+                        vec![
+                            create_call_target("test.Foo.bar", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                                .with_receiver_class_for_test("test.Foo", context),
+                            create_call_target("test.baz", TargetType::Function),
+                        ],
                         /* init_targets */ vec![],
                         /* new_targets */ vec![],
                         /* higher_order_parameters */ vec![],
                         /* unresolved */
-                        Unresolved::True(UnresolvedReason::Mixed),
+                        Unresolved::False,
                     ),
                 ),
             ],
@@ -2441,11 +2457,11 @@ def f():
                 (
                     "8:5-8:8",
                     ExpressionCallees::Call(CallCallees {
-                        call_targets: vec![],
+                        call_targets: vec![create_call_target("test.bar", TargetType::Function)],
                         init_targets,
                         new_targets,
                         higher_order_parameters: HashMap::new(),
-                        unresolved: Unresolved::True(UnresolvedReason::Mixed),
+                        unresolved: Unresolved::False,
                     }),
                 ),
             ],
@@ -7264,6 +7280,24 @@ def foo(data: str):
     ET.fromstring(data)
 "#,
     &|context: &ModuleContext| {
+        // `fromstring` is an alias for `XML` in xml.etree.ElementTree.
+        // Resolves to the `XML` function via FuncDefIndex.
+        let xml_target = CallTarget {
+            target: Target::Function(FunctionRefForTest {
+                module_name: "xml.etree.ElementTree".to_owned(),
+                defining_class: None,
+                identifier: "XML".to_owned(),
+                is_decorated_target: false,
+                is_property_setter: false,
+                is_class_toplevel: None,
+            }),
+            implicit_receiver: ImplicitReceiver::False,
+            implicit_dunder_call: false,
+            receiver_class: None,
+            is_class_method: false,
+            is_static_method: false,
+            return_type: ScalarTypeProperties::none(),
+        };
         vec![(
             "test.foo",
             vec![
@@ -7271,13 +7305,11 @@ def foo(data: str):
                     "5:5-5:18",
                     ExpressionCallees::AttributeAccess(AttributeAccessCallees {
                         if_called: CallCallees {
-                            call_targets: vec![],
+                            call_targets: vec![xml_target.clone()],
                             init_targets: vec![],
                             new_targets: vec![],
                             higher_order_parameters: HashMap::new(),
-                            unresolved: Unresolved::True(
-                                UnresolvedReason::UnsupportedFunctionTarget,
-                            ),
+                            unresolved: Unresolved::False,
                         },
                         property_setters: vec![],
                         property_getters: vec![],
@@ -7289,11 +7321,52 @@ def foo(data: str):
                         is_attribute: true,
                     }),
                 ),
+                ("5:5-5:24", regular_call_callees(vec![xml_target])),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_attribute_callable,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Optional
+import weakref
+
+class A:
+    def __init__(self, x: Optional[weakref.ReferenceType[str]]):
+        self.x: Optional[weakref.ReferenceType[str]] = x
+"#,
+    &|context: &ModuleContext| {
+        let weakref_call_target = vec![
+            create_call_target("weakref.ReferenceType.__call__", TargetType::AllOverrides)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_implicit_dunder_call(true)
+                .with_receiver_class_for_test("weakref.ReferenceType", context),
+        ];
+        vec![(
+            "test.A.__init__",
+            vec![
                 (
-                    "5:5-5:24",
-                    // TODO(T225700656): Support aliases
-                    // fromstring is defined as an alias, `fromstring = XML` in the source.
-                    unresolved_expression_callees(UnresolvedReason::UnsupportedFunctionTarget),
+                    "7:9-7:15",
+                    ExpressionCallees::AttributeAccess(AttributeAccessCallees {
+                        if_called: CallCallees {
+                            call_targets: weakref_call_target.clone(),
+                            init_targets: vec![],
+                            new_targets: vec![],
+                            higher_order_parameters: HashMap::new(),
+                            unresolved: Unresolved::False,
+                        },
+                        property_setters: vec![],
+                        property_getters: vec![],
+                        global_targets: vec![],
+                        is_attribute: true,
+                    }),
+                ),
+                (
+                    "7:56-7:57|identifier|x",
+                    regular_identifier_callees(weakref_call_target),
                 ),
             ],
         )]

@@ -373,19 +373,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let paramspec_arg_idx = self.peek_next_paramspec_arg(targ_idx, &targs);
                         let nparams_for_tvt = paramspec_param_idx.unwrap_or(nparams);
                         let nargs_for_tvt = paramspec_arg_idx.unwrap_or(nargs);
-                        let args_to_consume = self.num_typevartuple_args_to_consume(
+                        let mut args_to_consume = self.num_typevartuple_args_to_consume(
                             param_idx,
                             nparams_for_tvt,
                             targ_idx,
                             nargs_for_tvt,
                         );
+                        // An unbounded tuple unpack provides an infinite supply, so the
+                        // TypeVarTuple should always absorb it even when the arithmetic
+                        // says zero args remain.
+                        if args_to_consume == 0
+                            && matches!(arg, Type::Unpack(box Type::Tuple(Tuple::Unbounded(_))))
+                        {
+                            args_to_consume = 1;
+                        }
                         let new_targ_idx = targ_idx + args_to_consume;
                         checked_targs.push(self.create_next_typevartuple_arg(
                             &targs[targ_idx..new_targ_idx],
                             range,
                             errors,
                         ));
-                        targ_idx = new_targ_idx;
+                        // If the last consumed arg is an unbounded tuple unpack and we've
+                        // reached the end of args, roll back so subsequent TypeVar params
+                        // can still draw from it.
+                        if new_targ_idx == nargs
+                            && matches!(
+                                targs.get(new_targ_idx - 1),
+                                Some(Type::Unpack(box Type::Tuple(Tuple::Unbounded(_))))
+                            )
+                        {
+                            targ_idx = new_targ_idx - 1;
+                        } else {
+                            targ_idx = new_targ_idx;
+                        }
                     }
                     QuantifiedKind::ParamSpec if nparams == 1 && !arg.is_kind_param_spec() => {
                         // If the only type param is a ParamSpec and the type argument
@@ -406,7 +426,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             validate_restriction,
                             errors,
                         ));
-                        targ_idx += 1;
+                        // An unbounded tuple unpack at the trailing position provides
+                        // an infinite supply of its element type. Don't advance past it
+                        // so subsequent TypeVar params can also consume it.
+                        if !(targ_idx == nargs - 1
+                            && matches!(arg, Type::Unpack(box Type::Tuple(Tuple::Unbounded(_)))))
+                        {
+                            targ_idx += 1;
+                        }
                     }
                 }
             } else {
@@ -425,7 +452,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             name_to_idx.insert(param.name(), param_idx);
         }
-        if targ_idx < nargs {
+        // Remaining args that are unbounded tuple unpacks were intentionally not
+        // consumed — they provide an infinite supply and don't indicate "too many args".
+        if targ_idx < nargs
+            && !targs[targ_idx..]
+                .iter()
+                .all(|arg| matches!(arg, Type::Unpack(box Type::Tuple(Tuple::Unbounded(_)))))
+        {
             self.error(
                 errors,
                 range,
@@ -598,6 +631,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         match arg {
+            // An unbounded tuple unpack provides an infinite supply of its element type,
+            // so a TypeVar can consume it by extracting the element type.
+            Type::Unpack(box Type::Tuple(Tuple::Unbounded(elt))) => (**elt).clone(),
             Type::Unpack(_) => self.error(
                 errors,
                 range,
@@ -717,7 +753,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tparams
             .iter()
             .skip(param_idx)
-            .map(|x| self.get_tparam_default(x, checked_targs, name_to_idx))
+            .map(|x| {
+                // A TypeVarTuple with no remaining args captures zero types when
+                // the specialization is otherwise valid. In error recovery (not
+                // enough args for non-defaulted params), keep the gradual type
+                // to avoid cascading errors.
+                if all_remaining_params_can_be_empty && x.is_type_var_tuple() {
+                    self.heap.mk_concrete_tuple(Vec::new())
+                } else {
+                    self.get_tparam_default(x, checked_targs, name_to_idx)
+                }
+            })
             .collect()
     }
 }

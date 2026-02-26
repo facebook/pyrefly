@@ -159,13 +159,11 @@ impl AtomicStep {
 
 /// For each step:
 ///   1. Gets inputs from `StepsMut` fields via `load_full().unwrap()`
-///   2. Saves old data from the output slot into `$old`
-///   3. Calls `Step::step_$output(ctx, inputs...)`
-///   4. Stores the result via ArcSwap
+///   2. Calls `Step::step_$output(ctx, inputs...)`
+///   3. Stores the result via ArcSwap
 macro_rules! compute_step {
-    ($steps:ident, $old:ident, $ctx:ident, $output:ident = $($input:ident),* $(,)?) => {{
+    ($steps:ident, $ctx:ident, $output:ident = $($input:ident),* $(,)?) => {{
         $(let $input = $steps.$input.load_full().unwrap();)*
-        $old.$output = $steps.$output.load_full();
         let res = paste! { Step::[<step_ $output>] }($ctx, $($input,)*);
         $steps.$output.store(Some(res));
     }};
@@ -188,6 +186,13 @@ pub struct StepsMut {
     pub exports: ArcSwapOption<Exports>,
     pub answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
     pub solutions: ArcSwapOption<Solutions>,
+    // Pre-rebuild data for diffing at the Solutions step.
+    // Populated by `reset_for_rebuild()`, consumed by `ComputeGuard::take_old_*()`.
+    // May remain unconsumed for modules that never reach Solutions (e.g.,
+    // require=Exports); cleared by `take_and_freeze()` at commit time.
+    pub old_exports: ArcSwapOption<Exports>,
+    pub old_answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
+    pub old_solutions: ArcSwapOption<Solutions>,
 }
 
 impl StepsMut {
@@ -200,6 +205,9 @@ impl StepsMut {
             exports: ArcSwapOption::new(steps.exports.dupe()),
             answers: ArcSwapOption::new(steps.answers.dupe()),
             solutions: ArcSwapOption::new(steps.solutions.dupe()),
+            old_exports: ArcSwapOption::empty(),
+            old_answers: ArcSwapOption::empty(),
+            old_solutions: ArcSwapOption::empty(),
         }
     }
 
@@ -212,6 +220,9 @@ impl StepsMut {
             exports: ArcSwapOption::empty(),
             answers: ArcSwapOption::empty(),
             solutions: ArcSwapOption::empty(),
+            old_exports: ArcSwapOption::empty(),
+            old_answers: ArcSwapOption::empty(),
+            old_solutions: ArcSwapOption::empty(),
         }
     }
 
@@ -226,6 +237,9 @@ impl StepsMut {
             exports: ArcSwapOption::empty(),
             answers: ArcSwapOption::empty(),
             solutions: ArcSwapOption::empty(),
+            old_exports: ArcSwapOption::empty(),
+            old_answers: ArcSwapOption::empty(),
+            old_solutions: ArcSwapOption::empty(),
         }
     }
 
@@ -244,33 +258,31 @@ impl StepsMut {
             .map_or(0, |load| load.module_info.line_count())
     }
 
-    /// Compute a step, writing the old data for the computed step into `old`.
+    /// Compute a step.
     ///
     /// This method:
     /// 1. Reads inputs from slots (via ArcSwap)
-    /// 2. Saves the old value of the output slot into `old`
-    /// 3. Calls the appropriate `Step::step_*` function
-    /// 4. Stores the result via ArcSwap
-    /// 5. Release-stores `current_step`
-    pub fn compute<Lookup: LookupExport + LookupAnswer>(
-        &self,
-        step: Step,
-        old: &mut Steps,
-        ctx: &Context<Lookup>,
-    ) {
+    /// 2. Calls the appropriate `Step::step_*` function
+    /// 3. Stores the result via ArcSwap
+    /// 4. Release-stores `current_step`
+    ///
+    /// Old data for diffing is stored in `old_*` fields by `reset_for_rebuild()`,
+    /// not captured here.
+    pub fn compute<Lookup: LookupExport + LookupAnswer>(&self, step: Step, ctx: &Context<Lookup>) {
         match step {
-            Step::Load => compute_step!(self, old, ctx, load =),
-            Step::Ast => compute_step!(self, old, ctx, ast = load),
-            Step::Exports => compute_step!(self, old, ctx, exports = load, ast),
-            Step::Answers => compute_step!(self, old, ctx, answers = load, ast, exports),
-            Step::Solutions => compute_step!(self, old, ctx, solutions = load, answers),
+            Step::Load => compute_step!(self, ctx, load =),
+            Step::Ast => compute_step!(self, ctx, ast = load),
+            Step::Exports => compute_step!(self, ctx, exports = load, ast),
+            Step::Answers => compute_step!(self, ctx, answers = load, ast, exports),
+            Step::Solutions => compute_step!(self, ctx, solutions = load, answers),
         }
         // Release-store current_step: readers seeing this value are guaranteed
         // to see the step data stored above.
         self.current_step.store_completed(step);
     }
 
-    /// Reset steps for recomputation. Optionally clears AST, always clears answers.
+    /// Reset steps for recomputation. Optionally clears AST, always clears
+    /// exports/answers/solutions (saving them into `old_*` for later diffing).
     /// Uses relaxed ordering — caller is responsible for a subsequent release-store
     /// on another variable (e.g. `checked` epoch) to make these writes visible.
     pub fn reset_for_rebuild(&self, clear_ast: bool) {
@@ -290,8 +302,10 @@ impl StepsMut {
             Some(Step::Ast)
         };
 
-        // Do not clear solutions or exports, since we use them for equality comparison.
-        self.answers.store(None);
+        // Take and clear exports/answers/solutions, saving for diffing at Solutions step.
+        self.old_exports.store(self.exports.swap(None));
+        self.old_answers.store(self.answers.swap(None));
+        self.old_solutions.store(self.solutions.swap(None));
 
         // Relaxed is fine here because the caller will release-store on `checked`,
         // which synchronizes all these writes with readers.
@@ -301,6 +315,9 @@ impl StepsMut {
     /// Drain all step data into a frozen `Steps`. The `StepsMut` should not be
     /// reused after this call (it becomes empty).
     pub fn take_and_freeze(&self) -> Steps {
+        // Drop any unconsumed old data (modules that never reached Solutions).
+        self.clear_old_data();
+
         let last_step = self.current_step.load();
         let load = self.load.swap(None);
         let ast = self.ast.swap(None);
@@ -315,6 +332,13 @@ impl StepsMut {
             answers,
             solutions,
         }
+    }
+
+    /// Drop any unconsumed old data.
+    pub fn clear_old_data(&self) {
+        self.old_exports.swap(None);
+        self.old_answers.swap(None);
+        self.old_solutions.swap(None);
     }
 }
 
