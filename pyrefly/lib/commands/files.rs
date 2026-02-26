@@ -45,7 +45,7 @@ pub struct FilesArgs {
     #[arg(long)]
     project_excludes: Option<Vec<String>>,
 
-    /// Explicitly set the Pyrefly configuration to use when type checking or starting a language server.
+    /// Explicitly set the Pyrefly configuration to use when type checking.
     /// In "single-file checking mode," this config is applied to all files being checked, ignoring
     /// the config's `project_includes` and `project_excludes` and ignoring any config-finding approach
     /// that would otherwise be used.

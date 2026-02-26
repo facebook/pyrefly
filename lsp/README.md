@@ -38,6 +38,9 @@ settings:
   but not find-references.
 - `pyrefly.lspPath` [string: '']: if your platform is not supported, you can
   build pyrefly from source and specify the binary here.
+- `pyrefly.configPath` [string: '']: path to a `pyrefly.toml` or
+  `pyproject.toml` configuration file. When set, the LSP will use this config
+  for all files instead of an upward-filesystem-walk discovery approach.
 - `python.analysis.showHoverGoToLinks` [boolean: true]: Controls whether hover
   tooltips include "Go to definition" and "Go to type definition" navigation
   links. Set to `false` for cleaner tooltips with only type information.
