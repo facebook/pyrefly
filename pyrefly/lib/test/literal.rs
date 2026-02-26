@@ -232,6 +232,48 @@ assert_type(x, list[LiteralString])
 );
 
 testcase!(
+    test_promote_literal_in_dict_comprehension,
+    r#"
+from typing import assert_type
+from string import ascii_uppercase
+
+# LiteralString from iterator should be promoted to str in comprehensions
+letter_to_index = {char: i for i, char in enumerate(ascii_uppercase)}
+assert_type(letter_to_index, dict[str, int])
+
+def encode(message: str) -> list[int]:
+    result = []
+    for letter in message:
+        result.append(letter_to_index[letter])
+    return result
+"#,
+);
+
+testcase!(
+    test_promote_literal_in_list_comprehension,
+    r#"
+from typing import assert_type
+from string import ascii_lowercase
+
+# LiteralString from iterator should be promoted to str in comprehensions
+chars = [c for c in ascii_lowercase]
+assert_type(chars, list[str])
+"#,
+);
+
+testcase!(
+    test_promote_literal_in_set_comprehension,
+    r#"
+from typing import assert_type
+from string import ascii_lowercase
+
+# LiteralString from iterator should be promoted to str in comprehensions
+chars = {c for c in ascii_lowercase}
+assert_type(chars, set[str])
+"#,
+);
+
+testcase!(
     test_literal_string_format,
     r#"
 from typing import assert_type, LiteralString

@@ -1443,6 +1443,23 @@ impl Type {
         self
     }
 
+    /// Promote all literals (both implicit and explicit) to their base types.
+    /// This is used for comprehension element inference, where we don't want to
+    /// preserve `LiteralString` or `Literal[...]` types even if they came from
+    /// explicit type annotations.
+    pub fn promote_all_literals(mut self, stdlib: &Stdlib) -> Type {
+        fn g(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
+            ty.recurse_mut(&mut |ty| g(ty, f));
+            f(ty);
+        }
+        g(&mut self, &mut |ty| match &ty {
+            Type::Literal(lit) => *ty = lit.value.general_class_type(stdlib).clone().to_type(),
+            Type::LiteralString(_) => *ty = stdlib.str().clone().to_type(),
+            _ => {}
+        });
+        self
+    }
+
     // Attempt at a function that will convert @ to Any for now.
     pub fn clean_var(self) -> Type {
         self.transform(&mut |ty| match &ty {
