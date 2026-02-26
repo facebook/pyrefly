@@ -533,7 +533,7 @@ class B(A):
         return "a"
 
 def f(a: B, b: A) -> None:
-    a += b  # E: Augmented assignment produces a value of type `int | str`, which is not assignable to `B`
+    a += b  # E: Augmented assignment result `int | str` is not assignable to `B`
     "#,
 );
 

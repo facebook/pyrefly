@@ -362,21 +362,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let reflected_ret = self.binop_call_type(rhs, &reflected_name, lhs, range);
                 let extra = match (forward_ret, reflected_ret) {
                     (Some(f), Some(r)) => {
-                        if self.is_equal(&f, &r) && self.is_equal(&result, &f) {
+                        if self.is_equivalent(&f, &r) && self.is_equivalent(&result, &f) {
                             None
                         } else {
                             Some(self.union(f, r))
                         }
                     }
                     (Some(f), None) => {
-                        if self.is_equal(&result, &f) {
+                        if self.is_equivalent(&result, &f) {
                             None
                         } else {
                             Some(f)
                         }
                     }
                     (None, Some(r)) => {
-                        if self.is_equal(&result, &r) {
+                        if self.is_equivalent(&result, &r) {
                             None
                         } else {
                             Some(r)
@@ -567,7 +567,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if !union_parts.is_empty() {
                 let extra = self.unions(union_parts);
-                if !self.is_equal(&result, &extra) {
+                if !self.is_equivalent(&result, &extra) {
                     result = self.union(result, extra);
                 }
             }
