@@ -123,7 +123,7 @@ pub struct InitializeSettings {
 }
 
 pub struct ClientRequestHandle<'a, R: lsp_types::request::Request> {
-    id: RequestId,
+    pub(crate) id: RequestId,
     client: &'a TestClient,
     _type: PhantomData<R>,
 }
@@ -727,7 +727,7 @@ impl TestClient {
     pub fn expect_message<T>(
         &self,
         description: &str,
-        matcher: impl Fn(Message) -> Option<Result<T, LspMessageError>>,
+        mut matcher: impl FnMut(Message) -> Option<Result<T, LspMessageError>>,
     ) -> Result<T, LspMessageError> {
         loop {
             match self.recv_timeout() {

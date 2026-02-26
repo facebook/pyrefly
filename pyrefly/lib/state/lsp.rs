@@ -549,6 +549,15 @@ impl PartialOrd for QuickfixAction {
 }
 
 impl<'a> Transaction<'a> {
+    fn allows_explicit_reexport(handle: &Handle) -> bool {
+        matches!(
+            handle.path().details(),
+            ModulePathDetails::FileSystem(_)
+                | ModulePathDetails::Namespace(_)
+                | ModulePathDetails::Memory(_)
+        )
+    }
+
     pub fn get_type(&self, handle: &Handle, key: &Key) -> Option<Type> {
         let idx = self.get_bindings(handle)?.key_to_idx(key);
         let answers = self.get_answers(handle)?;
@@ -953,9 +962,11 @@ impl<'a> Transaction<'a> {
             return ty;
         }
         let original = ty.clone();
-        self.ad_hoc_solve(handle, |solver| Self::callable_from_type(&solver, ty))
-            .and_then(|callable| callable)
-            .unwrap_or(original)
+        self.ad_hoc_solve(handle, "coerce_callable", |solver| {
+            Self::callable_from_type(&solver, ty)
+        })
+        .and_then(|callable| callable)
+        .unwrap_or(original)
     }
 
     /// Extract a callable type from `ty` by invoking the solver to find its `__call__` method.
@@ -1357,7 +1368,7 @@ impl<'a> Transaction<'a> {
         base_type: Type,
         name: &Name,
     ) -> Vec<FindDefinitionItemWithDocstring> {
-        self.ad_hoc_solve(handle, |solver| {
+        self.ad_hoc_solve(handle, "attribute_definition", |solver| {
             let completions = |ty| solver.completions(ty, Some(name), false);
 
             match base_type {
@@ -1496,7 +1507,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn find_definition_for_imported_module(
+    pub(crate) fn find_definition_for_imported_module(
         &self,
         handle: &Handle,
         module_name: ModuleName,
@@ -2011,6 +2022,8 @@ impl<'a> Transaction<'a> {
                         }
 
                         if let Some(mut actions) = quick_fixes::generate_code::generate_code_actions(
+                            self,
+                            handle,
                             &module_info,
                             ast.as_ref(),
                             error_range,
@@ -2455,7 +2468,12 @@ impl<'a> Transaction<'a> {
         Some(identifier_context?.identifier.range)
     }
 
-    pub fn find_local_references(&self, handle: &Handle, position: TextSize) -> Vec<TextRange> {
+    pub fn find_local_references(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        include_declaration: bool,
+    ) -> Vec<TextRange> {
         self.find_definition(
             handle,
             position,
@@ -2473,7 +2491,13 @@ impl<'a> Transaction<'a> {
                  docstring_range: _,
                  ..
              }| {
-                self.local_references_from_definition(handle, metadata, definition_range, &module)
+                self.local_references_from_definition(
+                    handle,
+                    metadata,
+                    definition_range,
+                    &module,
+                    include_declaration,
+                )
             },
         )
         .concat()
@@ -2524,6 +2548,7 @@ impl<'a> Transaction<'a> {
         definition_metadata: DefinitionMetadata,
         definition_name: &Name,
         definition_range: TextRange,
+        include_declaration: bool,
     ) -> Option<Vec<TextRange>> {
         let mut references = match definition_metadata {
             DefinitionMetadata::Attribute => self.local_attribute_references_from_local_definition(
@@ -2556,7 +2581,9 @@ impl<'a> Transaction<'a> {
             ]
             .concat(),
         };
-        references.push(definition_range);
+        if include_declaration {
+            references.push(definition_range);
+        }
         Some(references)
     }
 
@@ -2566,6 +2593,7 @@ impl<'a> Transaction<'a> {
         definition_metadata: DefinitionMetadata,
         definition_range: TextRange,
         module: &Module,
+        include_declaration: bool,
     ) -> Option<Vec<TextRange>> {
         let mut references = if handle.path() != module.path() {
             self.local_references_from_external_definition(handle, definition_range, module)?
@@ -2576,6 +2604,7 @@ impl<'a> Transaction<'a> {
                 definition_metadata,
                 &definition_name,
                 definition_range,
+                include_declaration,
             )?
         };
         references.sort_by_key(|range| range.start());
@@ -2608,7 +2637,7 @@ impl<'a> Transaction<'a> {
         };
         // For each attribute we found above, we will test whether it actually will jump to the
         // given `definition`.
-        self.ad_hoc_solve(handle, |solver| {
+        self.ad_hoc_solve(handle, "attribute_references", |solver| {
             let mut references = Vec::new();
             for attribute in relevant_attributes {
                 if let Some(answers) = self.get_answers(handle)
@@ -2982,7 +3011,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn search_exports_exact(&self, name: &str) -> Vec<(Handle, Export)> {
-        self.search_exports(|handle, exports| {
+        self.search_exports(|handle, exports_data, exports| {
             let name = Name::new(name);
             match exports.get(&name) {
                 Some(location) => {
@@ -2991,7 +3020,9 @@ impl<'a> Transaction<'a> {
                     {
                         let mut results = vec![(canonical_handle.dupe(), export.clone())];
                         if canonical_handle != *handle
-                            && Self::should_include_reexport(handle, &canonical_handle)
+                            && (Self::should_include_reexport(handle, &canonical_handle)
+                                || (exports_data.is_explicit_reexport(&name)
+                                    && Self::allows_explicit_reexport(handle)))
                         {
                             results.push((handle.dupe(), export));
                         }
@@ -3006,7 +3037,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn search_exports_fuzzy(&self, pattern: &str) -> Vec<(Handle, String, Export)> {
-        let mut res = self.search_exports(|handle, exports| {
+        let mut res = self.search_exports(|handle, exports_data, exports| {
             let matcher = SkimMatcherV2::default().smart_case();
             let mut results = Vec::new();
             for (name, location) in exports.iter() {
@@ -3022,7 +3053,9 @@ impl<'a> Transaction<'a> {
                         export.clone(),
                     ));
                     if canonical_handle != *handle
-                        && Self::should_include_reexport(handle, &canonical_handle)
+                        && (Self::should_include_reexport(handle, &canonical_handle)
+                            || (exports_data.is_explicit_reexport(name)
+                                && Self::allows_explicit_reexport(handle)))
                     {
                         results.push((score, handle.dupe(), name_str.to_owned(), export));
                     }
@@ -3211,6 +3244,7 @@ impl<'a> CancellableTransaction<'a> {
         sys_info: &SysInfo,
         definition_kind: DefinitionMetadata,
         definition: TextRangeWithModule,
+        include_declaration: bool,
     ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
         let results = self.process_rdeps_with_definition(
             sys_info,
@@ -3226,6 +3260,7 @@ impl<'a> CancellableTransaction<'a> {
                         definition_kind.clone(),
                         patched_definition.range,
                         &patched_definition.module,
+                        include_declaration,
                     )
                     .unwrap_or_default();
                 if !references.is_empty()

@@ -16,7 +16,7 @@ use crate::test::util::get_batched_lsp_operations_report;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let transaction = state.transaction();
-    let ranges = transaction.find_local_references(handle, position);
+    let ranges = transaction.find_local_references(handle, position, true);
     let module_info = transaction.get_module_info(handle).unwrap();
     format!(
         "Rename locations:\n{}",

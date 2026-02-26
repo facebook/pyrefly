@@ -6,50 +6,53 @@
  */
 
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
 use dupe::Dupe;
+use pyrefly_build::handle::Handle;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::class::ClassDefIndex;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::includes::Includes;
 use regex::Regex;
 use ruff_python_ast::Parameters;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use serde::Serialize;
+use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::Answers;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
+use crate::binding::binding::BindingExport;
 use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMro;
+use crate::binding::binding::KeyExport;
 use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::Bindings;
 use crate::commands::check::Handles;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
+use crate::export::exports::ExportLocation;
 use crate::state::require::Require;
 use crate::state::state::State;
 
-/// Location information for code elements
+/// Location of a code element (start of its declaration)
 #[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 struct Location {
-    start: Position,
-    end: Position,
-}
-
-/// Position with line and column
-#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-struct Position {
     line: usize,
     column: usize,
 }
@@ -94,9 +97,18 @@ struct ReportClass {
     location: Location,
 }
 
+/// A top-level exported variable.
+#[derive(Debug, Serialize)]
+struct Variable {
+    name: String,
+    annotation: Option<String>,
+    location: Location,
+}
+
 /// File report
 #[derive(Debug, Serialize)]
 struct FileReport {
+    variables: Vec<Variable>,
     line_count: usize,
     functions: Vec<Function>,
     classes: Vec<ReportClass>,
@@ -114,13 +126,18 @@ pub struct ReportArgs {
     /// Configuration override options
     #[command(flatten)]
     config_override: ConfigOverrideArgs,
+
+    /// When enabled, `.py` files are skipped if a corresponding `.pyi`
+    /// file is also present in the set of files to check.
+    #[clap(long, default_value_t = true, action = clap::ArgAction::Set)]
+    prefer_stubs: bool,
 }
 
 impl ReportArgs {
     pub fn run(self) -> anyhow::Result<CommandExitStatus> {
         self.config_override.validate()?;
         let (files_to_check, config_finder) = self.files.resolve(self.config_override)?;
-        Self::run_inner(files_to_check, config_finder)
+        Self::run_inner(files_to_check, config_finder, self.prefer_stubs)
     }
 
     /// Helper to extract all parameters from Parameters struct
@@ -138,24 +155,11 @@ impl ReportArgs {
         all_params
     }
 
-    /// Helper to convert byte offset to line and column position
-    fn offset_to_position(module: &Module, offset: ruff_text_size::TextSize) -> Position {
-        let location = module.lined_buffer().line_index().source_location(
-            offset,
-            module.lined_buffer().contents(),
-            ruff_source_file::PositionEncoding::Utf8,
-        );
-        Position {
-            line: location.line.get(),
-            column: location.character_offset.get(),
-        }
-    }
-
-    /// Helper to convert a text range to a Location
     fn range_to_location(module: &Module, range: TextRange) -> Location {
+        let pos = module.lined_buffer().display_pos(range.start(), None);
         Location {
-            start: Self::offset_to_position(module, range.start()),
-            end: Self::offset_to_position(module, range.end()),
+            line: pos.line_within_file().get() as usize,
+            column: pos.column().get() as usize,
         }
     }
 
@@ -183,20 +187,13 @@ impl ReportArgs {
                 if let Some(comment_start) = line.find('#') {
                     let line_number = line_idx + 1; // 1-indexed
                     let start_col = comment_start + 1; // 1-indexed column
-                    let end_col = line.len();
 
                     suppressions.push(Suppression {
                         kind: "ignore".to_owned(),
                         codes,
                         location: Location {
-                            start: Position {
-                                line: line_number,
-                                column: start_col,
-                            },
-                            end: Position {
-                                line: line_number,
-                                column: end_col,
-                            },
+                            line: line_number,
+                            column: start_col,
                         },
                     });
                 }
@@ -206,7 +203,90 @@ impl ReportArgs {
         suppressions
     }
 
-    fn parse_functions(module: &Module, bindings: Bindings) -> Vec<Function> {
+    /// Check if any ancestor in a `NestingContext` chain is a function.
+    fn has_function_ancestor(parent: &NestingContext) -> bool {
+        let mut current = parent;
+        loop {
+            if current.is_function() {
+                return true;
+            }
+            match current.parent() {
+                Some(p) => current = p,
+                None => return false,
+            }
+        }
+    }
+
+    fn parse_variables(
+        module: &Module,
+        bindings: &Bindings,
+        exports: &SmallMap<Name, ExportLocation>,
+        functions: &[Function],
+        classes: &[ReportClass],
+    ) -> Vec<Variable> {
+        let module_prefix = if module.name() != ModuleName::unknown() {
+            format!("{}.", module.name())
+        } else {
+            String::new()
+        };
+        // Collect names already reported as functions or classes so we can skip them.
+        let reported_names: HashSet<&str> = functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .chain(classes.iter().map(|c| c.name.as_str()))
+            .collect();
+
+        let mut variables = Vec::new();
+        for idx in bindings.keys::<KeyExport>() {
+            let KeyExport(name) = bindings.idx_to_key(idx);
+            let qualified_name = format!("{module_prefix}{name}");
+            if reported_names.contains(qualified_name.as_str()) {
+                continue;
+            }
+            let BindingExport(binding) = bindings.get(idx);
+            let location = match exports.get(name) {
+                Some(ExportLocation::ThisModule(export)) => {
+                    Self::range_to_location(module, export.location)
+                }
+                _ => continue,
+            };
+            match binding {
+                Binding::AnnotatedType(annot_idx, _inner) => {
+                    let annotation_text = match bindings.get(*annot_idx) {
+                        BindingAnnotation::AnnotateExpr(_, expr, _) => {
+                            Some(module.code_at(expr.range()).to_owned())
+                        }
+                        _ => None,
+                    };
+                    variables.push(Variable {
+                        name: qualified_name,
+                        annotation: annotation_text,
+                        location,
+                    });
+                }
+                Binding::Forward(idx) => match bindings.get(*idx) {
+                    // Skip injected implicit globals
+                    Binding::Global(_) => {}
+                    _ => {
+                        variables.push(Variable {
+                            name: qualified_name,
+                            annotation: None,
+                            location,
+                        });
+                    }
+                },
+                _ => {}
+            }
+        }
+        variables.sort_by(|a, b| a.location.cmp(&b.location));
+        variables
+    }
+
+    fn parse_functions(
+        module: &Module,
+        bindings: Bindings,
+        exports: &SmallMap<Name, ExportLocation>,
+    ) -> Vec<Function> {
         let mut functions = Vec::new();
         let module_prefix = if module.name() != ModuleName::unknown() {
             format!("{}.", module.name())
@@ -223,6 +303,10 @@ impl ReportArgs {
                 let func_name = if let Some(class_key) = fun.class_key {
                     match bindings.get(class_key) {
                         BindingClass::ClassDef(cls) => {
+                            // Skip methods of classes nested inside functions
+                            if Self::has_function_ancestor(&cls.parent) {
+                                continue;
+                            }
                             // Build full qualified name using nesting context
                             let parent_path = module.display(&cls.parent).to_string();
                             if parent_path.is_empty() {
@@ -239,6 +323,11 @@ impl ReportArgs {
                         }
                     }
                 } else {
+                    // Skip functions not present in the module's exports
+                    // (e.g. functions nested inside other functions).
+                    if !exports.contains_key(&fun.def.name.id) {
+                        continue;
+                    }
                     format!("{}{}", module_prefix, fun.def.name)
                 };
                 // Get return annotation from ReturnTypeKind
@@ -340,6 +429,10 @@ impl ReportArgs {
                 BindingClass::ClassDef(cls) => cls,
                 BindingClass::FunctionalClassDef(..) => continue,
             };
+            // Skip classes nested inside functions, since they are not public symbols.
+            if Self::has_function_ancestor(&cls_binding.parent) {
+                continue;
+            }
             let class_type = match answers.get_idx(class_idx) {
                 Some(result) => match &result.0 {
                     Some(cls) => cls.clone(),
@@ -439,9 +532,20 @@ impl ReportArgs {
         classes
     }
 
+    /// Returns the set of `.py` paths that should be skipped because a
+    /// corresponding `.pyi` file also appears in `handles`.
+    fn py_paths_shadowed_by_pyi(handles: &[Handle]) -> HashSet<PathBuf> {
+        handles
+            .iter()
+            .filter(|h| h.path().is_interface())
+            .map(|h| h.path().as_path().with_extension("py"))
+            .collect()
+    }
+
     fn run_inner(
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
+        prefer_stubs: bool,
     ) -> anyhow::Result<CommandExitStatus> {
         let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
         let state = State::new(config_finder);
@@ -464,19 +568,33 @@ impl ReportArgs {
 
         let mut report: HashMap<String, FileReport> = HashMap::new();
         transaction.run(handles.as_slice(), Require::Everything);
-        for handle in handles {
-            if let Some(bindings) = transaction.get_bindings(&handle)
-                && let Some(module) = transaction.get_module_info(&handle)
-                && let Some(answers) = transaction.get_answers(&handle)
+
+        let shadowed = if prefer_stubs {
+            Self::py_paths_shadowed_by_pyi(&handles)
+        } else {
+            HashSet::new()
+        };
+        for handle in &handles {
+            if shadowed.contains(handle.path().as_path()) {
+                continue;
+            }
+
+            if let Some(bindings) = transaction.get_bindings(handle)
+                && let Some(module) = transaction.get_module_info(handle)
+                && let Some(answers) = transaction.get_answers(handle)
             {
                 let line_count = module.lined_buffer().line_index().line_count();
-                let functions = Self::parse_functions(&module, bindings.dupe());
+                let exports = transaction.get_exports(handle);
+                let functions = Self::parse_functions(&module, bindings.dupe(), &exports);
                 let classes = Self::parse_classes(&module, bindings.dupe(), answers);
+                let variables =
+                    Self::parse_variables(&module, &bindings, &exports, &functions, &classes);
                 let suppressions = Self::parse_suppressions(&module);
 
                 report.insert(
                     handle.path().as_path().display().to_string(),
                     FileReport {
+                        variables,
                         line_count,
                         functions,
                         classes,
@@ -499,9 +617,12 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use dupe::Dupe;
+    use pyrefly_build::handle::Handle;
     use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
+    use pyrefly_python::sys_info::SysInfo;
 
     use super::*;
     use crate::state::require::Require;
@@ -531,12 +652,93 @@ z = 3  # pyrefly: ignore[code1, code2]
         // Suppression with single error code
         assert_eq!(suppressions[0].kind, "ignore");
         assert_eq!(suppressions[0].codes, vec!["error-code"]);
-        assert_eq!(suppressions[0].location.start.line, 2);
+        assert_eq!(suppressions[0].location.line, 2);
 
         // Suppression with multiple error codes
         assert_eq!(suppressions[1].kind, "ignore");
         assert_eq!(suppressions[1].codes, vec!["code1", "code2"]);
-        assert_eq!(suppressions[1].location.start.line, 4);
+        assert_eq!(suppressions[1].location.line, 4);
+    }
+
+    #[test]
+    fn test_parse_variables() {
+        let code = r#"
+from typing import Callable, TypeVar
+from typing import List as MyList
+
+T = TypeVar("T")
+x = 42
+y: Callable[[int], int] = lambda n: n
+z: str = "hello"
+
+def some_func() -> None:
+    pass
+
+class SomeClass:
+    my_field = 42
+"#;
+        let (state, handle_fn) = TestEnv::one("test", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("test");
+        let transaction = state.transaction();
+
+        let module = transaction.get_module_info(&handle).unwrap();
+        let bindings = transaction.get_bindings(&handle).unwrap();
+        let answers = transaction.get_answers(&handle).unwrap();
+        let exports = transaction.get_exports(&handle);
+
+        let functions = ReportArgs::parse_functions(&module, bindings.dupe(), &exports);
+        let classes = ReportArgs::parse_classes(&module, bindings.dupe(), answers);
+        let variables =
+            ReportArgs::parse_variables(&module, &bindings, &exports, &functions, &classes);
+        // T (line 5), x (line 6), y (line 7), z (line 8)
+        assert_eq!(variables.len(), 4, "should have 4 variables: T, x, y, z");
+
+        // T (TypeVar) on line 5
+        assert_eq!(variables[0].name, "test.T");
+        assert_eq!(variables[0].annotation, None);
+        assert_eq!(variables[0].location.line, 5, "T should be on line 5");
+
+        // x has no annotation on line 6
+        assert_eq!(variables[1].name, "test.x");
+        assert_eq!(variables[1].annotation, None);
+        assert_eq!(variables[1].location.line, 6, "x should be on line 6");
+
+        // y has a Callable[[int], int] annotation on line 7
+        assert_eq!(variables[2].name, "test.y");
+        assert_eq!(
+            variables[2].annotation,
+            Some("Callable[[int], int]".to_owned())
+        );
+        assert_eq!(variables[2].location.line, 7, "y should be on line 7");
+
+        // z has a str annotation on line 8
+        assert_eq!(variables[3].name, "test.z");
+        assert_eq!(variables[3].annotation, Some("str".to_owned()));
+        assert_eq!(variables[3].location.line, 8, "z should be on line 8");
+
+        // Functions and classes should NOT appear as variables
+        assert!(
+            !variables.iter().any(|v| v.name.contains("some_func")),
+            "functions should not be reported as variables"
+        );
+        assert!(
+            !variables.iter().any(|v| v.name.contains("SomeClass")),
+            "classes should not be reported as variables"
+        );
+        assert!(
+            !variables.iter().any(|v| v.name.contains("Callable")),
+            "we should not report re-exported symbols as variables"
+        );
+        assert!(
+            !variables.iter().any(|v| v.name.contains("MyList")),
+            "we should not report re-exported symbols as variables"
+        );
+        assert!(
+            !variables.iter().any(|v| v.name.contains("my_field")),
+            "we should not report class fields as variables"
+        );
     }
 
     #[test]
@@ -561,8 +763,9 @@ class C:
 
         let module = transaction.get_module_info(&handle).unwrap();
         let bindings = transaction.get_bindings(&handle).unwrap();
+        let exports = transaction.get_exports(&handle);
 
-        let functions = ReportArgs::parse_functions(&module, bindings);
+        let functions = ReportArgs::parse_functions(&module, bindings, &exports);
 
         assert_eq!(functions.len(), 4);
 
@@ -628,8 +831,9 @@ def foo():
         let handle = handle_fn("__unknown__");
         let transaction = state.transaction();
         let bindings = transaction.get_bindings(&handle).unwrap();
+        let exports = transaction.get_exports(&handle);
 
-        let functions = ReportArgs::parse_functions(&module, bindings);
+        let functions = ReportArgs::parse_functions(&module, bindings, &exports);
 
         assert_eq!(functions.len(), 1);
         assert_eq!(functions[0].name, "foo");
@@ -747,5 +951,168 @@ class Child(Base):
         assert_eq!(base.incomplete_attributes.len(), 1);
         assert_eq!(base.incomplete_attributes[0].name, "base_method");
         assert_eq!(base.incomplete_attributes[0].declared_in, "test.Base");
+    }
+
+    #[test]
+    fn test_parse_functions_excludes_nested_in_functions() {
+        let code = r#"
+def outer() -> None:
+    def inner() -> None:
+        pass
+    def inner2(x: int) -> str:
+        return str(x)
+
+def top_level(x: int) -> bool:
+    return True
+"#;
+        let (state, handle_fn) = TestEnv::one("test", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("test");
+        let transaction = state.transaction();
+
+        let module = transaction.get_module_info(&handle).unwrap();
+        let bindings = transaction.get_bindings(&handle).unwrap();
+        let exports = transaction.get_exports(&handle);
+
+        let functions = ReportArgs::parse_functions(&module, bindings, &exports);
+
+        // Only top-level functions should be reported; inner and inner2 are nested
+        // inside outer and are not public symbols.
+        let names: Vec<&str> = functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            names.contains(&"test.outer"),
+            "top-level function 'outer' should be reported, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"test.top_level"),
+            "top-level function 'top_level' should be reported, got: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("inner")),
+            "nested functions should not be reported, got: {names:?}"
+        );
+        assert_eq!(
+            functions.len(),
+            2,
+            "only 2 top-level functions expected, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_functions_excludes_methods_of_classes_nested_in_functions() {
+        let code = r#"
+def outer() -> None:
+    class LocalClass:
+        def method(self) -> None:
+            pass
+
+class TopLevel:
+    def method(self) -> None:
+        pass
+"#;
+        let (state, handle_fn) = TestEnv::one("test", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("test");
+        let transaction = state.transaction();
+
+        let module = transaction.get_module_info(&handle).unwrap();
+        let bindings = transaction.get_bindings(&handle).unwrap();
+        let exports = transaction.get_exports(&handle);
+
+        let functions = ReportArgs::parse_functions(&module, bindings, &exports);
+        // LocalClass.method is inside a function and is not a public symbol.
+        let names: Vec<&str> = functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            names.contains(&"test.outer"),
+            "top-level function 'outer' should be reported, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"test.TopLevel.method"),
+            "method of top-level class should be reported, got: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("LocalClass")),
+            "methods of classes nested in functions should not be reported, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_classes_excludes_nested_in_functions() {
+        let code = r#"
+def outer() -> None:
+    class LocalClass:
+        def method(self) -> None:
+            pass
+
+class TopLevel:
+    def method(self) -> None:
+        pass
+"#;
+        let (state, handle_fn) = TestEnv::one("test", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("test");
+        let transaction = state.transaction();
+
+        let module = transaction.get_module_info(&handle).unwrap();
+        let bindings = transaction.get_bindings(&handle).unwrap();
+        let answers = transaction.get_answers(&handle).unwrap();
+
+        let classes = ReportArgs::parse_classes(&module, bindings, answers);
+
+        // Only TopLevel should be reported; LocalClass is nested inside a function
+        // and is not a public symbol.
+        let names: Vec<&str> = classes.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            names.contains(&"test.TopLevel"),
+            "top-level class should be reported, got: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("LocalClass")),
+            "classes nested in functions should not be reported, got: {names:?}"
+        );
+        assert_eq!(
+            classes.len(),
+            1,
+            "only 1 top-level class expected, got: {names:?}"
+        );
+    }
+
+    /// When both test.py and test.pyi exist, the .py file is shadowed.
+    #[test]
+    fn test_pyi_shadows_py_in_report() {
+        let sys_info = SysInfo::default();
+        let py_handle = Handle::new(
+            ModuleName::from_str("test"),
+            ModulePath::memory(PathBuf::from("test.py")),
+            sys_info.dupe(),
+        );
+        let py_handle2 = Handle::new(
+            ModuleName::from_str("test2"),
+            ModulePath::memory(PathBuf::from("test2.py")),
+            sys_info.dupe(),
+        );
+        let pyi_handle = Handle::new(
+            ModuleName::from_str("test"),
+            ModulePath::memory(PathBuf::from("test.pyi")),
+            sys_info.dupe(),
+        );
+        let handles = vec![py_handle, py_handle2, pyi_handle];
+        let shadowed = ReportArgs::py_paths_shadowed_by_pyi(&handles);
+
+        assert!(
+            shadowed.contains(PathBuf::from("test.py").as_path()),
+            "test.py should be shadowed when test.pyi exists"
+        );
+        assert!(
+            !shadowed.contains(PathBuf::from("test.pyi").as_path()),
+            "test.pyi should not be shadowed"
+        );
+        assert!(
+            !shadowed.contains(PathBuf::from("test2.py").as_path()),
+            "test2.py should not be shadowed"
+        );
     }
 }

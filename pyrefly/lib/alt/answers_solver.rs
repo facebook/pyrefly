@@ -1465,7 +1465,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             // Cross-module: delegate to the LookupAnswer trait to route
             // the commit to the correct module's Answers.
-            self.answers.commit_to_module(calc_id, answer, errors);
+            assert!(
+                self.answers
+                    .commit_to_module(calc_id.dupe(), answer, errors),
+                "commit_single_result: cross-module commit failed for {}. \
+                 The target module's Answers may not be loaded, which would \
+                 leave its Calculation cell stuck in Calculating state.",
+                calc_id,
+            );
             return;
         }
         dispatch_anyidx!(any_idx, self, commit_typed, answer, errors)

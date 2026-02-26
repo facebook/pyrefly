@@ -91,6 +91,20 @@ the project root. BUCK files are not exported to GitHub, so:
 - If `BUCK` exists → internal checkout, `buck` and `arc` are available
 - If `BUCK` does not exist → GitHub checkout, only `cargo` works
 
+### Source control
+
+**Do not assume git.** This repo may be either a Git checkout or a Sapling
+(Mercurial-based) checkout. Before running any source-control commands, detect
+which VCS is in use:
+
+- If `.git` exists at the repo root → Git. Use `git` commands.
+- If `.sl` exists at the repo root → Sapling. Use `sl` commands (`sl status`,
+  `sl diff`, `sl commit`, `sl amend`, etc.). **Do not use `git`.**
+
+You can check with: `test -d "$(sl root 2>/dev/null)/.sl" && echo sapling || echo git`
+
+The internal (Meta) checkout always uses Sapling. The GitHub checkout uses Git.
+
 ## Feature guidelines
 
 - When working on a feature, the first commit should be a failing test if

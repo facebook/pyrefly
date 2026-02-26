@@ -237,7 +237,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .any(|(_, metadata)| metadata.has_base_any());
 
-        let named_tuple_metadata = self.named_tuple_metadata(cls, &bases_with_metadata, errors);
+        let named_tuple_metadata =
+            self.named_tuple_metadata(cls, bases, &bases_with_metadata, errors);
         if named_tuple_metadata.is_some() && bases_with_metadata.len() > 1 {
             self.error(
                 errors,
@@ -463,9 +464,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn named_tuple_metadata(
         &self,
         cls: &Class,
+        bases: &[BaseClass],
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         errors: &ErrorCollector,
     ) -> Option<NamedTupleMetadata> {
+        // Check if any base is a NamedTuple with dynamic fields
+        let has_dynamic_fields = bases
+            .iter()
+            .any(|b| matches!(b, BaseClass::NamedTuple(_, true)));
+
         bases_with_metadata
             .iter()
             .find_map(|(base_class_object, metadata)| {
@@ -475,6 +482,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ) {
                     Some(NamedTupleMetadata {
                         elements: self.get_named_tuple_elements(cls, errors),
+                        has_dynamic_fields,
                     })
                 } else {
                     metadata.named_tuple_metadata().cloned()
@@ -1025,6 +1033,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None => BaseClassParseResult::InvalidBase(base.range()),
                 }
             }
+            BaseClass::TypeOf(inner_expr, _) => {
+                // Ignore all type errors here since they'll be reported in `class_bases_of` anyway
+                let errors = ErrorCollector::new(self.module().dupe(), ErrorStyle::Never);
+                let ty = self.base_class_expr_infer_for_metadata(inner_expr, &errors);
+                // Determine what class `type(X)` resolves to:
+                // - If X is a class (type is type[C]), type(X) = C's metaclass
+                // - If X is an instance (type is C), type(X) = C
+                match self.untype_opt(ty.clone(), inner_expr.range(), &errors) {
+                    Some(Type::ClassType(c)) => {
+                        // X is a class C. type(C) = metaclass of C.
+                        let class_obj = c.class_object();
+                        let inner_metadata = self.get_metadata_for_class(class_obj);
+                        let metaclass_ct = inner_metadata.metaclass(self.stdlib);
+                        let metaclass_class = metaclass_ct.class_object();
+                        let metaclass_metadata = self.get_metadata_for_class(metaclass_class);
+                        BaseClassParseResult::Parsed(ParsedBaseClass {
+                            class_object: metaclass_class.dupe(),
+                            range,
+                            metadata: metaclass_metadata,
+                        })
+                    }
+                    Some(_) => BaseClassParseResult::InvalidType(ty, range),
+                    None => {
+                        // X is an instance of class C. type(X) = C.
+                        match &ty {
+                            Type::ClassType(c) => {
+                                let class_obj = c.class_object();
+                                let metadata = self.get_metadata_for_class(class_obj);
+                                BaseClassParseResult::Parsed(ParsedBaseClass {
+                                    class_object: class_obj.dupe(),
+                                    range,
+                                    metadata,
+                                })
+                            }
+                            _ => BaseClassParseResult::InvalidType(ty, range),
+                        }
+                    }
+                }
+            }
             BaseClass::TypedDict(..) | BaseClass::Generic(..) => {
                 if is_new_type {
                     BaseClassParseResult::InvalidBase(base.range())
@@ -1300,6 +1347,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut abstract_members = SmallSet::new();
         for field_name in fields_to_check {
+            // If the class has a synthesized concrete implementation (e.g., `__dataclass_fields__`
+            // from @dataclass), that satisfies any protocol requirement for this field.
+            if self
+                .get_class_member(cls, &field_name)
+                .is_some_and(|f| !f.is_abstract() && !f.is_uninit_class_var())
+            {
+                continue;
+            }
             if let Some(field) =
                 self.get_non_synthesized_class_member_and_defining_class(cls, &field_name)
                 && (field.value.is_abstract() ||

@@ -698,6 +698,22 @@
         "id": 0,
         "key": {
           "id": 0,
+          "key": "dataclasses"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "dataclasses"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
           "key": "dataclasses.dataclass"
         },
         "value": {

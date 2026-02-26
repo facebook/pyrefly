@@ -396,6 +396,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ));
                     }
                 }
+                if let Some(ty) = &ann.ty {
+                    self.check_legacy_typevar_scoping(ty, x.range(), errors);
+                }
                 Arc::new(AnnotationWithTarget {
                     target: target.clone(),
                     annotation: ann,
@@ -3709,14 +3712,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         finalize(&annotation.target, self.heap.mk_any_implicit())
                     })
             }
-            FunctionParameter::Unannotated(var, function_idx, target) => {
-                // It's important that we force the undecorated function binding before reading
-                // from this var. Solving the undecorated function binding pins the type of the var,
-                // either to a concrete type or to any. Without this we can have non-determinism
-                // where the reader can observe an unresolved var or a resolved type, depending on
-                // the order of solved bindings.
-                self.get_idx(*function_idx);
-                let ty = self.solver().force_var(*var);
+            FunctionParameter::Unannotated(function_idx, target, param_name) => {
+                // Get the resolved UndecoratedFunction - this ensures the function has been solved
+                // and resolved_param_types has been populated.
+                let undecorated = self.get_idx(*function_idx);
+                // Look up the type from resolved_param_types. This should always succeed since
+                // we populate it for all unannotated parameters during function solving.
+                let ty = undecorated
+                    .resolved_param_types
+                    .get(param_name)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        // Fallback to Any for safety, though this should never happen
+                        self.heap.mk_any_implicit()
+                    });
                 finalize(target, ty)
             }
         }
@@ -4320,6 +4329,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tparams
     }
 
+    /// Check that a resolved type does not contain out-of-scope legacy TypeVars.
+    fn check_legacy_typevar_scoping(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
+        let wrapped = self.wrap_callable_legacy_typevars(ty.clone());
+        self.check_raw_legacy_type_variables(&wrapped, range, errors);
+    }
+
+    /// Check for raw legacy type variables in a resolved annotation type.
+    /// Raw legacy TypeVars in annotations indicate out-of-scope usage — in-scope
+    /// TypeVars are replaced with Quantified by LegacyTParamCollector.
+    fn check_raw_legacy_type_variables(
+        &self,
+        ty: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let mut names = Vec::new();
+        ty.collect_raw_legacy_type_variables(&mut names);
+        for name in names {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                format!("Type variable `{name}` is not in scope"),
+            );
+        }
+    }
+
     fn check_implicit_return_against_annotation(
         &self,
         implicit_return: Arc<TypeInfo>,
@@ -4710,6 +4746,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Arc<UndecoratedFunction> {
         self.undecorated_function(
             &x.def,
+            x.def_index,
             x.stub_or_impl,
             x.class_key.as_ref(),
             &x.decorators,

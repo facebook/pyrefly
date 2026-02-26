@@ -105,7 +105,7 @@ assert_type(classmethod[Any], type[classmethod[Any, ..., Any]])  # E: Expected 3
 # No error if it's a TypeVarTuple w/ nothing after, because a TypeVarTuple can be empty
 class C2[T, *Ts]: pass
 C2_Alias = C2[int]
-assert_type(C2[int], type[C2[int, *tuple[Any, ...]]])
+assert_type(C2[int], type[C2[int, *tuple[()]]])
 "#,
 );
 
@@ -623,6 +623,26 @@ class F(Generic[T1, T2]): ...
 class G(F[int, str]): ...
 class H(F[str, int]): ...
 class I(G, H): ...  # E: Class `I` has inconsistent type arguments for base class `F`: `F[int, str]` and `F[str, int]`
+"#,
+);
+
+testcase!(
+    test_typevar_union_with_type_of_typevar,
+    r#"
+from typing import TypeVar, assert_type
+
+class Base: ...
+class Sub(Base): ...
+
+T = TypeVar("T", bound=Base)
+
+# type[T] alone works
+def good(x: type[T]) -> T: ...
+assert_type(good(Sub), Sub)
+
+# T | type[T] should also work — pyrefly should check the type[T] branch
+def bad(x: T | type[T]) -> T: ...
+assert_type(bad(Sub), Sub)
 "#,
 );
 

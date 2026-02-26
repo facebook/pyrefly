@@ -61,7 +61,7 @@ pub struct ThreadPool(
 );
 
 impl ThreadPool {
-    fn stack_size() -> usize {
+    pub fn stack_size() -> usize {
         match env::var("PYREFLY_STACK_SIZE") {
             Ok(s) => {
                 let res = s

@@ -2094,28 +2094,6 @@
     },
     {
       "code": -2,
-      "column": 20,
-      "concise_description": "`Proto7` is not assignable to `Proto6`",
-      "description": "`Proto7` is not assignable to `Proto6`\n  `Proto7.__call__` has type `(self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None`, which is not assignable to `(self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None`, the type of `Proto6.__call__`",
-      "line": 157,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 22,
-      "stop_line": 157
-    },
-    {
-      "code": -2,
-      "column": 25,
-      "concise_description": "`Proto8` is not assignable to `Proto5[Any]`",
-      "description": "`Proto8` is not assignable to `Proto5[Any]`\n  `Proto8.__call__` has type `(self: Proto8) -> None`, which is not assignable to `(self: Proto8, *args: Any, **kwargs: Any) -> None`, the type of `Proto5.__call__`",
-      "line": 159,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 27,
-      "stop_line": 159
-    },
-    {
-      "code": -2,
       "column": 26,
       "concise_description": "`() -> str` is not assignable to `(int, ...) -> str`",
       "description": "`() -> str` is not assignable to `(int, ...) -> str`",
@@ -4966,30 +4944,7 @@
       "stop_line": 14
     }
   ],
-  "directives_version_platform.py": [
-    {
-      "code": -2,
-      "column": 17,
-      "concise_description": "`Literal['']` is not assignable to `int`",
-      "description": "`Literal['']` is not assignable to `int`",
-      "line": 40,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 19,
-      "stop_line": 40
-    },
-    {
-      "code": -2,
-      "column": 17,
-      "concise_description": "`Literal['']` is not assignable to `int`",
-      "description": "`Literal['']` is not assignable to `int`",
-      "line": 45,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 19,
-      "stop_line": 45
-    }
-  ],
+  "directives_version_platform.py": [],
   "enums_behaviors.py": [
     {
       "code": -2,
@@ -6256,6 +6211,28 @@
     },
     {
       "code": -2,
+      "column": 8,
+      "concise_description": "Type variable `S` is not in scope",
+      "description": "Type variable `S` is not in scope",
+      "line": 50,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 50
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Type variable `S` is not in scope",
+      "description": "Type variable `S` is not in scope",
+      "line": 54,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 54
+    },
+    {
+      "code": -2,
       "column": 11,
       "concise_description": "Redundant type parameter declaration",
       "description": "Redundant type parameter declaration",
@@ -6264,6 +6241,28 @@
       "severity": "error",
       "stop_column": 20,
       "stop_line": 65
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Type variable `T` is not in scope",
+      "description": "Type variable `T` is not in scope",
+      "line": 94,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 94
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Type variable `T` is not in scope",
+      "description": "Type variable `T` is not in scope",
+      "line": 95,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 95
     }
   ],
   "generics_self_advanced.py": [],
@@ -7264,28 +7263,6 @@
   "generics_typevartuple_specialization.py": [
     {
       "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed",
-      "description": "assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed",
-      "line": 51,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 31,
-      "stop_line": 51
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed",
-      "description": "assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed",
-      "line": 94,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 33,
-      "stop_line": 94
-    },
-    {
-      "code": -2,
       "column": 1,
       "concise_description": "Unpacked argument cannot be used for type parameter T",
       "description": "Unpacked argument cannot be used for type parameter T",
@@ -7294,17 +7271,6 @@
       "severity": "error",
       "stop_column": 21,
       "stop_line": 109
-    },
-    {
-      "code": -2,
-      "column": 1,
-      "concise_description": "Unpacked argument cannot be used for type parameter T",
-      "description": "Unpacked argument cannot be used for type parameter T",
-      "line": 110,
-      "name": "bad-unpacking",
-      "severity": "error",
-      "stop_column": 36,
-      "stop_line": 110
     },
     {
       "code": -2,
@@ -7338,28 +7304,6 @@
       "severity": "error",
       "stop_column": 13,
       "stop_line": 127
-    },
-    {
-      "code": -2,
-      "column": 8,
-      "concise_description": "Unpacked argument cannot be used for type parameter T1",
-      "description": "Unpacked argument cannot be used for type parameter T1",
-      "line": 153,
-      "name": "bad-unpacking",
-      "severity": "error",
-      "stop_column": 29,
-      "stop_line": 153
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed",
-      "description": "assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed",
-      "line": 157,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 49,
-      "stop_line": 157
     },
     {
       "code": -2,

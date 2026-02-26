@@ -38,6 +38,7 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingUndecoratedFunction;
+use crate::binding::binding::BindingUndecoratedFunctionRange;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::ExhaustivenessKind;
@@ -51,6 +52,7 @@ use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
+use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::ReturnExplicit;
@@ -720,8 +722,16 @@ impl<'a> BindingsBuilder<'a> {
         let mut def_idx =
             self.declare_current_idx(Key::Definition(ShortIdentifier::new(&func_name)));
 
+        let func_def_index = self.func_def_index();
+
         let undecorated_idx =
             self.idx_for_promise(KeyUndecoratedFunction(ShortIdentifier::new(&func_name)));
+
+        // Map FuncDefIndex to ShortIdentifier for reverse lookup.
+        self.insert_binding(
+            KeyUndecoratedFunctionRange(func_def_index),
+            BindingUndecoratedFunctionRange(ShortIdentifier::new(&func_name)),
+        );
 
         // Get preceding function definition, if any. Used for building an overload type.
         let (function_idx, pred_idx) = self.create_function_index(&func_name);
@@ -760,6 +770,7 @@ impl<'a> BindingsBuilder<'a> {
         let undecorated_idx = self.insert_binding_idx(
             undecorated_idx,
             BindingUndecoratedFunction {
+                def_index: func_def_index,
                 def: FunctionDefData::new(x),
                 stub_or_impl,
                 class_key,
@@ -847,9 +858,15 @@ fn function_last_expressions<'a>(
             }
             Stmt::If(x) => {
                 let mut last_test = None;
+                let mut any_branch_processed = false;
                 for (test, body) in sys_info.pruned_if_branches(x) {
+                    any_branch_processed = true;
                     last_test = test;
                     f(sys_info, body, res)?;
+                }
+                if !any_branch_processed {
+                    // All branches were pruned, so the code falls through
+                    return None;
                 }
                 if last_test.is_some() {
                     // The if/elif chain has no else clause, so it's not syntactically exhaustive.

@@ -2226,3 +2226,110 @@ def f() -> dict: ...
 X = TypedDict("X", {"k1": int, **f()})  # E: Unpacking is not supported
     "#,
 );
+
+testcase!(
+    test_anonymous_typed_dict_missing_required_key,
+    r#"
+from typing import TypedDict
+
+class TD(TypedDict):
+    a: int
+    b: bool
+
+def f(td: TD) -> None: ...
+
+td = {"a": 1000}
+f(td=td)  # E: `b` is present in `TD` and absent in `<anonymous>`
+    "#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_missing_not_required_key_ok,
+    r#"
+from typing import TypedDict
+
+class TD(TypedDict, total=False):
+    a: int
+    b: bool
+
+def f(td: TD) -> None: ...
+
+td = {"a": 1000}
+f(td=td)
+    "#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_any_requiredness_ok,
+    r#"
+from typing import NotRequired, Required, TypedDict
+
+class TD1(TypedDict):
+    a: Required[int]
+
+class TD2(TypedDict):
+    a: NotRequired[int]
+
+def f(td1: TD1, td2: TD2) -> None: ...
+
+td = {"a": 1000}
+f(td1=td, td2=td)
+    "#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_any_extra_items_ok,
+    r#"
+from typing import ReadOnly, TypedDict
+
+class TD1(TypedDict, closed=True):
+    a: int
+
+class TD2(TypedDict, extra_items=str):
+    a: int
+
+class TD3(TypedDict, extra_items=ReadOnly[str]):
+    a: int
+
+def f(td1: TD1, td2: TD2, td3: TD3) -> None: ...
+
+td = {"a": 1000}
+f(td1=td, td2=td, td3=td)
+    "#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_value_subtype,
+    r#"
+from typing import TypedDict
+
+class TD(TypedDict):
+    a: int
+
+def f(td: TD) -> None: ...
+
+td = {"a": True}
+f(td=td)
+    "#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_check_extra_items,
+    r#"
+from typing import TypedDict
+
+class TD1(TypedDict):
+    a: int
+
+class TD2(TypedDict, extra_items=str):
+    a: int
+
+def f(td1: TD1, td2: TD2) -> None: ...
+
+td = {"a": 0, "b": "hi"}
+f(
+    td1=td,  # E: Field `b` is present in `<anonymous>` and absent in `TD1`
+    td2=td,
+)
+    "#,
+);

@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -66,6 +67,8 @@ pub struct Workspace {
     pub disabled_language_services: Option<DisabledLanguageServices>,
     pub display_type_errors: Option<DisplayTypeErrors>,
     pub lsp_analysis_config: Option<LspAnalysisConfig>,
+    pub stream_diagnostics: Option<bool>,
+    pub diagnostic_mode: Option<DiagnosticMode>,
 }
 
 impl Workspace {
@@ -173,20 +176,22 @@ struct PyreflyClientConfig {
     display_type_errors: Option<DisplayTypeErrors>,
     disable_language_services: Option<bool>,
     extra_paths: Option<Vec<PathBuf>>,
+    #[allow(dead_code)] // Will be read once diagnostic mode semantics are implemented.
+    diagnostic_mode: Option<DiagnosticMode>,
     #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
     #[serde(default)]
     disabled_language_services: Option<DisabledLanguageServices>,
-    // This is a global config that's read separately
-    #[allow(dead_code)]
     stream_diagnostics: Option<bool>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum DiagnosticMode {
-    #[serde(rename = "workspace")]
-    Workspace,
+    // TODO: Implement workspace-wide diagnostics.
+    // #[serde(rename = "workspace")]
+    // Workspace,
+    #[default]
     #[serde(rename = "openFilesOnly")]
     OpenFilesOnly,
 }
@@ -255,7 +260,6 @@ impl DisabledLanguageServices {
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LspAnalysisConfig {
-    #[allow(dead_code)]
     pub diagnostic_mode: Option<DiagnosticMode>,
     pub import_format: Option<ImportFormat>,
     pub complete_function_parens: Option<bool>,
@@ -389,6 +393,12 @@ impl Workspaces {
             if let Some(disabled_language_services) = pyrefly.disabled_language_services {
                 self.update_disabled_language_services(scope_uri, disabled_language_services);
             }
+            if let Some(stream_diagnostics) = pyrefly.stream_diagnostics {
+                self.update_stream_diagnostics(scope_uri, stream_diagnostics);
+            }
+            if let Some(diagnostic_mode) = pyrefly.diagnostic_mode {
+                self.update_diagnostic_mode(scope_uri, diagnostic_mode);
+            }
             self.update_display_type_errors(modified, scope_uri, pyrefly.display_type_errors);
             // Handle analysis config nested under pyrefly (e.g., pyrefly.analysis)
             if let Some(analysis) = pyrefly.analysis {
@@ -438,6 +448,36 @@ impl Workspaces {
             None => {
                 self.default.write().disabled_language_services = Some(disabled_language_services);
             }
+        }
+    }
+
+    /// Update streamDiagnostics setting for scope_uri, None if default workspace
+    fn update_stream_diagnostics(&self, scope_uri: &Option<Url>, stream_diagnostics: bool) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
+                    workspace.stream_diagnostics = Some(stream_diagnostics);
+                }
+            }
+            None => self.default.write().stream_diagnostics = Some(stream_diagnostics),
+        }
+    }
+
+    /// Update diagnosticMode setting for scope_uri, None if default workspace
+    fn update_diagnostic_mode(&self, scope_uri: &Option<Url>, diagnostic_mode: DiagnosticMode) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
+                    workspace.diagnostic_mode = Some(diagnostic_mode);
+                }
+            }
+            None => self.default.write().diagnostic_mode = Some(diagnostic_mode),
         }
     }
 
@@ -562,6 +602,31 @@ impl Workspaces {
 
     pub fn sourcedb_available(&self) -> bool {
         !self.source_db_config_map.lock().is_empty()
+    }
+
+    /// Check if diagnostics should be streamed for a file at the given path.
+    /// Defaults to true if not explicitly configured.
+    pub fn should_stream_diagnostics(&self, path: &Path) -> bool {
+        self.get_with(path.to_path_buf(), |(_, workspace)| {
+            workspace.stream_diagnostics.unwrap_or(true)
+        })
+    }
+
+    /// Get the diagnostic mode for a file at the given path.
+    /// Checks `pyrefly.diagnosticMode` first, then falls back to
+    /// `analysis.diagnosticMode`, and defaults to `OpenFilesOnly`.
+    #[allow(dead_code)] // Will be used once diagnostic mode semantics are implemented.
+    pub fn diagnostic_mode(&self, path: &Path) -> DiagnosticMode {
+        self.get_with(path.to_path_buf(), |(_, workspace)| {
+            workspace
+                .diagnostic_mode
+                .or_else(|| {
+                    workspace
+                        .lsp_analysis_config
+                        .and_then(|c| c.diagnostic_mode)
+                })
+                .unwrap_or_default()
+        })
     }
 }
 
@@ -712,7 +777,7 @@ mod tests {
         let valid_config = json!({
             "pythonPath": "/usr/bin/python3",
             "analysis": {
-                "diagnosticMode": "workspace",
+                "diagnosticMode": "openFilesOnly",
                 "importFormat": "absolute"
             },
             "pyrefly": {
@@ -727,7 +792,7 @@ mod tests {
         let analysis = config.analysis.unwrap();
         assert!(matches!(
             analysis.diagnostic_mode,
-            Some(DiagnosticMode::Workspace)
+            Some(DiagnosticMode::OpenFilesOnly)
         ));
         assert!(matches!(
             analysis.import_format,

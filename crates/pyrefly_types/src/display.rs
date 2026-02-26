@@ -1209,6 +1209,7 @@ pub mod tests {
                     class.dupe().module().dupe(),
                     class.dupe(),
                     Name::new(method_name),
+                    None,
                 ),
             }),
         }))
@@ -1251,6 +1252,7 @@ pub mod tests {
                         class.dupe().module().dupe(),
                         class.dupe(),
                         Name::new(method_name),
+                        None,
                     ),
                 },
             }),
@@ -1841,6 +1843,7 @@ pub mod tests {
                 class.dupe().module().dupe(),
                 class.dupe(),
                 Name::new_static("overloaded_func"),
+                None,
             ),
         };
 
@@ -1864,6 +1867,7 @@ pub mod tests {
                 class.dupe().module().dupe(),
                 class.dupe(),
                 Name::new_static("overloaded_func"),
+                None,
             ),
         };
 

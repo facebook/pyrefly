@@ -22,8 +22,8 @@
   "annotations_methods.py": [],
   "annotations_typeexpr.py": [],
   "callables_annotation.py": [
-    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`\\n  `Proto4[Ellipsis].__call__` has type `(Proto4[Ellipsis], int, ...) -> None`, which is not assignable to `(self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None`, the type of `Proto3.__call__`']",
-    "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`\\n  `Proto7.__call__` has type `(self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None`, which is not assignable to `(self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None`, the type of `Proto6.__call__`']"
+    "Line 159: Expected 1 errors",
+    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`\\n  `Proto4[Ellipsis].__call__` has type `(Proto4[Ellipsis], int, ...) -> None`, which is not assignable to `(self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None`, the type of `Proto3.__call__`']"
   ],
   "callables_kwargs.py": [],
   "callables_protocol.py": [],
@@ -103,13 +103,9 @@
   "generics_paramspec_semantics.py": [],
   "generics_paramspec_specialization.py": [],
   "generics_scoping.py": [
-    "Line 50: Expected 1 errors",
-    "Line 54: Expected 1 errors",
     "Line 75: Expected 1 errors",
     "Line 78: Expected 1 errors",
     "Line 87: Expected 1 errors",
-    "Line 94: Expected 1 errors",
-    "Line 95: Expected 1 errors",
     "Line 96: Expected 1 errors"
   ],
   "generics_self_advanced.py": [],
@@ -136,10 +132,7 @@
   "generics_typevartuple_concat.py": [],
   "generics_typevartuple_overloads.py": [],
   "generics_typevartuple_specialization.py": [
-    "Line 51: Unexpected errors ['assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed']",
-    "Line 94: Unexpected errors ['assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed']",
-    "Line 153: Unexpected errors ['Unpacked argument cannot be used for type parameter T1']",
-    "Line 157: Unexpected errors ['assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed']"
+    "Line 110: Expected 1 errors"
   ],
   "generics_typevartuple_unpack.py": [],
   "generics_upper_bound.py": [],

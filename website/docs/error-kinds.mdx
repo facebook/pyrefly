@@ -1271,6 +1271,26 @@ def valid_generator():
     yield 2  # This is valid
 ```
 
+## unresolvable-dunder-all
+
+Default severity: **warn**
+
+This warning is raised when `__all__` is defined but its value cannot be
+statically analyzed. This can happen when `__all__` is assigned a function call,
+a variable, a list comprehension, or any expression that Pyrefly cannot resolve
+at analysis time.
+
+When this occurs, Pyrefly falls back to inferring public exports from
+module-level definitions (all names that do not start with an underscore).
+
+```python
+def generate_all():
+    return ["x", "y"]
+
+__all__ = generate_all()
+# `__all__` could not be statically analyzed [unresolvable-dunder-all]
+```
+
 ## unsafe-overlap
 
 Protocols decorated with `@runtime_checkable` may be used in `isinstance` and `issubclass` checks, but the runtime will only checks that all the required attributes are present, without looking at their types.

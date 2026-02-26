@@ -131,120 +131,6 @@ impl Display for SizeExpr {
 }
 
 // ============================================================================
-// Simplification
-// ============================================================================
-
-/// Simplify a dimension expression to canonical form.
-///
-/// This applies algebraic simplifications:
-/// - Constant folding: 2 + 3 → 5
-/// - Identity elimination: N + 0 → N, N * 1 → N
-/// - Zero propagation: N * 0 → 0
-/// - Any propagation: expressions containing Any become Any
-///
-/// Any subexpression with only literal leaves is evaluated.
-pub fn simplify(ty: Type) -> Type {
-    match ty {
-        Type::Size(dim) => {
-            if contains_any_in_sizeexpr(&dim) {
-                return Type::Any(AnyStyle::Explicit);
-            }
-            simplify_sizeexpr(dim)
-        }
-        // Quantified, Var, Any, Dim are already canonical
-        other => other,
-    }
-}
-
-/// Inner simplification that skips the Any check.
-/// Called after the top-level `simplify` has already verified no Any is present.
-fn simplify_inner(ty: Type) -> Type {
-    match ty {
-        Type::Size(dim) => simplify_sizeexpr(dim),
-        other => other,
-    }
-}
-
-fn simplify_sizeexpr(dim: SizeExpr) -> Type {
-    match dim {
-        // Addition: N + M
-        SizeExpr::Add(left, right) => {
-            let left = simplify_inner(*left);
-            let right = simplify_inner(*right);
-
-            match (left.as_shape_literal(), right.as_shape_literal()) {
-                // Both literal - evaluate
-                (Some(a), Some(b)) => Type::Size(SizeExpr::Literal(a + b)),
-                // N + 0 = N
-                (_, Some(0)) => left,
-                // 0 + N = N
-                (Some(0), _) => right,
-                // Can't simplify further
-                _ => Type::Size(SizeExpr::Add(Box::new(left), Box::new(right))),
-            }
-        }
-
-        // Subtraction: N - M
-        SizeExpr::Sub(left, right) => {
-            let left = simplify_inner(*left);
-            let right = simplify_inner(*right);
-
-            match (left.as_shape_literal(), right.as_shape_literal()) {
-                // Both literal (only simplify if result is non-negative)
-                (Some(a), Some(b)) if a >= b => Type::Size(SizeExpr::Literal(a - b)),
-                // N - 0 = N
-                (_, Some(0)) => left,
-                // Can't simplify further
-                _ => Type::Size(SizeExpr::Sub(Box::new(left), Box::new(right))),
-            }
-        }
-
-        // Multiplication: N * M
-        SizeExpr::Mul(left, right) => {
-            let left = simplify_inner(*left);
-            let right = simplify_inner(*right);
-            let left_lit = left.as_shape_literal();
-            let right_lit = right.as_shape_literal();
-
-            match (left_lit, right_lit) {
-                // Both literal - evaluate
-                (Some(a), Some(b)) => Type::Size(SizeExpr::Literal(a * b)),
-                // N * 0 = 0 or 0 * N = 0
-                (Some(0), _) | (_, Some(0)) => Type::Size(SizeExpr::Literal(0)),
-                // N * 1 = N
-                (_, Some(1)) => left,
-                // 1 * N = N
-                (Some(1), _) => right,
-                // Can't simplify further
-                _ => Type::Size(SizeExpr::Mul(Box::new(left), Box::new(right))),
-            }
-        }
-
-        // Floor Division: N // M
-        SizeExpr::FloorDiv(left, right) => {
-            let left = simplify_inner(*left);
-            let right = simplify_inner(*right);
-            let left_lit = left.as_shape_literal();
-            let right_lit = right.as_shape_literal();
-
-            match (left_lit, right_lit) {
-                // Both literal (avoid division by zero)
-                (Some(a), Some(b)) if b != 0 => Type::Size(SizeExpr::Literal(a / b)),
-                // N / 1 = N
-                (_, Some(1)) => left,
-                // 0 / N = 0
-                (Some(0), _) => Type::Size(SizeExpr::Literal(0)),
-                // Can't simplify further
-                _ => Type::Size(SizeExpr::FloorDiv(Box::new(left), Box::new(right))),
-            }
-        }
-
-        // Literal - already canonical
-        SizeExpr::Literal(_) => Type::Size(dim),
-    }
-}
-
-// ============================================================================
 // Canonicalization
 // ============================================================================
 
@@ -264,7 +150,7 @@ pub fn canonicalize(ty: Type) -> Type {
         Type::Size(dim) => {
             // Check for Any - if present anywhere, entire expression becomes Any
             if contains_any_in_sizeexpr(&dim) {
-                return Type::Any(AnyStyle::Implicit);
+                return Type::Any(AnyStyle::Explicit);
             }
             canonicalize_sizeexpr(dim)
         }
@@ -333,7 +219,7 @@ fn canonicalize_sum(left: Type, right: Type) -> Type {
     let mut term_map: HashMap<Type, i64> = HashMap::new();
 
     for term in terms {
-        let (coeff, non_literal_part) = extract_coefficient(term.clone());
+        let (coeff, non_literal_part) = extract_coefficient(term);
         *term_map.entry(non_literal_part).or_insert(0) += coeff;
     }
 
@@ -613,20 +499,25 @@ fn gcd(mut a: i64, mut b: i64) -> i64 {
 }
 
 /// Compare types for canonical ordering.
-/// Ordering: Literal < Quantified < SizeExpr(FloorDiv) < SizeExpr(Mul) < SizeExpr(Add) < SizeExpr(Sub)
+/// Ordering: Literal < Quantified < Var < SizeExpr(FloorDiv) < SizeExpr(Mul) < SizeExpr(Add) < SizeExpr(Sub)
 fn compare_type(a: &Type, b: &Type) -> Ordering {
     match (a, b) {
         // Literals: compare numerically
         (Type::Size(SizeExpr::Literal(n1)), Type::Size(SizeExpr::Literal(n2))) => n1.cmp(n2),
 
-        // Type ordering
+        // Literals come first
         (Type::Size(SizeExpr::Literal(_)), _) => Ordering::Less,
         (_, Type::Size(SizeExpr::Literal(_))) => Ordering::Greater,
 
-        // Quantified
+        // Quantified (type parameters)
         (Type::Quantified(q1), Type::Quantified(q2)) => q1.cmp(q2),
-        (Type::Quantified(_), Type::Size(_)) => Ordering::Less,
-        (Type::Size(_), Type::Quantified(_)) => Ordering::Greater,
+        (Type::Quantified(_), _) => Ordering::Less,
+        (_, Type::Quantified(_)) => Ordering::Greater,
+
+        // Var (solver variables, created during generic instantiation)
+        (Type::Var(v1), Type::Var(v2)) => v1.cmp(v2),
+        (Type::Var(_), _) => Ordering::Less,
+        (_, Type::Var(_)) => Ordering::Greater,
 
         // SizeExpr variants
         (Type::Size(d1), Type::Size(d2)) => compare_sizeexpr(d1, d2),

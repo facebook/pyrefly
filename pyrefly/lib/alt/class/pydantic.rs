@@ -150,7 +150,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let params = vec![self.class_self_param(cls, false), root_param];
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT, None),
         });
         ClassSynthesizedField::new(ty)
     }

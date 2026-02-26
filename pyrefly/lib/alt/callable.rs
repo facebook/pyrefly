@@ -263,9 +263,29 @@ impl<'a> CallArg<'a> {
         match self {
             Self::Arg(TypeOrExpr::Type(ty, _)) => CallArgPreEval::Type(ty, false),
             Self::Arg(TypeOrExpr::Expr(e)) => CallArgPreEval::Expr(e, false),
-            Self::Star(e, range) => {
+            Self::Star(e, _range) => {
+                // Special-case list/set/tuple literals with statically known element count.
+                // Only do this if there are no starred elements inside the literal.
+                if let TypeOrExpr::Expr(expr) = e {
+                    let literal_elts: Option<&[Expr]> = match expr {
+                        Expr::List(list_expr) => Some(&list_expr.elts),
+                        Expr::Set(set_expr) => Some(&set_expr.elts),
+                        Expr::Tuple(tuple_expr) => Some(&tuple_expr.elts),
+                        _ => None,
+                    };
+                    if let Some(elts) = literal_elts {
+                        let has_starred = elts.iter().any(|elt| matches!(elt, Expr::Starred(_)));
+                        if !has_starred {
+                            let tys: Vec<Type> = elts
+                                .iter()
+                                .map(|elt| solver.expr_infer(elt, arg_errors))
+                                .collect();
+                            return CallArgPreEval::Fixed(tys, 0);
+                        }
+                    }
+                }
                 let ty = e.infer(solver, arg_errors);
-                let iterables = solver.iterate(&ty, *range, arg_errors, None);
+                let iterables = solver.iterate(&ty, *_range, arg_errors, None);
                 // If we have a union of iterables, use a fixed length only if every iterable is
                 // fixed and has the same length. Otherwise, use star.
                 let mut fixed_lens = Vec::new();
@@ -378,6 +398,18 @@ impl CallArgPreEval<'_> {
             }
             Self::Fixed(_, i) => {
                 *i += 1;
+            }
+        }
+    }
+
+    // Similar to post_skip but it skips to the end of any fixed length arguments.
+    fn mark_done(&mut self) {
+        match self {
+            Self::Type(_, done) | Self::Expr(_, done) | Self::Star(_, done) => {
+                *done = true;
+            }
+            Self::Fixed(tys, i) => {
+                *i = tys.len();
             }
         }
     }
@@ -514,6 +546,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             )
         };
+
+        let keyword_arg_names: SmallSet<&Name> = keywords
+            .iter()
+            .filter_map(|kw| kw.arg.map(|id| &id.id))
+            .collect();
+
         let iargs = self_arg.iter().chain(args.iter());
         // Creates a reversed copy of the parameters that we iterate through from back to front,
         // so that we can easily peek at and pop from the end.
@@ -569,6 +607,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         name,
                         kind: kind @ (PosParamKind::PositionalOnly | PosParamKind::Positional),
                     }) => {
+                        // For unknown-length star args, stop consuming positional parameters
+                        // when we reach a one that has a corresponding keyword argument.
+                        // This is unsound, but prevents false positive "multiple values" errors.
+                        if arg_pre.is_star()
+                            && kind == PosParamKind::Positional
+                            && name.is_some_and(|n| keyword_arg_names.contains(n))
+                        {
+                            arg_pre.mark_done();
+                            break;
+                        }
                         num_positional_params += 1;
                         rparams.pop();
                         if let Some(name) = name
@@ -1059,7 +1107,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If we have a hint, we want to try to instantiate against it first, so we can contextually type
             // arguments. If we don't match the hint, we need to throw away any instantiations we might have made.
             // By invariant, hint will be None if we are calling a constructor.
-            if let Some(hint) = hint {
+            if let Some(hint) = hint
+                && !self.solver().is_partial(hint.ty())
+            {
                 let (qs, callable_) = self.instantiate_fresh_callable(tparams, callable.clone());
                 if self.is_subset_eq(&callable_.ret, hint.ty())
                     && !self.solver().has_instantiation_errors(&qs)

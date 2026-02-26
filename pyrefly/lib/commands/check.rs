@@ -213,6 +213,9 @@ struct OutputArgs {
     /// Report type traces.
     #[arg(long, value_name = "OUTPUT_FILE")]
     report_trace: Option<PathBuf>,
+    /// Experimental: generate a JSON dependency graph of all modules to the specified file. This is unstable and should only be used for debugging.
+    #[arg(long, value_name = "OUTPUT_FILE")]
+    dependency_graph: Option<PathBuf>,
     /// Process each module individually to figure out how long each step takes.
     #[arg(long, value_name = "OUTPUT_FILE")]
     report_timings: Option<PathBuf>,
@@ -957,7 +960,7 @@ impl CheckArgs {
             fs_anyhow::create_dir_all(glean)?;
             for handle in handles {
                 // Generate a safe filename using hash to avoid OS filename length limits
-                let module_hash = blake3::hash(handle.module().to_string().as_bytes());
+                let module_hash = blake3::hash(handle.path().to_string().as_bytes());
                 fs_anyhow::write(
                     &glean.join(format!("{}.json", &module_hash)),
                     report::glean::glean(transaction, handle),
@@ -965,13 +968,19 @@ impl CheckArgs {
             }
         }
         if let Some(pysa_directory) = &self.output.report_pysa {
-            report::pysa::write_results(pysa_directory, transaction, &shown_errors)?;
+            report::pysa::write_results(pysa_directory, transaction, handles, &shown_errors)?;
         }
         if let Some(path) = &self.output.report_binding_memory {
             fs_anyhow::write(path, report::binding_memory::binding_memory(transaction))?;
         }
         if let Some(path) = &self.output.report_trace {
             fs_anyhow::write(path, report::trace::trace(transaction))?;
+        }
+        if let Some(path) = &self.output.dependency_graph {
+            fs_anyhow::write(
+                path,
+                report::dependency_graph::dependency_graph(transaction, handles),
+            )?;
         }
         if self.behavior.suppress_errors {
             // TODO: Move this into separate command

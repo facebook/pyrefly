@@ -818,6 +818,14 @@ impl ConfigFile {
                  self.root.tensor_shapes.unwrap())
     }
 
+    pub fn strict_callable_subtyping(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_strict_callable_subtyping, path)
+            .unwrap_or_else(||
+                 // we can use unwrap here, because the value in the root config must
+                 // be set in `ConfigFile::configure()`.
+                 self.root.strict_callable_subtyping.unwrap())
+    }
+
     pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
         self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path)
             .unwrap_or_else(||
@@ -1079,6 +1087,10 @@ impl ConfigFile {
 
         if self.root.tensor_shapes.is_none() {
             self.root.tensor_shapes = Some(false);
+        }
+
+        if self.root.strict_callable_subtyping.is_none() {
+            self.root.strict_callable_subtyping = Some(false);
         }
 
         let tools_from_permissive_ignores = match self.root.permissive_ignores {
@@ -1402,6 +1414,7 @@ mod tests {
              ignore-missing-imports = []
              ignore-errors-in-generated-code = false
              infer-with-first-use = false
+             strict-callable-subtyping = false
              [sub-config.errors]
              assert-type = false
              invalid-yield = false
@@ -1454,6 +1467,7 @@ mod tests {
                     disable_type_errors_in_ide: None,
                     ignore_errors_in_generated_code: Some(true),
                     infer_with_first_use: None,
+                    strict_callable_subtyping: None,
                     tensor_shapes: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
                     ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
@@ -1475,6 +1489,7 @@ mod tests {
                         disable_type_errors_in_ide: None,
                         ignore_errors_in_generated_code: Some(false),
                         infer_with_first_use: Some(false),
+                        strict_callable_subtyping: Some(false),
                         tensor_shapes: None,
                         replace_imports_with_any: Some(Vec::new()),
                         ignore_missing_imports: Some(Vec::new()),
@@ -1862,6 +1877,7 @@ baseline = "baseline.json"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                strict_callable_subtyping: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),
@@ -2172,6 +2188,7 @@ baseline = "baseline.json"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                strict_callable_subtyping: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),
@@ -2207,6 +2224,7 @@ baseline = "baseline.json"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                strict_callable_subtyping: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),

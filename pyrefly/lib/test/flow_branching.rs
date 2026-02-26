@@ -1144,9 +1144,8 @@ def f(x: int) -> int:
     "#,
 );
 
-// After fix, x should be narrowed to int in the body (is not None) and
+// x is narrowed to int in the body (is not None) and
 // the else branch returns 0 (int), so the return type is int. No error.
-// Before the fix, this works because narrowing finds x through static scope.
 testcase!(
     test_walrus_in_ternary_with_narrowing,
     r#"
@@ -1167,16 +1166,19 @@ def f() -> str:
     "#,
 );
 
-// After the fix, short-circuit prevents walrus execution — walrus may not run.
-// The BoolOp merge uses lax handling, so `x` is treated as defined even though
-// it may not execute. This is a known false negative from BoolOp laxness.
 testcase!(
     test_walrus_in_ternary_short_circuit,
     r#"
 def condition() -> bool: ...
 def get() -> int: ...
-def f() -> int:
-    return x if condition() and (x := get()) else 0
+def f1() -> int:
+    return x if condition() and (x := get()) else 0  # no error
+# BoolOp merging uses lax handling, so `x` is treated as defined even though
+# `x := get()` may not execute. This is a known false negative from BoolOp laxness.
+def f2() -> int:
+    return x if condition() or (x := get()) else 0  # false negative
+def f3() -> int:
+    return x if condition() and (x := get()) else x  # false negative
     "#,
 );
 
@@ -1751,5 +1753,45 @@ def f(x: int | str, y: int | str) -> str:  # E: Function declared to return `str
     elif isinstance(y, str):
         return "y is str"
     # Different subjects in different branches - cannot determine exhaustiveness
+"#,
+);
+
+// Issue #2406: NoReturn in except block should make variable always initialized
+testcase!(
+    test_noreturn_try_except_simple,
+    r#"
+from typing import NoReturn
+
+def foo() -> NoReturn:
+    raise ValueError('')
+
+def main() -> None:
+    try:
+        node = 1
+    except Exception:
+        foo()
+    print(node)
+"#,
+);
+
+testcase!(
+    test_noreturn_try_except_if_nested,
+    r#"
+from typing import NoReturn
+
+def foo() -> NoReturn:
+    raise ValueError('')
+
+def main(resolve: bool) -> None:
+    try:
+        node = 1
+    except Exception as exc:
+        foo()
+    if resolve:
+        try:
+            node = 2
+        except Exception:
+            foo()
+    print(node)
 "#,
 );

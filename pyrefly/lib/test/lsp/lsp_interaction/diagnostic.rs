@@ -5,17 +5,57 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_server::RequestId;
 use lsp_types::DocumentDiagnosticReportResult;
+use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Url;
+use lsp_types::notification::Notification as _;
+use lsp_types::notification::PublishDiagnostics;
+use lsp_types::request::Initialize;
+use lsp_types::request::Request as _;
+use lsp_types::request::WorkspaceConfiguration;
 use pyrefly_util::stdlib::register_stdlib_paths;
+use serde_json::Value;
 use serde_json::json;
 
 use crate::commands::lsp::IndexingMode;
 use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Notification;
+use crate::lsp::non_wasm::protocol::Request;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::test::lsp::lsp_interaction::object_model::LspMessageError;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+
+fn require_markdown_initialize(interaction: &LspInteraction) {
+    let settings = InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    };
+    let mut params = interaction.client.get_initialize_params(&settings);
+    params["capabilities"]["textDocument"]["diagnostic"]["markupMessageSupport"] = json!(true);
+    interaction.client.send_message(Message::Request(Request {
+        id: RequestId::from(1),
+        method: Initialize::METHOD.to_owned(),
+        params,
+        activity_key: None,
+    }));
+    interaction
+        .client
+        .expect_any_message()
+        .expect("Failed to receive initialize response");
+    interaction.client.send_initialized();
+    if let Some(settings) = settings.configuration {
+        interaction
+            .client
+            .expect_any_message()
+            .expect("Failed to receive configuration request");
+        interaction.client.send_response::<WorkspaceConfiguration>(
+            RequestId::from(1),
+            settings.unwrap_or(json!([])),
+        );
+    }
+}
 
 #[test]
 fn test_show_syntax_errors_without_config() {
@@ -38,6 +78,91 @@ fn test_show_syntax_errors_without_config() {
         .expect("Failed to receive expected response");
 }
 
+#[test]
+fn test_diagnostics_markdown_messages() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    require_markdown_initialize(&interaction);
+
+    interaction.client.did_open("syntax_errors.py");
+
+    interaction
+        .client
+        .expect_message("publishDiagnostics with markdown message", |msg| {
+            let Message::Notification(notification) = msg else {
+                return None;
+            };
+            if notification.method != PublishDiagnostics::METHOD {
+                return None;
+            }
+            let uri = notification
+                .params
+                .get("uri")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !uri.ends_with("syntax_errors.py") {
+                return None;
+            }
+            let diagnostics = notification
+                .params
+                .get("diagnostics")
+                .and_then(Value::as_array)
+                .ok_or_else(|| LspMessageError::Custom {
+                    description: "Missing diagnostics array".to_owned(),
+                });
+            let diagnostics = match diagnostics {
+                Ok(diagnostics) => diagnostics,
+                Err(err) => return Some(Err(err)),
+            };
+            let Some(diagnostic) = diagnostics.first() else {
+                return Some(Err(LspMessageError::Custom {
+                    description: "Expected at least one diagnostic".to_owned(),
+                }));
+            };
+            let message = diagnostic
+                .get("message")
+                .and_then(Value::as_object)
+                .ok_or_else(|| LspMessageError::Custom {
+                    description: "Expected markdown message object".to_owned(),
+                });
+            let message = match message {
+                Ok(message) => message,
+                Err(err) => return Some(Err(err)),
+            };
+            let kind = message.get("kind").and_then(Value::as_str);
+            let value = message.get("value").and_then(Value::as_str);
+            if kind != Some("markdown")
+                || value != Some("Parse error: Expected an indented block after `if` statement")
+            {
+                return Some(Err(LspMessageError::Custom {
+                    description: format!(
+                        "Unexpected markdown message: kind={kind:?} value={value:?}"
+                    ),
+                }));
+            }
+            Some(Ok(()))
+        })
+        .expect("Failed to receive markdown publishDiagnostics message");
+
+    interaction
+        .client
+        .diagnostic("syntax_errors.py")
+        .expect_response(json!({
+            "items": [{
+                "code":"parse-error",
+                "codeDescription":{"href":"https://pyrefly.org/en/docs/error-kinds/#parse-error"},
+                "message":{"kind":"markdown","value":"Parse error: Expected an indented block after `if` statement"},
+                "range":{"end":{"character":1,"line":9},"start":{"character":0,"line":9}},
+                "severity":1,
+                "source":"Pyrefly"
+            }],
+            "kind": "full"
+        }))
+        .expect("Failed to receive markdown diagnostic response");
+
+    interaction.shutdown().unwrap();
+}
 #[test]
 fn test_stream_diagnostics_after_save() {
     let root = get_test_files_root();
@@ -1184,6 +1309,44 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
     interaction.shutdown().unwrap();
 }
 
+/// Verifies that closing a file in the default `openFilesOnly` mode clears its diagnostics.
+/// After `did_close`, the server should publish an empty diagnostics array for that URI.
+/// This serves as a regression control: workspace diagnostics mode will NOT clear on close.
+#[test]
+fn test_did_close_clears_diagnostics_in_open_files_only_mode() {
+    let test_files_root = get_test_files_root();
+    let root = test_files_root.path();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    // Open a file with a type error and verify diagnostics are published.
+    let file = "type_errors.py";
+    interaction.client.did_open(file);
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(root.join(file), 1)
+        .unwrap();
+
+    // Close the file and assert that publishDiagnostics with zero diagnostics is received.
+    // We use `eventual` rather than `must` because in-flight rechecks may produce
+    // intermediate non-empty notifications before the close is fully processed.
+    interaction.client.did_close(file);
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(root.join(file), 0)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
 #[test]
 fn test_missing_source_for_stubs_diagnostic() {
     let test_files_root = get_test_files_root();
@@ -1330,6 +1493,65 @@ fn test_untyped_import_diagnostic_does_not_show_non_recommended_packages() {
     interaction.shutdown().unwrap();
 }
 
+/// Test that cross-file diagnostics are produced even when indexing is disabled.
+/// Because dependencies are lazily computed, and do not necessarily reach Step::Solutions,
+/// when a dependency is changed, we need to invalidate based on the difference between
+/// the old Step::Answers data and the new Step::Solutions data.
+///
+/// Because background indexing computes project files to Step::Solutions, this test
+/// requires indexing to be disabled, to ensure the initial dependency state is Step::Answers.
+#[test]
+fn test_cross_file_diagnostic_no_indexing() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("cross_file_method_change");
+    // Indexing must be disabled to reproduce.
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+    let foo_path = root_path.join("foo.py");
+    let bar_path = root_path.join("bar.py");
+    let foo_contents = std::fs::read_to_string(&foo_path).unwrap();
+
+    // Open both files and verify initial empty diagnostics
+    interaction.client.did_open("foo.py");
+    interaction
+        .client
+        .diagnostic("foo.py")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive initial diagnostics for foo");
+
+    interaction.client.did_open("bar.py");
+    interaction
+        .client
+        .diagnostic("bar.py")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive initial diagnostics for bar");
+
+    // Change foo.py: is_skipped now takes str instead of Path.
+    let new_foo_contents = foo_contents.replace("path: Path", "path: str");
+    interaction.client.did_change("foo.py", &new_foo_contents);
+    std::fs::write(&foo_path, &new_foo_contents).unwrap();
+    interaction.client.did_save("foo.py");
+
+    // bar.py should now have a diagnostic because it passes Path("test") where str is expected.
+    // The server pushes publishDiagnostics after the recheck. We use "eventual" here because
+    // an intermediate 0-error notification may arrive if the did_change is processed before
+    // the did_save triggers the full disk-based recheck.
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(bar_path.clone(), 1)
+        .expect("Failed to receive cross-file diagnostic for bar after foo signature change");
+
+    interaction.shutdown().unwrap();
+}
+
 #[test]
 fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
     let test_files_root = get_test_files_root();
@@ -1386,4 +1608,68 @@ fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
         .unwrap();
 
     interaction.shutdown().unwrap();
+}
+
+/// Verifies that in the default `openFilesOnly` mode, diagnostics are NOT published for
+/// files that exist on disk but have not been opened via `did_open`.
+///
+/// Uses the shutdown response as a fence: a single `expect_message` records all
+/// `publishDiagnostics` URIs and terminates when the shutdown response arrives.
+/// After that, asserts none of the recorded URIs target the non-open file.
+#[test]
+fn test_no_diagnostics_for_non_open_files_in_open_files_only_mode() {
+    let test_files_root = get_test_files_root();
+    let root = test_files_root.path();
+    let non_open_file = root.join("type_errors.py");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    // Open a different file to trigger indexing. type_errors.py is on disk but not opened.
+    interaction.client.did_open("text_document.py");
+
+    // Send shutdown and use the response as a fence. The matcher records every
+    // publishDiagnostics URI it sees and only terminates on the shutdown response,
+    // ensuring no messages are silently consumed.
+    let shutdown_handle = interaction.client.send_shutdown();
+    let shutdown_id = shutdown_handle.id.clone();
+    let mut diagnostics_uris: Vec<Url> = Vec::new();
+    interaction
+        .client
+        .expect_message(
+            "shutdown response, recording all publishDiagnostics URIs",
+            |msg| {
+                if let Message::Notification(n) = &msg
+                    && n.method == PublishDiagnostics::METHOD
+                {
+                    let params: PublishDiagnosticsParams =
+                        serde_json::from_value(n.params.clone()).unwrap();
+                    diagnostics_uris.push(params.uri.clone());
+                }
+                if let Message::Response(r) = &msg
+                    && r.id == shutdown_id
+                {
+                    return Some(Ok(()));
+                }
+                None
+            },
+        )
+        .unwrap();
+    interaction.client.send_exit();
+
+    // Assert that no publishDiagnostics was received for the non-open file.
+    assert!(
+        !diagnostics_uris
+            .iter()
+            .any(|uri| uri.to_file_path().unwrap() == non_open_file),
+        "Received unexpected publishDiagnostics for non-open file: {}",
+        non_open_file.display()
+    );
 }

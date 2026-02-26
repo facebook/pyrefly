@@ -9,7 +9,7 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_types::dimension::SizeExpr;
-use pyrefly_types::dimension::simplify;
+use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::QuantifiedKind;
@@ -134,10 +134,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Perform the operation on the dimension types
         let result_ty = match op {
-            Operator::Add => simplify(self.heap.mk_size(SizeExpr::add(l_type, r_type))),
-            Operator::Sub => simplify(self.heap.mk_size(SizeExpr::sub(l_type, r_type))),
-            Operator::Mult => simplify(self.heap.mk_size(SizeExpr::mul(l_type, r_type))),
-            Operator::FloorDiv => simplify(self.heap.mk_size(SizeExpr::floor_div(l_type, r_type))),
+            Operator::Add => canonicalize(self.heap.mk_size(SizeExpr::add(l_type, r_type))),
+            Operator::Sub => canonicalize(self.heap.mk_size(SizeExpr::sub(l_type, r_type))),
+            Operator::Mult => canonicalize(self.heap.mk_size(SizeExpr::mul(l_type, r_type))),
+            Operator::FloorDiv => {
+                canonicalize(self.heap.mk_size(SizeExpr::floor_div(l_type, r_type)))
+            }
             _ => unreachable!(),
         };
 
@@ -577,7 +579,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Type::Dim(inner_ty) = t {
                     let zero = self.heap.mk_size(SizeExpr::Literal(0));
                     let result_ty =
-                        simplify(self.heap.mk_size(SizeExpr::sub(zero, (**inner_ty).clone())));
+                        canonicalize(self.heap.mk_size(SizeExpr::sub(zero, (**inner_ty).clone())));
                     return self.heap.mk_dim(result_ty);
                 }
                 let f = |lit: &Lit| lit.negate();

@@ -96,10 +96,17 @@ pub enum BaseClass {
     Generic(BaseClassGeneric),
     BaseClassExpr(BaseClassExpr),
     InvalidExpr(Expr),
-    NamedTuple(TextRange),
+    /// A namedtuple base class.
+    /// The bool indicates whether fields were dynamically generated
+    /// (e.g., using a generator or variable that couldn't be statically resolved).
+    NamedTuple(TextRange, bool),
     /// A namedtuple class synthesized anonymously as a base class,
     /// e.g. `class Foo(namedtuple("Foo", ["a", "b"]))`.
     SynthesizedBase(Idx<KeyClass>, TextRange),
+    /// `type(X)` where X is a statically determinable expression.
+    /// At runtime, evaluates to the metaclass of X (if X is a class)
+    /// or the class of X (if X is an instance).
+    TypeOf(BaseClassExpr, TextRange),
 }
 
 impl BaseClass {
@@ -125,8 +132,9 @@ impl Ranged for BaseClass {
             BaseClass::Generic(x) => x.range(),
             BaseClass::BaseClassExpr(base_expr) => base_expr.range(),
             BaseClass::InvalidExpr(expr) => expr.range(),
-            BaseClass::NamedTuple(range) => *range,
+            BaseClass::NamedTuple(range, _) => *range,
             BaseClass::SynthesizedBase(_, range) => *range,
+            BaseClass::TypeOf(_, range) => *range,
         }
     }
 }
@@ -136,7 +144,7 @@ impl<'a> BindingsBuilder<'a> {
         match self.as_special_export(&base_expr) {
             Some(SpecialExport::TypedDict) => BaseClass::TypedDict(base_expr.range()),
             Some(SpecialExport::TypingNamedTuple) | Some(SpecialExport::CollectionsNamedTuple) => {
-                BaseClass::NamedTuple(base_expr.range())
+                BaseClass::NamedTuple(base_expr.range(), false)
             }
             Some(SpecialExport::Protocol) => BaseClass::Generic(BaseClassGeneric {
                 kind: BaseClassGenericKind::Protocol,
@@ -167,6 +175,14 @@ impl<'a> BindingsBuilder<'a> {
                         }
                         _ => {}
                     }
+                }
+                if let Expr::Call(call) = &base_expr
+                    && call.arguments.args.len() == 1
+                    && call.arguments.keywords.is_empty()
+                    && self.as_special_export(&call.func) == Some(SpecialExport::BuiltinsType)
+                    && let Some(inner) = BaseClassExpr::from_expr(&call.arguments.args[0])
+                {
+                    return BaseClass::TypeOf(inner, base_expr.range());
                 }
                 if let Some(valid_expr) = BaseClassExpr::from_expr(&base_expr) {
                     BaseClass::BaseClassExpr(valid_expr)
