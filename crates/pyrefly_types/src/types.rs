@@ -626,6 +626,10 @@ pub enum Type {
     ElementOfTypeVarTuple(Box<Quantified>),
     TypeGuard(Box<Type>),
     TypeIs(Box<Type>),
+    /// `Annotated[T, meta, ...]` used as a value expression (not in an annotation context).
+    /// This is transparent when resolving annotations (i.e. `x: SmallInt` resolves to `int`)
+    /// but is not callable and cannot be assigned to `type[T]`.
+    Annotated(Box<Type>),
     Unpack(Box<Type>),
     TypeVar(TypeVar),
     ParamSpec(ParamSpec),
@@ -712,6 +716,7 @@ impl Visit for Type {
             Type::ElementOfTypeVarTuple(x) => x.visit(f),
             Type::TypeGuard(x) => x.visit(f),
             Type::TypeIs(x) => x.visit(f),
+            Type::Annotated(x) => x.visit(f),
             Type::Unpack(x) => x.visit(f),
             Type::TypeVar(x) => x.visit(f),
             Type::ParamSpec(x) => x.visit(f),
@@ -764,6 +769,7 @@ impl VisitMut for Type {
             Type::ElementOfTypeVarTuple(x) => x.visit_mut(f),
             Type::TypeGuard(x) => x.visit_mut(f),
             Type::TypeIs(x) => x.visit_mut(f),
+            Type::Annotated(x) => x.visit_mut(f),
             Type::Unpack(x) => x.visit_mut(f),
             Type::TypeVar(x) => x.visit_mut(f),
             Type::ParamSpec(x) => x.visit_mut(f),

@@ -558,9 +558,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     arguments.len()
                 ),
             ),
-            SpecialForm::Annotated if arguments.len() > 1 => self.heap.mk_type_form(
-                self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors),
-            ),
+            SpecialForm::Annotated if arguments.len() > 1 => {
+                let inner = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
+                Type::Annotated(Box::new(inner))
+            }
             SpecialForm::Annotated => self.error(
                 errors,
                 range,

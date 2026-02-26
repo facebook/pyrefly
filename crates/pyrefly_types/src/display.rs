@@ -871,6 +871,16 @@ impl<'a> TypeDisplayContext<'a> {
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
+            Type::Annotated(ty) => {
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("Annotated");
+                output.write_builtin("Annotated", qname)?;
+                output.write_str("[")?;
+                self.fmt_helper_generic(ty, false, output)?;
+                output.write_str("]")
+            }
             Type::Unpack(box ty @ Type::TypedDict(_)) => {
                 self.maybe_fmt_with_module("typing", "Unpack", output)?;
                 output.write_str("[")?;

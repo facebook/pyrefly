@@ -1593,6 +1593,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.type_order.has_superclass(got, want),
                 SubsetError::Other,
             ),
+            // Annotated[T, ...] is not a class object; it cannot be assigned to type[T].
+            (Type::Annotated(_), Type::Type(_)) => Err(SubsetError::Other),
             // Although the object created by a NewType call behaves like a class for type-checking
             // purposes, it isn't one at runtime, so don't allow it to match `type`.
             (Type::ClassDef(got), Type::Type(_)) if self.type_order.is_new_type(got) => {

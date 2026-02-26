@@ -1128,7 +1128,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 seen_param_specs,
                 tparams,
             ),
-            Type::Type(t) => self.tvars_to_tparams_for_type_alias(
+            Type::Type(t) | Type::Annotated(t) => self.tvars_to_tparams_for_type_alias(
                 t,
                 seen_type_vars,
                 seen_type_var_tuples,
@@ -1151,6 +1151,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !self.has_valid_annotation_syntax(expr, errors) {
             return TypeAlias::error(name.clone(), style);
         }
+        // Check whether the original type was Annotated before it gets rebound below.
+        // We use this later to decide whether to wrap the stored type in Annotated.
+        let original_was_annotated = matches!(ty, Type::Annotated(_));
         let untyped = self.untype_opt(ty.clone(), range, errors);
         let ty = if let Some(untyped) = untyped {
             let validated =
@@ -1174,12 +1177,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .map(|e| self.expr_infer(e, &self.error_swallower()))
             .collect();
-        TypeAlias::new(
-            name.clone(),
-            self.heap.mk_type_form(ty),
-            style,
-            annotated_metadata,
-        )
+        // If the original type was Annotated[T, ...], preserve the wrapper so that
+        // the alias is not callable and not assignable to type[T] in value position.
+        let stored_ty = if original_was_annotated {
+            Type::Annotated(Box::new(ty))
+        } else {
+            self.heap.mk_type_form(ty)
+        };
+        TypeAlias::new(name.clone(), stored_ty, style, annotated_metadata)
     }
 
     /// Check whether a type alias body contains a cyclic self-reference.
@@ -4404,7 +4409,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // when there is no annotation, so that `mylist = list` is treated
         // like a value assignment rather than a type alias?
         match ty {
-            Type::Type(_) | Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_) => true,
+            Type::Type(_)
+            | Type::TypeVar(_)
+            | Type::ParamSpec(_)
+            | Type::TypeVarTuple(_)
+            | Type::Annotated(_) => true,
             Type::TypeAlias(ta) => {
                 self.check_type_form(&self.get_type_alias(ta).as_type(), allow_none)
             }
@@ -5021,6 +5030,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.canonicalize_all_class_types(Type::ClassDef(cls), range, errors);
                 self.untype_opt(canonicalized, range, errors)
             }
+            // Annotated[T, meta] in annotation/type-alias context unwraps to T
+            Type::Annotated(t) => Some(*t),
             _ => None,
         }
     }

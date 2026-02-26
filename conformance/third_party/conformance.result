@@ -164,14 +164,7 @@
   "protocols_self.py": [],
   "protocols_subtyping.py": [],
   "protocols_variance.py": [],
-  "qualifiers_annotated.py": [
-    "Line 71: Expected 1 errors",
-    "Line 72: Expected 1 errors",
-    "Line 79: Expected 1 errors",
-    "Line 80: Expected 1 errors",
-    "Line 87: Expected 1 errors",
-    "Line 88: Expected 1 errors"
-  ],
+  "qualifiers_annotated.py": [],
   "qualifiers_final_annotation.py": [
     "Line 34: Expected 1 errors",
     "Line 38: Expected 1 errors",

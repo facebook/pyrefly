@@ -1,9 +1,9 @@
 {
   "total": 138,
-  "pass": 122,
-  "fail": 16,
-  "pass_rate": 0.88,
-  "differences": 48,
+  "pass": 123,
+  "fail": 15,
+  "pass_rate": 0.89,
+  "differences": 42,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -104,6 +104,7 @@
     "protocols_self.py",
     "protocols_subtyping.py",
     "protocols_variance.py",
+    "qualifiers_annotated.py",
     "qualifiers_final_decorator.py",
     "specialtypes_any.py",
     "specialtypes_never.py",
@@ -143,7 +144,6 @@
     "generics_self_usage.py": 2,
     "generics_typevartuple_basic.py": 1,
     "protocols_modules.py": 1,
-    "qualifiers_annotated.py": 6,
     "qualifiers_final_annotation.py": 5
   },
   "comment": "@generated"

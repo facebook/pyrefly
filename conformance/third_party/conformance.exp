@@ -10062,6 +10062,50 @@
     },
     {
       "code": -2,
+      "column": 24,
+      "concise_description": "`Annotated[int]` is not assignable to `type[Any]`",
+      "description": "`Annotated[int]` is not assignable to `type[Any]`",
+      "line": 71,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 42,
+      "stop_line": 71
+    },
+    {
+      "code": -2,
+      "column": 24,
+      "concise_description": "`TypeAlias[SmallInt, Annotated[int]]` is not assignable to `type[Any]`",
+      "description": "`TypeAlias[SmallInt, Annotated[int]]` is not assignable to `type[Any]`",
+      "line": 72,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 32,
+      "stop_line": 72
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Argument `Annotated[str]` is not assignable to parameter `x` with type `type[@_]` in function `func4`",
+      "description": "Argument `Annotated[str]` is not assignable to parameter `x` with type `type[@_]` in function `func4`",
+      "line": 79,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 25,
+      "stop_line": 79
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Argument `TypeAlias[SmallInt, Annotated[int]]` is not assignable to parameter `x` with type `type[@_]` in function `func4`",
+      "description": "Argument `TypeAlias[SmallInt, Annotated[int]]` is not assignable to parameter `x` with type `type[@_]` in function `func4`",
+      "line": 80,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 80
+    },
+    {
+      "code": -2,
       "column": 1,
       "concise_description": "Expected a callable, got `type[Annotated]`",
       "description": "Expected a callable, got `type[Annotated]`",
@@ -10070,6 +10114,28 @@
       "severity": "error",
       "stop_column": 10,
       "stop_line": 86
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Expected a callable, got `Annotated[int]`",
+      "description": "Expected a callable, got `Annotated[int]`",
+      "line": 87,
+      "name": "not-callable",
+      "severity": "error",
+      "stop_column": 19,
+      "stop_line": 87
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Expected a callable, got `TypeAlias[SmallInt, Annotated[int]]`",
+      "description": "Expected a callable, got `TypeAlias[SmallInt, Annotated[int]]`",
+      "line": 88,
+      "name": "not-callable",
+      "severity": "error",
+      "stop_column": 9,
+      "stop_line": 88
     }
   ],
   "qualifiers_final_annotation.py": [
