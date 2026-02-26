@@ -626,9 +626,9 @@ pub enum Type {
     ElementOfTypeVarTuple(Box<Quantified>),
     TypeGuard(Box<Type>),
     TypeIs(Box<Type>),
-    /// `Annotated[T, meta, ...]` used as a value expression (not in an annotation context).
-    /// This is transparent when resolving annotations (i.e. `x: SmallInt` resolves to `int`)
-    /// but is not callable and cannot be assigned to `type[T]`.
+    /// Used for special form `Annotated[T, ...]`.
+    /// This is transparent when resolving annotations, but is not callable and
+    /// cannot be assigned to `type[T]`.
     Annotated(Box<Type>),
     Unpack(Box<Type>),
     TypeVar(TypeVar),
