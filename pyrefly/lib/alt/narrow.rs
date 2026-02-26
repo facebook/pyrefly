@@ -9,6 +9,7 @@ use num_traits::ToPrimitive;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::dunder;
 use pyrefly_types::class::Class;
 use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::facet::FacetChain;
@@ -506,6 +507,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
+        if let FacetKind::Attribute(attr) = facet
+            && *attr == dunder::CLASS
+        {
+            match op {
+                AtomicNarrowOp::Is(v) | AtomicNarrowOp::Eq(v) => {
+                    // If X.__class__ == Y then X has to be exactly Y, not a subclass of Y
+                    // We can't model that, so we narrow it exactly like isinstance(X, Y)
+                    let right = self.expr_infer(v, errors);
+                    return Some(self.narrow_isinstance(base, &right));
+                }
+                _ => {}
+            }
+        }
         match op {
             AtomicNarrowOp::Is(v) => {
                 let right = self.expr_infer(v, errors);
@@ -1013,7 +1027,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::IsNotInstance(v, _source) => self.narrow_is_not_instance(ty, v, errors),
             AtomicNarrowOp::TypeEq(v) => {
-                // If type(X) == Y then X can't be a subclass of Y
+                // If type(X) == Y then X has to be exactly Y, not a subclass of Y
                 // We can't model that, so we narrow it exactly like isinstance(X, Y)
                 let right = self.expr_infer(v, errors);
                 self.narrow_isinstance(ty, &right)
