@@ -66,3 +66,60 @@ def bar(yes: bool) -> None:
     foo(**kwargs)
 "#,
 );
+
+testcase!(
+    test_anonymous_typed_dict_spread_unpack,
+    r#"
+from typing import assert_type
+
+# Basic dict unpacking should preserve anonymous typed dict
+defaults = {"host": "localhost", "port": 8080}
+overrides = {"port": 9090}
+config = {**defaults, **overrides}
+port: int = config["port"]
+host: str = config["host"]
+
+# Multiple dict unpacking with different value types
+base = {"name": "test", "count": 0}
+extra = {"count": 5, "active": True}
+combined = {**base, **extra}
+count: int = combined["count"]
+name: str = combined["name"]
+active: bool = combined["active"]
+
+# Passing unpacked dict value to typed function
+def process_port(port: int) -> str:
+    return f":{port}"
+
+merged = {**defaults, **overrides}
+process_port(merged["port"])
+
+# assert_type works on the dict
+assert_type(config["port"], int)
+assert_type(config["host"], str)
+"#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_spread_with_explicit_keys,
+    r#"
+from typing import assert_type
+base = {"x": 1, "y": "hello"}
+extended = {**base, "z": True}
+assert_type(extended["x"], int)
+assert_type(extended["y"], str)
+assert_type(extended["z"], bool)
+assert_type(extended, dict[str, int | str | bool])
+"#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_spread_override,
+    r#"
+from typing import assert_type
+original = {"val": "string"}
+updated = {**original, "val": 42}
+assert_type(updated["val"], int)
+assert_type(updated, dict[str, int])
+"#,
+);

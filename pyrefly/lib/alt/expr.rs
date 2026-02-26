@@ -59,6 +59,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
+use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 use vec1::vec1;
 
@@ -929,7 +930,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// typed dict if the following conditions are met:
     /// - there cannot already be a contextual hint
     /// - all the keys must be string literals
-    /// - there cannot be any unpackings
+    /// - any unpacked value is also an anonymous typed dict
     /// - the dict cannot be empty
     fn dict_items_infer(
         &self,
@@ -958,13 +959,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             self.heap.mk_class_type(self.stdlib.dict(key_ty, value_ty))
         } else {
-            let mut typed_dict_fields = Vec::new();
-            let can_create_anonymous_typed_dict = hint.is_none()
+            // Use a map to track fields by name so later fields override earlier ones
+            let mut typed_dict_fields_map: SmallMap<Name, TypedDictField> = SmallMap::new();
+            // We can create an anonymous typed dict if there's no hint, the size is reasonable,
+            // and all keys are string literals. Unpackings are resolved later - we only allow them
+            // if all unpackings resolve to anonymous typed dicts.
+            let mut can_create_anonymous_typed_dict = hint.is_none()
                 && items.len() <= ANONYMOUS_TYPED_DICT_MAX_ITEMS
                 && items.iter().all(|item| {
-                    item.key
-                        .as_ref()
-                        .is_some_and(|k| k.as_string_literal_expr().is_some())
+                    item.key.is_none()
+                        || item
+                            .key
+                            .as_ref()
+                            .is_some_and(|k| k.as_string_literal_expr().is_some())
                 });
             let mut key_tys = Vec::new();
             let mut value_tys = Vec::new();
@@ -988,7 +995,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             && let Some(string_lit) = key.as_string_literal_expr()
                         {
                             let key_name = Name::new(string_lit.value.to_str());
-                            typed_dict_fields.push((
+                            typed_dict_fields_map.insert(
                                 key_name,
                                 TypedDictField {
                                     ty: if value_t.is_none() {
@@ -1007,14 +1014,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     required: false,
                                     read_only_reason: None,
                                 },
-                            ));
+                            );
                         }
                         value_tys.push(value_t);
                     }
                 }
                 None => {
                     let ty = self.expr_infer(&x.value, errors);
-                    if let Some((key_t, value_t)) = self.unwrap_mapping(&ty) {
+                    // If the unpacked value is an anonymous typed dict, merge its fields.
+                    // Later fields override earlier ones with the same name.
+                    if can_create_anonymous_typed_dict
+                        && let Type::TypedDict(TypedDict::Anonymous(inner)) = &ty
+                    {
+                        key_tys.push(self.stdlib.str().clone().to_type());
+                        for (name, field) in inner.fields.iter() {
+                            typed_dict_fields_map.insert(name.clone(), field.clone());
+                            if !field.ty.is_error() {
+                                value_tys.push(field.ty.clone());
+                            }
+                        }
+                    } else if let Some((key_t, value_t)) = self.unwrap_mapping(&ty) {
+                        // Non-anonymous-typed-dict unpacking disables anonymous typed dict creation
+                        can_create_anonymous_typed_dict = false;
                         if !key_t.is_error() {
                             if let Some(key_hint) = &key_hint
                                 && self.is_subset_eq(&key_t, key_hint.ty())
@@ -1034,6 +1055,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         }
                     } else {
+                        can_create_anonymous_typed_dict = false;
                         self.error(
                             errors,
                             x.value.range(),
@@ -1043,11 +1065,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             });
-            if can_create_anonymous_typed_dict && !typed_dict_fields.is_empty() {
+            if can_create_anonymous_typed_dict
+                && !typed_dict_fields_map.is_empty()
+                && typed_dict_fields_map.len() <= ANONYMOUS_TYPED_DICT_MAX_ITEMS
+            {
+                // Compute the fallback value type from the field mapping, not from value_tys which
+                // may contain types from overridden keys
+                let final_value_tys: Vec<_> = typed_dict_fields_map
+                    .values()
+                    .map(|f| f.ty.clone())
+                    .collect();
+                let typed_dict_fields: Vec<_> = typed_dict_fields_map.into_iter().collect();
                 return self.heap.mk_typed_dict(TypedDict::Anonymous(Box::new(
                     AnonymousTypedDictInner {
                         fields: typed_dict_fields,
-                        value_type: self.unions(value_tys),
+                        value_type: self.unions(final_value_tys),
                     },
                 )));
             }
