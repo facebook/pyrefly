@@ -339,6 +339,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Optimisation: If we have `Union[a, b] | Union[c, d]`, instead of unioning
         // (a | c) | (a | d) | (b | c) | (b | d), we can just do one union.
         if x.op == Operator::BitOr
+            && !lhs.is_any()
+            && !rhs.is_any()
             && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
             && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
         {

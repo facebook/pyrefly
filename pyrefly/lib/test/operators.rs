@@ -767,3 +767,19 @@ def test(a: A, b: B, c: C) -> None:
     a < c      # E: `<` is not supported between `A` and `C`
     "#,
 );
+
+testcase!(
+    test_bitor_unknown_operands,
+    r#"
+from typing import assert_type, Any
+
+def f(x: int): ...
+
+def test(x, y):
+    z = x | y
+    # When operands are unknown, the result should be Any, not type[Any]
+    assert_type(z, Any)
+    # This should not produce an error since z is Any
+    f(z)
+"#,
+);
