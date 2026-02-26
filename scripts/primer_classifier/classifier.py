@@ -49,6 +49,7 @@ class Classification:
     method: str = "heuristic"  # "heuristic" or "llm"
     categories: list[CategoryVerdict] = field(default_factory=list)
     pr_attribution: str = ""
+    error_kinds: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -505,6 +506,11 @@ def classify_project(
         reason="",
         added_count=len(project.added),
         removed_count=len(project.removed),
+        error_kinds=sorted(set(
+            e.error_kind
+            for e in (*project.added, *project.removed)
+            if e.error_kind
+        )),
     )
 
     # Heuristic 1: All additions are internal-error → regression

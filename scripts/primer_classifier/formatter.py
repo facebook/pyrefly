@@ -129,6 +129,8 @@ def _extract_root_cause(c) -> str:
         return f"[`{func_name}()`]({url})"
     if func_match:
         return f"`{func_match.group(1)}()`"
+    if file_path:
+        return f"[`{file_path}`]({_GITHUB_BASE_URL}{file_path})"
     # Truncate long attribution text for the table
     if len(attr) > 60:
         return attr[:57] + "..."
@@ -136,10 +138,73 @@ def _extract_root_cause(c) -> str:
 
 
 def _extract_error_kind(c) -> str:
-    """Extract the primary error kind from a classification's categories."""
+    """Extract the primary error kind(s) from a classification.
+
+    Prefers LLM-provided categories, falls back to error kinds extracted
+    directly from the project's error entries.
+    """
     if c.categories:
         return f"`{c.categories[0].category}`"
+    if c.error_kinds:
+        return ", ".join(f"`{k}`" for k in c.error_kinds[:2])
     return ""
+
+
+def _build_high_level_summary(result: ClassificationResult) -> str:
+    """Build a one-paragraph high-level summary of the classification results.
+
+    Aggregates common error kinds and root causes across all projects to give
+    reviewers a quick understanding of the overall impact.
+    """
+    regressions = [c for c in result.classifications if c.verdict == "regression"]
+    improvements = [c for c in result.classifications if c.verdict == "improvement"]
+
+    if not regressions and not improvements:
+        return ""
+
+    parts = []
+
+    if regressions:
+        # Collect error kinds across all regressions
+        all_kinds: list[str] = []
+        for c in regressions:
+            if c.categories:
+                all_kinds.extend(cat.category for cat in c.categories)
+            elif c.error_kinds:
+                all_kinds.extend(c.error_kinds)
+        kind_counts: dict[str, int] = {}
+        for k in all_kinds:
+            kind_counts[k] = kind_counts.get(k, 0) + 1
+        top_kinds = sorted(kind_counts, key=lambda k: kind_counts[k], reverse=True)[:3]
+
+        # Collect root causes
+        causes = set()
+        for c in regressions:
+            func = _INTERNAL_FUNCTION_PATTERN.search(c.pr_attribution or "")
+            if func:
+                causes.add(f"`{func.group(1)}()`")
+        proj_names = [c.project_name for c in regressions]
+
+        reg_parts = []
+        reg_parts.append(
+            f"**{len(regressions)} regression(s)** "
+            f"across {', '.join(proj_names)}"
+        )
+        if top_kinds:
+            kinds_str = ", ".join(f"`{k}`" for k in top_kinds)
+            reg_parts.append(f"error kinds: {kinds_str}")
+        if causes:
+            reg_parts.append(f"caused by {', '.join(sorted(causes))}")
+        parts.append(". ".join(reg_parts) + ".")
+
+    if improvements:
+        proj_names = [c.project_name for c in improvements]
+        parts.append(
+            f"**{len(improvements)} improvement(s)** "
+            f"across {', '.join(proj_names)}."
+        )
+
+    return " ".join(parts) + "\n"
 
 
 def format_markdown(result: ClassificationResult) -> str:
@@ -170,9 +235,12 @@ def format_markdown(result: ClassificationResult) -> str:
         parts.append(f"{_VERDICT_EMOJI['ambiguous']} {result.ambiguous} needs review")
     lines.append(" | ".join(parts) + f" | {result.total_projects} project(s) total\n")
 
+    # High-level summary: aggregate the common patterns across projects
+    lines.append(_build_high_level_summary(result))
+
     # Overview table
-    lines.append("| Project | Verdict | Changes | Error Kind | Root Cause |")
-    lines.append("|---------|---------|---------|------------|------------|")
+    lines.append("| Project | Verdict | Changes | Error Kinds | Root Cause |")
+    lines.append("|---------|---------|---------|-------------|------------|")
     for c in result.classifications:
         emoji = _VERDICT_EMOJI.get(c.verdict, "")
         label = _VERDICT_LABEL.get(c.verdict, c.verdict)
