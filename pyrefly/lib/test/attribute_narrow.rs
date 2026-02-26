@@ -105,6 +105,11 @@ def f(x: int | str):
 def g(x: int | str):
     assert x.__class__ is int
     assert_type(x, int)
+def h(x: bool | str):
+    if x.__class__ is bool:
+        assert_type(x, bool)
+    else:
+        assert_type(x, str)
 "#,
 );
 
