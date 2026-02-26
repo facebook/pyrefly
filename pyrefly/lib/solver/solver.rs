@@ -49,7 +49,10 @@ use crate::error::context::TypeCheckKind;
 use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
 use crate::types::callable::Function;
+use crate::types::callable::Param;
+use crate::types::callable::ParamList;
 use crate::types::callable::Params;
+use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::module::ModuleType;
 use crate::types::simplify::simplify_tuples;
@@ -621,6 +624,36 @@ impl Solver {
                         ));
                     }
                     _ => {}
+                }
+            } else if let Some(Callable {
+                params: Params::List(param_list),
+                ret: _,
+            }) = callable
+            {
+                // When a VarArg has a concrete unpacked tuple, expand it to positional-only params
+                // e.g., (*args: Unpack[tuple[int, str]]) -> (int, str, /)
+                let needs_expansion = param_list.items().iter().any(|p| {
+                    matches!(
+                        p,
+                        Param::VarArg(_, Type::Unpack(box Type::Tuple(Tuple::Concrete(_))))
+                    )
+                });
+                if needs_expansion {
+                    let mut new_params = Vec::new();
+                    for param in mem::take(param_list).into_items() {
+                        match param {
+                            Param::VarArg(
+                                _,
+                                Type::Unpack(box Type::Tuple(Tuple::Concrete(elts))),
+                            ) => {
+                                for elt in elts {
+                                    new_params.push(Param::PosOnly(None, elt, Required::Required));
+                                }
+                            }
+                            _ => new_params.push(param),
+                        }
+                    }
+                    *param_list = ParamList::new(new_params);
                 }
             }
         });

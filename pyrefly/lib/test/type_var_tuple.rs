@@ -409,3 +409,36 @@ IntTupleGeneric = tuple[int, T, T2]
 x: IntTupleGeneric[*tuple[float, ...]]  # E: Unpacked argument cannot be used for type parameter T # E: Expected 2 type arguments for `IntTupleGeneric`, got 1
 "#,
 );
+
+testcase!(
+    test_expand_concrete_tuple_varargs,
+    r#"
+from typing import TypeVarTuple, TypeVar, Callable, assert_type
+
+T = TypeVarTuple("T")
+R = TypeVar("R")
+
+def positional(fn: Callable[[*T], R]) -> Callable[[*T], R]:
+    return fn
+
+def test(name: str) -> str:
+    return name
+
+infer = positional(test)
+# When TypeVarTuple resolves to concrete types, callable params should expand
+# to positional params, not *args: Unpack[tuple[...]]
+assert_type(infer, Callable[[str], str])
+
+def test2(a: int, b: str) -> float:
+    return 1.0
+
+infer2 = positional(test2)
+assert_type(infer2, Callable[[int, str], float])
+
+def test3() -> None:
+    pass
+
+infer3 = positional(test3)
+assert_type(infer3, Callable[[], None])
+"#,
+);
