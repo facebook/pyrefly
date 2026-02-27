@@ -4967,6 +4967,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     return Some(TensorType::shapeless(cls.clone()).to_type());
                 }
+                // Normalize type[NoneType] as None
+                if let Type::ClassType(cls) = t.as_ref()
+                    && cls.has_qname("types", "NoneType")
+                {
+                    return Some(self.heap.mk_none());
+                }
                 Some(*t)
             }
             Type::None => Some(self.heap.mk_none()), // Both a value and a type

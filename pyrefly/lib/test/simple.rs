@@ -956,6 +956,17 @@ assert_type(type(x6), type[dict])
 );
 
 testcase!(
+    test_assert_nonetype,
+    r#"
+from types import NoneType
+from typing import assert_type
+
+def f(x: int | NoneType):
+    assert_type(x, int | None)
+"#,
+);
+
+testcase!(
     test_anywhere_binding,
     r#"
 from typing import assert_type, Literal

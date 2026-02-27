@@ -67,6 +67,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .explicit_any()
                     .explicit_literals()
                     .noreturn_to_never()
+                    .nonetype_to_none()
                     .anon_callables()
                     .anon_typed_dicts(self.stdlib)
                     .distribute_type_over_union(self.heap)

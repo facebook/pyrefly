@@ -1508,6 +1508,16 @@ impl Type {
         })
     }
 
+    pub fn nonetype_to_none(self) -> Self {
+        self.transform(&mut |ty| {
+            if let Type::ClassType(cls) = ty
+                && cls.has_qname("types", "NoneType")
+            {
+                *ty = Type::None;
+            }
+        })
+    }
+
     /// type[a | b] -> type[a] | type[b]
     pub fn distribute_type_over_union(self, heap: &TypeHeap) -> Self {
         self.transform(&mut |ty| {
