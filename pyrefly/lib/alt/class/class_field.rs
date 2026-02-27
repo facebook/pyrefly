@@ -1787,7 +1787,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect();
         if matches!(
             field_definition,
-            ClassFieldDefinition::AssignedInBody { .. }
+            ClassFieldDefinition::DefinedInMethod { .. }
         ) && !init_assignments.is_empty()
             && annotation
                 .as_ref()
