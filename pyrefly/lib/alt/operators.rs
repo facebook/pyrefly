@@ -900,13 +900,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if left.is_any() || right.is_any() || left.is_never() || right.is_never() {
             return;
         }
-        let Some(left_builtin) = self.builtin_scalar_name(left) else {
+        let Some(left_ty) = self.comparison_base(left) else {
             return;
         };
-        let Some(right_builtin) = self.builtin_scalar_name(right) else {
+        let Some(right_ty) = self.comparison_base(right) else {
             return;
         };
-        if Self::builtin_eq_group(&left_builtin) == Self::builtin_eq_group(&right_builtin) {
+        let left_base = self.disjoint_base(&left_ty);
+        let right_base = self.disjoint_base(&right_ty);
+        if left_base == right_base
+            || self.has_superclass(&left_base, &right_base)
+            || self.has_superclass(&right_base, &left_base)
+        {
             return;
         }
         let left_display = self.for_display(left.clone());
@@ -924,31 +929,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
     }
 
-    fn builtin_scalar_name(&self, ty: &Type) -> Option<String> {
-        let class_type = match ty {
-            Type::ClassType(cls) => cls.clone(),
-            Type::Literal(lit) => lit.value.general_class_type(self.stdlib).clone(),
-            Type::LiteralString(_) => self.stdlib.str().clone(),
-            _ => return None,
-        };
-        let class = class_type.class_object();
-        if class.qname().module_name().as_str() != "builtins" {
-            return None;
-        }
-        let name = class.name().as_str();
-        match name {
-            "bool" | "int" | "float" | "complex" | "str" | "bytes" | "bytearray" | "memoryview" => {
-                Some(name.to_owned())
-            }
+    fn comparison_base(&self, ty: &Type) -> Option<Type> {
+        match ty {
+            Type::ClassType(_) | Type::Tuple(_) => Some(ty.clone()),
+            Type::Literal(lit) => Some(Type::ClassType(
+                lit.value.general_class_type(self.stdlib).clone(),
+            )),
+            Type::LiteralString(_) => Some(Type::ClassType(self.stdlib.str().clone())),
             _ => None,
-        }
-    }
-
-    fn builtin_eq_group(name: &str) -> std::borrow::Cow<'_, str> {
-        match name {
-            "bool" | "int" | "float" | "complex" => std::borrow::Cow::Borrowed("numeric"),
-            "bytes" | "bytearray" | "memoryview" => std::borrow::Cow::Borrowed("bytes-like"),
-            _ => std::borrow::Cow::Borrowed(name),
         }
     }
 }
