@@ -1231,3 +1231,16 @@ class B(A):
     f: Callable[[Any], int]  # E: overrides parent class `A` in an inconsistent manner
     "#,
 );
+
+testcase!(
+    test_override_method_without_self,
+    r#"
+class A:
+    def foo() -> int:
+        return 42
+
+class B(A):
+    def foo() -> int:
+        return 100
+    "#,
+);

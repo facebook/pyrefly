@@ -1404,6 +1404,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             {
                 self.is_subset_eq(&l_no_self, &u_no_self)
             }
+            (Type::BoundMethod(l), Type::BoundMethod(u)) => {
+                self.is_subset_eq(&l.func.clone().as_type(), &u.func.clone().as_type())
+            }
             (
                 Type::Callable(box l)
                 | Type::Function(box Function {
