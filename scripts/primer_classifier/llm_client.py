@@ -170,6 +170,12 @@ You MUST cite the relevant typing spec section with a link (https://typing.readt
 
 CRITICAL — MYPY/PYRIGHT CROSS-CHECK: Before classifying a new error as "improvement", ask yourself: would mypy and pyright also flag this exact pattern? If they would NOT — if pyrefly is enforcing a rule more strictly than the ecosystem standard — then the error is a REGRESSION regardless of whether the code has a theoretical type issue. Pyrefly being stricter than established tools creates false positive noise. Use your training data knowledge of mypy/pyright behavior to make this determination.
 
+INTENTIONAL REGRESSIONS vs SPEC COMPLIANCE: Sometimes a PR intentionally introduces stricter behavior to comply with the typing spec. When the PR description states conformance intent AND cites a specific spec section:
+- If the spec clearly supports the new check, classify as "improvement" — the projects producing new errors were relying on a bug in pyrefly. The old (lenient) behavior was the bug, not the new (correct) behavior.
+- Frame it clearly with a concrete example pulled from the actual errors. Show the specific type pattern from the error messages (e.g., the actual types involved) so reviewers can immediately understand what changed.
+- The mypy/pyright cross-check is informational, not decisive. Pyrefly may be ahead of other tools on spec compliance, and that's fine.
+- Do NOT suggest reverting spec-compliant behavior in fix suggestions.
+
 OUTPUT FORMAT:
 
 Do NOT include a "verdict" field — your job in this pass is ONLY to analyze and reason. A separate step will assign the verdict based on your reasoning.
@@ -200,11 +206,16 @@ def _build_user_prompt(
     change_type: str,
     structural_signals: Optional[str] = None,
     pyrefly_diff: Optional[str] = None,
+    pr_description: Optional[str] = None,
 ) -> str:
     parts = [
         f"Change type: {change_type} ('+' = new error on PR branch, '-' = removed error)\n",
         f"Errors:\n{errors_text}\n",
     ]
+    if pr_description:
+        parts.append(
+            f"PR description (author's stated intent):\n{pr_description}\n"
+        )
     if structural_signals:
         parts.append(f"\n{structural_signals}\n")
     if source_context:
@@ -382,6 +393,7 @@ def classify_with_llm(
     model: Optional[str] = None,
     structural_signals: Optional[str] = None,
     pyrefly_diff: Optional[str] = None,
+    pr_description: Optional[str] = None,
 ) -> LLMResponse:
     """Pass 1: Send errors + context to the LLM for reasoning (no verdict).
 
@@ -401,7 +413,8 @@ def classify_with_llm(
 
     system_prompt = _build_system_prompt()
     user_prompt = _build_user_prompt(
-        errors_text, source_context, change_type, structural_signals, pyrefly_diff
+        errors_text, source_context, change_type, structural_signals, pyrefly_diff,
+        pr_description,
     )
 
     print(f"Using {backend} backend for classification (pass 1: reasoning)", file=sys.stderr)
@@ -461,6 +474,8 @@ Rules:
 - If the reasoning describes new errors as correctly catching real bugs → "improvement" (pyrefly is now smarter)
 - If the reasoning describes new errors as wrong, false positives, or too strict → "regression" (pyrefly got worse)
 - If the reasoning describes only message wording changes → "neutral"
+- SPEC COMPLIANCE: If the reasoning says new errors are correct per the typing spec and the PR is implementing spec-required behavior, classify as "improvement" even if mypy/pyright don't enforce the same rule yet. Spec compliance is the primary authority.
+- TOO STRICT (without spec basis): If the reasoning says new errors have NO spec basis and mypy/pyright don't flag them → "regression".
 
 Respond with JSON only:
 {"verdict": "regression|improvement|neutral", "categories": [{"category": "short label", "verdict": "regression|improvement|neutral"}, ...]}
@@ -556,6 +571,7 @@ GOOD (actionable): "In check_override_compatibility() in solver/subset.rs, add a
 
 Rules:
 - Focus on regressions. Improvements are fine — don't suggest reverting them.
+- For intentional/conformance improvements: do NOT suggest reverting or weakening spec-compliant behavior. The ecosystem needs to adapt to the spec, not the other way around.
 - If a rule is applied too broadly (e.g., a protocol-only check applied to regular classes), suggest narrowing its scope with a guard condition, naming the specific function.
 - If type inference regressed, identify which inference path changed and suggest restoring the previous behavior for the affected cases.
 - Reference specific pyrefly source files and function names from the diff.

@@ -51,13 +51,21 @@ jobs:
       - run: unzip diff.zip
       - run: cat diff_*.txt | tee fulldiff.txt
 
-      - name: Fetch PR code diff
+      - name: Fetch PR code diff and description
         uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
             const prNumber = parseInt(fs.readFileSync("pr_number.txt", { encoding: "utf8" }));
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            const description = `# ${pr.title}\n\n${pr.body || ''}`;
+            fs.writeFileSync("pr_description.txt", description);
+            console.log(`Fetched PR #${prNumber} description (${description.length} chars)`);
             const { data: diff } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -72,6 +80,7 @@ jobs:
           python -m scripts.primer_classifier \
             --diff-file fulldiff.txt \
             --pyrefly-diff pr_code.diff \
+            --pr-description pr_description.txt \
             --suggest \
             --output-format markdown \
             | tee classification.md

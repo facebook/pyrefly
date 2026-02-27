@@ -69,6 +69,11 @@ def main() -> int:
         action="store_true",
         help="Generate aggregate source code suggestions for fixing regressions (Pass 3)",
     )
+    parser.add_argument(
+        "--pr-description",
+        default=None,
+        help="Path to file containing the PR title and description (for intent context)",
+    )
 
     args = parser.parse_args()
 
@@ -117,6 +122,19 @@ def main() -> int:
             print(f"Error reading pyrefly diff file: {e}", file=sys.stderr)
             return 1
 
+    # Read the PR description if provided
+    pr_description = None
+    if args.pr_description:
+        try:
+            with open(args.pr_description) as f:
+                pr_description = f.read()
+        except FileNotFoundError:
+            print(f"Error: file not found: {args.pr_description}", file=sys.stderr)
+            return 1
+        except OSError as e:
+            print(f"Error reading PR description file: {e}", file=sys.stderr)
+            return 1
+
     # Classify
     result = classify_all(
         projects,
@@ -125,6 +143,7 @@ def main() -> int:
         model=args.model,
         pyrefly_diff=pyrefly_diff,
         generate_suggestion=args.suggest,
+        pr_description=pr_description,
     )
 
     # Output

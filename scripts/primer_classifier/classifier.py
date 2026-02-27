@@ -493,6 +493,7 @@ def classify_project(
     use_llm: bool = True,
     model: Optional[str] = None,
     pyrefly_diff: Optional[str] = None,
+    pr_description: Optional[str] = None,
 ) -> Classification:
     """Classify a single project's changes.
 
@@ -575,6 +576,7 @@ def classify_project(
             model=model,
             structural_signals=structural_signals,
             pyrefly_diff=truncated_diff,
+            pr_description=pr_description,
         )
 
         # Multi-pass: if the LLM requests additional files, fetch and retry
@@ -604,6 +606,7 @@ def classify_project(
                 model=model,
                 structural_signals=structural_signals,
                 pyrefly_diff=truncated_diff,
+                pr_description=pr_description,
             )
 
         # If the LLM still wants files after all passes, give up
@@ -650,6 +653,7 @@ def classify_all(
     model: Optional[str] = None,
     pyrefly_diff: Optional[str] = None,
     generate_suggestion: bool = False,
+    pr_description: Optional[str] = None,
 ) -> ClassificationResult:
     """Classify all projects in a primer diff.
 
@@ -669,6 +673,7 @@ def classify_all(
             use_llm=use_llm,
             model=model,
             pyrefly_diff=pyrefly_diff,
+            pr_description=pr_description,
         )
         result.classifications.append(classification)
 
