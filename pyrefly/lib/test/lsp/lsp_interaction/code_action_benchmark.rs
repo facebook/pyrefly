@@ -114,7 +114,8 @@ fn test_code_action_latency() {
 
     let file_path = repo_root.join(&file_rel);
     let uri = Url::from_file_path(&file_path).unwrap();
-    interaction.client.did_open(&file_rel);
+    let file_rel_static: &'static str = Box::leak(file_rel.clone().into_boxed_str());
+    interaction.client.did_open(file_rel_static);
 
     // Warm up by waiting for diagnostics on the target file.
     interaction
