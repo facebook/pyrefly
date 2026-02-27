@@ -66,17 +66,16 @@ fn print_stats(label: &str, samples: &[Duration]) {
     let mut sorted = samples.to_vec();
     sorted.sort();
     let count = sorted.len() as u64;
-    let total: Duration = sorted.iter().copied().fold(Duration::ZERO, |acc, v| acc + v);
+    let total: Duration = sorted
+        .iter()
+        .copied()
+        .fold(Duration::ZERO, |acc, v| acc + v);
     let mean_nanos = total.as_nanos() / count as u128;
     let mean = Duration::from_nanos(mean_nanos as u64);
     let p50 = sorted[sorted.len() / 2];
-    let p95 =
-        sorted[(((sorted.len() as f64) * 0.95).floor() as usize).min(sorted.len() - 1)];
-    let p99 =
-        sorted[(((sorted.len() as f64) * 0.99).floor() as usize).min(sorted.len() - 1)];
-    eprintln!(
-        "{label}: count={count} mean={mean:?} p50={p50:?} p95={p95:?} p99={p99:?}"
-    );
+    let p95 = sorted[(((sorted.len() as f64) * 0.95).floor() as usize).min(sorted.len() - 1)];
+    let p99 = sorted[(((sorted.len() as f64) * 0.99).floor() as usize).min(sorted.len() - 1)];
+    eprintln!("{label}: count={count} mean={mean:?} p50={p50:?} p95={p95:?} p99={p99:?}");
 }
 
 #[test]
