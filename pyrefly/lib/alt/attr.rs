@@ -2241,9 +2241,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             // At runtime, `Annotated[T, ...]` is an instance of `typing._AnnotatedAlias`,
             // which inherits from `typing._GenericAlias`. We model it as `GenericAlias`.
-            Type::Annotated(_) => {
-                acc.push(AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone()))
-            }
+            Type::Annotated(_) => acc.push(AttributeBase1::ClassInstance(
+                self.stdlib.generic_alias().clone(),
+            )),
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
             | Type::Type(_)
