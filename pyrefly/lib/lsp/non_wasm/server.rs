@@ -3764,11 +3764,15 @@ impl Server {
         };
         let allow_quickfix = allows_kind(&CodeActionKind::QUICKFIX);
         let allow_fix_all = allows_kind(&CodeActionKind::SOURCE_FIX_ALL);
-        let allow_refactor = only_kinds.is_none_or(|kinds| {
-            kinds
-                .iter()
-                .any(|kind| kind.as_str().starts_with(CodeActionKind::REFACTOR.as_str()))
-        });
+        let refactor_move_kind = CodeActionKind::new("refactor.move");
+        let allow_refactor_extract = allows_kind(&CodeActionKind::REFACTOR_EXTRACT);
+        let allow_refactor_inline = allows_kind(&CodeActionKind::REFACTOR_INLINE);
+        let allow_refactor_rewrite = allows_kind(&CodeActionKind::REFACTOR_REWRITE);
+        let allow_refactor_move = allows_kind(&refactor_move_kind);
+        let allow_refactor = allow_refactor_extract
+            || allow_refactor_inline
+            || allow_refactor_rewrite
+            || allow_refactor_move;
         let mut actions = Vec::new();
         let server_state = self.telemetry_state();
         let start = Instant::now();
@@ -3856,7 +3860,7 @@ impl Server {
             return (!actions.is_empty()).then_some(actions);
         }
         if allow_refactor {
-            let mut push_refactor_actions =
+            let push_refactor_actions =
                 |actions: &mut Vec<CodeActionOrCommand>,
                  refactors: Vec<LocalRefactorCodeAction>| {
                     for action in refactors {
@@ -3876,8 +3880,8 @@ impl Server {
                     }
                 };
             macro_rules! timed_refactor_action {
-                ($name:expr, $kind:expr, $call:expr) => {{
-                    if allows_kind($kind) {
+                ($name:expr, $allowed:expr, $call:expr) => {{
+                    if $allowed {
                         let start = Instant::now();
                         if let Some(refactors) = $call {
                             push_refactor_actions(&mut actions, refactors);
@@ -3894,91 +3898,84 @@ impl Server {
                     }
                 }};
             }
-            let refactor_move_kind = CodeActionKind::new("refactor.move");
             timed_refactor_action!(
                 "extract_field",
-                &CodeActionKind::REFACTOR_EXTRACT,
+                allow_refactor_extract,
                 transaction.extract_field_code_actions(&handle, range)
             );
             timed_refactor_action!(
                 "extract_variable",
-                &CodeActionKind::REFACTOR_EXTRACT,
+                allow_refactor_extract,
                 transaction.extract_variable_code_actions(&handle, range)
             );
             timed_refactor_action!(
                 "invert_boolean",
-                &CodeActionKind::REFACTOR_REWRITE,
+                allow_refactor_rewrite,
                 transaction.invert_boolean_code_actions(&handle, range)
             );
             timed_refactor_action!(
                 "extract_function",
-                &CodeActionKind::REFACTOR_EXTRACT,
+                allow_refactor_extract,
                 transaction.extract_function_code_actions(&handle, range)
             );
             timed_refactor_action!(
                 "extract_superclass",
-                &CodeActionKind::REFACTOR_EXTRACT,
+                allow_refactor_extract,
                 transaction.extract_superclass_code_actions(&handle, range)
             );
             timed_refactor_action!(
                 "inline_variable",
-                &CodeActionKind::REFACTOR_INLINE,
+                allow_refactor_inline,
                 transaction.inline_variable_code_actions(&handle, range)
             );
             timed_refactor_action!(
                 "inline_method",
-                &CodeActionKind::REFACTOR_INLINE,
+                allow_refactor_inline,
                 transaction.inline_method_code_actions(&handle, range)
             );
             timed_refactor_action!(
                 "inline_parameter",
-                &CodeActionKind::REFACTOR_INLINE,
+                allow_refactor_inline,
                 transaction.inline_parameter_code_actions(&handle, range)
             );
             timed_refactor_action!(
                 "pull_members_up",
-                &refactor_move_kind,
+                allow_refactor_move,
                 transaction.pull_members_up_code_actions(&handle, range)
             );
             timed_refactor_action!(
                 "push_members_down",
-                &refactor_move_kind,
+                allow_refactor_move,
                 transaction.push_members_down_code_actions(&handle, range)
             );
             timed_refactor_action!(
                 "move_module_member",
-                &refactor_move_kind,
+                allow_refactor_move,
                 transaction.move_module_member_code_actions(&handle, range, import_format)
             );
             timed_refactor_action!(
                 "make_local_function_top_level",
-                &refactor_move_kind,
+                allow_refactor_move,
                 transaction.make_local_function_top_level_code_actions(
                     &handle,
                     range,
                     import_format,
                 )
             );
-            if allows_kind(&CodeActionKind::REFACTOR_EXTRACT) {
+            if allow_refactor_extract {
                 let start = Instant::now();
                 if let Some(titles) = transaction.introduce_parameter_action_titles(&handle, range)
                 {
-                    for title in titles {
-                        let data = CodeActionResolveData::IntroduceParameter {
+                    self.push_resolvable_refactor_actions(
+                        &mut actions,
+                        &CodeActionKind::REFACTOR_EXTRACT,
+                        titles,
+                        |title| CodeActionResolveData::IntroduceParameter {
                             uri: uri.clone(),
                             range: lsp_range.clone(),
-                            title: title.clone(),
-                        };
-                        actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                             title,
-                            kind: Some(CodeActionKind::REFACTOR_EXTRACT),
-                            data: Some(
-                                serde_json::to_value(data)
-                                    .expect("introduce_parameter code action data is serializable"),
-                            ),
-                            ..Default::default()
-                        }));
-                    }
+                        },
+                    );
                     record_code_action_telemetry(
                         "introduce_parameter",
                         start,
@@ -3992,10 +3989,10 @@ impl Server {
             }
             timed_refactor_action!(
                 "convert_star_import",
-                &CodeActionKind::REFACTOR_REWRITE,
+                allow_refactor_rewrite,
                 transaction.convert_star_import_code_actions(&handle, range)
             );
-            if allows_kind(&refactor_move_kind)
+            if allow_refactor_move
                 && let Some(action) =
                     convert_module_package_code_actions(&self.initialize_params.capabilities, uri)
             {
@@ -4003,6 +4000,26 @@ impl Server {
             }
         }
         (!actions.is_empty()).then_some(actions)
+    }
+
+    fn push_resolvable_refactor_actions(
+        &self,
+        actions: &mut Vec<CodeActionOrCommand>,
+        kind: &CodeActionKind,
+        titles: Vec<String>,
+        data_builder: impl Fn(String) -> CodeActionResolveData,
+    ) {
+        for title in titles {
+            let data = data_builder(title.clone());
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title,
+                kind: Some(kind.clone()),
+                data: Some(
+                    serde_json::to_value(data).expect("code action resolve data is serializable"),
+                ),
+                ..Default::default()
+            }));
+        }
     }
 
     fn code_action_resolve(
@@ -4017,7 +4034,8 @@ impl Server {
         let Some(data) = code_action_resolve_data(&action) else {
             return action;
         };
-        match data {
+        let start = Instant::now();
+        let telemetry_name = match data {
             CodeActionResolveData::IntroduceParameter { uri, range, title } => {
                 let (handle, _) = match self.make_handle_with_lsp_analysis_config_if_enabled(
                     &uri,
@@ -4030,7 +4048,6 @@ impl Server {
                     return action;
                 };
                 let selection = self.from_lsp_range(&uri, &module_info, range);
-                let start = Instant::now();
                 if let Some(refactors) =
                     transaction.introduce_parameter_code_actions(&handle, selection)
                 {
@@ -4047,17 +4064,20 @@ impl Server {
                         }
                     }
                 }
-                let server_state = self.telemetry_state();
-                record_code_action_telemetry(
-                    "introduce_parameter_resolve",
-                    start,
-                    &server_state,
-                    telemetry,
-                    activity_key,
-                    file_stats,
-                    queue_name,
-                );
+                Some("introduce_parameter_resolve")
             }
+        };
+        if let Some(name) = telemetry_name {
+            let server_state = self.telemetry_state();
+            record_code_action_telemetry(
+                name,
+                start,
+                &server_state,
+                telemetry,
+                activity_key,
+                file_stats,
+                queue_name,
+            );
         }
         action
     }

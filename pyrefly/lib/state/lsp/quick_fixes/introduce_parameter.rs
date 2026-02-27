@@ -39,6 +39,7 @@ use super::extract_shared::split_selection;
 use super::extract_shared::unique_name;
 use super::extract_shared::validate_non_empty_selection;
 use super::types::LocalRefactorCodeAction;
+use crate::ModuleInfo;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
 
@@ -85,28 +86,41 @@ enum ParameterInsertStyle {
     KeywordOnly,
 }
 
-pub(crate) fn introduce_parameter_action_titles(
+#[derive(Clone, Debug)]
+struct IntroduceParameterPlan {
+    module_info: ModuleInfo,
+    function_name_range: TextRange,
+    method_ctx: Option<MethodContext>,
+    param_info: ParamInfo,
+    template: ExpressionTemplate,
+    param_name: String,
+    insert_style: ParameterInsertStyle,
+    signature_edit: (ModuleInfo, TextRange, String),
+    selection_edit: (ModuleInfo, TextRange, String),
+    occurrence_ranges: Vec<TextRange>,
+}
+
+fn prepare_introduce_parameter(
     transaction: &Transaction<'_>,
     handle: &Handle,
     selection: TextRange,
-) -> Option<Vec<String>> {
+) -> Option<IntroduceParameterPlan> {
     let module_info = transaction.get_module_info(handle)?;
     let ast = transaction.get_ast(handle)?;
     let selection_text = validate_non_empty_selection(selection, module_info.code_at(selection))?;
-    let (_, expression_text, _, expression_range) = split_selection(selection_text, selection)?;
+    let (leading_ws, expression_text, trailing_ws, expression_range) =
+        split_selection(selection_text, selection)?;
     if !is_exact_expression(ast.as_ref(), expression_range) {
         return None;
     }
     let function_ctx = find_function_context(ast.as_ref(), expression_range)?;
-    if function_ctx
-        .function_def
-        .parameters
-        .range()
-        .contains_range(expression_range)
-    {
+    let function_name_range = function_ctx.function_def.name.range;
+    let parameters = &function_ctx.function_def.parameters;
+    if parameters.range().contains_range(expression_range) {
         return None;
     }
-    let param_info = ParamInfo::from_parameters(&function_ctx.function_def.parameters);
+    let method_ctx = function_ctx.method.clone();
+    let param_info = ParamInfo::from_parameters(parameters);
     let param_names = param_info.all_names();
     let name_refs = collect_expression_name_refs(ast.as_ref(), expression_range);
     if expression_uses_local_names(
@@ -127,15 +141,47 @@ pub(crate) fn introduce_parameter_action_titles(
         ExpressionTemplate::new(expression_text, expression_range, &name_refs, &param_names);
     let base_name = suggest_parameter_name(ast.as_ref(), expression_range, &param_names);
     let param_name = unique_name(&base_name, |name| param_names.contains(name));
+    let insert_style = parameter_insert_style(parameters);
+    let (signature_range, signature_text) = build_parameter_insertion(
+        module_info.contents(),
+        parameters,
+        &param_name,
+        insert_style,
+    )?;
+    let signature_edit = (module_info.dupe(), signature_range, signature_text);
+    let selection_replacement = format!("{leading_ws}{param_name}{trailing_ws}");
+    let selection_edit = (module_info.dupe(), selection, selection_replacement);
     let occurrence_ranges = collect_matching_expression_ranges(
         module_info.contents(),
         &function_ctx.function_def.body,
         &template.text,
     );
-    let mut titles = vec![format!("Introduce parameter `{param_name}`")];
-    if occurrence_ranges.len() > 1 {
+
+    Some(IntroduceParameterPlan {
+        module_info,
+        function_name_range,
+        method_ctx,
+        param_info,
+        template,
+        param_name,
+        insert_style,
+        signature_edit,
+        selection_edit,
+        occurrence_ranges,
+    })
+}
+
+pub(crate) fn introduce_parameter_action_titles(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    selection: TextRange,
+) -> Option<Vec<String>> {
+    let plan = prepare_introduce_parameter(transaction, handle, selection)?;
+    let mut titles = vec![format!("Introduce parameter `{}`", plan.param_name)];
+    if plan.occurrence_ranges.len() > 1 {
         titles.push(format!(
-            "Introduce parameter `{param_name}` (replace all occurrences)"
+            "Introduce parameter `{}` (replace all occurrences)",
+            plan.param_name
         ));
     }
     Some(titles)
@@ -147,52 +193,18 @@ pub(crate) fn introduce_parameter_code_actions(
     handle: &Handle,
     selection: TextRange,
 ) -> Option<Vec<LocalRefactorCodeAction>> {
-    let module_info = transaction.get_module_info(handle)?;
-    let ast = transaction.get_ast(handle)?;
-    let selection_text = validate_non_empty_selection(selection, module_info.code_at(selection))?;
-    let (leading_ws, expression_text, trailing_ws, expression_range) =
-        split_selection(selection_text, selection)?;
-    if !is_exact_expression(ast.as_ref(), expression_range) {
-        return None;
-    }
-    let function_ctx = find_function_context(ast.as_ref(), expression_range)?;
-    if function_ctx
-        .function_def
-        .parameters
-        .range()
-        .contains_range(expression_range)
-    {
-        return None;
-    }
-    let param_info = ParamInfo::from_parameters(&function_ctx.function_def.parameters);
-    let param_names = param_info.all_names();
-    let name_refs = collect_expression_name_refs(ast.as_ref(), expression_range);
-    if expression_uses_local_names(
-        transaction,
-        handle,
-        module_info.path(),
-        function_ctx.function_def,
-        &name_refs,
-        &param_names,
-    ) {
-        return None;
-    }
-    if expression_uses_variadic_params(&name_refs, &param_info) {
-        return None;
-    }
-
-    let template =
-        ExpressionTemplate::new(expression_text, expression_range, &name_refs, &param_names);
-    let base_name = suggest_parameter_name(ast.as_ref(), expression_range, &param_names);
-    let param_name = unique_name(&base_name, |name| param_names.contains(name));
-    let insert_style = parameter_insert_style(&function_ctx.function_def.parameters);
-    let (signature_range, signature_text) = build_parameter_insertion(
-        module_info.contents(),
-        &function_ctx.function_def.parameters,
-        &param_name,
+    let IntroduceParameterPlan {
+        module_info,
+        function_name_range,
+        method_ctx,
+        param_info,
+        template,
+        param_name,
         insert_style,
-    )?;
-    let signature_edit = (module_info.dupe(), signature_range, signature_text);
+        signature_edit,
+        selection_edit,
+        occurrence_ranges,
+    } = prepare_introduce_parameter(transaction, handle, selection)?;
     let call_edits = build_callsite_edits(
         transaction,
         handle,
@@ -201,28 +213,21 @@ pub(crate) fn introduce_parameter_code_actions(
         &template,
         &param_name,
         insert_style,
-        &function_ctx,
+        function_name_range,
+        method_ctx.as_ref(),
     )?;
-
-    let selection_replacement = format!("{leading_ws}{param_name}{trailing_ws}");
-    let replace_selection_edit = (module_info.dupe(), selection, selection_replacement);
     let mut actions = Vec::new();
     actions.push(LocalRefactorCodeAction {
         title: format!("Introduce parameter `{param_name}`"),
         edits: [
             vec![signature_edit.clone()],
             call_edits.clone(),
-            vec![replace_selection_edit],
+            vec![selection_edit],
         ]
         .concat(),
         kind: CodeActionKind::REFACTOR_EXTRACT,
     });
 
-    let occurrence_ranges = collect_matching_expression_ranges(
-        module_info.contents(),
-        &function_ctx.function_def.body,
-        &template.text,
-    );
     if occurrence_ranges.len() > 1 {
         let replace_all_edits = occurrence_ranges
             .iter()
@@ -533,20 +538,19 @@ fn build_callsite_edits(
     template: &ExpressionTemplate,
     new_param_name: &str,
     insert_style: ParameterInsertStyle,
-    function_ctx: &FunctionContext<'_>,
+    function_name_range: TextRange,
+    method_ctx: Option<&MethodContext>,
 ) -> Option<Vec<(pyrefly_python::module::Module, TextRange, String)>> {
     let definition = transaction
         .find_definition(
             handle,
-            function_ctx.function_def.name.range.start(),
+            function_name_range.start(),
             FindPreference::default(),
         )
         .into_iter()
         .find(|def| {
             def.module.path() == module_info.path()
-                && def
-                    .definition_range
-                    .contains_range(function_ctx.function_def.name.range)
+                && def.definition_range.contains_range(function_name_range)
         })?;
 
     let mut edits = Vec::new();
@@ -590,7 +594,7 @@ fn build_callsite_edits(
                 other_module_info.contents(),
                 param_info,
                 template,
-                function_ctx.method.as_ref(),
+                method_ctx,
             ) else {
                 failed = true;
                 return;
