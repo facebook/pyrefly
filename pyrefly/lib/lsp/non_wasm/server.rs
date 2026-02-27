@@ -223,7 +223,6 @@ use serde_json::Value;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
-use tracing::debug;
 use tracing::error;
 use tracing::info;
 use uuid::Uuid;
