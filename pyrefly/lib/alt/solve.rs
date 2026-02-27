@@ -1559,16 +1559,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if validated_tparams.is_empty() {
             let name = name.as_str();
             match ta.as_type_mut() {
-                Type::Union(box Union { display_name, .. }) => {
-                    if display_name.is_none() {
-                        *display_name = Some(name.into());
+                Type::Union(u) => {
+                    if u.display_name.is_none() {
+                        u.display_name = Some((self.module().name(), Name::new(name)));
                     }
                 }
                 Type::Type(inner) => {
-                    if let Type::Union(box Union { display_name, .. }) = inner.as_mut()
-                        && display_name.is_none()
+                    if let Type::Union(u) = inner.as_mut()
+                        && u.display_name.is_none()
                     {
-                        *display_name = Some(name.into());
+                        u.display_name = Some((self.module().name(), Name::new(name)));
                     }
                 }
                 _ => {}
@@ -5722,7 +5722,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     unreachable!("guarded by matches! above")
                 };
                 let mut aliased_type = self.untype_opt(ta.as_type(), range, errors)?;
-                if let Type::Union(f) = &mut aliased_type {
+                if let Type::Union(f) = &mut aliased_type
+                    && f.display_name.is_none()
+                {
                     f.display_name = Some((self.module().name(), (*ta.name).clone()));
                 }
                 Some(aliased_type)
