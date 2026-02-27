@@ -1566,14 +1566,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match ta.as_type_mut() {
                 Type::Union(box Union { display_name, .. }) => {
                     if display_name.is_none() {
-                        *display_name = Some(name.into());
+                        *display_name = Some((self.module().name(), Name::new(name)));
                     }
                 }
                 Type::Type(inner) => {
                     if let Type::Union(box Union { display_name, .. }) = inner.as_mut()
                         && display_name.is_none()
                     {
-                        *display_name = Some(name.into());
+                        *display_name = Some((self.module().name(), Name::new(name)));
                     }
                 }
                 _ => {}
@@ -5364,7 +5364,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Any(style) => Some(style.propagate()),
             Type::TypeAlias(box TypeAliasData::Value(ta)) => {
                 let mut aliased_type = self.untype_opt(ta.as_type(), range, errors)?;
-                if let Type::Union(box Union { display_name, .. }) = &mut aliased_type {
+                if let Type::Union(box Union { display_name, .. }) = &mut aliased_type
+                    && display_name.is_none()
+                {
                     *display_name = Some((self.module().name(), (*ta.name).clone()));
                 }
                 Some(aliased_type)

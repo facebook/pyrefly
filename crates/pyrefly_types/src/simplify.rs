@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::module_name::ModuleName;
+use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
@@ -17,6 +19,8 @@ use crate::tuple::Tuple;
 use crate::typed_dict::TypedDict;
 use crate::types::Type;
 use crate::types::Union;
+
+const PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS: usize = 3;
 
 /// Turn unions of unions into a flattened list for one union, and return the deduped list.
 fn flatten_and_dedup(xs: Vec<Type>, heap: &TypeHeap) -> Vec<Type> {
@@ -67,59 +71,62 @@ fn simplify_intersections(xs: &mut [Type], heap: &TypeHeap) {
     }
 }
 
-fn large_alias_union_display_name(xs: &[Type]) -> Option<Box<str>> {
-    const PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS: usize = 2;
+#[derive(Debug, Clone)]
+struct LargeAliasUnion {
+    name: (ModuleName, Name),
+    members: Vec<Type>,
+}
 
-    let mut alias_name: Option<String> = None;
-    let mut alias_members: Option<Vec<Type>> = None;
-    let mut alias_count = 0;
-    let mut other_branches = Vec::new();
-    for x in xs.iter().cloned() {
+fn large_alias_union_info(xs: &[Type]) -> Option<LargeAliasUnion> {
+    let mut info: Option<LargeAliasUnion> = None;
+    for x in xs {
         match x {
             Type::Union(box Union {
                 members,
                 display_name: Some(name),
             }) if members.len() >= PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS => {
-                alias_count += 1;
-                if alias_name.is_none() {
-                    alias_name = Some(name.into_string());
-                    alias_members = Some(members.clone());
+                if info.is_some() {
+                    return None;
                 }
+                info = Some(LargeAliasUnion {
+                    name: name.clone(),
+                    members: members.clone(),
+                });
             }
-            t => other_branches.push(t),
+            _ => {}
         }
     }
+    info
+}
 
-    if alias_count == 1 && !other_branches.is_empty() {
-        let overlaps_alias_member = |t: &Type| {
-            let Some(alias_members) = alias_members.as_ref() else {
-                return false;
-            };
-            fn has_overlap(t: &Type, alias_members: &[Type]) -> bool {
-                match t {
-                    Type::Union(box Union { members, .. }) => {
-                        members.iter().any(|m| has_overlap(m, alias_members))
-                    }
-                    t => alias_members.contains(t),
-                }
-            }
-            has_overlap(t, alias_members)
-        };
-        if other_branches.iter().any(overlaps_alias_member) {
-            return None;
-        }
-
-        other_branches.sort();
-        other_branches.dedup();
-        let other = other_branches
-            .iter()
-            .map(|t| t.to_string())
-            .collect::<Vec<_>>()
-            .join(" | ");
-        alias_name.map(|name| format!("{name} | {other}").into_boxed_str())
-    } else {
-        None
+/// If the final union is a strict superset of a single large alias union, keep that
+/// alias name in the display output and append only the extra members.
+fn large_alias_union_display_name(
+    members: &[Type],
+    alias_union: &LargeAliasUnion,
+) -> Option<(ModuleName, Name)> {
+    let alias_members: SmallSet<_> = alias_union.members.iter().cloned().collect();
+    if alias_members
+        .iter()
+        .any(|alias_member| !members.contains(alias_member))
+    {
+        return None;
     }
+    if members.len() <= alias_members.len() {
+        return None;
+    }
+    let extras = members
+        .iter()
+        .filter(|member| !alias_members.contains(*member))
+        .map(|member| member.to_string())
+        .collect::<Vec<_>>();
+    if extras.is_empty() {
+        return None;
+    }
+    Some((
+        alias_union.name.0,
+        Name::new(format!("{} | {}", alias_union.name.1, extras.join(" | "))),
+    ))
 }
 
 fn unions_internal(
@@ -128,7 +135,7 @@ fn unions_internal(
     enum_members: Option<&dyn Fn(&Class) -> Option<usize>>,
     heap: &TypeHeap,
 ) -> Type {
-    let large_alias_display_name = large_alias_union_display_name(&xs);
+    let alias_union = large_alias_union_info(&xs);
     try_collapse(xs, heap).unwrap_or_else(|xs| {
         let mut res = flatten_and_dedup(xs, heap);
         if let Some(stdlib) = stdlib {
@@ -139,7 +146,10 @@ fn unions_internal(
         collapse_builtins_type(&mut res, heap);
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
         try_collapse(res, heap).unwrap_or_else(|members| {
-            if let Some(name) = large_alias_display_name.clone() {
+            let display_name = alias_union
+                .as_ref()
+                .and_then(|alias_union| large_alias_union_display_name(&members, alias_union));
+            if let Some(name) = display_name {
                 heap.mk_union_with_name(members, name)
             } else {
                 heap.mk_union(members)
