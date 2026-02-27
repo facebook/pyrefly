@@ -18,22 +18,12 @@ fn env_with_flask_typing_alias() -> TestEnv {
 from __future__ import annotations
 import typing as t
 
-ResponseValue = t.Union[
-    str,
-    bytes,
-    dict[str, t.Any],
-    list[t.Any],
-]
-
-HeadersValue = t.Union[
-    dict[str, str],
-    list[tuple[str, str]],
-]
+ResponseValue = t.Union[str, bytes]
 
 ResponseReturnValue = t.Union[
     ResponseValue,
     tuple[ResponseValue, int],
-    tuple[ResponseValue, int, HeadersValue],
+    tuple[ResponseValue, int, dict[str, str]],
 ]
 "#,
     );
@@ -556,7 +546,29 @@ testcase!(
     test_decorator_error_uses_external_union_alias,
     env_with_flask_typing_alias(),
     r#"
-import controllers.console.app.mcp_server
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
+
+from flask import current_app
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def login_required(func: Callable[P, R]):
+    def decorated_view(*args: P.args, **kwargs: P.kwargs):
+        if args:
+            return current_app.login_manager.unauthorized()
+        return current_app.ensure_sync(func)(*args, **kwargs)
+    return decorated_view
+
+def setup_required(view: Callable[..., int]) -> Callable[..., int]: ...
+
+@setup_required
+@login_required
+def handler(*args, **kwargs) -> int:
+    return 0
     "#,
 );
 
