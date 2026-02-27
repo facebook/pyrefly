@@ -9,6 +9,8 @@
 
 mod basic;
 mod call_hierarchy;
+mod code_action_benchmark;
+mod code_action_resolve;
 mod completion;
 mod configuration;
 mod convert_module_package;
