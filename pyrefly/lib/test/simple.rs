@@ -886,6 +886,15 @@ Y = Annotated[int] # E: `Annotated` needs at least one piece of metadata in addi
 );
 
 testcase!(
+    test_annotated_dunder_doc,
+    r#"
+from typing import Annotated, assert_type
+x = Annotated[int, "meta"].__doc__
+assert_type(x, str | None)
+    "#,
+);
+
+testcase!(
     test_nested_string_annotation,
     r#"
 x: "'int'" = 1  # E: Expected a type form, got instance of `Literal['int']`

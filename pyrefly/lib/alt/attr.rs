@@ -2239,10 +2239,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ElementOfTypeVarTuple(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.object().clone()))
             }
+            // At runtime, `Annotated[T, ...]` is an instance of `typing._AnnotatedAlias`,
+            // which inherits from `typing._GenericAlias`. We model it as `GenericAlias`.
+            Type::Annotated(_) => {
+                acc.push(AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone()))
+            }
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
             | Type::Type(_)
-            | Type::Annotated(_)
             | Type::Unpack(_)
             | Type::Concatenate(_, _)
             | Type::ParamSpecValue(_)
