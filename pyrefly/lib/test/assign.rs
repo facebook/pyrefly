@@ -453,20 +453,21 @@ class D:
 );
 
 testcase!(
-    // A `Final` variable declared without a value should be considered initialized when
-    // the very next binding provides the value via tuple unpacking, a walrus operator,
-    // or a `with … as` target — none of these forms allow combining the annotation and
-    // the assignment into a single statement.
+    // `Final` declarations without a value followed by one of these assignment forms
+    // (which cannot be combined with an annotation into a single statement) should
+    // produce no errors at all.  The declaration error is still emitted because
+    // pyrefly does not yet perform the flow analysis needed to confirm that a following
+    // statement always provides the value.
     bug = "Final variables initialized via tuple unpacking, walrus, or with-as should not produce a declaration error",
     test_final_alternate_init_forms,
     r#"
 from typing import Final, TextIO
 x: Final[int]  # E: Final name must be initialized with a value
-x, _ = 1, 2  # E: Cannot assign to variable `x` because it is marked final
+x, _ = 1, 2  # OK — first assignment is initialization, not reassignment
 y: Final[int]  # E: Final name must be initialized with a value
-z = (y := 3)  # E: Cannot assign to variable `y` because it is marked final
+z = (y := 3)  # OK
 f: Final[TextIO]  # E: Final name must be initialized with a value
-with open('foo') as f: pass  # E: Cannot assign to variable `f` because it is marked final
+with open('foo') as f: pass  # OK
 "#,
 );
 
