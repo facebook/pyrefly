@@ -38,6 +38,7 @@ mod notebook_sync;
 mod notebook_tokens;
 mod notebook_type_definition;
 mod object_model;
+mod progress;
 mod provide_type;
 mod pytorch_benchmark;
 mod references;
