@@ -404,8 +404,8 @@ for x in [1, 2, 3]:  # E: Cannot assign to variable `x` because it is marked fin
 xs: Final[list[int]] = []
 [_, *xs] = [1, 2, 3]  # E: Cannot assign to variable `xs` because it is marked final
 
-f: Final[TextIO]
-with open("file.txt") as f:  # OK — first assignment counts as initialization
+f: Final[TextIO] = open("file.txt")
+with open("file.txt") as f:  # E: Cannot assign to variable `f` because it is marked final
     ...
 "#,
 );
