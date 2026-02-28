@@ -419,6 +419,17 @@ z: Final = 1  # OK
 );
 
 testcase!(
+    bug = "Should error when a final variable is declared without initialization",
+    test_final_without_assign,
+    r#"
+from typing import Final
+x: Final[int]  # Should error
+class C:
+    y: Final[int]  # Should error
+"#,
+);
+
+testcase!(
     test_assign_final_attr,
     r#"
 from typing import Final
