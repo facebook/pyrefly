@@ -3,7 +3,7 @@
   "pass": 122,
   "fail": 16,
   "pass_rate": 0.88,
-  "differences": 48,
+  "differences": 46,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -144,7 +144,7 @@
     "generics_typevartuple_basic.py": 1,
     "protocols_modules.py": 1,
     "qualifiers_annotated.py": 6,
-    "qualifiers_final_annotation.py": 5
+    "qualifiers_final_annotation.py": 3
   },
   "comment": "@generated"
 }

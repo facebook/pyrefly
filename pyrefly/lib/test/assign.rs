@@ -413,19 +413,18 @@ testcase!(
     r#"
 from typing import Final
 x: Final   # E: Expected a type argument for `Final`
-y: Final[int]  # OK
+y: Final[int]  # E: Final name must be initialized with a value
 z: Final = 1  # OK
     "#,
 );
 
 testcase!(
-    bug = "Should error when a final variable is declared without initialization",
     test_final_without_assign,
     r#"
 from typing import Final
-x: Final[int]  # Should error
+x: Final[int]  # E: Final name must be initialized with a value
 class C:
-    y: Final[int]  # Should error
+    y: Final[int]  # E: Final attribute declared in class body must be initialized with a value or in `__init__`
 "#,
 );
 

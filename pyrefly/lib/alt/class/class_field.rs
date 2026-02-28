@@ -1459,7 +1459,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_inherited,
             direct_annotation,
         ) = match field_definition {
-            ClassFieldDefinition::DeclaredByAnnotation { annotation: annot } => {
+            ClassFieldDefinition::DeclaredByAnnotation {
+                annotation: annot,
+                initialized_in_recognized_method,
+            } => {
                 let direct_annotation = Some(self.get_idx(*annot).annotation.clone());
 
                 // Check if there's an inherited descriptor from a parent class.
@@ -1512,6 +1515,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     ClassFieldInitialization::Uninitialized
                 };
+                // A Final field declared in the class body must be initialized either there
+                // or in a recognized attribute-defining method like `__init__`.
+                // Dataclasses and NamedTuples are excluded because their synthesized `__init__`
+                // initializes fields that have no default value. Protocols are excluded because
+                // protocol members are abstract declarations that don't need initialization.
+                if !initialized_in_recognized_method
+                    && direct_annotation.as_ref().is_some_and(|a| a.is_final())
+                    && matches!(initialization, ClassFieldInitialization::Uninitialized)
+                    && metadata.dataclass_metadata().is_none()
+                    && metadata.named_tuple_metadata().is_none()
+                    && !metadata.is_protocol()
+                {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        "Final attribute declared in class body must be initialized with a value or in `__init__`".to_owned(),
+                    );
+                }
                 let value =
                     value_storage.push(ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)));
                 let (value_ty, annotation, is_inherited) = self.analyze_class_field_value(

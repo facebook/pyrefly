@@ -10097,6 +10097,28 @@
     },
     {
       "code": -2,
+      "column": 5,
+      "concise_description": "Final attribute declared in class body must be initialized with a value or in `__init__`",
+      "description": "Final attribute declared in class body must be initialized with a value or in `__init__`",
+      "line": 34,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 8,
+      "stop_line": 34
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Final attribute declared in class body must be initialized with a value or in `__init__`",
+      "description": "Final attribute declared in class body must be initialized with a value or in `__init__`",
+      "line": 38,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 8,
+      "stop_line": 38
+    },
+    {
+      "code": -2,
       "column": 9,
       "concise_description": "Cannot set field `ID5`",
       "description": "Cannot set field `ID5`\n  This field is marked as Final, and an initial value is provided",

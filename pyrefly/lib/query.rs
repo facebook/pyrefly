@@ -1047,7 +1047,7 @@ impl Query {
                         bindings.key_to_idx_hashed_opt(Hashed::new(&class_field_index))?;
                     let class_field = bindings.get(class_field_idx);
                     let is_final = match &class_field.definition {
-                        ClassFieldDefinition::DeclaredByAnnotation { annotation } => {
+                        ClassFieldDefinition::DeclaredByAnnotation { annotation, .. } => {
                             Some(*annotation)
                         }
                         ClassFieldDefinition::AssignedInBody { annotation, .. } => *annotation,

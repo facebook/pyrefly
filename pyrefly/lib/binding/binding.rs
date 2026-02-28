@@ -2685,8 +2685,14 @@ impl DisplayWith<Bindings> for BindingClassBaseType {
 /// Represents everything we know about a class field definition at binding time.
 #[derive(Clone, Debug)]
 pub enum ClassFieldDefinition {
-    /// Declared by an annotation, with no assignment
-    DeclaredByAnnotation { annotation: Idx<KeyAnnotation> },
+    /// Declared by an annotation, with no assignment.
+    /// `initialized_in_recognized_method` is true if the field is assigned in a recognized
+    /// instance attribute-defining method (e.g., `__init__`), meaning a Final field
+    /// declared here is legally initialized even without a class-body value.
+    DeclaredByAnnotation {
+        annotation: Idx<KeyAnnotation>,
+        initialized_in_recognized_method: bool,
+    },
     /// Declared with no annotation or assignment (this is impossible
     /// in a normal class, but can happen with some synthesized classes).
     DeclaredWithoutAnnotation,
@@ -2722,11 +2728,15 @@ pub enum ClassFieldDefinition {
 impl DisplayWith<Bindings> for ClassFieldDefinition {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         match self {
-            Self::DeclaredByAnnotation { annotation } => {
+            Self::DeclaredByAnnotation {
+                annotation,
+                initialized_in_recognized_method,
+            } => {
                 write!(
                     f,
-                    "ClassFieldDefinition::DeclaredByAnnotation({})",
+                    "ClassFieldDefinition::DeclaredByAnnotation({}, initialized_in_recognized_method={})",
                     ctx.display(*annotation),
+                    initialized_in_recognized_method,
                 )
             }
             Self::DeclaredWithoutAnnotation => {

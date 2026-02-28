@@ -835,7 +835,10 @@ impl<'a> BindingsBuilder<'a> {
                     alias_of: None,
                 },
                 (None, false) => match annotation {
-                    Some(annotation) => ClassFieldDefinition::DeclaredByAnnotation { annotation },
+                    Some(annotation) => ClassFieldDefinition::DeclaredByAnnotation {
+                        annotation,
+                        initialized_in_recognized_method: false,
+                    },
                     None => ClassFieldDefinition::DeclaredWithoutAnnotation,
                 },
             };

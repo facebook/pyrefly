@@ -914,7 +914,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> ClassField {
         let (annotation, is_legal_field_declaration) = match field_definition {
-            ClassFieldDefinition::DeclaredByAnnotation { annotation } => (Some(annotation), true),
+            ClassFieldDefinition::DeclaredByAnnotation { annotation, .. } => {
+                (Some(annotation), true)
+            }
             ClassFieldDefinition::AssignedInBody {
                 value: _,
                 annotation,
