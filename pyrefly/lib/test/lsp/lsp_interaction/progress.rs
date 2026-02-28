@@ -76,5 +76,26 @@ fn test_work_done_progress_notifications() {
         })
         .unwrap();
 
+    interaction
+        .client
+        .expect_message("$/progress end", |msg| {
+            if let Message::Notification(notification) = msg
+                && notification.method == Progress::METHOD
+            {
+                let params: ProgressParams = serde_json::from_value(notification.params).unwrap();
+                if params.token == token {
+                    match params.value {
+                        ProgressParamsValue::WorkDone(WorkDoneProgress::End(_)) => Some(Ok(())),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .unwrap();
+
     interaction.shutdown().unwrap();
 }

@@ -2568,6 +2568,24 @@ impl Server {
         ProgressToken::String(format!("pyrefly-progress-{id}"))
     }
 
+    fn make_recheck_subscriber<'a>(
+        &'a self,
+        publish_callback: impl Fn(&Transaction<'_>, &Handle, bool) + Send + Sync + 'a,
+    ) -> Box<dyn Subscriber + 'a> {
+        let mut subscribers: Vec<Box<dyn Subscriber + 'a>> = Vec::new();
+        subscribers.push(Box::new(PublishDiagnosticsSubscriber { publish_callback }));
+        if let Some(progress_subscriber) = LspProgressSubscriber::new(self, "Pyrefly: Rechecking") {
+            subscribers.push(Box::new(progress_subscriber));
+        }
+        if subscribers.len() == 1 {
+            subscribers
+                .pop()
+                .expect("subscriber list unexpectedly empty")
+        } else {
+            Box::new(CompositeSubscriber::new(subscribers))
+        }
+    }
+
     /// Run the transaction with the in-memory content of open files. Returns the handles of open files when the transaction is done.
     fn validate_in_memory_for_transaction(
         &self,
@@ -3026,20 +3044,7 @@ impl Server {
                             )
                         }
                     };
-                let mut subscribers: Vec<Box<dyn Subscriber + '_>> = Vec::new();
-                subscribers.push(Box::new(PublishDiagnosticsSubscriber { publish_callback }));
-                if let Some(progress_subscriber) =
-                    LspProgressSubscriber::new(server, "Pyrefly: Rechecking")
-                {
-                    subscribers.push(Box::new(progress_subscriber));
-                }
-                let subscriber: Box<dyn Subscriber + '_> = if subscribers.len() == 1 {
-                    subscribers
-                        .pop()
-                        .expect("subscriber list unexpectedly empty")
-                } else {
-                    Box::new(CompositeSubscriber::new(subscribers))
-                };
+                let subscriber = server.make_recheck_subscriber(publish_callback);
                 let mut transaction = server
                     .state
                     .new_committable_transaction(Require::Exports, Some(subscriber));
@@ -5324,20 +5329,7 @@ impl Server {
                             )
                         }
                     };
-                let mut subscribers: Vec<Box<dyn Subscriber + '_>> = Vec::new();
-                subscribers.push(Box::new(PublishDiagnosticsSubscriber { publish_callback }));
-                if let Some(progress_subscriber) =
-                    LspProgressSubscriber::new(server, "Pyrefly: Rechecking")
-                {
-                    subscribers.push(Box::new(progress_subscriber));
-                }
-                let subscriber: Box<dyn Subscriber + '_> = if subscribers.len() == 1 {
-                    subscribers
-                        .pop()
-                        .expect("subscriber list unexpectedly empty")
-                } else {
-                    Box::new(CompositeSubscriber::new(subscribers))
-                };
+                let subscriber = server.make_recheck_subscriber(publish_callback);
                 let mut transaction = server
                     .state
                     .new_committable_transaction(Require::Exports, Some(subscriber));
