@@ -13,7 +13,7 @@ testcase!(
     r#"
 from typing import Callable, reveal_type
 f1 = lambda x: 1
-reveal_type(f1)  # E: revealed type: (x: Unknown) -> Literal[1]
+reveal_type(f1)  # E: revealed type: (x: @_) -> Literal[1]
 f2 = lambda x: reveal_type(x)  # E: revealed type: Unknown
 f3: Callable[[int], int] = lambda x: 1
 reveal_type(f3)  # E: revealed type: (int) -> int

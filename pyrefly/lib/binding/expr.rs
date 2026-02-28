@@ -88,6 +88,10 @@ pub enum Usage {
     /// Narrowing context that should not pin partial types.
     /// The idx (if present) is used for secondary-read detection.
     Narrowing(Option<Idx<Key>>),
+    /// Non-pinning read that should not consume first-use inference.
+    /// Used for type-inspection helpers like `reveal_type`.
+    /// The idx (if present) is used for secondary-read detection.
+    NonPinningRead(Option<Idx<Key>>),
     /// Static type context that should not pin partial types.
     StaticTypeInformation,
     /// Type alias RHS context. Like StaticTypeInformation, does not pin
@@ -103,7 +107,19 @@ impl Usage {
         match other {
             Self::CurrentIdx(idx) => Self::Narrowing(Some(*idx)),
             Self::Narrowing(idx) => Self::Narrowing(*idx),
+            Self::NonPinningRead(idx) => Self::Narrowing(*idx),
             Self::StaticTypeInformation | Self::TypeAliasRhs => Self::Narrowing(None),
+        }
+    }
+
+    /// Create a non-pinning read usage from another usage context.
+    pub fn non_pinning_from(other: &Self) -> Self {
+        match other {
+            Self::CurrentIdx(idx) => Self::NonPinningRead(Some(*idx)),
+            Self::Narrowing(idx) => Self::NonPinningRead(*idx),
+            Self::NonPinningRead(idx) => Self::NonPinningRead(*idx),
+            Self::StaticTypeInformation => Self::StaticTypeInformation,
+            Self::TypeAliasRhs => Self::TypeAliasRhs,
         }
     }
 
@@ -112,6 +128,7 @@ impl Usage {
         match self {
             Usage::CurrentIdx(idx) => Some(*idx),
             Usage::Narrowing(idx) => *idx,
+            Usage::NonPinningRead(idx) => *idx,
             Usage::StaticTypeInformation | Usage::TypeAliasRhs => None,
         }
     }
@@ -723,6 +740,21 @@ impl<'a> BindingsBuilder<'a> {
                     .as_special_export(&call.func)
                     .expect("guard already matched");
                 self.bind_inline_functional_named_tuple(call, kind);
+            }
+            Expr::Call(ExprCall {
+                node_index: _,
+                range: _,
+                func,
+                arguments,
+            }) if self.as_special_export(func) == Some(SpecialExport::RevealType) => {
+                self.ensure_expr(func, usage);
+                let mut non_pinning_usage = Usage::non_pinning_from(usage);
+                for arg in arguments.args.iter_mut() {
+                    self.ensure_expr(arg, &mut non_pinning_usage);
+                }
+                for kw in arguments.keywords.iter_mut() {
+                    self.ensure_expr(&mut kw.value, &mut non_pinning_usage);
+                }
             }
             Expr::Call(ExprCall {
                 node_index: _,
