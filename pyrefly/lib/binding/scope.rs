@@ -2146,9 +2146,9 @@ impl Scopes {
         };
         self.pop(); // Also pop the annotation scope that wrapped the class body.
 
-        // Collect all method-defined attributes up front (consuming class_scope) so we can
-        // determine which class-body-declared fields are initialized in recognized methods
-        // (e.g. `__init__`) before building the field definitions.
+        // Collect all method-defined attributes up front (exhausting the `method_defined_attributes`
+        // iterator) so we can determine which class-body-declared fields are initialized in
+        // recognized methods (e.g. `__init__`) before building the field definitions.
         let method_attrs: Vec<_> = class_scope.method_defined_attributes().collect();
 
         // Fields assigned in a recognized instance method (e.g. `__init__`) with `self`.

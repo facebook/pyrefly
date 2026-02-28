@@ -383,11 +383,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             BindingAnnotation::AnnotateExpr(target, x, class_key) => {
                 let type_form_context = target.type_form_context();
                 let mut ann = self.expr_annotation(x, type_form_context, errors);
-                // A Final variable outside a class must be initialized at the point of annotation.
-                // (Class-level Final without initialization is checked separately in calculate_class_field,
-                // where we can determine whether __init__ provides the initialization.)
-                // Note: bare `Final` without a type argument already errors elsewhere (it requires a value
-                // to infer the type), so we only need to check when the type is explicitly provided.
+                // A Final variable at module or function scope must be initialized at the point of
+                // annotation (`AnnotationTarget::Assign` covers both; class members use
+                // `AnnotationTarget::ClassMember` and are checked separately in
+                // `calculate_class_field`, where we can determine whether `__init__` provides the
+                // initialization).
+                // Note: bare `Final` without a type argument already errors elsewhere (it requires a
+                // value to infer the type), so we only need to check when the type is explicitly
+                // provided.
                 if ann.is_final()
                     && ann.ty.is_some()
                     && matches!(target, AnnotationTarget::Assign(_, AnnAssignHasValue::No))

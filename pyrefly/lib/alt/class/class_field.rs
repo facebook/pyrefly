@@ -1520,13 +1520,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Dataclasses and NamedTuples are excluded because their synthesized `__init__`
                 // initializes fields that have no default value. Protocols are excluded because
                 // protocol members are abstract declarations that don't need initialization.
-                if !initialized_in_recognized_method
+                let is_uninit_final = !initialized_in_recognized_method
                     && direct_annotation.as_ref().is_some_and(|a| a.is_final())
-                    && matches!(initialization, ClassFieldInitialization::Uninitialized)
-                    && metadata.dataclass_metadata().is_none()
-                    && metadata.named_tuple_metadata().is_none()
-                    && !metadata.is_protocol()
-                {
+                    && matches!(initialization, ClassFieldInitialization::Uninitialized);
+                let is_special_class = metadata.dataclass_metadata().is_some()
+                    || metadata.named_tuple_metadata().is_some()
+                    || metadata.is_protocol();
+                if is_uninit_final && !is_special_class {
                     self.error(
                         errors,
                         range,

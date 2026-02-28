@@ -423,8 +423,14 @@ testcase!(
     r#"
 from typing import Final
 x: Final[int]  # E: Final name must be initialized with a value
+def f() -> None:
+    y: Final[int]  # E: Final name must be initialized with a value
 class C:
-    y: Final[int]  # E: Final attribute declared in class body must be initialized with a value or in `__init__`
+    z: Final[int]  # E: Final attribute declared in class body must be initialized with a value or in `__init__`
+class D:
+    w: Final[int]  # OK — initialized in `__init__`
+    def __init__(self) -> None:
+        self.w = 1
 "#,
 );
 
