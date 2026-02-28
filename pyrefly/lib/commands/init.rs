@@ -38,15 +38,25 @@ pub struct InitArgs {
     /// If this is the path to a pyproject.toml, the config will be written as a `[tool.pyrefly]` entry in that file.
     #[arg(default_value_os_t = PathBuf::from("."))]
     path: PathBuf,
+    /// Run without interactive prompts, using safe defaults (decline all).
+    /// Useful for CI, scripted workflows, or running init before check in automated pipelines.
+    #[arg(long)]
+    non_interactive: bool,
 }
 
 impl InitArgs {
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            non_interactive: false,
+        }
     }
 
     pub fn new_migration(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            non_interactive: false,
+        }
     }
 
     fn check_for_pyproject_file(path: &Path) -> bool {
@@ -57,9 +67,10 @@ impl InitArgs {
         pyproject_path.exists()
     }
 
-    fn prompt_user_confirmation(prompt: &str) -> bool {
-        if cfg!(test) {
-            // decline confirmation, mocking user input
+    /// Prompts the user for a y/N confirmation. Returns `false` without prompting
+    /// when `non_interactive` is set, providing safe defaults for CI and scripted use.
+    fn prompt_user_confirmation(&self, prompt: &str) -> bool {
+        if self.non_interactive {
             return false;
         }
         let input = Self::read_from_stdin(prompt);
@@ -133,7 +144,7 @@ impl InitArgs {
             "Found {error_count} errors. We can add suppression comments (e.g., `pyrefly: ignore`) to silence them for you. Would you like to suppress them? (y/N): "
         );
 
-        if Self::prompt_user_confirmation(&prompt) {
+        if self.prompt_user_confirmation(&prompt) {
             info!("Running pyrefly check with suppress-errors flag...");
 
             // Create check args with suppress-errors flag
@@ -181,7 +192,7 @@ impl InitArgs {
                 "The project at `{}` has already been initialized for pyrefly. Run `pyrefly check` to see type errors. Re-initialize and write a new section? (y/N): ",
                 dir.display()
             );
-            if !Self::prompt_user_confirmation(&prompt) {
+            if !self.prompt_user_confirmation(&prompt) {
                 return Ok((CommandExitStatus::UserError, None));
             }
         }
@@ -271,12 +282,22 @@ mod test {
     }
 
     fn run_init_on_dir(dir: &TempDir) -> anyhow::Result<CommandExitStatus> {
-        let args = InitArgs::new(dir.path().to_path_buf());
+        let mut args = InitArgs::new(dir.path().to_path_buf());
+        args.non_interactive = true;
         args.run(None)
     }
 
     fn run_init_on_file(dir: &TempDir, file: &str) -> anyhow::Result<CommandExitStatus> {
-        let args = InitArgs::new(dir.path().join(file));
+        let mut args = InitArgs::new(dir.path().join(file));
+        args.non_interactive = true;
+        args.run(None)
+    }
+
+    fn run_init_non_interactive(dir: &TempDir) -> anyhow::Result<CommandExitStatus> {
+        let args = InitArgs {
+            path: dir.path().to_path_buf(),
+            non_interactive: true,
+        };
         args.run(None)
     }
 
@@ -594,6 +615,40 @@ k = [\"v\"]
         let tmp = tempfile::tempdir()?;
         create_file_in(tmp.path(), "pyrefly.toml", None)?;
         let status = run_init_on_file(&tmp, "pyproject.toml")?;
+        assert_user_error(status);
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_interactive_empty_dir() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let status = run_init_non_interactive(&tmp)?;
+        assert_success(status);
+        check_file_in(tmp.path(), "pyrefly.toml", &["project-includes"])
+    }
+
+    #[test]
+    fn test_non_interactive_with_mypy_config() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        create_file_in(
+            tmp.path(),
+            "mypy.ini",
+            Some(b"[mypy]\nignore_missing_imports = True"),
+        )?;
+        let status = run_init_non_interactive(&tmp)?;
+        assert_success(status);
+        check_file_in(
+            tmp.path(),
+            "pyrefly.toml",
+            &["ignore-missing-imports = [\"*\"]"],
+        )
+    }
+
+    #[test]
+    fn test_non_interactive_existing_config() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        create_file_in(tmp.path(), "pyrefly.toml", None)?;
+        let status = run_init_non_interactive(&tmp)?;
         assert_user_error(status);
         Ok(())
     }
