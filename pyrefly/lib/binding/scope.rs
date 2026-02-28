@@ -2146,13 +2146,11 @@ impl Scopes {
         };
         self.pop(); // Also pop the annotation scope that wrapped the class body.
 
-        // Collect all method-defined attributes up front (exhausting the `method_defined_attributes`
-        // iterator) so we can determine which class-body-declared fields are initialized in
-        // recognized methods (e.g. `__init__`) before building the field definitions.
+        // Collect method-defined attributes up front so we can compute which class-body fields
+        // are initialized in a recognized instance method (e.g. `__init__`) before building
+        // field definitions — a Final field is legally uninitialized in the class body if it
+        // appears in such a method.
         let method_attrs: Vec<_> = class_scope.method_defined_attributes().collect();
-
-        // Fields assigned in a recognized instance method (e.g. `__init__`) with `self`.
-        // A Final field declared only in the class body is legally initialized if it appears here.
         let recognized_instance_attrs: SmallSet<Name> = method_attrs
             .iter()
             .filter_map(|(name, method, _)| {

@@ -383,10 +383,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             BindingAnnotation::AnnotateExpr(target, x, class_key) => {
                 let type_form_context = target.type_form_context();
                 let mut ann = self.expr_annotation(x, type_form_context, errors);
-                // The "Final name must be initialized" check is NOT here.  It lives in the
-                // `Binding::AnnotatedType` arm of `binding_to_type`, which is only the active
-                // binding when no subsequent statement provides the value.  Class-level Final
-                // without initialization is checked in `calculate_class_field`.
                 if let Some(class_key) = class_key
                     && let Some(ty) = &mut ann.ty
                 {
@@ -2827,12 +2823,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        // `Binding::AnnotatedType` (the no-value annotation binding) is responsible for
-        // the "Final name must be initialized" error when there is *no* subsequent
-        // assignment.  When *any* subsequent assignment exists it supersedes the
-        // `AnnotatedType` binding, so `check_final_reassignment` is called instead.
-        // If the annotation had no initial value (`AnnAssignHasValue::No`), that
-        // assignment is the initialization — not a reassignment — so we allow it.
+        // Skip when `AnnAssignHasValue::No`: that assignment is the initialization, not a
+        // reassignment.  The "must be initialized" error is handled in `Binding::AnnotatedType`.
         if annot.annotation.is_final()
             && !matches!(
                 annot.target,
@@ -4652,15 +4644,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             Binding::AnnotatedType(ann, val) => {
                 let annot = self.get_idx(*ann);
-                // This binding is the "no-value" form of an annotation (`x: Final[int]`).
-                // Error when the name truly has no initializer anywhere — detected at bind
-                // time by checking `subsequently_initialized`.  Assignments that cannot be
-                // merged with the annotation syntactically (tuple unpacking, walrus,
-                // `with … as`) are recorded there and suppress this error.
-                //
-                // Note: bare `Final` without a type argument already errors elsewhere, so
-                // we only check when `ty` is present.  Stub files are excluded because they
-                // routinely declare Final names without values.
+                // `Binding::AnnotatedType` is the active binding for annotation-only declarations
+                // (`x: Final[int]`).  Fire the "must be initialized" error unless the name is
+                // subsequently initialized via a non-annotated assignment (tuple unpacking, walrus,
+                // `with … as`), which is tracked in `subsequently_initialized` at bind time.
                 if annot.annotation.is_final()
                     && annot.annotation.ty.is_some()
                     && matches!(

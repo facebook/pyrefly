@@ -439,12 +439,9 @@ impl<'a> BindingsBuilder<'a> {
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
-        // Detect whether this name was in an uninitialized state before this
-        // assignment.  An annotation-only declaration (`x: T`) sets
-        // `FlowStyle::Uninitialized`, so if this assignment changes that state
-        // it is the *initialization* of the annotated name rather than a
-        // reassignment — record it so the solver can suppress the
-        // "Final must be initialized" error on the annotation.
+        // If the name was annotation-only (`x: T`, `FlowStyle::Uninitialized`) before this
+        // assignment, it is the initialization rather than a reassignment — record it so
+        // the solver can suppress the "Final must be initialized" error.
         let was_uninitialized = self
             .scopes
             .current_flow_style(&name.id)
