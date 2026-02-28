@@ -394,6 +394,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if ann.is_final()
                     && ann.ty.is_some()
                     && matches!(target, AnnotationTarget::Assign(_, AnnAssignHasValue::No))
+                    && !self.module().path().is_interface()
                 {
                     self.error(
                         errors,

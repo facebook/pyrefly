@@ -419,6 +419,24 @@ z: Final = 1  # OK
 );
 
 testcase!(
+    test_final_stub,
+    // Stub files define interfaces, so Final declarations without a value are legal.
+    TestEnv::one_with_path(
+        "stub",
+        "stub.pyi",
+        r#"
+from typing import Final
+x: Final[int]
+class C:
+    y: Final[int]
+"#,
+    ),
+    r#"
+from stub import x, C
+"#,
+);
+
+testcase!(
     test_final_without_assign,
     r#"
 from typing import Final
