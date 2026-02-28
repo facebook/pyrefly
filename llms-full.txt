@@ -287,9 +287,12 @@ Go-to-definition can be used on a type in an inlay hint to jump its definition. 
 
 ### [Notebook support](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#notebookDocument)
 
-Pyrefly provides language services for Jupyter notebooks directly in VS Code and also in Jupyter Lab.
+Pyrefly provides language services for Jupyter notebooks directly in VS Code and also in Jupyter Lab. In Jupyter Lab, once you install the
+[jupyterlab-lsp](https://jupyterlab-lsp.readthedocs.io/en/latest/Installation.html) extension, and Pyrefly will appear on the list of
+automatically-detected language servers.
 
-In Jupyter Lab, once you install the [jupyterlab-lsp](https://jupyterlab-lsp.readthedocs.io/en/latest/Installation.html) extension, and Pyrefly will appear on the list of automatically-detected language servers.
+Pyrefly also provides language services to [Marimo notebooks](https://marimo.io/). See
+[Language Server Protocol](https://docs.marimo.io/guides/editor_features/language_server/#pyrefly) for how to enable it.
 
 Notebook support is experimental. Please report any bugs on our Github.
 
