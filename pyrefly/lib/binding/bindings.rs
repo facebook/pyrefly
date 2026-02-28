@@ -185,6 +185,13 @@ struct BindingsInner {
     /// keyed by the lambda's TextRange. Populated at binding time so the
     /// solver can look up yield info without re-walking the AST.
     lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
+    /// Annotation-only declarations (`x: Final[int]`) that are subsequently
+    /// initialized by an assignment that cannot be syntactically merged with
+    /// the annotation (tuple unpacking, walrus operator, `with … as`).
+    /// The solver uses this to suppress the "must be initialized" error for
+    /// these declarations, since the following assignment counts as the
+    /// initializer.
+    subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
 }
 
 impl Display for Bindings {
@@ -248,6 +255,8 @@ pub struct BindingsBuilder<'a> {
     deferred_bound_names: Vec<DeferredBoundName>,
     /// Yield and yield-from indices for lambdas that contain yields.
     lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
+    /// See `BindingsInner::subsequently_initialized`.
+    pub subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -296,6 +305,7 @@ impl Bindings {
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
             lambda_yield_keys: Vec::new(),
+            subsequently_initialized: SmallSet::new(),
         }))
     }
 
@@ -330,6 +340,12 @@ impl Bindings {
             .iter()
             .find(|(r, _, _)| *r == range)
             .map_or((&[], &[]), |(_, yields, yield_froms)| (yields, yield_froms))
+    }
+
+    /// Returns `true` if the given annotation-only declaration was subsequently
+    /// initialized by a non-annotated assignment (tuple unpacking, walrus, `with … as`).
+    pub fn subsequently_initialized(&self, ann: Idx<KeyAnnotation>) -> bool {
+        self.0.subsequently_initialized.contains(&ann)
     }
 
     pub fn available_definitions(&self, position: TextSize) -> SmallSet<Idx<Key>> {
@@ -495,6 +511,7 @@ impl Bindings {
             semantic_syntax_errors: RefCell::new(Vec::new()),
             deferred_bound_names: Vec::new(),
             lambda_yield_keys: Vec::new(),
+            subsequently_initialized: SmallSet::new(),
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -575,6 +592,7 @@ impl Bindings {
             unused_imports: builder.unused_imports,
             unused_variables: builder.unused_variables,
             lambda_yield_keys: builder.lambda_yield_keys,
+            subsequently_initialized: builder.subsequently_initialized,
         }))
     }
 

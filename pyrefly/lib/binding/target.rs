@@ -439,7 +439,20 @@ impl<'a> BindingsBuilder<'a> {
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
+        // Detect whether this name was in an uninitialized state before this
+        // assignment.  An annotation-only declaration (`x: T`) sets
+        // `FlowStyle::Uninitialized`, so if this assignment changes that state
+        // it is the *initialization* of the annotated name rather than a
+        // reassignment — record it so the solver can suppress the
+        // "Final must be initialized" error on the annotation.
+        let was_uninitialized = self
+            .scopes
+            .current_flow_style(&name.id)
+            .is_some_and(|s| matches!(s, FlowStyle::Uninitialized));
         let ann = self.bind_current(&name.id, &user, FlowStyle::Other);
+        if was_uninitialized && let Some(ann_idx) = ann {
+            self.subsequently_initialized.insert(ann_idx);
+        }
         let binding = make_binding(assigned.as_deref(), ann);
         self.insert_binding_current(user, binding);
     }

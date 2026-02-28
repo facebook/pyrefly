@@ -4653,10 +4653,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::AnnotatedType(ann, val) => {
                 let annot = self.get_idx(*ann);
                 // This binding is the "no-value" form of an annotation (`x: Final[int]`).
-                // It is only the *current* binding for `x` when no subsequent statement
-                // initializes it.  If a subsequent assignment exists (tuple unpacking,
-                // walrus, with-as, etc.) that binding supersedes this one, so we only
-                // reach here when `x` truly has no initializer.
+                // Error when the name truly has no initializer anywhere — detected at bind
+                // time by checking `subsequently_initialized`.  Assignments that cannot be
+                // merged with the annotation syntactically (tuple unpacking, walrus,
+                // `with … as`) are recorded there and suppress this error.
                 //
                 // Note: bare `Final` without a type argument already errors elsewhere, so
                 // we only check when `ty` is present.  Stub files are excluded because they
@@ -4668,6 +4668,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         AnnotationTarget::Assign(_, AnnAssignHasValue::No)
                     )
                     && !self.module().path().is_interface()
+                    && !self.bindings().subsequently_initialized(*ann)
                 {
                     self.error(
                         errors,
