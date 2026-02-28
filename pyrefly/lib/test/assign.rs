@@ -453,6 +453,24 @@ class D:
 );
 
 testcase!(
+    // A `Final` variable declared without a value should be considered initialized when
+    // the very next binding provides the value via tuple unpacking, a walrus operator,
+    // or a `with … as` target — none of these forms allow combining the annotation and
+    // the assignment into a single statement.
+    bug = "Final variables initialized via tuple unpacking, walrus, or with-as should not produce a declaration error",
+    test_final_alternate_init_forms,
+    r#"
+from typing import Final, TextIO
+x: Final[int]  # E: Final name must be initialized with a value
+x, _ = 1, 2  # E: Cannot assign to variable `x` because it is marked final
+y: Final[int]  # E: Final name must be initialized with a value
+z = (y := 3)  # E: Cannot assign to variable `y` because it is marked final
+f: Final[TextIO]  # E: Final name must be initialized with a value
+with open('foo') as f: pass  # E: Cannot assign to variable `f` because it is marked final
+"#,
+);
+
+testcase!(
     test_assign_final_attr,
     r#"
 from typing import Final
