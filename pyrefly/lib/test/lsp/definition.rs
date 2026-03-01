@@ -2083,3 +2083,31 @@ y = f"hello {x:{f()}}"
         "Expected definition to jump to function f, got: {report}"
     );
 }
+
+#[test]
+fn goto_def_list_comprehension_target() {
+    let code = r#"
+items = [1, 2, 3]
+result = [x for x in items]
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        !report.contains("Definition Result: None"),
+        "Expected goto-def on list comprehension target variable to find a definition, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_usage() {
+    let code = r#"
+items = [1, 2, 3]
+result = [x for x in items]
+#         ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        !report.contains("Definition Result: None"),
+        "Expected goto-def on list comprehension usage variable to find a definition, got: {report}"
+    );
+}
