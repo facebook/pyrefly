@@ -81,6 +81,14 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             Binding::TypeAliasRef(..) => {
                 return Some(current_key);
             }
+            // IterableValue is a terminal binding for comprehension variables.
+            // The Forward chain from a comprehension usage variable may bypass
+            // Key::Definition and land directly at the IterableValue binding.
+            // Treat the current key as the definition so goto-def works for
+            // comprehension usage variables like `x` in `[x for x in items]`.
+            Binding::IterableValue(..) => {
+                return Some(current_key);
+            }
             Binding::Forward(k)
             | Binding::Narrow(k, _, _)
             | Binding::CompletedPartialType(k, ..)
