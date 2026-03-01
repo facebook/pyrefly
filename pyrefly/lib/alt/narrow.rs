@@ -41,7 +41,9 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
+use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyAnnotation;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::FacetOrigin;
 use crate::binding::narrow::FacetSubject;
@@ -205,6 +207,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 left.clone()
             }
         })
+    }
+
+    fn final_sentinel_type_for_binding(
+        &self,
+        binding_idx: Idx<Key>,
+        annot_idx: Idx<KeyAnnotation>,
+    ) -> Option<Type> {
+        let annotation = self.get_idx(annot_idx);
+        if !annotation.annotation.is_final() {
+            return None;
+        }
+        let Binding::NameAssign { expr, .. } = self.bindings().get(binding_idx) else {
+            return None;
+        };
+        Some(self.expr_infer(expr.as_ref(), &self.error_swallower()))
     }
 
     fn resolve_narrowing_call(
@@ -559,6 +576,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                     match right {
                         Type::None
+                        | Type::Ellipsis
                         | Type::Literal(box Literal {
                             value: Lit::Bool(_) | Lit::Enum(_),
                             ..
@@ -585,11 +603,67 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     match (&facet_ty, &right) {
                         (
                             Type::None
+                            | Type::Ellipsis
                             | Type::Literal(box Literal {
                                 value: Lit::Bool(_) | Lit::Enum(_),
                                 ..
                             }),
                             Type::None
+                            | Type::Ellipsis
+                            | Type::Literal(box Literal {
+                                value: Lit::Bool(_) | Lit::Enum(_),
+                                ..
+                            }),
+                        ) if self.literal_equal(&right, &facet_ty) => self.heap.mk_never(),
+                        _ => t.clone(),
+                    }
+                }))
+            }
+            AtomicNarrowOp::IsSentinel(binding_idx, annot_idx) => {
+                let right = self.final_sentinel_type_for_binding(*binding_idx, *annot_idx)?;
+                Some(self.distribute_over_union(base, |t| {
+                    let base_info = TypeInfo::of_ty(t.clone());
+                    let facet_ty = self.get_facet_chain_type(
+                        &base_info,
+                        &FacetChain::new(Vec1::new(facet.clone())),
+                        range,
+                    );
+                    match right {
+                        Type::None
+                        | Type::Ellipsis
+                        | Type::Literal(box Literal {
+                            value: Lit::Bool(_) | Lit::Enum(_),
+                            ..
+                        }) => {
+                            if self.is_subset_eq(&right, &facet_ty) {
+                                t.clone()
+                            } else {
+                                self.heap.mk_never()
+                            }
+                        }
+                        _ => t.clone(),
+                    }
+                }))
+            }
+            AtomicNarrowOp::IsNotSentinel(binding_idx, annot_idx) => {
+                let right = self.final_sentinel_type_for_binding(*binding_idx, *annot_idx)?;
+                Some(self.distribute_over_union(base, |t| {
+                    let base_info = TypeInfo::of_ty(t.clone());
+                    let facet_ty = self.get_facet_chain_type(
+                        &base_info,
+                        &FacetChain::new(Vec1::new(facet.clone())),
+                        range,
+                    );
+                    match (&facet_ty, &right) {
+                        (
+                            Type::None
+                            | Type::Ellipsis
+                            | Type::Literal(box Literal {
+                                value: Lit::Bool(_) | Lit::Enum(_),
+                                ..
+                            }),
+                            Type::None
+                            | Type::Ellipsis
                             | Type::Literal(box Literal {
                                 value: Lit::Bool(_) | Lit::Enum(_),
                                 ..
@@ -609,7 +683,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         range,
                     );
                     match right {
-                        Type::None | Type::Literal(_) => {
+                        Type::None | Type::Ellipsis | Type::Literal(_) => {
                             if self.is_subset_eq(&right, &facet_ty) {
                                 t.clone()
                             } else {
@@ -630,11 +704,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         range,
                     );
                     match (&facet_ty, &right) {
-                        (Type::None | Type::Literal(_), Type::None | Type::Literal(_))
-                            if self.literal_equal(&right, &facet_ty) =>
-                        {
-                            self.heap.mk_never()
-                        }
+                        (
+                            Type::None | Type::Ellipsis | Type::Literal(_),
+                            Type::None | Type::Ellipsis | Type::Literal(_),
+                        ) if self.literal_equal(&right, &facet_ty) => self.heap.mk_never(),
                         _ => t.clone(),
                     }
                 }))
@@ -1008,6 +1081,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         (
                             _,
                             Type::None
+                            | Type::Ellipsis
                             | Type::Literal(box Literal {
                                 value: Lit::Bool(_) | Lit::Enum(_),
                                 ..
@@ -1028,6 +1102,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         _ => t.clone(),
                     }
                 })
+            }
+            AtomicNarrowOp::IsSentinel(binding_idx, annot_idx) => {
+                if let Some(right) = self.final_sentinel_type_for_binding(*binding_idx, *annot_idx)
+                {
+                    self.intersect(ty, &right)
+                } else {
+                    ty.clone()
+                }
+            }
+            AtomicNarrowOp::IsNotSentinel(binding_idx, annot_idx) => {
+                if let Some(right) = self.final_sentinel_type_for_binding(*binding_idx, *annot_idx)
+                {
+                    self.distribute_over_union(ty, |t| match (t, &right) {
+                        (
+                            _,
+                            Type::None
+                            | Type::Ellipsis
+                            | Type::Literal(box Literal {
+                                value: Lit::Bool(_) | Lit::Enum(_),
+                                ..
+                            }),
+                        ) if self.literal_equal(t, &right) => self.heap.mk_never(),
+                        (Type::ClassType(cls), Type::Literal(lit))
+                            if cls.is_builtin("bool")
+                                && let Lit::Bool(b) = &lit.value =>
+                        {
+                            Lit::Bool(!b).to_implicit_type()
+                        }
+                        (Type::ClassType(left_cls), Type::Literal(right))
+                            if let Lit::Enum(right) = &right.value
+                                && left_cls == &right.class =>
+                        {
+                            self.subtract_enum_member(left_cls, &right.member)
+                        }
+                        _ => t.clone(),
+                    })
+                } else {
+                    ty.clone()
+                }
             }
             AtomicNarrowOp::IsInstance(v, source) => {
                 let right = self.expr_infer(v, errors);
@@ -1193,7 +1306,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::Eq(v) => {
                 let right = self.expr_infer(v, errors);
-                if matches!(right, Type::Literal(_) | Type::None) {
+                if matches!(right, Type::Literal(_) | Type::None | Type::Ellipsis) {
                     self.intersect(ty, &right)
                 } else {
                     ty.clone()
@@ -1201,7 +1314,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::NotEq(v) => {
                 let right = self.expr_infer(v, errors);
-                if matches!(right, Type::Literal(_) | Type::None) {
+                if matches!(right, Type::Literal(_) | Type::None | Type::Ellipsis) {
                     self.distribute_over_union(ty, |t| match (t, &right) {
                         (_, _) if self.literal_equal(t, &right) => self.heap.mk_never(),
                         (Type::ClassType(cls), Type::Literal(lit))
@@ -1789,6 +1902,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn literal_equal(&self, left: &Type, right: &Type) -> bool {
         match (left, right) {
             (Type::None, Type::None) => true,
+            (Type::Ellipsis, Type::Ellipsis) => true,
             (Type::Literal(left), Type::Literal(right)) => left.value == right.value,
             _ => false,
         }
