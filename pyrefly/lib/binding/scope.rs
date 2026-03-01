@@ -2219,21 +2219,23 @@ impl Scopes {
                 field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
             }
         });
-        for (name, method, InstanceAttribute(value, annotation, range, _)) in method_attrs {
-            if !field_definitions.contains_key_hashed(name.as_ref()) {
-                field_definitions.insert_hashed(
-                    name,
-                    (
-                        ClassFieldDefinition::DefinedInMethod {
-                            value: Box::new(value),
-                            annotation,
-                            method,
-                        },
-                        range,
-                    ),
-                );
-            }
-        }
+        method_attrs.into_iter().for_each(
+            |(name, method, InstanceAttribute(value, annotation, range, _))| {
+                if !field_definitions.contains_key_hashed(name.as_ref()) {
+                    field_definitions.insert_hashed(
+                        name,
+                        (
+                            ClassFieldDefinition::DefinedInMethod {
+                                value: Box::new(value),
+                                annotation,
+                                method,
+                            },
+                            range,
+                        ),
+                    );
+                }
+            },
+        );
         field_definitions
     }
 
