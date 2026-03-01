@@ -31,6 +31,7 @@ use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
+use pyrefly_types::types::Forallable;
 use pyrefly_types::types::Union;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
@@ -1914,9 +1915,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             match base {
                 Type::Forall(forall) => {
-                    let tys =
-                        xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
-                    self.specialize_forall(*forall, tys, range, errors)
+                    if matches!(forall.body, Forallable::TypeAlias(_)) {
+                        let tys = xs
+                            .map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
+                        self.specialize_forall(*forall, tys, range, errors)
+                    } else {
+                        let name = forall.body.name();
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                            format!("`{}` is not subscriptable", name.as_ref().as_str()),
+                        )
+                    }
                 }
                 // Note that we have to check for `builtins.type` by name here because this code runs
                 // when we're bootstrapping the stdlib and don't have access to class objects yet.

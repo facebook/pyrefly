@@ -251,6 +251,16 @@ def f(condition: bool):
 );
 
 testcase!(
+    test_generic_function_subscript,
+    r#"
+def func[T](x: T) -> T:
+    return x
+
+func[int](100)  # E: `func` is not subscriptable
+    "#,
+);
+
+testcase!(
     test_any_constructor,
     r#"
 from typing import Any
