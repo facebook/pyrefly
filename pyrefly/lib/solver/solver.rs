@@ -1220,6 +1220,7 @@ impl Solver {
             gas: INITIAL_GAS,
             recursive_assumptions: SmallSet::new(),
             class_protocol_assumptions: SmallSet::new(),
+            protocol_subset_cache: SmallMap::new(),
         }
     }
 }
@@ -1424,6 +1425,13 @@ impl SubsetError {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum ProtocolSubsetCacheEntry {
+    InProgress,
+    Ok,
+    Err(SubsetError),
+}
+
 /// A helper to implement subset ergonomically.
 /// Should only be used within `crate::subset`, which implements part of it.
 pub struct Subset<'a, Ans: LookupAnswer> {
@@ -1439,6 +1447,8 @@ pub struct Subset<'a, Ans: LookupAnswer> {
     /// pairs to detect cycles. This enables coinductive reasoning for recursive protocols
     /// like Functor/Maybe without falsely assuming success for unrelated protocol checks.
     pub class_protocol_assumptions: SmallSet<(Class, Class)>,
+    /// Memoized protocol subset checks for class-to-protocol structural typing.
+    pub protocol_subset_cache: SmallMap<(Type, Type), ProtocolSubsetCacheEntry>,
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {

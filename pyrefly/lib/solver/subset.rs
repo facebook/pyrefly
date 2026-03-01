@@ -40,6 +40,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
 use crate::solver::solver::OpenTypedDictSubsetError;
+use crate::solver::solver::ProtocolSubsetCacheEntry;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypedDictSubsetError;
@@ -463,6 +464,29 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> Result<(), SubsetError> {
+        if matches!(got, Type::ClassType(_)) {
+            let protocol_type = Type::ClassType(protocol.clone());
+            if !got.may_contain_quantified_var() && !protocol_type.may_contain_quantified_var() {
+                let cache_key = (got.clone(), protocol_type);
+                if let Some(entry) = self.protocol_subset_cache.get(&cache_key) {
+                    return match entry {
+                        ProtocolSubsetCacheEntry::InProgress | ProtocolSubsetCacheEntry::Ok => {
+                            Ok(())
+                        }
+                        ProtocolSubsetCacheEntry::Err(err) => Err(err.clone()),
+                    };
+                }
+                self.protocol_subset_cache
+                    .insert(cache_key.clone(), ProtocolSubsetCacheEntry::InProgress);
+                let res = self.is_subset_protocol_inner(got, protocol);
+                let entry = match &res {
+                    Ok(()) => ProtocolSubsetCacheEntry::Ok,
+                    Err(err) => ProtocolSubsetCacheEntry::Err(err.clone()),
+                };
+                self.protocol_subset_cache.insert(cache_key, entry);
+                return res;
+            }
+        }
         // For class-level coinductive reasoning: if the `got` type's type arguments
         // contain Vars, we're likely in a recursive pattern (e.g., checking method return
         // types that reference the same classes). Use (Class, Class) matching to detect
