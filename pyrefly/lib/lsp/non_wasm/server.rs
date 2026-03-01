@@ -3714,24 +3714,83 @@ impl Server {
         let mut actions = Vec::new();
         let server_state = self.telemetry_state();
         let start = Instant::now();
+        // If the code action is triggered from a notebook cell, we need the cell's
+        // index so that import quick-fixes can be redirected to the current cell
+        // instead of always targeting cell 1 (position 0 of the combined AST).
+        let triggered_cell_index = self.maybe_get_cell_index(uri);
         if allow_quickfix
             && let Some(quickfixes) =
                 transaction.local_quickfix_code_actions_sorted(&handle, range, import_format)
         {
             actions.extend(quickfixes.into_iter().filter_map(
                 |(title, info, range, insert_text)| {
-                    let lsp_location = self.to_lsp_location(&TextRangeWithModule {
-                        module: info,
-                        range,
-                    })?;
+                    // For notebook cells: if the import quick-fix targets a different
+                    // cell than the one where the action was triggered, redirect the
+                    // edit to the top of the current cell.  This mirrors Pylance's
+                    // behaviour where "insert import" always goes into the active cell.
+                    let (edit_uri, edit_range) =
+                        if let Some(current_cell_idx) = triggered_cell_index {
+                            let edit_cell_idx = info.to_cell_for_lsp(range.start());
+                            if edit_cell_idx != Some(current_cell_idx) {
+                                // Redirect to the current cell, inserting at line 0.
+                                let open_files = self.open_files.read();
+                                let notebook_path = self
+                                    .open_notebook_cells
+                                    .read()
+                                    .get(uri)
+                                    .cloned();
+                                let cell_url = notebook_path.and_then(|path| {
+                                    if let Some(LspFile::Notebook(notebook)) =
+                                        open_files.get(&path).map(|f| &**f)
+                                    {
+                                        notebook.get_cell_url(current_cell_idx).cloned()
+                                    } else {
+                                        None
+                                    }
+                                });
+                                if let Some(cell_url) = cell_url {
+                                    let top_of_cell = lsp_types::Range {
+                                        start: lsp_types::Position {
+                                            line: 0,
+                                            character: 0,
+                                        },
+                                        end: lsp_types::Position {
+                                            line: 0,
+                                            character: 0,
+                                        },
+                                    };
+                                    (cell_url, top_of_cell)
+                                } else {
+                                    let lsp_location =
+                                        self.to_lsp_location(&TextRangeWithModule {
+                                            module: info,
+                                            range,
+                                        })?;
+                                    (lsp_location.uri, lsp_location.range)
+                                }
+                            } else {
+                                let lsp_location =
+                                    self.to_lsp_location(&TextRangeWithModule {
+                                        module: info,
+                                        range,
+                                    })?;
+                                (lsp_location.uri, lsp_location.range)
+                            }
+                        } else {
+                            let lsp_location = self.to_lsp_location(&TextRangeWithModule {
+                                module: info,
+                                range,
+                            })?;
+                            (lsp_location.uri, lsp_location.range)
+                        };
                     Some(CodeActionOrCommand::CodeAction(CodeAction {
                         title,
                         kind: Some(CodeActionKind::QUICKFIX),
                         edit: Some(WorkspaceEdit {
                             changes: Some(HashMap::from([(
-                                lsp_location.uri,
+                                edit_uri,
                                 vec![TextEdit {
-                                    range: lsp_location.range,
+                                    range: edit_range,
                                     new_text: insert_text,
                                 }],
                             )])),

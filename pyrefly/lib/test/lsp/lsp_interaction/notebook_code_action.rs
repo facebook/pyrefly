@@ -53,7 +53,8 @@ fn test_notebook_code_action_import() {
         })
         .unwrap();
 
-    // Code actions for later cells will still insert imports to the first cell
+    // Code actions for later cells insert imports into the current cell, not the first cell
+    let cell2_uri = interaction.cell_uri("notebook.ipynb", "cell2");
     interaction
         .code_action_cell("notebook.ipynb", "cell2", 0, 0, 0, 10)
         .expect_response_with(|response| {
@@ -68,7 +69,7 @@ fn test_notebook_code_action_import() {
                     .edit
                     .as_ref()
                     .and_then(|edit| edit.changes.as_ref())
-                    .and_then(|changes| changes.get(&cell1_uri))
+                    .and_then(|changes| changes.get(&cell2_uri))
                 else {
                     return false;
                 };
@@ -76,6 +77,36 @@ fn test_notebook_code_action_import() {
                     text_edit.range.start.line == 0
                         && text_edit.range.start.character == 0
                         && text_edit.new_text.as_str() == "from typing import NamedTuple\n"
+                })
+            })
+        })
+        .unwrap();
+
+    // Code actions for a third cell also insert into that specific cell
+    interaction.open_notebook("notebook.ipynb", vec!["TypedDict", "NamedTuple", "List"]);
+    let cell3_uri = interaction.cell_uri("notebook.ipynb", "cell3");
+    interaction
+        .code_action_cell("notebook.ipynb", "cell3", 0, 0, 0, 4)
+        .expect_response_with(|response| {
+            let Some(actions) = response else {
+                return false;
+            };
+            actions.iter().any(|action| {
+                let CodeActionOrCommand::CodeAction(code_action) = action else {
+                    return false;
+                };
+                let Some(text_edits) = code_action
+                    .edit
+                    .as_ref()
+                    .and_then(|edit| edit.changes.as_ref())
+                    .and_then(|changes| changes.get(&cell3_uri))
+                else {
+                    return false;
+                };
+                text_edits.iter().any(|text_edit| {
+                    text_edit.range.start.line == 0
+                        && text_edit.range.start.character == 0
+                        && text_edit.new_text.as_str() == "from typing import List\n"
                 })
             })
         })
