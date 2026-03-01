@@ -256,7 +256,7 @@ pub struct BindingsBuilder<'a> {
     /// Yield and yield-from indices for lambdas that contain yields.
     lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
     /// See `BindingsInner::subsequently_initialized`.
-    pub subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
+    subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -862,6 +862,11 @@ impl<'a> BindingsBuilder<'a> {
     /// Insert a binding into the bindings table using the current idx from a `CurrentIdx` wrapper.
     pub fn insert_binding_current(&mut self, current: CurrentIdx, value: Binding) -> Idx<Key> {
         self.insert_binding_idx(current.into_idx(), value)
+    }
+
+    /// Record that an annotation-only declaration was subsequently initialized by a non-annotated assignment.
+    pub fn insert_subsequently_initialized(&mut self, ann_idx: Idx<KeyAnnotation>) {
+        self.subsequently_initialized.insert(ann_idx);
     }
 
     /// Allow access to an `Idx<Key>` given a `LastStmt` coming from a scan of a function body.

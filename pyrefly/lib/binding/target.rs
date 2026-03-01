@@ -448,7 +448,7 @@ impl<'a> BindingsBuilder<'a> {
             .is_some_and(|s| matches!(s, FlowStyle::Uninitialized));
         let ann = self.bind_current(&name.id, &user, FlowStyle::Other);
         if was_uninitialized && let Some(ann_idx) = ann {
-            self.subsequently_initialized.insert(ann_idx);
+            self.insert_subsequently_initialized(ann_idx);
         }
         let binding = make_binding(assigned.as_deref(), ann);
         self.insert_binding_current(user, binding);
