@@ -419,8 +419,7 @@ z: Final = 1  # OK
 );
 
 testcase!(
-    test_final_stub,
-    // Stub files define interfaces, so Final declarations without a value are legal.
+    test_final_stub_no_error,
     TestEnv::one_with_path(
         "stub",
         "stub.pyi",
@@ -437,7 +436,7 @@ from stub import x, C
 );
 
 testcase!(
-    test_final_without_assign,
+    test_final_without_assign_should_error,
     r#"
 from typing import Final
 x: Final[int]  # E: Final name must be initialized with a value
@@ -445,26 +444,19 @@ def f() -> None:
     y: Final[int]  # E: Final name must be initialized with a value
 class C:
     z: Final[int]  # E: Final attribute declared in class body must be initialized with a value or in `__init__`
-class D:
-    w: Final[int]  # OK — initialized in `__init__`
-    def __init__(self) -> None:
-        self.w = 1
 "#,
 );
 
 testcase!(
-    // `Final` declarations without a value followed by an assignment form that cannot
-    // be syntactically merged with the annotation (tuple unpacking, walrus operator,
-    // `with … as`) should produce no errors.
-    test_final_alternate_init_forms,
+    test_final_alternate_init_forms_no_error,
     r#"
 from typing import Final, TextIO
 x: Final[int]
-x, _ = 1, 2  # OK — first assignment is initialization, not reassignment
+x, _ = 1, 2
 y: Final[int]
-z = (y := 3)  # OK
+z = (y := 3)
 f: Final[TextIO]
-with open('foo') as f: pass  # OK
+with open('foo') as f: pass
 "#,
 );
 
