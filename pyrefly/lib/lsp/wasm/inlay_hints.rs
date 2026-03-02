@@ -117,48 +117,51 @@ impl<'a> Transaction<'a> {
 
         let mut adjusted_parts: Vec<(String, Option<TextRangeWithModule>)> =
             Vec::with_capacity(parts.len());
-        let mut handle_module_parts =
-            |module_text: &str,
-             mut name_part: (String, Option<TextRangeWithModule>),
-             dot_part: Option<(String, Option<TextRangeWithModule>)>|
-             -> Option<Vec<(String, Option<TextRangeWithModule>)>> {
-                if module_text.is_empty() {
-                    return None;
-                }
-                let loc = name_part.1.as_ref()?;
-                let module_name = loc.module.name();
-                if module_text != module_name.as_str() {
-                    return None;
-                }
-                if module_name == current_module {
-                    return Some(vec![name_part]);
-                }
-                let tracker = tracker?;
-                let name = name_part.0.as_str();
-                let alt_module = if module_name.as_str() == "typing" {
-                    Some(ModuleName::from_str("typing_extensions"))
-                } else if module_name.as_str() == "typing_extensions" {
-                    Some(ModuleName::from_str("typing"))
-                } else {
-                    None
-                };
-                if let Some(alias) = tracker
-                    .imported_name_alias(module_name, name)
-                    .or_else(|| alt_module.and_then(|m| tracker.imported_name_alias(m, name)))
-                {
-                    if alias != name_part.0 {
-                        name_part.0 = alias.to_owned();
-                    }
-                    return Some(vec![name_part]);
-                }
-                if let Some(alias) = tracker.alias_for_module(module_name) {
-                    return Some(match dot_part {
-                        Some(dot_part) => vec![(alias, None), dot_part, name_part],
-                        None => vec![(format!("{alias}."), None), name_part],
-                    });
-                }
+        let handle_module_parts = |module_text: &str,
+                                   mut name_part: (String, Option<TextRangeWithModule>),
+                                   dot_part: Option<(String, Option<TextRangeWithModule>)>|
+         -> Option<Vec<(String, Option<TextRangeWithModule>)>> {
+            if module_text.is_empty() {
+                return None;
+            }
+            let loc = name_part.1.as_ref()?;
+            let module_name = loc.module.name();
+            let module_name_str = module_name.as_str();
+            let module_matches = module_text == module_name_str
+                || (module_text == "typing" && module_name_str == "typing_extensions")
+                || (module_text == "typing_extensions" && module_name_str == "typing");
+            if !module_matches {
+                return None;
+            }
+            if module_name == current_module {
+                return Some(vec![name_part]);
+            }
+            let tracker = tracker?;
+            let name = name_part.0.as_str();
+            let alt_module = if module_name.as_str() == "typing" {
+                Some(ModuleName::from_str("typing_extensions"))
+            } else if module_name.as_str() == "typing_extensions" {
+                Some(ModuleName::from_str("typing"))
+            } else {
                 None
             };
+            if let Some(alias) = tracker
+                .imported_name_alias(module_name, name)
+                .or_else(|| alt_module.and_then(|m| tracker.imported_name_alias(m, name)))
+            {
+                if alias != name_part.0 {
+                    name_part.0 = alias.to_owned();
+                }
+                return Some(vec![name_part]);
+            }
+            if let Some(alias) = tracker.alias_for_module(module_name) {
+                return Some(match dot_part {
+                    Some(dot_part) => vec![(alias, None), dot_part, name_part],
+                    None => vec![(format!("{alias}."), None), name_part],
+                });
+            }
+            None
+        };
         let mut i = 0;
         while i < parts.len() {
             if i + 1 < parts.len()
@@ -198,10 +201,17 @@ impl<'a> Transaction<'a> {
         if let (Some(tracker), Some(ast)) = (tracker, ast) {
             let mut maybe_add_import = |module_text: &str, loc: &TextRangeWithModule| {
                 let module_name = loc.module.name();
-                if module_text == module_name.as_str()
-                    && !tracker.has_module_import(module_name)
+                let module_to_import = if module_text == module_name.as_str() {
+                    Some(module_name)
+                } else if module_text == "typing" || module_text == "typing_extensions" {
+                    Some(ModuleName::from_str(module_text))
+                } else {
+                    None
+                };
+                if let Some(module_to_import) = module_to_import
+                    && !tracker.has_module_import(module_to_import)
                     && let Some(handle_to_import) =
-                        self.import_handle(handle, module_name, None).finding()
+                        self.import_handle(handle, module_to_import, None).finding()
                 {
                     let (position, insert_text, _) =
                         import_regular_import_edit(ast, handle_to_import, None);
