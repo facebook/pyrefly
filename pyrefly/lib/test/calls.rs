@@ -41,6 +41,16 @@ force_error(f(1, None))  # E: Argument `tuple[int, @_]` is not assignable to par
 );
 
 testcase!(
+    test_abs_union_supports_abs,
+    r#"
+from typing import assert_type
+
+def f(x: bool | int | float | complex) -> None:
+    assert_type(abs(x), int | float)
+"#,
+);
+
+testcase!(
     test_self_type_subst,
     r#"
 from typing import assert_type, Self
