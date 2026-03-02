@@ -10,6 +10,6 @@ def p():
 
 a = "a"
 print(a + "b")
-print("a" "b")
+print("ab")
 
 x = complex(real=123, imag=2)

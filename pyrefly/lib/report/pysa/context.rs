@@ -5,10 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fmt;
 use std::sync::Arc;
 
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
+use pyrefly_util::display::DisplayWith;
+use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::Arguments;
+use ruff_python_ast::Decorator;
+use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
 
 use crate::alt::answers::Answers;
@@ -55,5 +61,38 @@ impl ModuleContext<'_> {
             module_ids,
             handle,
         })
+    }
+}
+
+impl<'a, T: DisplayWith<ModuleContext<'a>>> DisplayWith<ModuleContext<'a>> for Option<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, context: &ModuleContext<'a>) -> fmt::Result {
+        match self {
+            Some(value) => pyrefly_util::display::DisplayWith::fmt(&value, f, context),
+            None => write!(f, "Option::None"),
+        }
+    }
+}
+
+impl DisplayWith<ModuleContext<'_>> for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, context: &ModuleContext) -> fmt::Result {
+        pyrefly_util::display::DisplayWith::fmt(&self, f, &context.module_info)
+    }
+}
+
+impl DisplayWith<ModuleContext<'_>> for AnyNodeRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, context: &ModuleContext) -> fmt::Result {
+        pyrefly_util::display::DisplayWith::fmt(&self, f, &context.module_info)
+    }
+}
+
+impl DisplayWith<ModuleContext<'_>> for Arguments {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, context: &ModuleContext) -> fmt::Result {
+        pyrefly_util::display::DisplayWith::fmt(&self, f, &context.module_info)
+    }
+}
+
+impl DisplayWith<ModuleContext<'_>> for Decorator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, context: &ModuleContext) -> fmt::Result {
+        pyrefly_util::display::DisplayWith::fmt(&self, f, &context.module_info)
     }
 }

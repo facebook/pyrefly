@@ -14,15 +14,22 @@ use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_types::class::Class;
+use pyrefly_types::class::ClassType;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::statement_visitor::StatementVisitor;
+use ruff_python_ast::statement_visitor::walk_stmt;
 use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use serde::Serialize;
 use serde::ser::SerializeStruct;
 use starlark_map::Hashed;
 
 use crate::alt::class::class_field::ClassField;
+use crate::alt::class::class_field::WithDefiningClass;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassField;
@@ -177,7 +184,11 @@ impl PysaClassFieldDeclaration {
             ClassFieldDefinition::AssignedInBody { .. } => {
                 Some(PysaClassFieldDeclaration::AssignedInBody)
             }
-            ClassFieldDefinition::DefinedWithoutAssign { .. } => {
+            ClassFieldDefinition::NestedClass { .. }
+            | ClassFieldDefinition::DefinedWithoutAssign { .. } => {
+                // TODO: we handled NestedClass this way for backward
+                // compatibility after a Pyrefly refactor. Should it be modeled
+                // differently?
                 Some(PysaClassFieldDeclaration::DefinedWithoutAssign)
             }
             ClassFieldDefinition::DefinedInMethod { .. } => {
@@ -230,17 +241,31 @@ pub fn get_all_classes(context: &ModuleContext) -> impl Iterator<Item = Class> {
         .map(|idx| context.answers.get_idx(idx).unwrap().0.dupe().unwrap())
 }
 
-pub fn get_class_field(
+pub fn get_class_field_from_current_class_only(
     class: &Class,
     field_name: &Name,
     context: &ModuleContext,
 ) -> Option<Arc<ClassField>> {
     context
         .transaction
-        .ad_hoc_solve(&context.handle, |solver| {
+        .ad_hoc_solve(&context.handle, "pysa_class_field", |solver| {
             solver.get_field_from_current_class_only(class, field_name)
         })
         .unwrap()
+}
+
+pub fn get_super_class_member(
+    class: &Class,
+    field_name: &Name,
+    start_lookup_cls: Option<&ClassType>,
+    context: &ModuleContext,
+) -> Option<WithDefiningClass<Arc<ClassField>>> {
+    context
+        .transaction
+        .ad_hoc_solve(&context.handle, "pysa_super_class_member", |solver| {
+            solver.get_super_class_member(class, start_lookup_cls, field_name)
+        })
+        .flatten()
 }
 
 pub fn get_context_from_class<'a>(
@@ -282,7 +307,8 @@ pub fn get_class_fields<'a>(
     context: &'a ModuleContext<'a>,
 ) -> impl Iterator<Item = (Cow<'a, Name>, Arc<ClassField>)> {
     let regular_fields = class.fields().filter_map(|name| {
-        get_class_field(class, name, context).map(|field| (Cow::Borrowed(name), field))
+        get_class_field_from_current_class_only(class, name, context)
+            .map(|field| (Cow::Borrowed(name), field))
     });
 
     let synthesized_fields_idx = context
@@ -301,9 +327,51 @@ pub fn get_class_fields<'a>(
     regular_fields.chain(synthesized_fields)
 }
 
-pub fn export_class_fields(
+/// Maps the start position of each `StmtAnnAssign` target to the `TextRange` of its annotation.
+///
+/// This allows O(1) lookup of annotations by target position, avoiding repeated
+/// full AST traversals via `Ast::locate_node`.
+struct AnnAssignMap {
+    map: HashMap<TextSize, TextRange>,
+}
+
+impl AnnAssignMap {
+    /// Build a map from target start position to annotation range for all
+    /// `StmtAnnAssign` statements in the module AST.
+    fn build(ast: &ruff_python_ast::ModModule) -> AnnAssignMap {
+        let mut collector = AnnAssignCollector {
+            map: HashMap::new(),
+        };
+        collector.visit_body(&ast.body);
+        AnnAssignMap { map: collector.map }
+    }
+
+    /// Look up the annotation range for a given target start position.
+    fn get(&self, target_start: TextSize) -> Option<&TextRange> {
+        self.map.get(&target_start)
+    }
+}
+
+/// Walks the AST and collects all `StmtAnnAssign` nodes, mapping each target's
+/// start position to the annotation's text range.
+struct AnnAssignCollector {
+    map: HashMap<TextSize, TextRange>,
+}
+
+impl<'a> StatementVisitor<'a> for AnnAssignCollector {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if let Stmt::AnnAssign(assign) = stmt {
+            self.map
+                .insert(assign.target.range().start(), assign.annotation.range());
+        }
+        walk_stmt(self, stmt);
+    }
+}
+
+fn export_class_fields(
     class: &Class,
     context: &ModuleContext,
+    ann_assign_map: &AnnAssignMap,
 ) -> HashMap<Name, PysaClassField> {
     assert_eq!(class.module(), &context.module_info);
     get_class_fields(class, context)
@@ -332,19 +400,11 @@ pub fn export_class_fields(
                 // We cannot use the answer for `key_annotation` (which wraps a `Type`),
                 // because it contains a normalized type where some elements have
                 // been stripped out (most notably, `typing.Annotated`).
-                KeyAnnotation::Annotation(identifier) => {
-                    // `Ast::locate_node` returns all covering AST nodes, from innermost to outermost.
-                    // The innermost will be the Name node, so we need the second node.
-                    match Ast::locate_node(&context.ast, identifier.range().start()).get(1) {
-                        Some(AnyNodeRef::StmtAnnAssign(assign)) => Some(
-                            context
-                                .module_info
-                                .code_at(assign.annotation.range())
-                                .to_owned(),
-                        ),
-                        _ => None,
-                    }
-                }
+                KeyAnnotation::Annotation(identifier) => ann_assign_map
+                    .get(identifier.range().start())
+                    .map(|annotation_range| {
+                        context.module_info.code_at(*annotation_range).to_owned()
+                    }),
                 KeyAnnotation::AttrAnnotation(range) => {
                     Some(context.module_info.code_at(*range).to_owned())
                 }
@@ -366,9 +426,7 @@ pub fn export_class_fields(
                     PysaClassField {
                         type_: PysaType::from_type(&field.ty(), context),
                         explicit_annotation,
-                        location: Some(PysaLocation::new(
-                            context.module_info.display_range(*range),
-                        )),
+                        location: Some(PysaLocation::from_text_range(*range, &context.module_info)),
                         declaration_kind: PysaClassFieldDeclaration::from(definition),
                     },
                 )),
@@ -424,6 +482,7 @@ pub fn export_all_classes(
     context: &ModuleContext,
 ) -> HashMap<PysaLocation, ClassDefinition> {
     let mut class_definitions = HashMap::new();
+    let ann_assign_map = AnnAssignMap::build(&context.ast);
 
     for class_idx in context.bindings.keys::<KeyClass>() {
         let class = context
@@ -433,7 +492,6 @@ pub fn export_all_classes(
             .0
             .dupe()
             .unwrap();
-        let display_range = context.module_info.display_range(class.qname().range());
         let class_index = class.index();
         let parent = get_scope_parent(&context.ast, &context.module_info, class.qname().range());
         let metadata = context
@@ -446,7 +504,7 @@ pub fn export_all_classes(
             BindingClass::ClassDef(_) => false,
         };
 
-        let fields = export_class_fields(&class, context);
+        let fields = export_class_fields(&class, context, &ann_assign_map);
 
         let bases = metadata
             .base_class_objects()
@@ -483,7 +541,10 @@ pub fn export_all_classes(
 
         assert!(
             class_definitions
-                .insert(PysaLocation::new(display_range), class_definition)
+                .insert(
+                    PysaLocation::from_text_range(class.qname().range(), &context.module_info),
+                    class_definition
+                )
                 .is_none(),
             "Found class definitions with the same location"
         );

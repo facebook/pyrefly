@@ -20,13 +20,13 @@ use pyrefly_util::arc_id::ArcId;
 use starlark_map::small_map::SmallMap;
 
 use crate::module::bundled::BundledStub;
+use crate::module::bundled::create_bundled_stub_config;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct BundledTypeshedThirdParty {
     pub find: SmallMap<ModuleName, PathBuf>,
     pub load: SmallMap<PathBuf, Arc<String>>,
-    pub temp_dir: &'static str,
 }
 
 impl BundledStub for BundledTypeshedThirdParty {
@@ -35,7 +35,6 @@ impl BundledStub for BundledTypeshedThirdParty {
         let mut res = Self {
             find: SmallMap::new(),
             load: SmallMap::new(),
-            temp_dir: "pyrefly_bundled_typeshed_third_party",
         };
         for (relative_path, contents) in contents {
             let module_name = ModuleName::from_relative_path(&relative_path)?;
@@ -64,16 +63,16 @@ impl BundledStub for BundledTypeshedThirdParty {
         self.find.keys().copied()
     }
 
-    fn get_path_name(&self) -> &'static str {
-        self.temp_dir
+    fn get_path_name(&self) -> String {
+        format!(
+            "pyrefly_bundled_typeshed_third_party_{}",
+            faster_hex::hex_string(&pyrefly_bundled::BUNDLED_TYPESHED_DIGEST[0..6])
+        )
     }
 
     fn config() -> ArcId<ConfigFile> {
         static CONFIG: LazyLock<ArcId<ConfigFile>> = LazyLock::new(|| {
-            let mut config_file = ConfigFile::default();
-            config_file.python_environment.site_package_path = Some(Vec::new());
-            config_file.root.disable_type_errors_in_ide = Some(true);
-            config_file.configure();
+            let config_file = create_bundled_stub_config(None, None, None);
             ArcId::new(config_file)
         });
         CONFIG.dupe()

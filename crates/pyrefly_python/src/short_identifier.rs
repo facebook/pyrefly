@@ -30,6 +30,11 @@ impl ShortIdentifier {
         // Not represented as an Identifier, but literally in the source code in the same way
         Self(x.range)
     }
+
+    // Prefer `::new` or `::expr_name` over this, since this could create invalid identifiers.
+    pub fn from_text_range(range: TextRange) -> Self {
+        Self(range)
+    }
 }
 
 impl PartialOrd for ShortIdentifier {

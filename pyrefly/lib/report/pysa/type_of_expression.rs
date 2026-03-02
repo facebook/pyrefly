@@ -25,13 +25,11 @@ fn visit_expression(e: &Expr, context: &mut VisitorContext) {
 
     // If the expression has a type, export it.
     if let Some(type_) = context.module_context.answers.get_type_trace(range) {
-        let display_range = context.module_context.module_info.display_range(range);
-
         assert!(
             context
                 .type_of_expression
                 .insert(
-                    PysaLocation::new(display_range),
+                    PysaLocation::from_text_range(range, &context.module_context.module_info),
                     PysaType::from_type(&type_, context.module_context)
                 )
                 .is_none(),

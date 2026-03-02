@@ -11,7 +11,8 @@ use std::collections::HashSet;
 use pyrefly_build::handle::Handle;
 use pyrefly_types::class::Class;
 use pyrefly_util::thread_pool::ThreadPool;
-use rayon::prelude::*;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
 use ruff_python_ast::name::Name;
 
 use crate::report::pysa::class::ClassRef;
@@ -99,7 +100,7 @@ fn get_super_class_member(
 
     let super_class_member = context
         .transaction
-        .ad_hoc_solve(&context.handle, |solver| {
+        .ad_hoc_solve(&context.handle, "override_super_class_member", |solver| {
             solver.get_super_class_member(class, None, field_name)
         })
         .flatten()?;

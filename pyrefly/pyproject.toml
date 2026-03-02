@@ -1,12 +1,12 @@
 [build-system]
-requires = ["maturin>=1.0,<1.10.0"]
+requires = ["maturin>=1.10.2,<2.0"]
 build-backend = "maturin"
 
 [tool.maturin]
 bindings = "bin"
 python-source = "python"
 module-name = "pyrefly"
-strip = true
+strip = false
 include = ["rust-toolchain"]
 
 [project.urls]
@@ -16,11 +16,12 @@ documentation = "https://pyrefly.org/en/docs/"
 [project]
 name = "pyrefly"
 description = "A fast type checker and language server for Python with powerful IDE features"
+dynamic = ["version"]
 readme = "README.md"
 requires-python = ">=3.8"
 keywords = ["typechecker", "typechecking"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",

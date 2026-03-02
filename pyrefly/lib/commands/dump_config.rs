@@ -19,6 +19,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::commands::check::FullCheckArgs;
 use crate::commands::check::Handles;
+use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
 use crate::config::config::ConfigFile;
@@ -82,9 +83,16 @@ pub struct DumpConfigArgs {
 }
 
 impl DumpConfigArgs {
-    pub fn run(self) -> anyhow::Result<CommandExitStatus> {
-        // Pass on just the subset of args we use, the rest are irrelevant
-        dump_config(self.args.files, self.args.config_override, self.max_files)
+    pub fn run(
+        self,
+        wrapper: Option<ConfigConfigurerWrapper>,
+    ) -> anyhow::Result<CommandExitStatus> {
+        dump_config(
+            self.args.files,
+            self.args.config_override,
+            self.max_files,
+            wrapper,
+        )
     }
 }
 
@@ -92,9 +100,10 @@ fn dump_config(
     files: FilesArgs,
     config_override: ConfigOverrideArgs,
     max_files: MaxFiles,
+    wrapper: Option<ConfigConfigurerWrapper>,
 ) -> anyhow::Result<CommandExitStatus> {
     config_override.validate()?;
-    let (files_to_check, config_finder) = files.resolve(config_override)?;
+    let (files_to_check, config_finder) = files.resolve(config_override, wrapper)?;
 
     let mut configs_to_files: SmallMap<ArcId<ConfigFile>, Vec<ModulePath>> = SmallMap::new();
     let handles = Handles::new(config_finder.checkpoint(files_to_check.files())?);
@@ -105,7 +114,7 @@ fn dump_config(
     handles.sort_by(|a, b| a.path().cmp(b.path()));
     for handle in handles {
         let path = handle.path();
-        let config = config_finder.python_file(handle.module(), path);
+        let config = config_finder.python_file(handle.module_kind(), path);
         configs_to_files
             .entry(config)
             .or_default()

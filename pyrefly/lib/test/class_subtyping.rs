@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -31,7 +32,6 @@ s: object = ""
 "#,
 );
 
-// T is bivariant in A since it's not used nor in a covariant nor contravariant position.
 testcase!(
     test_simple_generic_subtyping,
     r#"
@@ -42,8 +42,9 @@ class D[T]: pass
 
 b: A[int] = B[int]()
 c: A[int] = C()
-oops: A[int] = D[int]()  # E: `D[int]` is not assignable to `A[int]`
-ok: A[int] = A[str]()
+oops1: A[int] = D[int]()  # E: `D[int]` is not assignable to `A[int]`
+# Although T is bivariant in A, we follow mypy and pyright's lead in treating it as invariant.
+oops2: A[int] = A[str]()  # E: `A[str]` is not assignable to `A[int]`
 "#,
 );
 
@@ -225,30 +226,27 @@ x: PyO3Enum = PyO3Enum.Variant0()
 // dealing with C extensions.
 
 testcase!(
-    bug = "We probably need to be able to handle `type(...)` as a base class better than we do.",
     test_type_function_in_base_class_list_v0,
     r#"
 class A:
     pass
 a = A()
-class B(type(a)):  # E: Invalid expression form for base class: `type(a)`
+class B(type(a)):
     pass
     "#,
 );
 
 testcase!(
-    bug = "We probably need to be able to handle `type(...)` as a base class better than we do.",
     test_type_function_in_base_class_list_v1,
     r#"
 class A:
     pass
-class B(type(A)):  # E: Invalid expression form for base class: `type(A)`
+class B(type(A)):
     pass
     "#,
 );
 
 testcase!(
-    bug = "We probably need to be able to handle `type(...)` as a base class better than we do.",
     test_type_function_in_base_class_list_v2,
     r#"
 from typing import assert_type, ClassVar, Any
@@ -256,9 +254,32 @@ class M(type):
     x: ClassVar[int] = 42
 class A(metaclass=M):
     pass
-class B(type(A)):  # E: Invalid expression form for base class: `type(A)`
+class B(type(A)):
     pass
-assert_type(B.x, Any)
+assert_type(B.x, int)
+    "#,
+);
+
+testcase!(
+    test_type_function_in_base_class_list_self_cycle,
+    r#"
+from typing import assert_type
+class B(type(B)):
+    pass
+# B references itself in its base class via type(B).
+# The cycle is detected and resolved: type(B) degrades
+# to `type` (the default metaclass), so B inherits from `type`.
+x: type = B
+    "#,
+);
+
+testcase!(
+    test_type_function_in_base_class_list_mutual_cycle,
+    r#"
+class C(type(D)):
+    pass
+class D(type(C)):
+    pass
     "#,
 );
 
@@ -367,6 +388,35 @@ class Bar:
 # For read-write fields, the inherited type from each parent should be assignable to the intersection
 class Both(Foo, Bar):  # E: Field `x` is declared `float`
     ...
+"#,
+);
+
+fn env_conditional_import() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+class Foo1: pass
+class Foo2: pass
+"#,
+    )
+}
+
+testcase!(
+    test_conditional_import_base_class,
+    env_conditional_import(),
+    r#"
+if int("1"):
+    from foo import Foo1 as Foo
+else:
+    from foo import Foo2 as Foo
+
+class Document(Foo): pass  # E: Invalid base class: `Foo1 | Foo2`
+
+from abc import ABC, abstractmethod
+class CustomModel[T: Document](ABC):
+    @abstractmethod
+    async def to_db(self) -> T:
+        pass
 "#,
 );
 

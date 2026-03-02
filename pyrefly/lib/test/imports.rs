@@ -450,7 +450,7 @@ fn env_export_all_wrongly() -> TestEnv {
     TestEnv::one(
         "foo",
         r#"
-__all__ = ['bad_definition']
+__all__ = ['bad_definition']  # E: Name `bad_definition` is listed in `__all__` but is not defined in the module
 __all__.extend(bad_module.__all__)  # E: Could not find name `bad_module`
 "#,
     )
@@ -501,21 +501,21 @@ x = foo.bar  # E: No attribute `bar` in module `foo`
 testcase!(
     test_missing_import_named,
     r#"
-from foo import bar  # E: Could not find import of `foo`
+from foo import bar  # E: Cannot find module `foo`
 "#,
 );
 
 testcase!(
     test_missing_import_star,
     r#"
-from foo import *  # E: Could not find import of `foo`
+from foo import *  # E: Cannot find module `foo`
 "#,
 );
 
 testcase!(
     test_missing_import_module,
     r#"
-import foo, bar.baz  # E: Could not find import of `foo`  # E: Could not find import of `bar.baz`
+import foo, bar.baz  # E: Cannot find module `foo`  # E: Cannot find module `bar.baz`
 "#,
 );
 
@@ -765,7 +765,7 @@ def test2() -> Literal[foo.F.Y]: ... # E: `foo.F.Y` is not a valid enum member
 testcase!(
     test_relative_import_missing_module_attribute,
     r#"
-from . import foo  # E: Could not find import of `.`
+from . import foo  # E: Cannot find module `.`
     "#,
 );
 
@@ -835,10 +835,11 @@ x = X()
 );
 
 testcase!(
+    bug = "When something is imported via *, we should warn on usage not on import",
     test_import_star_deprecated_class_warn,
     env_class_x_deprecated(),
     r#"
-from foo import * # E: `X` is deprecated
+from foo import *
 
 x = X()
 "#,
@@ -879,7 +880,7 @@ testcase!(
     test_import_star_deprecated_func_warn,
     env_func_x_deprecated(),
     r#"
-from foo import * # E: `x` is deprecated
+from foo import *
 
 x()  # E: `foo.x` is deprecated
 "#,
@@ -1074,5 +1075,200 @@ testcase!(
     env_extra_builtins_in_typings(),
     r#"
 x: X = X()
+"#,
+);
+
+fn env_extra_builtins_single_underscore() -> TestEnv {
+    TestEnv::one_with_path(
+        "__builtins__",
+        "__builtins__.pyi",
+        r#"
+def gettext(message: str) -> str: ...
+def _(message: str) -> str: ...
+"#,
+    )
+}
+
+testcase!(
+    test_extra_builtins_single_underscore,
+    env_extra_builtins_single_underscore(),
+    r#"
+from typing import assert_type
+# Single underscore `_` is a common alias for gettext and should be exported from builtins
+assert_type(gettext("a"), str)
+assert_type(_("b"), str)
+"#,
+);
+
+fn env_assign_to_ellipsis() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "foo_stub",
+        "foo_stub.pyi",
+        r#"
+X = ...
+"#,
+    );
+    env.add_with_path(
+        "bar_source",
+        "bar_source.py",
+        r#"
+Y = ...
+"#,
+    );
+    env
+}
+
+testcase!(
+    test_var_assigned_to_ellipsis,
+    env_assign_to_ellipsis(),
+    r#"
+from foo_stub import X
+from bar_source import Y
+from typing import Any, assert_type, reveal_type
+
+assert_type(X, Any)
+assert_type(X.anything, Any)
+
+reveal_type(Y)  # E: Ellipsis
+Y.anything  # E: `EllipsisType` has no attribute `anything`
+    "#,
+);
+
+fn env_final_value() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from typing import Final
+X: Final = 42
+Y: Final[int] = 42
+"#,
+    )
+}
+
+testcase!(
+    test_modify_imported_final_value,
+    env_final_value(),
+    r#"
+from foo import X, Y
+X = 10  # E: Cannot assign to `X` because it is imported as final
+Y = 10  # E: Cannot assign to `Y` because it is imported as final
+"#,
+);
+
+testcase!(
+    test_modify_imported_as_final_value,
+    env_final_value(),
+    r#"
+from foo import X as x, Y as y
+x = 10  # E: Cannot assign to `x` because it is imported as final
+y = 10  # E: Cannot assign to `y` because it is imported as final
+"#,
+);
+
+fn env_all_binop_add() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "base",
+        r#"
+__all__ = ["x", "y"]
+x: int = 1
+y: str = "hello"
+"#,
+    );
+    t.add(
+        "combined",
+        r#"
+import base
+from base import *
+a: float = 3.14
+__all__ = ["a"] + base.__all__
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_star_all_binop_add,
+    env_all_binop_add(),
+    r#"
+from typing import assert_type
+from combined import *
+assert_type(a, float)
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);
+
+fn env_all_starred() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "base",
+        r#"
+__all__ = ["x", "y"]
+x: int = 1
+y: str = "hello"
+"#,
+    );
+    t.add(
+        "combined",
+        r#"
+import base
+from base import *
+a: float = 3.14
+__all__ = [*base.__all__, "a"]
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_star_all_starred,
+    env_all_starred(),
+    r#"
+from typing import assert_type
+from combined import *
+assert_type(a, float)
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);
+
+fn env_all_unresolvable() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+def generate_all():
+    return ["x"]
+
+x: int = 1
+y: str = "hello"
+_private: float = 3.14
+__all__ = generate_all()  # E: `__all__` could not be statically analyzed
+"#,
+    )
+}
+
+testcase!(
+    test_import_star_all_unresolvable,
+    env_all_unresolvable(),
+    r#"
+from typing import assert_type
+from foo import *
+# Since __all__ is unresolvable, falls back to all public names
+assert_type(x, int)
+assert_type(y, str)
+_private  # E: Could not find name `_private`
+"#,
+);
+
+testcase!(
+    test_import_named_all_unresolvable,
+    env_all_unresolvable(),
+    r#"
+from typing import assert_type
+from foo import x, y
+assert_type(x, int)
+assert_type(y, str)
 "#,
 );

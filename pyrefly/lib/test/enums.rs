@@ -45,7 +45,7 @@ class MyEnum(Enum):
 
 assert_type(MyEnum.X, Literal[MyEnum.X])
 assert_type(MyEnum["X"], Literal[MyEnum.X])
-assert_type(MyEnum.__PRIVATE, int)
+assert_type(MyEnum.__PRIVATE, int)  # E: Private attribute `__PRIVATE` cannot be accessed outside of its defining class
 assert_type(MyEnum.X.name, Literal["X"])
 assert_type(MyEnum.X._name_, Literal["X"])
 assert_type(MyEnum.X.value, int)
@@ -222,7 +222,7 @@ class MyEnum(Enum):
     def D(self) -> None: pass
 
 reveal_type(MyEnum.A)  # E: revealed type: Literal[MyEnum.A]
-reveal_type(MyEnum.B)  # E: revealed type: nonmember[int]
+reveal_type(MyEnum.B)  # E: revealed type: int
 reveal_type(MyEnum.C)  # E: revealed type: Literal[MyEnum.C]
 reveal_type(MyEnum.D)  # E: revealed type: (self: MyEnum) -> None
 "#,
@@ -430,7 +430,7 @@ testcase!(
     test_magic_enum_attr_3_10,
     TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
     r#"
-from typing_extensions import assert_type
+from typing_extensions import assert_type, Any
 import enum
 class E(enum.Enum):
     _value_: int
@@ -439,7 +439,7 @@ class E(enum.Enum):
     @enum._magic_enum_attr
     def foo(self) -> str: ...
 e = E.E0
-assert_type(e.foo, str)
+assert_type(e.foo, Any)
     "#,
 );
 
@@ -447,7 +447,7 @@ testcase!(
     test_magic_enum_attr_3_11,
     TestEnv::new_with_version(PythonVersion::new(3, 11, 0)),
     r#"
-from typing_extensions import assert_type, Any
+from typing_extensions import assert_type
 import enum
 class E(enum.Enum):
     _value_: int
@@ -476,6 +476,24 @@ class A(enum.IntEnum):
         return member
 
 assert_type(A.B, Literal[A.B])
+    "#,
+);
+
+testcase!(
+    test_intenum_numeric_tower,
+    r#"
+import enum
+from typing import assert_type
+
+class Period(enum.IntEnum):
+    DAY = 24
+
+def takes_float(x: float) -> float:
+    return x
+
+assert_type(takes_float(Period.DAY), float)
+assert_type(takes_float(24), float)
+assert_type(takes_float(24.0), float)
     "#,
 );
 
@@ -680,5 +698,78 @@ class InclusionLevel(Enum):
         return self.value >  self.B.value
 
 x: Callable[[InclusionLevel], bool] = InclusionLevel.is_included
+    "#,
+);
+
+testcase!(
+    test_callable_enum,
+    r#"
+from enum import Enum
+from typing import assert_type
+
+class MyCallable:
+    def __call__(self) -> int:
+        return 42
+
+class E1(MyCallable, Enum):
+    pass
+
+class E2(E1):
+    X = 1
+
+assert_type(E2.X(), int)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/755
+testcase!(
+    test_access_value_on_mixed_type_enum,
+    r#"
+from enum import Enum
+
+class StrEnum(str, Enum):
+    FOO = "FOO"
+    DEFAULT = "DEFAULT"
+
+    @classmethod
+    def normalize(cls, val: str) -> str:
+        try:
+            return cls(val).value
+        except ValueError:
+            return cls.DEFAULT.value
+
+class IntEnum(int, Enum):
+    FOO = 1
+    DEFAULT = 0
+
+    @classmethod
+    def normalize(cls, val: int) -> int:
+        try:
+            return cls(val).value
+        except ValueError:
+            return cls.DEFAULT.value
+    "#,
+);
+
+testcase!(
+    test_enum_alias,
+    r#"
+from typing import assert_type, Literal
+from enum import Enum
+
+class TrafficLight(Enum):
+    YELLOW = 3
+    AMBER = YELLOW  # Alias for YELLOW
+
+assert_type(TrafficLight.AMBER, Literal[TrafficLight.YELLOW])
+    "#,
+);
+
+testcase!(
+    test_illegal_unpacking_in_def,
+    r#"
+from enum import Enum
+def f() -> dict: ...
+X = Enum("X", {'FOO': 1, **f()})  # E: Unpacking is not supported
     "#,
 );

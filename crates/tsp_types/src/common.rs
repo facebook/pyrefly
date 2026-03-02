@@ -19,9 +19,9 @@ use crate::protocol as tsp;
 // ---------------------------------------------------------------------------
 // Backward compatibility shims (manually added)
 // ---------------------------------------------------------------------------
-// Older code expected a TSP_PROTOCOL_VERSION constant; alias to generated name.
-// Reference the generated version constant without editing the generated file.
-pub const TSP_PROTOCOL_VERSION: &str = crate::protocol::TYPE_SERVER_VERSION;
+// Provide the current protocol version.
+// This references the generated TypeServerVersion::Current variant.
+pub const TSP_PROTOCOL_VERSION: tsp::TypeServerVersion = tsp::TypeServerVersion::Current;
 
 // Older handlers referenced GetSupportedProtocolVersionParams even though
 // the generator only emits a Request with no params. Provide an empty params
@@ -59,22 +59,6 @@ macro_rules! tsp_debug {
 }
 pub use tsp_debug;
 
-/// Add the query helper methods that legacy code expected on TypeReprFlags
-impl tsp::TypeReprFlags {
-    #[inline]
-    pub fn has_expand_type_aliases(self) -> bool {
-        self.contains(tsp::TypeReprFlags::EXPAND_TYPE_ALIASES)
-    }
-    #[inline]
-    pub fn has_print_type_var_variance(self) -> bool {
-        self.contains(tsp::TypeReprFlags::PRINT_TYPE_VAR_VARIANCE)
-    }
-    #[inline]
-    pub fn has_convert_to_instance_type(self) -> bool {
-        self.contains(tsp::TypeReprFlags::CONVERT_TO_INSTANCE_TYPE)
-    }
-}
-
 /// Provide a Default implementation shim for ResolveImportOptions (all None)
 impl Default for tsp::ResolveImportOptions {
     fn default() -> Self {
@@ -85,38 +69,6 @@ impl Default for tsp::ResolveImportOptions {
             resolve_local_names: Some(false),
             skip_file_needed_check: Some(false),
         }
-    }
-}
-
-/// Helper: convert protocol Position to lsp_types::Position
-pub fn to_lsp_position(pos: &tsp::Position) -> lsp_types::Position {
-    lsp_types::Position {
-        line: pos.line,
-        character: pos.character,
-    }
-}
-
-/// Helper: convert lsp_types::Position to protocol Position
-pub fn from_lsp_position(pos: lsp_types::Position) -> tsp::Position {
-    tsp::Position {
-        line: pos.line,
-        character: pos.character,
-    }
-}
-
-/// Helper: convert protocol Range to lsp_types::Range
-pub fn to_lsp_range(r: &tsp::Range) -> lsp_types::Range {
-    lsp_types::Range {
-        start: to_lsp_position(&r.start),
-        end: to_lsp_position(&r.end),
-    }
-}
-
-/// Helper: convert lsp_types::Range to protocol Range
-pub fn from_lsp_range(r: lsp_types::Range) -> tsp::Range {
-    tsp::Range {
-        start: from_lsp_position(r.start),
-        end: from_lsp_position(r.end),
     }
 }
 
@@ -181,39 +133,6 @@ pub(crate) fn language_services_disabled_error() -> ResponseError {
         code: ErrorCode::RequestFailed as i32,
         message: "Language services disabled".to_owned(),
         data: None,
-    }
-}
-
-/// Create a default type for a declaration when we can't determine the exact type
-pub fn create_default_type_for_declaration(decl: &tsp::Declaration) -> tsp::Type {
-    let (category, flags) = match decl.category {
-        tsp::DeclarationCategory::Function => {
-            (tsp::TypeCategory::Function, tsp::TypeFlags::CALLABLE)
-        }
-        tsp::DeclarationCategory::Class => (tsp::TypeCategory::Class, tsp::TypeFlags::INSTANTIABLE),
-        tsp::DeclarationCategory::Import => (tsp::TypeCategory::Module, tsp::TypeFlags::NONE),
-        tsp::DeclarationCategory::TypeAlias => (tsp::TypeCategory::Any, tsp::TypeFlags::FROM_ALIAS),
-        tsp::DeclarationCategory::TypeParam => (tsp::TypeCategory::TypeVar, tsp::TypeFlags::NONE),
-        _ => (tsp::TypeCategory::Any, tsp::TypeFlags::NONE),
-    };
-
-    // Convert the declaration handle into a type handle. We just mirror the
-    // underlying representation (string or int) so synthesized types remain
-    // stable within the snapshot.
-    let type_handle = match &decl.handle {
-        tsp::DeclarationHandle::String(s) => tsp::TypeHandle::String(s.clone()),
-        tsp::DeclarationHandle::Int(i) => tsp::TypeHandle::Int(*i),
-    };
-
-    tsp::Type {
-        alias_name: None,
-        handle: type_handle,
-        category,
-        flags,
-        module_name: Some(decl.module_name.clone()),
-        name: decl.name.clone(),
-        category_flags: 0,
-        decl: None,
     }
 }
 

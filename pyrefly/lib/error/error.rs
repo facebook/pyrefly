@@ -15,6 +15,7 @@ use itertools::Itertools;
 use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
 use lsp_types::Url;
+use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::number_thousands;
@@ -28,6 +29,7 @@ use ruff_annotate_snippets::Snippet;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 use yansi::Paint;
 
@@ -291,11 +293,16 @@ impl Error {
         }
     }
 
-    pub fn is_ignored(&self, permissive_ignores: bool) -> bool {
+    pub fn is_ignored(&self, enabled_ignores: &SmallSet<Tool>) -> bool {
+        // UnusedIgnore errors cannot be suppressed - this prevents infinite loops
+        // where suppressing an unused-ignore creates another unused-ignore.
+        if self.error_kind == ErrorKind::UnusedIgnore {
+            return false;
+        }
         self.module.is_ignored(
             &self.display_range,
             self.error_kind.to_name(),
-            permissive_ignores,
+            enabled_ignores,
         )
     }
 

@@ -16,19 +16,30 @@ use zstd::stream::read::Decoder;
 
 const BUNDLED_TYPESHED_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/typeshed.tar.zst"));
 
+pub const BUNDLED_TYPESHED_DIGEST: &[u8; 32] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/typeshed.sha256"));
+
+const BUNDLED_THIRD_PARTY_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/stubs.tar.zst"));
+
+pub const BUNDLED_THIRD_PARTY_DIGEST: &[u8; 32] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/stubs.sha256"));
+
 #[derive(PartialEq)]
 enum PathFilter {
     /// Filter for stdlib files (typeshed/stdlib/...)
     Stdlib,
     /// Filter for third-party stubs (typeshed/stubs/package-name/...)
+    ThirdPartyTypeshedStubs,
+    /// Filter for third-party stubs not from typeshed (stubs/package-name/...)
     ThirdPartyStubs,
 }
 
 impl PathFilter {
-    fn expected_first_component(&self) -> &str {
+    fn expected_first_component(&self) -> Option<&str> {
         match self {
-            PathFilter::Stdlib => "stdlib",
-            PathFilter::ThirdPartyStubs => "stubs",
+            PathFilter::Stdlib => Some("stdlib"),
+            PathFilter::ThirdPartyTypeshedStubs => Some("stubs"),
+            PathFilter::ThirdPartyStubs => None,
         }
     }
 
@@ -36,17 +47,25 @@ impl PathFilter {
     fn should_skip_next_component(&self) -> bool {
         match self {
             PathFilter::Stdlib => false,
-            PathFilter::ThirdPartyStubs => true, // Skip package directory
+            PathFilter::ThirdPartyTypeshedStubs => true, // Skip package directory
+            PathFilter::ThirdPartyStubs => false,        // Skip package directory
+        }
+    }
+
+    fn archive_bytes(&self) -> &'static [u8] {
+        match self {
+            PathFilter::Stdlib | PathFilter::ThirdPartyTypeshedStubs => BUNDLED_TYPESHED_BYTES,
+            PathFilter::ThirdPartyStubs => BUNDLED_THIRD_PARTY_BYTES,
         }
     }
 }
 
 fn extract_pyi_files_from_archive(filter: PathFilter) -> anyhow::Result<SmallMap<PathBuf, String>> {
-    let decoder = Decoder::new(BUNDLED_TYPESHED_BYTES)?;
+    let decoder = Decoder::new(filter.archive_bytes())?;
     let mut archive = Archive::new(decoder);
     let entries = archive
         .entries()
-        .context("Cannot query all entries in typeshed archive")?;
+        .context("Cannot query all entries in archive")?;
 
     let mut items = SmallMap::new();
 
@@ -64,20 +83,26 @@ fn extract_pyi_files_from_archive(filter: PathFilter) -> anyhow::Result<SmallMap
         let mut relative_path_components = relative_path_context.components();
 
         let first_component = relative_path_components.next();
-        if first_component
-            .is_none_or(|component| component.as_os_str() != filter.expected_first_component())
+        if let Some(expected) = filter.expected_first_component()
+            && first_component.is_none_or(|component| component.as_os_str() != expected)
         {
             continue;
         }
+        // For ThirdPartyStubs, we need to put first_component back into the path
 
         // Typeshed stdlib stubs have a different directory structure than third-party stubs.
         // stdlib example: typeshed/stdlib/builtins.pyi
         // third-party example: typeshed/stubs/package-name/package-name/other.pyi
         // An example of this might be the path typeshed/stubs/JACK-Client/jack/other.pyi
         // In this case we want out path to be jack/other.pyi, so we skip over "stubs" and "JACK-Client".
-        let relative_path = if filter == PathFilter::ThirdPartyStubs {
+        let relative_path = if filter == PathFilter::ThirdPartyTypeshedStubs {
             relative_path_components.next();
             relative_path_components.collect::<PathBuf>()
+        } else if filter == PathFilter::ThirdPartyStubs {
+            // Include first_component (e.g., "conans-stubs") in the path
+            let mut path = PathBuf::from(first_component.unwrap().as_os_str());
+            path.extend(relative_path_components);
+            path
         } else {
             relative_path_components.collect::<PathBuf>()
         };
@@ -104,6 +129,12 @@ pub fn bundled_typeshed() -> anyhow::Result<SmallMap<PathBuf, String>> {
 
 #[allow(dead_code)]
 pub fn bundled_third_party_stubs() -> anyhow::Result<SmallMap<PathBuf, String>> {
+    extract_pyi_files_from_archive(PathFilter::ThirdPartyTypeshedStubs)
+}
+
+/// Extract third-party stubs from the bundled archive.
+/// These are stubs that are not included in typeshed (e.g., pandas-stubs, boto3-stubs).
+pub fn bundled_third_party() -> anyhow::Result<SmallMap<PathBuf, String>> {
     extract_pyi_files_from_archive(PathFilter::ThirdPartyStubs)
 }
 
@@ -237,12 +268,12 @@ mod tests {
     fn test_path_filter_expected_first_component() {
         assert_eq!(
             PathFilter::Stdlib.expected_first_component(),
-            "stdlib",
+            Some("stdlib"),
             "Stdlib filter should expect 'stdlib' component"
         );
         assert_eq!(
-            PathFilter::ThirdPartyStubs.expected_first_component(),
-            "stubs",
+            PathFilter::ThirdPartyTypeshedStubs.expected_first_component(),
+            Some("stubs"),
             "ThirdPartyStubs filter should expect 'stubs' component"
         );
     }
@@ -277,5 +308,35 @@ mod tests {
                 path
             );
         }
+    }
+
+    #[test]
+    fn test_typeshed_archive_is_valid_zstd_compressed_tar() {
+        let decoder = Decoder::new(BUNDLED_TYPESHED_BYTES);
+        assert!(
+            decoder.is_ok(),
+            "Typeshed archive should be valid zstd compressed data"
+        );
+        let mut archive = Archive::new(decoder.unwrap());
+        let entries = archive.entries();
+        assert!(
+            entries.is_ok(),
+            "Typeshed archive should contain valid tar entries"
+        );
+    }
+
+    #[test]
+    fn test_stubs_archive_is_valid_zstd_compressed_tar() {
+        let decoder = Decoder::new(BUNDLED_THIRD_PARTY_BYTES);
+        assert!(
+            decoder.is_ok(),
+            "Stubs archive should be valid zstd compressed data"
+        );
+        let mut archive = Archive::new(decoder.unwrap());
+        let entries = archive.entries();
+        assert!(
+            entries.is_ok(),
+            "Stubs archive should contain valid tar entries"
+        );
     }
 }

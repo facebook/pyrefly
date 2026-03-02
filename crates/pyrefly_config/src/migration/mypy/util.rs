@@ -77,8 +77,20 @@ pub fn string_to_paths(value: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+#[derive(Default)]
+pub struct MypyErrorConfigFlags {
+    pub warn_redundant_casts: bool,
+    pub disallow_untyped_defs: bool,
+    pub disallow_incomplete_defs: bool,
+    pub disallow_any_generics: bool,
+    pub strict: bool,
+    pub report_deprecated_as_note: bool,
+    pub allow_redefinitions: bool,
+}
+
 /// Create an error config from disable and enable error codes
 pub fn make_error_config(
+    mypy_error_config_flags: Option<MypyErrorConfigFlags>,
     disables: Vec<String>,
     enables: Vec<String>,
 ) -> Option<ErrorDisplayConfig> {
@@ -90,62 +102,86 @@ pub fn make_error_config(
     for error_code in enables {
         errors.insert(error_code, Severity::Error);
     }
+    if let Some(MypyErrorConfigFlags {
+        warn_redundant_casts,
+        disallow_untyped_defs,
+        disallow_incomplete_defs,
+        disallow_any_generics,
+        strict,
+        report_deprecated_as_note,
+        allow_redefinitions,
+    }) = mypy_error_config_flags
+    {
+        // These severities take precedence over enable/disable
+        if warn_redundant_casts || strict {
+            errors.insert(ErrorKind::RedundantCast.to_string(), Severity::Warn);
+        }
+        if disallow_untyped_defs || disallow_incomplete_defs || strict {
+            errors.insert(ErrorKind::UnannotatedParameter.to_string(), Severity::Error);
+            errors.insert(ErrorKind::UnannotatedReturn.to_string(), Severity::Error);
+        }
+        if disallow_any_generics || strict {
+            errors.insert(ErrorKind::ImplicitAny.to_string(), Severity::Error);
+        }
+        if report_deprecated_as_note && errors.contains_key(&ErrorKind::Deprecated.to_string()) {
+            errors.insert(ErrorKind::Deprecated.to_string(), Severity::Info);
+        }
+        if allow_redefinitions {
+            errors.insert(ErrorKind::Redefinition.to_string(), Severity::Ignore);
+        }
+    }
     code_to_kind(errors)
 }
 
-/// Convert mypy error codes to pyrefly ErrorKinds. This consumes the input map.
-// One or more error codes can map to the same ErrorKind, and this must be taken into consideration when adding a new error code.
-// If the error code is the only one that maps to a specific ErrorKind:
-//     if let Some(value) = errors.remove("error-thing") {
-//       map.insert(ErrorKind::Unknown, value);
-//     }
-// If multiple error codes map to the same ErrorKind:
-//     if let Some(import_error) = [
-//         error.remove("error-thing"),
-//         error.remove("other-thing"),
-//     ]
-//     .into_iter()
-//     .flatten()  // get rid of the ones that are None
-//     .reduce(|acc, x| acc | x)  // OR them together
-//     {
-//         map.insert(ErrorKind::Unknown, import_error);
-//     }
-fn code_to_kind(mut errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig> {
+/// Convert mypy error codes to pyrefly ErrorKinds.
+fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig> {
     let mut map = HashMap::new();
-    if let Some(value) = [errors.remove("union-attr"), errors.remove("attr-defined")]
-        .into_iter()
-        .flatten()
-        .max()
-    {
-        map.insert(ErrorKind::MissingAttribute, value);
-    }
+    let mut add = |value, kind| {
+        // If multiple Mypy overrides map to the same Pyrefly error
+        // use the maximum severity.
+        if map.get(&kind).is_none_or(|x| *x < value) {
+            map.insert(kind, value);
+        }
+    };
 
-    if let Some(value) = [errors.remove("arg-type")].into_iter().flatten().max() {
-        map.insert(ErrorKind::BadArgumentType, value);
-    }
-
-    if let Some(value) = [errors.remove("assignment")].into_iter().flatten().max() {
-        map.insert(ErrorKind::BadAssignment, value);
-    }
-
-    if let Some(value) = [errors.remove("call-arg")].into_iter().flatten().max() {
-        map.insert(ErrorKind::BadArgumentCount, value);
-    }
-
-    if let Some(value) = [errors.remove("call-overload")].into_iter().flatten().max() {
-        map.insert(ErrorKind::NoMatchingOverload, value);
-    }
-
-    if let Some(value) = [errors.remove("index"), errors.remove("operator")]
-        .into_iter()
-        .flatten()
-        .max()
-    {
-        map.insert(ErrorKind::UnsupportedOperation, value);
-    }
-
-    if let Some(value) = [errors.remove("dict-item")].into_iter().flatten().max() {
-        map.insert(ErrorKind::BadTypedDict, value);
+    for (code, severity) in errors {
+        match code.as_str() {
+            "union-attr" | "attr-defined" => add(severity, ErrorKind::MissingAttribute),
+            "arg-type" => add(severity, ErrorKind::BadArgumentType),
+            "assignment" => add(severity, ErrorKind::BadAssignment),
+            "call-arg" => add(severity, ErrorKind::BadArgumentCount),
+            "call-overload" => add(severity, ErrorKind::NoMatchingOverload),
+            "index" => {
+                add(severity, ErrorKind::BadIndex);
+                add(severity, ErrorKind::UnsupportedOperation);
+            }
+            "dict-item" => add(severity, ErrorKind::BadTypedDict),
+            "operator" => add(severity, ErrorKind::UnsupportedOperation),
+            "typeddict-unknown-key" => add(severity, ErrorKind::BadTypedDictKey),
+            "typeddict-readonly-mutated" => add(severity, ErrorKind::ReadOnly),
+            "name-defined" => add(severity, ErrorKind::UnknownName),
+            "used-before-def" | "possibly-undefined" => add(severity, ErrorKind::UnboundName),
+            "valid-type" => add(severity, ErrorKind::InvalidAnnotation),
+            "type-arg" | "no-untyped-def" => add(severity, ErrorKind::ImplicitAny),
+            "metaclass" => add(severity, ErrorKind::InvalidInheritance),
+            "override" => add(severity, ErrorKind::BadOverride),
+            "return" | "return-value" => add(severity, ErrorKind::BadReturn),
+            "type-var" => add(severity, ErrorKind::BadSpecialization),
+            "import" | "import-not-found" => add(severity, ErrorKind::MissingImport),
+            "import-untyped" => add(severity, ErrorKind::UntypedImport),
+            "abstract" => add(severity, ErrorKind::BadInstantiation),
+            "no-overload-impl" => add(severity, ErrorKind::InvalidOverload),
+            "unused-coroutine" | "unused-awaitable" => add(severity, ErrorKind::UnusedCoroutine),
+            "top-level-await" | "await-not-async" => add(severity, ErrorKind::NotAsync),
+            "assert-type" => add(severity, ErrorKind::AssertType),
+            "syntax" => add(severity, ErrorKind::ParseError),
+            "redundant-cast" => add(severity, ErrorKind::RedundantCast),
+            "redundant-expr" | "truthy-function" | "truthy-bool" | "truthy-iterable" => {
+                add(severity, ErrorKind::RedundantCondition)
+            }
+            "deprecated" => add(severity, ErrorKind::Deprecated),
+            _ => {}
+        }
     }
 
     if map.is_empty() {

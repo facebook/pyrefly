@@ -15,7 +15,6 @@ use std::sync::LazyLock;
 use anyhow::anyhow;
 use dupe::Dupe;
 use pyrefly_bundled::bundled_typeshed;
-use pyrefly_config::error::ErrorDisplayConfig;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::module_name::ModuleName;
@@ -25,12 +24,12 @@ use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
 use crate::module::bundled::BundledStub;
+use crate::module::bundled::create_bundled_stub_config;
 
 #[derive(Debug, Clone)]
 pub struct BundledTypeshedStdlib {
     pub find: SmallMap<ModuleName, PathBuf>,
     pub load: SmallMap<PathBuf, Arc<String>>,
-    pub temp_dir: &'static str,
 }
 
 impl BundledStub for BundledTypeshedStdlib {
@@ -39,7 +38,6 @@ impl BundledStub for BundledTypeshedStdlib {
         let mut res = Self {
             find: SmallMap::new(),
             load: SmallMap::new(),
-            temp_dir: "pyrefly_bundled_typeshed",
         };
         for (relative_path, contents) in contents {
             let module_name = ModuleName::from_relative_path(&relative_path)?;
@@ -67,25 +65,28 @@ impl BundledStub for BundledTypeshedStdlib {
         self.find.keys().copied()
     }
 
-    fn get_path_name(&self) -> &'static str {
-        self.temp_dir
+    fn get_path_name(&self) -> String {
+        format!(
+            "pyrefly_bundled_typeshed_{}",
+            faster_hex::hex_string(&pyrefly_bundled::BUNDLED_TYPESHED_DIGEST[0..6])
+        )
     }
 
     fn config() -> ArcId<ConfigFile> {
         static CONFIG: LazyLock<ArcId<ConfigFile>> = LazyLock::new(|| {
-            let mut config_file = ConfigFile::default();
-            config_file.python_environment.site_package_path = Some(Vec::new());
-            config_file.search_path_from_file = match stdlib_search_path() {
+            let search_paths = match stdlib_search_path() {
                 Some(path) => vec![path],
                 None => Vec::new(),
             };
-            config_file.root.errors = Some(ErrorDisplayConfig::new(HashMap::from([
+            let error_overrides = HashMap::from([
                 // The stdlib is full of deliberately incorrect overrides, so ignore them
                 (ErrorKind::BadOverride, Severity::Ignore),
                 (ErrorKind::BadParamNameOverride, Severity::Ignore),
-            ])));
-            config_file.root.disable_type_errors_in_ide = Some(true);
-            config_file.configure();
+                // The stdlib has variance violations in typing.pyi, so ignore them
+                (ErrorKind::InvalidVariance, Severity::Ignore),
+            ]);
+            let config_file =
+                create_bundled_stub_config(Some(search_paths), Some(error_overrides), Some(true));
             ArcId::new(config_file)
         });
         CONFIG.dupe()

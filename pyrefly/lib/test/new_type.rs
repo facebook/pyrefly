@@ -131,8 +131,24 @@ testcase!(
     r#"
 from typing import Any, NewType
 Foo = NewType("Foo", int)
-x: type = Foo  # E: `type[Foo]` is not assignable to `type`
+x: type = Foo  # E: `type[Foo]` is not assignable to `type[Any]`
 y: type[Any] = Foo  # E: `type[Foo]` is not assignable to `type[Any]`
+    "#,
+);
+
+testcase!(
+    test_new_type_type_argument,
+    r#"
+from typing import NewType, Type
+
+Thing = NewType("Thing", int)
+ThingType = type[Thing]  # E: NewType `Thing` is not a class and cannot be used with `type` or `Type`
+OtherThingType = Type[Thing]  # E: NewType `Thing` is not a class and cannot be used with `type` or `Type`
+
+mapping: dict[int, ThingType] = {1: Thing}  # E: `dict[int, type[Thing]]` is not assignable to `dict[int, type[Any]]`
+
+def func(x: ThingType) -> None: ...
+func(Thing)  # E: Argument `type[Thing]` is not assignable to parameter `x` with type `type[Any]` in function `func`
     "#,
 );
 

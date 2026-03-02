@@ -91,6 +91,28 @@ def f(foo: Foo):
 "#,
 );
 
+testcase!(
+    test_dunder_class_attribute_narrow,
+    r#"
+from typing import assert_type
+def f(x: int | str):
+    if x.__class__ is int:
+        assert_type(x, int)
+    else:
+        assert_type(x, int | str)
+    if x.__class__ == int:
+        assert_type(x, int)
+def g(x: int | str):
+    assert x.__class__ is int
+    assert_type(x, int)
+def h(x: bool | str):
+    if x.__class__ is bool:
+        assert_type(x, bool)
+    else:
+        assert_type(x, str)
+"#,
+);
+
 // The expected behavior when narrowing an invalid attribute chain is to produce
 // type errors at the narrow site, but apply the narrowing downstream
 // (motivation: being noisy downstream could be quite frustrating for gradually
@@ -113,6 +135,56 @@ def f(foo: Foo):
         assert_type(foo.x, Foo | None)
         assert_type(foo.x.y, Foo)
         assert_type(foo.x.y.x, Foo)
+"#,
+);
+
+testcase!(
+    test_missing_attribute_call_does_not_narrow,
+    r#"
+from typing import reveal_type
+def f(x: str):
+    if (
+        len(x.magic)  # E: Object of class `str` has no attribute `magic`
+        or reveal_type(  # E: revealed type: Unknown
+            x.magic  # E: Object of class `str` has no attribute `magic`
+        )
+    ):
+        pass
+"#,
+);
+
+testcase!(
+    test_missing_attribute_call_does_not_narrow_overload,
+    r#"
+from typing import overload
+class History:
+    pass
+@overload
+def open_like(path: str) -> int: ...
+@overload
+def open_like(path: bytes) -> int: ...
+def open_like(path: object) -> int:
+    return 0
+def f(history: History):
+    if (
+        len(history.filename)  # E: Object of class `History` has no attribute `filename`
+        or open_like(
+            history.filename  # E: Object of class `History` has no attribute `filename`
+        )
+    ):
+        pass
+"#,
+);
+
+testcase!(
+    test_missing_attribute_call_does_not_narrow_union,
+    r#"
+def f(x: int | str):
+    if (
+        len(x.missing)  # E: Object of class `int` has no attribute `missing`\nObject of class `str` has no attribute `missing`
+        or x.missing  # E: Object of class `int` has no attribute `missing`\nObject of class `str` has no attribute `missing`
+    ):
+        pass
 "#,
 );
 
@@ -192,9 +264,10 @@ def f(c: C):
 
 // This test is adapted from a Pytorch example.
 testcase!(
+    bug = "The behavior of this was changed by the fix for https://github.com/facebook/pyrefly/issues/1999",
     test_isinstance_getitem,
     r#"
-from typing import Any, Optional, reveal_type
+from typing import Any, Optional, assert_type, Never
 
 Arg = Optional[tuple["Arg", ...]]
 
@@ -208,11 +281,10 @@ class N:
     def args(self) -> tuple[Arg, ...]:
         return self._args
 
-
 def f(n: N):
     assert isinstance(n.args[0], N)
     t1 = n.args[0].type
-    reveal_type(t1)  # E: revealed type: DataType | None
+    assert_type(t1, Never)
 "#,
 );
 
@@ -293,12 +365,12 @@ def test(y: A | None) -> None:
 testcase!(
     test_join_empty_facets_in_or,
     r#"
-from typing import reveal_type
+from typing import assert_type
 class A:
     kind: str
 def test(y: A | None) -> None:
     if not y or y.kind:
-        reveal_type(y)  # E: revealed type: A | None
+        assert_type(y, A | None)
 "#,
 );
 
@@ -493,7 +565,7 @@ def f(foo: Foo):
 testcase!(
     test_hasattr_narrowing,
     r#"
-from typing import reveal_type, assert_type, Any
+from typing import assert_type, Any
 class C:
     x: int
 

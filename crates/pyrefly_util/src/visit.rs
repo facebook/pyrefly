@@ -9,12 +9,14 @@
 //! for full documentation, where [`VisitMut`] works similarly.
 
 use std::any;
-use std::any::Any;
+use std::marker::PhantomData;
 
 use compact_str::CompactString;
 use const_str;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
+use starlark_map::ordered_map::OrderedMap;
+use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
 use crate::uniques::Unique;
@@ -60,7 +62,7 @@ use crate::uniques::Unique;
 /// * If you use `recurse` instead of `visit`, you will miss the outer element if
 ///   `value = Expr::Constant(1)`.
 /// * If you use `visit` instead of `recurse`, you will infinite loop and stack overflow.
-pub trait Visit<To: 'static = Self>: 'static + Sized {
+pub trait Visit<To = Self>: Sized {
     /// Is `recurse` a no-op.
     const RECURSE_CONTAINS: bool = true;
 
@@ -74,9 +76,9 @@ pub trait Visit<To: 'static = Self>: 'static + Sized {
 
     /// Like `visit`, but if `To == Self` then calls the function directly.
     fn visit<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
-        if Self::VISIT_CONTAINS
-            && let Some(to) = (self as &dyn Any).downcast_ref::<To>()
-        {
+        if type_eq::<To, Self>() {
+            // SAFETY: type_eq verifies To and Self are the same type by type_name comparison.
+            let to: &'a To = unsafe { &*(self as *const Self as *const To) };
             f(to);
         } else if Self::RECURSE_CONTAINS {
             self.recurse(f)
@@ -85,7 +87,7 @@ pub trait Visit<To: 'static = Self>: 'static + Sized {
 }
 
 /// Like `Visit`, but mutably.
-pub trait VisitMut<To: 'static = Self>: 'static + Sized {
+pub trait VisitMut<To = Self>: Sized {
     const RECURSE_CONTAINS: bool = true;
     const VISIT_CONTAINS: bool = Self::RECURSE_CONTAINS || type_eq::<To, Self>();
 
@@ -97,7 +99,9 @@ pub trait VisitMut<To: 'static = Self>: 'static + Sized {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To));
 
     fn visit_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
-        if let Some(to) = (self as &mut dyn Any).downcast_mut::<To>() {
+        if type_eq::<To, Self>() {
+            // SAFETY: type_eq verifies To and Self are the same type by type_name comparison.
+            let to: &mut To = unsafe { &mut *(self as *mut Self as *mut To) };
             f(to);
         } else {
             self.recurse_mut(f)
@@ -114,12 +118,12 @@ const fn type_eq<T1, T2>() -> bool {
 
 macro_rules! visit_nothing {
     ($t:ty) => {
-        impl<To: 'static> Visit<To> for $t {
+        impl<To> Visit<To> for $t {
             const RECURSE_CONTAINS: bool = false;
             fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a To)) {}
         }
 
-        impl<To: 'static> VisitMut<To> for $t {
+        impl<To> VisitMut<To> for $t {
             const RECURSE_CONTAINS: bool = false;
             fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut To)) {}
         }
@@ -146,12 +150,22 @@ visit_nothing!(CompactString);
 // We can't visit `str` on its own, so this is atomic.
 visit_nothing!(Box<str>);
 
+impl<T, To> Visit<To> for PhantomData<T> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a To)) {}
+}
+
+impl<T, To> VisitMut<To> for PhantomData<T> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut To)) {}
+}
+
 // Pyrefly types that have nothing inside
 visit_nothing!(Name);
 visit_nothing!(Unique);
 visit_nothing!(TextRange);
 
-impl<To: 'static, T: Visit<To>> Visit<To> for Vec<T> {
+impl<To, T: Visit<To>> Visit<To> for Vec<T> {
     const RECURSE_CONTAINS: bool = <T as Visit<To>>::VISIT_CONTAINS;
 
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
@@ -161,7 +175,7 @@ impl<To: 'static, T: Visit<To>> Visit<To> for Vec<T> {
     }
 }
 
-impl<To: 'static, T: VisitMut<To>> VisitMut<To> for Vec<T> {
+impl<To, T: VisitMut<To>> VisitMut<To> for Vec<T> {
     const RECURSE_CONTAINS: bool = <T as VisitMut<To>>::VISIT_CONTAINS;
 
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
@@ -171,7 +185,7 @@ impl<To: 'static, T: VisitMut<To>> VisitMut<To> for Vec<T> {
     }
 }
 
-impl<To: 'static, T: Visit<To>> Visit<To> for Vec1<T> {
+impl<To, T: Visit<To>> Visit<To> for Vec1<T> {
     const RECURSE_CONTAINS: bool = <T as Visit<To>>::VISIT_CONTAINS;
 
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
@@ -181,7 +195,7 @@ impl<To: 'static, T: Visit<To>> Visit<To> for Vec1<T> {
     }
 }
 
-impl<To: 'static, T: VisitMut<To>> VisitMut<To> for Vec1<T> {
+impl<To, T: VisitMut<To>> VisitMut<To> for Vec1<T> {
     const RECURSE_CONTAINS: bool = <T as VisitMut<To>>::VISIT_CONTAINS;
 
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
@@ -191,7 +205,7 @@ impl<To: 'static, T: VisitMut<To>> VisitMut<To> for Vec1<T> {
     }
 }
 
-impl<To: 'static, T: Visit<To>> Visit<To> for Box<[T]> {
+impl<To, T: Visit<To>> Visit<To> for Box<[T]> {
     const RECURSE_CONTAINS: bool = <T as Visit<To>>::VISIT_CONTAINS;
 
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
@@ -201,7 +215,7 @@ impl<To: 'static, T: Visit<To>> Visit<To> for Box<[T]> {
     }
 }
 
-impl<To: 'static, T: VisitMut<To>> VisitMut<To> for Box<[T]> {
+impl<To, T: VisitMut<To>> VisitMut<To> for Box<[T]> {
     const RECURSE_CONTAINS: bool = <T as VisitMut<To>>::VISIT_CONTAINS;
 
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
@@ -211,7 +225,7 @@ impl<To: 'static, T: VisitMut<To>> VisitMut<To> for Box<[T]> {
     }
 }
 
-impl<To: 'static, T: Visit<To>> Visit<To> for Option<T> {
+impl<To, T: Visit<To>> Visit<To> for Option<T> {
     const RECURSE_CONTAINS: bool = <T as Visit<To>>::VISIT_CONTAINS;
 
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
@@ -221,7 +235,7 @@ impl<To: 'static, T: Visit<To>> Visit<To> for Option<T> {
     }
 }
 
-impl<To: 'static, T: VisitMut<To>> VisitMut<To> for Option<T> {
+impl<To, T: VisitMut<To>> VisitMut<To> for Option<T> {
     const RECURSE_CONTAINS: bool = <T as VisitMut<To>>::VISIT_CONTAINS;
 
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
@@ -231,7 +245,7 @@ impl<To: 'static, T: VisitMut<To>> VisitMut<To> for Option<T> {
     }
 }
 
-impl<To: 'static, T: Visit<To>> Visit<To> for Box<T> {
+impl<To, T: Visit<To>> Visit<To> for Box<T> {
     const RECURSE_CONTAINS: bool = <T as Visit<To>>::VISIT_CONTAINS;
 
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
@@ -239,7 +253,7 @@ impl<To: 'static, T: Visit<To>> Visit<To> for Box<T> {
     }
 }
 
-impl<To: 'static, T: VisitMut<To>> VisitMut<To> for Box<T> {
+impl<To, T: VisitMut<To>> VisitMut<To> for Box<T> {
     const RECURSE_CONTAINS: bool = <T as VisitMut<To>>::VISIT_CONTAINS;
 
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
@@ -247,7 +261,7 @@ impl<To: 'static, T: VisitMut<To>> VisitMut<To> for Box<T> {
     }
 }
 
-impl<To: 'static, T0: Visit<To>, T1: Visit<To>> Visit<To> for (T0, T1) {
+impl<To, T0: Visit<To>, T1: Visit<To>> Visit<To> for (T0, T1) {
     const RECURSE_CONTAINS: bool =
         <T0 as Visit<To>>::VISIT_CONTAINS || <T1 as Visit<To>>::VISIT_CONTAINS;
 
@@ -257,7 +271,7 @@ impl<To: 'static, T0: Visit<To>, T1: Visit<To>> Visit<To> for (T0, T1) {
     }
 }
 
-impl<To: 'static, T0: VisitMut<To>, T1: VisitMut<To>> VisitMut<To> for (T0, T1) {
+impl<To, T0: VisitMut<To>, T1: VisitMut<To>> VisitMut<To> for (T0, T1) {
     const RECURSE_CONTAINS: bool =
         <T0 as VisitMut<To>>::VISIT_CONTAINS || <T1 as VisitMut<To>>::VISIT_CONTAINS;
 
@@ -267,7 +281,7 @@ impl<To: 'static, T0: VisitMut<To>, T1: VisitMut<To>> VisitMut<To> for (T0, T1) 
     }
 }
 
-impl<To: 'static, T0: Visit<To>, T1: Visit<To>, T2: Visit<To>> Visit<To> for (T0, T1, T2) {
+impl<To, T0: Visit<To>, T1: Visit<To>, T2: Visit<To>> Visit<To> for (T0, T1, T2) {
     const RECURSE_CONTAINS: bool = <T0 as Visit<To>>::VISIT_CONTAINS
         || <T1 as Visit<To>>::VISIT_CONTAINS
         || <T2 as Visit<To>>::VISIT_CONTAINS;
@@ -279,9 +293,7 @@ impl<To: 'static, T0: Visit<To>, T1: Visit<To>, T2: Visit<To>> Visit<To> for (T0
     }
 }
 
-impl<To: 'static, T0: VisitMut<To>, T1: VisitMut<To>, T2: VisitMut<To>> VisitMut<To>
-    for (T0, T1, T2)
-{
+impl<To, T0: VisitMut<To>, T1: VisitMut<To>, T2: VisitMut<To>> VisitMut<To> for (T0, T1, T2) {
     const RECURSE_CONTAINS: bool = <T0 as VisitMut<To>>::VISIT_CONTAINS
         || <T1 as VisitMut<To>>::VISIT_CONTAINS
         || <T2 as VisitMut<To>>::VISIT_CONTAINS;
@@ -293,7 +305,7 @@ impl<To: 'static, T0: VisitMut<To>, T1: VisitMut<To>, T2: VisitMut<To>> VisitMut
     }
 }
 
-impl<To: 'static, T0: Visit<To>, T1: Visit<To>, T2: Visit<To>, T3: Visit<To>> Visit<To>
+impl<To, T0: Visit<To>, T1: Visit<To>, T2: Visit<To>, T3: Visit<To>> Visit<To>
     for (T0, T1, T2, T3)
 {
     const RECURSE_CONTAINS: bool = <T0 as Visit<To>>::VISIT_CONTAINS
@@ -309,8 +321,8 @@ impl<To: 'static, T0: Visit<To>, T1: Visit<To>, T2: Visit<To>, T3: Visit<To>> Vi
     }
 }
 
-impl<To: 'static, T0: VisitMut<To>, T1: VisitMut<To>, T2: VisitMut<To>, T3: VisitMut<To>>
-    VisitMut<To> for (T0, T1, T2, T3)
+impl<To, T0: VisitMut<To>, T1: VisitMut<To>, T2: VisitMut<To>, T3: VisitMut<To>> VisitMut<To>
+    for (T0, T1, T2, T3)
 {
     const RECURSE_CONTAINS: bool = <T0 as VisitMut<To>>::VISIT_CONTAINS
         || <T1 as VisitMut<To>>::VISIT_CONTAINS
@@ -325,8 +337,58 @@ impl<To: 'static, T0: VisitMut<To>, T1: VisitMut<To>, T2: VisitMut<To>, T3: Visi
     }
 }
 
+impl<To, K: Visit<To>, V: Visit<To>> Visit<To> for SmallMap<K, V> {
+    const RECURSE_CONTAINS: bool =
+        <K as Visit<To>>::VISIT_CONTAINS || <V as Visit<To>>::VISIT_CONTAINS;
+
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
+        for (key, value) in self.iter() {
+            key.visit(f);
+            value.visit(f);
+        }
+    }
+}
+
+/// We don't implement this for a general K because we can't call visit_mut on the keys.
+/// Note that trying to Visit the Name will fail.
+impl<To, V: VisitMut<To>> VisitMut<To> for SmallMap<Name, V> {
+    const RECURSE_CONTAINS: bool = <V as VisitMut<To>>::VISIT_CONTAINS;
+
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
+        for value in self.values_mut() {
+            value.visit_mut(f);
+        }
+    }
+}
+
+impl<To, K: Visit<To>, V: Visit<To>> Visit<To> for OrderedMap<K, V> {
+    const RECURSE_CONTAINS: bool =
+        <K as Visit<To>>::VISIT_CONTAINS || <V as Visit<To>>::VISIT_CONTAINS;
+
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
+        for (key, value) in self.iter() {
+            key.visit(f);
+            value.visit(f);
+        }
+    }
+}
+
+/// We don't implement this for a general K because we can't call visit_mut on the keys.
+/// Note that trying to Visit the Name will fail.
+impl<To, V: VisitMut<To>> VisitMut<To> for OrderedMap<Name, V> {
+    const RECURSE_CONTAINS: bool = <V as VisitMut<To>>::VISIT_CONTAINS;
+
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
+        for value in self.values_mut() {
+            value.visit_mut(f);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::marker::PhantomData;
+
     use pyrefly_derive::Visit;
     use pyrefly_derive::VisitMut;
     use static_assertions::const_assert;
@@ -397,6 +459,13 @@ mod tests {
     #[derive(Visit, VisitMut, PartialEq, Eq, Debug)]
     struct Generic<T>(T);
 
+    #[derive(Visit, VisitMut, PartialEq, Eq, Debug)]
+    enum WithLifetime<'t> {
+        #[allow(dead_code)]
+        Unused(PhantomData<&'t ()>),
+        Value(i32),
+    }
+
     #[test]
     fn test_visit_derive() {
         let mut info = (
@@ -421,6 +490,14 @@ mod tests {
         const_assert!(!<Foo as Visit<u8>>::VISIT_CONTAINS);
         const_assert!(<Generic<i32> as Visit<i32>>::VISIT_CONTAINS);
         const_assert!(!<Generic<i32> as Visit<u8>>::VISIT_CONTAINS);
+
+        fn visit_with_lifetime<'t>(x: &WithLifetime<'t>) -> Vec<i32> {
+            let mut collect = Vec::new();
+            x.visit(&mut |v: &i32| collect.push(*v));
+            collect
+        }
+        assert_eq!(visit_with_lifetime(&WithLifetime::Value(42)), &[42]);
+        assert!(visit_with_lifetime(&WithLifetime::Unused(std::marker::PhantomData)).is_empty());
     }
 
     #[test]

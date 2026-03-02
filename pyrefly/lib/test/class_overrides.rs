@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -147,6 +148,219 @@ class Derived1(Base):
 
 class Derived2(Base):
     def m[T: C](self, x: T) -> T: ...  # E: `Derived2.m` overrides parent class `Base` in an inconsistent manner
+    "#,
+);
+
+testcase!(
+    test_override_infers_parameter_type,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type, override
+
+T = TypeVar("T")
+
+class G(Generic[T]):
+    def foo(self, value: T) -> T:
+        return value
+
+class C(G[int]):
+    @override
+    def foo(self, value):
+        assert_type(value, int)
+        return value
+
+    def bar(self, value):
+        assert_type(value, Any)
+    "#,
+);
+
+testcase!(
+    test_override_requires_decorator,
+    r#"
+from typing import Any, assert_type
+
+class Base:
+    def foo(self, x: int) -> None: ...
+
+class Derived(Base):
+    def foo(self, x):
+        assert_type(x, Any)
+    "#,
+);
+
+testcase!(
+    test_override_static_and_class_methods,
+    r#"
+from typing import assert_type, override
+
+class Base:
+    @staticmethod
+    def sm(x: int) -> None: ...
+
+    @classmethod
+    def cm(cls, y: str) -> None: ...
+
+class Derived(Base):
+    @override
+    @staticmethod
+    def sm(x):
+        assert_type(x, int)
+
+    @override
+    @classmethod
+    def cm(cls, y):
+        assert_type(y, str)
+    "#,
+);
+
+testcase!(
+    test_override_parameter_kinds,
+    r#"
+from typing import assert_type, override, Any
+
+class Base:
+    def g(self, /, x: int, *args: str, y: bool, **kwargs: float) -> None: ...
+    def method(self, a: int, /, *args: Any, k: str, **kwargs: Any) -> None: ...
+
+class Derived(Base):
+    @override
+    def g(self, /, x, *args, y, **kwargs):
+        assert_type(x, int)
+        assert_type(args, tuple[str, ...])
+        assert_type(y, bool)
+        assert_type(kwargs, dict[str, float])
+    @override
+    def method(self, a: float, /, b: int, *, k: str, m: str) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_basic,
+    r#"
+from typing import override, Any
+
+class GradualBase:
+    def method1(self, a: int, /, *args: Any, k: int, **kwargs: Any) -> None: ...
+
+class Child(GradualBase):
+    @override
+    def method1(self) -> None: ...
+
+class Base:
+    def method1(self) -> None: ...
+
+class GradualChild(Base):
+    @override
+    def method1(self, a: int, /, *args: Any, k: int, **kwargs: Any) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_abstract,
+    r#"
+from abc import ABC, abstractmethod
+from typing import Any
+
+class Processor(ABC):
+    @abstractmethod
+    def process(self, *args: Any, **kwargs: Any) -> Any:
+        pass
+
+class ConcreteProcessor(Processor):
+    def process(self, data: str, count: int = 1) -> str:
+        return data * count
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_parent_overload,
+    r#"
+from argparse import ArgumentParser as BaseArgumentParser
+from typing import Any
+
+class ArgumentParser(BaseArgumentParser):
+    def add_subparsers(self, *args: Any, **kwargs: Any):
+        return super().add_subparsers(*args, **kwargs)
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_child_overload,
+    r#"
+from typing import overload, Any
+class Base:
+    def test(self, *args: Any, **kwargs: Any):
+        pass
+
+class Child(Base):
+    @overload
+    def test(self, x: int): pass
+    @overload
+    def test(self, x: str): pass
+    def test(self, x):
+        pass
+    "#,
+);
+
+testcase!(
+    test_decorator_hint_takes_precedence_over_parent_hint,
+    r#"
+from typing import Any, assert_type, Callable, override
+
+def decorate(x: Callable[[Any, float], None]) -> Callable[[Any, float], None]:
+    return x
+
+class A:
+    def f(self, x: int, /):
+        pass
+
+class B(A):
+    @decorate
+    @override
+    def f(self, x, /):
+        assert_type(x, float)
+    "#,
+);
+
+testcase!(
+    test_mixed_decorator_and_parent_hints,
+    r#"
+from typing import Any, assert_type, Callable, override
+
+def decorate(x: Callable[[Any, float], None]) -> Any:
+    return x
+
+class A:
+    def f(self, x: int, y: str | None = None, /):
+        pass
+
+class B(A):
+    @decorate
+    @override
+    def f(self, x, y=None, /):
+        assert_type(x, float)
+        assert_type(y, str | None)
+    "#,
+);
+
+testcase!(
+    test_overloaded_parent_provides_no_hint,
+    r#"
+from typing import Any, assert_type, overload, override
+
+class A:
+    @overload
+    def f(self, x: int) -> int: ...
+    @overload
+    def f(self, x: str) -> str: ...
+    def f(self, x):
+        return x
+
+class B(A):
+    @override
+    def f(self, x):
+        assert_type(x, Any)
+        return x
+
     "#,
 );
 
@@ -577,7 +791,7 @@ class A:
     def f(self, x: TA1):
         pass
 class B(A):
-    def f(self, x: TA2):  # E: `B.f` has type `BoundMethod[B, (self: B, x: float | int) -> None]`, which is not assignable to `BoundMethod[B, (self: B, x: float | int | None) -> None]`, the type of `A.f`
+    def f(self, x: TA2):  # E: `B.f` has type `(self: B, x: TA2) -> None`, which is not assignable to `(self: B, x: TA1) -> None`, the type of `A.f`
         pass
     "#,
 );
@@ -585,7 +799,7 @@ class B(A):
 testcase!(
     test_unannotated_none_attribute_override,
     r#"
-from typing import reveal_type
+from typing import Any, assert_type
 
 class Foo:
     x = None
@@ -593,10 +807,10 @@ class Foo:
 class Bar(Foo):
     x = 1
 
-reveal_type(Bar.x)  # E: revealed type: int
-reveal_type(Foo.x)  # E: revealed type: None
+assert_type(Bar.x, Any | None)
+assert_type(Foo.x, Any | None)
 def test(x: type[Foo]):
-    reveal_type(x.x)  # E: revealed type: None
+    assert_type(x.x, Any | None)
     "#,
 );
 
@@ -616,6 +830,22 @@ class Child2(Parent):
 );
 
 testcase!(
+    test_unannotated_empty_tuple_attribute_override,
+    r#"
+from typing import Any, assert_type
+
+class Foo:
+    x = ()
+
+class Bar(Foo):
+    x = ("feature_x",)
+
+assert_type(Foo.x, tuple[Any, ...])
+assert_type(Bar.x, tuple[Any, ...])
+    "#,
+);
+
+testcase!(
     test_unannotated_none_attribute_with_annotation_ok,
     r#"
 from typing import Optional
@@ -625,5 +855,392 @@ class Foo:
 
 class Bar(Foo):
     x = 1  # OK - explicit Optional annotation allows override
+    "#,
+);
+
+// Test for https://github.com/facebook/pyrefly/issues/1372
+testcase!(
+    test_property_setter_inheritance,
+    r#"
+from typing import *
+
+class Myclass:
+    @property
+    def hello(self) -> int:
+        return 1
+
+    @hello.setter
+    def hello(self, value: int):
+        pass
+
+class MySubclass(Myclass):
+    def __init__(self):
+        self.hello = 1
+"#,
+);
+
+testcase!(
+    test_override_method_with_unknown_callable,
+    r#"
+from typing import Callable
+
+class A:
+    def f(self) -> None:
+        pass
+
+def decorate(f: Callable) -> Callable:
+    return f
+
+class B(A):
+    @decorate
+    def f(self) -> None:
+        pass
+    "#,
+);
+
+testcase!(
+    test_override_staticmethod,
+    r#"
+class A:
+    @staticmethod
+    def f() -> A | None:
+        return A()
+
+class B(A):
+    @staticmethod
+    def f() -> B:
+        return B()
+    "#,
+);
+
+testcase!(
+    test_override_instance_method_with_staticmethod,
+    r#"
+class A:
+    def f(self) -> None:
+        pass
+
+class B(A):
+    @staticmethod
+    def f() -> None:
+        pass
+    "#,
+);
+
+testcase!(
+    test_override_instance_method_with_staticmethod_2,
+    r#"
+class A:
+    def f(self) -> A:
+        return A()
+
+class B(A):
+    @staticmethod
+    def f() -> B:
+        return B()
+    "#,
+);
+
+testcase!(
+    test_annotated_union,
+    r#"
+from typing import assert_type
+class A:
+    x: int | None = 0
+class B(A):
+    x = 1
+class C(A):
+    x = "oops"  # E: `Literal['oops']` is not assignable to attribute `x` with type `int | None`
+def f(b: B):
+    assert_type(b.x, int | None)
+    "#,
+);
+
+testcase!(
+    test_inferred_union,
+    r#"
+from typing import assert_type
+def f() -> int | None: ...
+class A:
+    x = f()
+class B(A):
+    x = 1
+def f(b: B):
+    assert_type(b.x, int | None)
+    "#,
+);
+
+testcase!(
+    test_violate_inherited_type,
+    r#"
+class A:
+    x = 1
+class B(A):
+    x = "oops"  # E: `B.x` has type `str`, which is not consistent with `int`
+    "#,
+);
+
+testcase!(
+    test_use_inherited_type_as_context,
+    r#"
+from typing import assert_type
+
+class A: ...
+class B(A): ...
+class C:
+    x = [A()]
+class D(C):
+    x = [B()]
+
+def f(d: D):
+    assert_type(d.x, list[A])
+    "#,
+);
+
+// Tests for MissingOverrideDecorator (strict override enforcement)
+testcase!(
+    test_missing_override_decorator_method,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    def foo(self, x: int) -> None: ...
+
+class Derived(Base):
+    def foo(self, x: int) -> None: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_with_override,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override
+
+class Base:
+    def foo(self, x: int) -> None: ...
+
+class Derived(Base):
+    @override
+    def foo(self, x: int) -> None: ...  # OK - has @override
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_no_parent_method,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    def foo(self, x: int) -> None: ...
+
+class Derived(Base):
+    def bar(self, x: int) -> None: ...  # OK - not overriding anything
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_classmethod,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    @classmethod
+    def foo(cls) -> None: ...
+
+class Derived(Base):
+    @classmethod
+    def foo(cls) -> None: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_staticmethod,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    @staticmethod
+    def foo() -> None: ...
+
+class Derived(Base):
+    @staticmethod
+    def foo() -> None: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_property,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    @property
+    def foo(self) -> int: ...
+
+class Derived(Base):
+    @property
+    def foo(self) -> int: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_field,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    x: int
+
+class Derived(Base):
+    x: int
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_disabled_by_default,
+    r#"
+class Base:
+    def foo(self, x: int) -> None: ...
+
+class Derived(Base):
+    def foo(self, x: int) -> None: ...  # OK when error is disabled by default
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_multiple_inheritance,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base1:
+    def foo(self) -> None: ...
+
+class Base2:
+    def bar(self) -> None: ...
+
+class Derived(Base1, Base2):
+    def foo(self) -> None: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
+    def bar(self) -> None: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
+    def baz(self) -> None: ...  # OK - not overriding anything
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_dunder_method,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    def __str__(self) -> str: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
+
+class Derived(Base):
+    def __str__(self) -> str: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_instance_attribute,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class A:
+    def __init__(self):
+        self.a = 1
+
+class B(A):
+    def __init__(self):
+        self.a = 2  # OK - instance attribute, not a method override
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_nested_class,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+# Nested classes cannot have the @override decorator applied to them.
+class A:
+    class C: pass
+
+class B(A):
+    class C(A.C): pass  # OK - nested class, @override cannot be applied
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_classvar,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import ClassVar
+
+# ClassVars cannot have the @override decorator applied to them.
+class A:
+    x: ClassVar[int]
+
+class B(A):
+    x: ClassVar[int]  # OK - ClassVar, @override cannot be applied
+    "#,
+);
+
+testcase!(
+    test_raise_not_implemented_infers_never_but_allows_override,
+    r#"
+from typing import Never, assert_type
+
+class A:
+    def foo(self):
+        raise NotImplementedError()
+
+assert_type(A().foo(), Never)
+
+class B(A):
+    def foo(self) -> int:
+        return 1
+"#,
+);
+
+testcase!(
+    test_explicit_never_annotation_allows_override,
+    r#"
+from typing import Never, assert_type
+
+class A:
+    def foo(self) -> Never:
+        raise NotImplementedError()
+
+assert_type(A().foo(), Never)
+
+class B(A):
+    def foo(self) -> int:
+        return 1
+    "#,
+);
+
+testcase!(
+    test_bad_parameter_override_with_never_return,
+    r#"
+class A:
+    def f(self, x: int):
+        raise NotImplementedError()
+class B(A):
+    def f(self, x: str):  # E: overrides parent class `A` in an inconsistent manner
+        return 1
+    "#,
+);
+
+testcase!(
+    test_callable_returning_never_checked_for_override_consistency,
+    r#"
+from typing import Any, Callable, Never, assert_type
+
+class A:
+    f: Callable[[Any], Never]
+
+class B(A):
+    f: Callable[[Any], int]  # E: overrides parent class `A` in an inconsistent manner
+    "#,
+);
+
+testcase!(
+    test_override_method_without_self,
+    r#"
+class A:
+    def foo() -> int:
+        return 42
+
+class B(A):
+    def foo() -> int:
+        return 100
     "#,
 );

@@ -14,6 +14,8 @@ use pyrefly::playground::Range;
 use starlark_map::small_map::SmallMap;
 use wasm_bindgen::prelude::*;
 
+extern crate console_error_panic_hook;
+
 #[wasm_bindgen]
 pub struct State(Playground);
 
@@ -21,6 +23,7 @@ pub struct State(Playground);
 impl State {
     #[wasm_bindgen(constructor)]
     pub fn new(version: String) -> Self {
+        console_error_panic_hook::set_once();
         let playground =
             Playground::new(Some(&version)).unwrap_or_else(|e| wasm_bindgen::throw_str(&e));
         Self(playground)

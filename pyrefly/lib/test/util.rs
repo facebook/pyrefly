@@ -106,8 +106,13 @@ pub struct TestEnv {
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
     implicit_any_error: bool,
+    unannotated_return_error: bool,
+    unannotated_parameter_error: bool,
+    unannotated_attribute_error: bool,
     implicit_abstract_class_error: bool,
     open_unpacking_error: bool,
+    missing_override_decorator_error: bool,
+    not_required_key_access_error: bool,
     default_require_level: Require,
 }
 
@@ -123,8 +128,13 @@ impl TestEnv {
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
             implicit_any_error: false,
+            unannotated_return_error: false,
+            unannotated_parameter_error: false,
+            unannotated_attribute_error: false,
             implicit_abstract_class_error: false,
             open_unpacking_error: false,
+            missing_override_decorator_error: false,
+            not_required_key_access_error: false,
             default_require_level: Require::Exports,
         }
     }
@@ -163,6 +173,21 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_unannotated_attribute_error(mut self) -> Self {
+        self.unannotated_attribute_error = true;
+        self
+    }
+
+    pub fn enable_unannotated_return_error(mut self) -> Self {
+        self.unannotated_return_error = true;
+        self
+    }
+
+    pub fn enable_unannotated_parameter_error(mut self) -> Self {
+        self.unannotated_parameter_error = true;
+        self
+    }
+
     pub fn enable_implicit_abstract_class_error(mut self) -> Self {
         self.implicit_abstract_class_error = true;
         self
@@ -170,6 +195,16 @@ impl TestEnv {
 
     pub fn enable_open_unpacking_error(mut self) -> Self {
         self.open_unpacking_error = true;
+        self
+    }
+
+    pub fn enable_missing_override_decorator_error(mut self) -> Self {
+        self.missing_override_decorator_error = true;
+        self
+    }
+
+    pub fn enable_not_required_key_access_error(mut self) -> Self {
+        self.not_required_key_access_error = true;
         self
     }
 
@@ -254,17 +289,32 @@ impl TestEnv {
         if self.implicit_any_error {
             errors.set_error_severity(ErrorKind::ImplicitAny, Severity::Error);
         }
+        if self.unannotated_attribute_error {
+            errors.set_error_severity(ErrorKind::UnannotatedAttribute, Severity::Error);
+        }
+        if self.unannotated_return_error {
+            errors.set_error_severity(ErrorKind::UnannotatedReturn, Severity::Error);
+        }
+        if self.unannotated_parameter_error {
+            errors.set_error_severity(ErrorKind::UnannotatedParameter, Severity::Error);
+        }
         if self.implicit_abstract_class_error {
             errors.set_error_severity(ErrorKind::ImplicitAbstractClass, Severity::Error);
         }
         if self.open_unpacking_error {
             errors.set_error_severity(ErrorKind::OpenUnpacking, Severity::Error);
         }
+        if self.missing_override_decorator_error {
+            errors.set_error_severity(ErrorKind::MissingOverrideDecorator, Severity::Error);
+        }
+        if self.not_required_key_access_error {
+            errors.set_error_severity(ErrorKind::NotRequiredKeyAccess, Severity::Error);
+        }
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
         for (name, path, _) in self.modules.iter() {
             sourcedb.insert(*name, path.dupe());
         }
-        config.source_db = Some(Arc::new(Box::new(sourcedb)));
+        config.source_db = Some(ArcId::new(Box::new(sourcedb)));
         config.interpreters.skip_interpreter_query = true;
         config.configure();
         ArcId::new(config)
@@ -293,7 +343,7 @@ impl TestEnv {
         );
         transaction.as_mut().set_memory(self.get_memory());
         transaction.as_mut().run(&handles, Require::Everything);
-        state.commit_transaction(transaction);
+        state.commit_transaction(transaction, None);
         subscriber.finish();
         let project_root = PathBuf::new();
         print_errors(
@@ -308,7 +358,9 @@ impl TestEnv {
             let name = ModuleName::from_str(module);
             Handle::new(
                 name,
-                find_import(&config_file, name, None).finding().unwrap(),
+                find_import(&config_file, name, None, None)
+                    .finding()
+                    .unwrap(),
                 config.dupe(),
             )
         })
@@ -438,7 +490,7 @@ fn get_batched_lsp_operations_report_helper(
     assert_zero_errors: bool,
     get_report: impl Fn(&State, &Handle, TextSize) -> String,
 ) -> String {
-    let (handles, state) = mk_multi_file_state(files, Require::indexing(), assert_zero_errors);
+    let (handles, state) = mk_multi_file_state(files, Require::Exports, assert_zero_errors);
     let mut report = String::new();
     for (name, code) in files {
         report.push_str("# ");
@@ -478,7 +530,7 @@ pub fn get_batched_lsp_operations_report_no_cursor(
     files: &[(&'static str, &str)],
     get_report: impl Fn(&State, &Handle) -> String,
 ) -> String {
-    let (handles, state) = mk_multi_file_state(files, Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(files, Require::Exports, true);
     let mut report = String::new();
     for (name, _code) in files {
         report.push_str("# ");

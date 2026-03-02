@@ -9,7 +9,6 @@ use std::collections::HashMap;
 
 use pretty_assertions::assert_eq;
 use pyrefly_types::class::ClassType;
-use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
 
 use crate::report::pysa::call_graph::Target;
@@ -219,10 +218,13 @@ class Foo:
                 "Bar".into(),
                 PysaClassField {
                     type_: PysaType::from_type(
-                        &Type::Type(Box::new(Type::ClassType(ClassType::new(
-                            get_class("test", "Bar", context),
-                            Default::default(),
-                        )))),
+                        &context
+                            .answers
+                            .heap()
+                            .mk_type(context.answers.heap().mk_class_type(ClassType::new(
+                                get_class("test", "Bar", context),
+                                Default::default(),
+                            ))),
                         context,
                     ),
                     explicit_annotation: None,
@@ -320,10 +322,213 @@ Point = namedtuple('Point', ['x', 'y'])
                     "__match_args__".into(),
                     PysaClassField {
                         type_: PysaType::from_type(
-                            &Type::Tuple(Tuple::Concrete(vec![
-                                context.stdlib.str().clone().to_type(),
-                                context.stdlib.str().clone().to_type(),
-                            ])),
+                            &Type::concrete_tuple(vec![
+                                context
+                                    .answers
+                                    .heap()
+                                    .mk_class_type(context.stdlib.str().clone()),
+                                context
+                                    .answers
+                                    .heap()
+                                    .mk_class_type(context.stdlib.str().clone()),
+                            ]),
+                            context,
+                        ),
+                        explicit_annotation: None,
+                        location: None,
+                        declaration_kind: None,
+                    },
+                ),
+            ]),
+            decorator_callees: HashMap::new(),
+        }
+    },
+);
+
+exported_class_testcase!(
+    test_export_typed_dict,
+    r#"
+from typing import TypedDict
+class Point(TypedDict):
+    x: int
+    y: int
+"#,
+    &|context: &ModuleContext| {
+        ClassDefinition {
+            class_id: ClassId::from_int(0),
+            name: "Point".to_owned(),
+            bases: vec![get_class_ref(
+                "_typeshed._type_checker_internals",
+                "TypedDictFallback",
+                context,
+            )],
+            mro: PysaClassMro::Resolved(vec![
+                get_class_ref(
+                    "_typeshed._type_checker_internals",
+                    "TypedDictFallback",
+                    context,
+                ),
+                get_class_ref("typing", "Mapping", context),
+                get_class_ref("typing", "Collection", context),
+                get_class_ref("typing", "Iterable", context),
+                get_class_ref("typing", "Container", context),
+            ]),
+            parent: ScopeParent::TopLevel,
+            is_synthesized: false,
+            is_dataclass: false,
+            is_named_tuple: false,
+            is_typed_dict: true,
+            fields: HashMap::from([
+                (
+                    "x".into(),
+                    PysaClassField {
+                        type_: PysaType::from_class_type(context.stdlib.int(), context),
+                        explicit_annotation: Some("int".to_owned()),
+                        location: Some(create_location(4, 5, 4, 6)),
+                        declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+                (
+                    "y".into(),
+                    PysaClassField {
+                        type_: PysaType::from_class_type(context.stdlib.int(), context),
+                        explicit_annotation: Some("int".to_owned()),
+                        location: Some(create_location(5, 5, 5, 6)),
+                        declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+            ]),
+            decorator_callees: HashMap::new(),
+        }
+    },
+);
+
+exported_class_testcase!(
+    test_export_non_total_typed_dict,
+    r#"
+from typing import TypedDict
+class Point(TypedDict, total=False):
+    x: int
+    y: int
+"#,
+    &|context: &ModuleContext| {
+        ClassDefinition {
+            class_id: ClassId::from_int(0),
+            name: "Point".to_owned(),
+            bases: vec![get_class_ref(
+                "_typeshed._type_checker_internals",
+                "TypedDictFallback",
+                context,
+            )],
+            mro: PysaClassMro::Resolved(vec![
+                get_class_ref(
+                    "_typeshed._type_checker_internals",
+                    "TypedDictFallback",
+                    context,
+                ),
+                get_class_ref("typing", "Mapping", context),
+                get_class_ref("typing", "Collection", context),
+                get_class_ref("typing", "Iterable", context),
+                get_class_ref("typing", "Container", context),
+            ]),
+            parent: ScopeParent::TopLevel,
+            is_synthesized: false,
+            is_dataclass: false,
+            is_named_tuple: false,
+            is_typed_dict: true,
+            fields: HashMap::from([
+                (
+                    "x".into(),
+                    PysaClassField {
+                        type_: PysaType::from_class_type(context.stdlib.int(), context),
+                        explicit_annotation: Some("int".to_owned()),
+                        location: Some(create_location(4, 5, 4, 6)),
+                        declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+                (
+                    "y".into(),
+                    PysaClassField {
+                        type_: PysaType::from_class_type(context.stdlib.int(), context),
+                        explicit_annotation: Some("int".to_owned()),
+                        location: Some(create_location(5, 5, 5, 6)),
+                        declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+            ]),
+            decorator_callees: HashMap::new(),
+        }
+    },
+);
+
+exported_class_testcase!(
+    test_export_typing_namedtuple_class,
+    r#"
+import typing
+class Foo(typing.NamedTuple):
+    x: int
+    y: str
+"#,
+    &|context: &ModuleContext| {
+        ClassDefinition {
+            class_id: ClassId::from_int(0),
+            name: "Foo".to_owned(),
+            bases: vec![get_class_ref(
+                "_typeshed._type_checker_internals",
+                "NamedTupleFallback",
+                context,
+            )],
+            mro: PysaClassMro::Resolved(vec![
+                get_class_ref(
+                    "_typeshed._type_checker_internals",
+                    "NamedTupleFallback",
+                    context,
+                ),
+                get_class_ref("builtins", "tuple", context),
+                get_class_ref("typing", "Sequence", context),
+                get_class_ref("typing", "Reversible", context),
+                get_class_ref("typing", "Collection", context),
+                get_class_ref("typing", "Iterable", context),
+                get_class_ref("typing", "Container", context),
+            ]),
+            parent: ScopeParent::TopLevel,
+            is_synthesized: false,
+            is_dataclass: false,
+            is_named_tuple: true,
+            is_typed_dict: false,
+            fields: HashMap::from([
+                (
+                    "x".into(),
+                    PysaClassField {
+                        type_: PysaType::from_class_type(context.stdlib.int(), context),
+                        explicit_annotation: Some("int".into()),
+                        location: Some(create_location(4, 5, 4, 6)),
+                        declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+                (
+                    "y".into(),
+                    PysaClassField {
+                        type_: PysaType::from_class_type(context.stdlib.str(), context),
+                        explicit_annotation: Some("str".into()),
+                        location: Some(create_location(5, 5, 5, 6)),
+                        declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+                (
+                    "__match_args__".into(),
+                    PysaClassField {
+                        type_: PysaType::from_type(
+                            &Type::concrete_tuple(vec![
+                                context
+                                    .answers
+                                    .heap()
+                                    .mk_class_type(context.stdlib.str().clone()),
+                                context
+                                    .answers
+                                    .heap()
+                                    .mk_class_type(context.stdlib.str().clone()),
+                            ]),
                             context,
                         ),
                         explicit_annotation: None,
@@ -464,10 +669,15 @@ class Foo:
                     "__dataclass_fields__".into(),
                     PysaClassField {
                         type_: PysaType::from_type(
-                            &Type::ClassType(context.stdlib.dict(
-                                context.stdlib.str().clone().to_type(),
-                                Type::any_implicit(),
-                            )),
+                            &context.answers.heap().mk_class_type(
+                                context.stdlib.dict(
+                                    context
+                                        .answers
+                                        .heap()
+                                        .mk_class_type(context.stdlib.str().clone()),
+                                    context.answers.heap().mk_any_implicit(),
+                                ),
+                            ),
                             context,
                         ),
                         explicit_annotation: None,
@@ -479,10 +689,16 @@ class Foo:
                     "__match_args__".into(),
                     PysaClassField {
                         type_: PysaType::from_type(
-                            &Type::Tuple(Tuple::Concrete(vec![
-                                context.stdlib.str().clone().to_type(),
-                                context.stdlib.str().clone().to_type(),
-                            ])),
+                            &Type::concrete_tuple(vec![
+                                context
+                                    .answers
+                                    .heap()
+                                    .mk_class_type(context.stdlib.str().clone()),
+                                context
+                                    .answers
+                                    .heap()
+                                    .mk_class_type(context.stdlib.str().clone()),
+                            ]),
                             context,
                         ),
                         explicit_annotation: None,
@@ -491,6 +707,14 @@ class Foo:
                     },
                 ),
             ]))
+            .with_decorator_callees(HashMap::from([(
+                create_location(3, 2, 3, 11),
+                vec![Target::Function(get_function_ref(
+                    "dataclasses",
+                    "dataclass",
+                    context,
+                ))],
+            )]))
     },
 );
 
@@ -569,5 +793,26 @@ class Foo:
                 ),
             ],
         ))
+    },
+);
+
+exported_class_testcase!(
+    test_export_private_attribute,
+    r#"
+import typing
+class Foo:
+    def __init__(self, x: int) -> None:
+        self.__x: int = x
+"#,
+    &|context: &ModuleContext| {
+        create_simple_class("Foo", 0, ScopeParent::TopLevel).with_fields(HashMap::from([(
+            "__x".into(),
+            PysaClassField {
+                type_: PysaType::from_class_type(context.stdlib.int(), context),
+                explicit_annotation: Some("int".to_owned()),
+                location: Some(create_location(5, 14, 5, 17)),
+                declaration_kind: Some(PysaClassFieldDeclaration::DefinedInMethod),
+            },
+        )]))
     },
 );

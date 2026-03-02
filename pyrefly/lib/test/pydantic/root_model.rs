@@ -123,7 +123,6 @@ RootModel[int](5, extra=6)  # E: Unexpected keyword argument `extra`
 );
 
 pydantic_testcase!(
-    bug = "We should allow populating root model fields using the root type; we are emitting errors in places where runtime coersion is happening",
     test_root_model_field,
     r#"
 from typing import assert_type
@@ -134,7 +133,7 @@ class RootModel1(RootModel[int]):
 
 class Model1(BaseModel, strict=True):
     x: RootModel1
-m1 = Model1(x=0)  # False positive  # E: not assignable
+m1 = Model1(x=0)
 assert_type(m1.x, RootModel1)
 m2 = Model1(x=RootModel1(0))
 assert_type(m2.x, RootModel1)
@@ -142,14 +141,14 @@ Model1(x='oops')  # E: `Literal['oops']` is not assignable to parameter `x`
 
 class Model2(BaseModel, strict=True):
     x: RootModel
-m3 = Model2(x=0)  # False positive  # E: not assignable
+m3 = Model2(x=0)
 assert_type(m3.x, RootModel)
 m4 = Model2(x=RootModel(0))
 assert_type(m4.x, RootModel)
 
 class Model3(BaseModel, strict=True):
     x: RootModel[int]
-m5 = Model3(x=0)  # False positive  # E: not assignable
+m5 = Model3(x=0)
 assert_type(m5.x, RootModel[int])
 m6 = Model3(x=RootModel(0))
 assert_type(m6.x, RootModel[int])
@@ -173,4 +172,86 @@ m1 = B(3)
 m2 = B("1") # E: Argument `Literal['1']` is not assignable to parameter `root` with type `int` in function `B.__init__`
 m3 = A("1") # E: Argument `Literal['1']` is not assignable to parameter `root` with type `int` in function `A.__init__
 "#,
+);
+
+pydantic_testcase!(
+    test_root_model_strict,
+    r#"
+from pydantic import BaseModel, RootModel
+
+class IntRootModel(RootModel[int]):
+    pass
+
+class Model(BaseModel, strict=True):
+    x: IntRootModel
+
+m1 = Model(x=IntRootModel(123))
+m2 = Model(x=123) 
+m3 = Model(x=IntRootModel(123))
+    "#,
+);
+
+pydantic_testcase!(
+    test_multiple_root_models_in_union,
+    r#"
+from pydantic import BaseModel, RootModel
+
+class IntRootModel(RootModel[int]):
+    pass
+
+class StrRootModel(RootModel[str]):
+    pass
+
+class Model(BaseModel, strict=True):
+    x: IntRootModel | StrRootModel
+
+# valid types
+m1 = Model(x=IntRootModel(5))
+m2 = Model(x=StrRootModel("hello"))
+m3 = Model(x=5)  
+m4 = Model(x="hello") 
+
+# Invalid types 
+Model(x=5.5)  # E: Argument `float` is not assignable to parameter `x` with type `IntRootModel | StrRootModel | int | str` in function `Model.__init__`
+Model(x=[])   # E: Argument `list[@_]` is not assignable to parameter `x` with type `IntRootModel | StrRootModel | int | str` in function `Model.__init__
+    "#,
+);
+
+pydantic_testcase!(
+    test_optional_root_model_fields,
+    r#"
+from typing import Optional
+from pydantic import BaseModel, RootModel
+
+class IntRootModel(RootModel[int]):
+    pass
+
+class Model(BaseModel):
+    x: Optional[IntRootModel] = None
+
+m1 = Model()
+m2 = Model(x=None)
+m3 = Model(x=5)
+m4 = Model(x=IntRootModel(5))
+    "#,
+);
+
+pydantic_testcase!(
+    test_nested_root_models,
+    r#"
+from pydantic import BaseModel, RootModel
+
+class InnerModel(RootModel[int]):
+    pass
+
+class OuterModel(RootModel[InnerModel]):
+    pass
+
+class Model(BaseModel, strict=True):
+    x: OuterModel
+
+m1 = Model(x=OuterModel(InnerModel(5)))
+m2 = Model(x=InnerModel(5))  
+m3 = Model(x=5)
+    "#,
 );

@@ -1,0 +1,9 @@
+from typing_extensions import Self
+
+from sympy.core.function import Derivative
+
+class ArrayDerivative(Derivative):
+    is_scalar = ...
+    def __new__(cls, expr, *variables, **kwargs) -> Self: ...
+    @property
+    def shape(self): ...

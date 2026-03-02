@@ -15,6 +15,7 @@ use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::base::ConfigBase;
 use pyrefly_config::config::DirectoryRelativeFallbackSearchPathCache;
 use pyrefly_config::config::FallbackSearchPath;
+use pyrefly_config::config::GENERATED_FILE_CONFIG_OVERRIDE;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
@@ -26,8 +27,15 @@ use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::config::finder::debug_log;
 use crate::module::bundled::BundledStub;
+use crate::module::third_party::BundledThirdParty;
 use crate::module::typeshed::BundledTypeshedStdlib;
 use crate::module::typeshed_third_party::BundledTypeshedThirdParty;
+
+/// A function that wraps a [`ConfigConfigurer`] with additional behavior.
+/// The function receives the "inner" configurer and returns a wrapped configurer
+/// that applies custom settings before delegating to the inner one.
+pub type ConfigConfigurerWrapper =
+    Arc<dyn Fn(Arc<dyn ConfigConfigurer>) -> Arc<dyn ConfigConfigurer> + Send + Sync>;
 
 /// Finalizes a config before being returned by a [`ConfigFinder`].
 pub trait ConfigConfigurer: Send + Sync + 'static {
@@ -79,8 +87,8 @@ impl ConfigConfigurer for DefaultConfigConfigurer {
     }
 }
 
-pub fn default_config_finder() -> ConfigFinder {
-    standard_config_finder(Arc::new(DefaultConfigConfigurer {}))
+pub fn default_config_finder(wrapper: Option<ConfigConfigurerWrapper>) -> ConfigFinder {
+    standard_config_finder(Arc::new(DefaultConfigConfigurer {}), wrapper)
 }
 
 struct DefaultConfigConfigurerWithOverrides {
@@ -117,16 +125,30 @@ impl ConfigConfigurer for DefaultConfigConfigurerWithOverrides {
 pub fn default_config_finder_with_overrides(
     args: ConfigOverrideArgs,
     ignore_errors: bool,
+    wrapper: Option<ConfigConfigurerWrapper>,
 ) -> ConfigFinder {
-    standard_config_finder(Arc::new(DefaultConfigConfigurerWithOverrides::new(
-        args,
-        ignore_errors,
-    )))
+    standard_config_finder(
+        Arc::new(DefaultConfigConfigurerWithOverrides::new(
+            args,
+            ignore_errors,
+        )),
+        wrapper,
+    )
 }
 
 /// Create a standard `ConfigFinder`, using the provided [`ConfigConfigurer`] to finalize
 /// the config before caching/returning it.
-pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFinder {
+///
+/// If `wrapper` is provided, it wraps the `configure` with additional behavior
+/// (e.g., applying internal-specific defaults) before delegation.
+pub fn standard_config_finder(
+    configure: Arc<dyn ConfigConfigurer>,
+    wrapper: Option<ConfigConfigurerWrapper>,
+) -> ConfigFinder {
+    let configure = match wrapper {
+        Some(wrap) => wrap(configure),
+        None => configure,
+    };
     let configure2 = configure.dupe();
     let configure3 = configure.dupe();
 
@@ -150,6 +172,7 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
             cache_one.lock().clear();
             cache_parents.lock().clear();
             cache_ancestors.clear();
+            GENERATED_FILE_CONFIG_OVERRIDE.write().clear();
         })
     };
 
@@ -160,7 +183,13 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
         config
     });
 
-    ConfigFinder::new(
+    ConfigFinder::new_custom(
+        Box::new(move |_, path| {
+            Ok(GENERATED_FILE_CONFIG_OVERRIDE
+                .read()
+                .get(&path.module_path_buf())
+                .cloned())
+        }),
         Box::new(move |file| {
             let (file_config, parse_errors) = ConfigFile::from_file(file);
             let (config, validation_errors) =
@@ -169,64 +198,72 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
         }),
         // Fall back to using a default config, but let's see if we can make the `search_path` somewhat useful
         // based on a few heuristics.
-        Box::new(move |name, path| match path.root_of(name) {
-            // We were able to walk up `path` and match each component of `name` to a directory until we ran out.
-            // That means the resulting path is likely the root of the 'project', and should therefore be its `search_path`.
-            Some(path) => cache_one
-                .lock()
-                .entry(path.clone())
-                .or_insert_with(|| {
-                    let (config, errors) = configure2.configure(
-                        path.parent(),
-                        ConfigFile::init_at_root(&path, &ProjectLayout::Flat, true),
-                        vec![],
-                    );
-                    // Since this is a config we generated, these are likely internal errors.
-                    debug_log(errors);
-                    config
-                })
-                .dupe(),
-
-            // We couldn't walk up and find a possible root of the project, so let's try to create a search
-            // path that is still useful for this import by including all of its parents.
-            None => {
-                let parent = match path.details() {
-                    ModulePathDetails::FileSystem(x) | ModulePathDetails::Memory(x) => {
-                        if let Some(path) = x.parent() {
-                            path
-                        } else {
-                            return empty.dupe();
-                        }
-                    }
-                    ModulePathDetails::Namespace(x) => x.as_path(),
-                    ModulePathDetails::BundledTypeshed(_) => {
-                        return BundledTypeshedStdlib::config();
-                    }
-                    ModulePathDetails::BundledTypeshedThirdParty(_) => {
-                        return BundledTypeshedThirdParty::config();
-                    }
-                };
-                cache_parents
+        Box::new(move |module_kind, path| {
+            let name = module_kind.name();
+            let is_fallback = module_kind.is_fallback();
+            match path.root_of(name) {
+                // We were able to walk up `path` and match each component of `name` to a directory until we ran out.
+                // That means the resulting path is likely the root of the 'project', and should therefore be its `search_path`.
+                Some(path) if !is_fallback => cache_one
                     .lock()
-                    .entry(parent.to_owned())
+                    .entry(path.clone())
                     .or_insert_with(|| {
-                        let fallback_search_path =
-                            FallbackSearchPath::Explicit(cache_ancestors.get_ancestors(parent));
-                        let mut config = ConfigFile {
-                            project_includes: ConfigFile::default_project_includes(),
-                            // We use `fallback_search_path` because otherwise a user with `/sys` on their
-                            // computer (all of them) will override `sys.version` in preference to typeshed.
-                            fallback_search_path,
-                            root: ConfigBase::default_for_ide_without_config(),
-                            ..Default::default()
-                        };
-                        config.rewrite_with_path_to_config(parent);
-                        let (config, errors) = configure2.configure(Some(parent), config, vec![]);
+                        let (config, errors) = configure2.configure(
+                            path.parent(),
+                            ConfigFile::init_at_root(&path, &ProjectLayout::Flat, true),
+                            vec![],
+                        );
                         // Since this is a config we generated, these are likely internal errors.
                         debug_log(errors);
                         config
                     })
-                    .dupe()
+                    .dupe(),
+
+                // We couldn't walk up and find a possible root of the project, so let's try to create a search
+                // path that is still useful for this import by including all of its parents.
+                _ => {
+                    let parent = match path.details() {
+                        ModulePathDetails::FileSystem(x) | ModulePathDetails::Memory(x) => {
+                            if let Some(path) = x.parent() {
+                                path
+                            } else {
+                                return empty.dupe();
+                            }
+                        }
+                        ModulePathDetails::Namespace(x) => x.as_path(),
+                        ModulePathDetails::BundledTypeshed(_) => {
+                            return BundledTypeshedStdlib::config();
+                        }
+                        ModulePathDetails::BundledTypeshedThirdParty(_) => {
+                            return BundledTypeshedThirdParty::config();
+                        }
+                        ModulePathDetails::BundledThirdParty(_) => {
+                            return BundledThirdParty::config();
+                        }
+                    };
+                    cache_parents
+                        .lock()
+                        .entry(parent.to_owned())
+                        .or_insert_with(|| {
+                            let fallback_search_path =
+                                FallbackSearchPath::Explicit(cache_ancestors.get_ancestors(parent));
+                            let mut config = ConfigFile {
+                                project_includes: ConfigFile::default_project_includes(),
+                                // We use `fallback_search_path` because otherwise a user with `/sys` on their
+                                // computer (all of them) will override `sys.version` in preference to typeshed.
+                                fallback_search_path,
+                                root: ConfigBase::default_for_ide_without_config(),
+                                ..Default::default()
+                            };
+                            config.rewrite_with_path_to_config(parent);
+                            let (config, errors) =
+                                configure2.configure(Some(parent), config, vec![]);
+                            // Since this is a config we generated, these are likely internal errors.
+                            debug_log(errors);
+                            config
+                        })
+                        .dupe()
+                }
             }
         }),
         clear_extra_caches,
@@ -241,6 +278,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use pyrefly_config::args::ConfigOverrideArgs;
     use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_name::ModuleNameWithKind;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_util::test_path::TestPath;
 
@@ -271,7 +309,7 @@ mod tests {
             + Sync
             + 'static,
         ) -> ConfigFinder {
-            standard_config_finder(Arc::new(TestConfigurer(Box::new(f))))
+            standard_config_finder(Arc::new(TestConfigurer(Box::new(f))), None)
         }
     }
 
@@ -290,7 +328,10 @@ mod tests {
     fn test_site_package_path_from_environment() {
         let args = ConfigOverrideArgs::default();
         let config = TestConfigurer::new_standard(move |_, x, _| args.override_config(x))
-            .python_file(ModuleName::unknown(), &ModulePath::filesystem("".into()));
+            .python_file(
+                ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+                &ModulePath::filesystem("".into()),
+            );
         let env = PythonEnvironment::get_default_interpreter_env();
         if let Some(paths) = env.site_package_path {
             for p in paths {
@@ -316,7 +357,7 @@ mod tests {
                 );
                 (ArcId::new(x), Vec::new())
             })
-            .python_file(module_name, &module_path2)
+            .python_file(ModuleNameWithKind::guaranteed(module_name), &module_path2)
         }
 
         let tempdir = tempfile::tempdir().unwrap();

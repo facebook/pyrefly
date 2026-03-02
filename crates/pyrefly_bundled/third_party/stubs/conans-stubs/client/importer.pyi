@@ -1,0 +1,26 @@
+from _typeshed import Incomplete
+from conans.client import tools as tools
+from conans.client.file_copier import FileCopier as FileCopier, report_copied_files as report_copied_files
+from conans.client.output import ScopedOutput as ScopedOutput
+from conans.errors import ConanException as ConanException
+from conans.model.conan_file import get_env_context_manager as get_env_context_manager
+from conans.model.manifest import FileTreeManifest as FileTreeManifest
+from conans.util.dates import timestamp_now as timestamp_now
+from conans.util.env_reader import get_env as get_env
+from conans.util.files import load as load, md5sum as md5sum, mkdir as mkdir
+
+IMPORTS_MANIFESTS: str
+
+def undo_imports(current_path, output) -> None: ...
+def _report_save_manifest(copied_files, output, dest_folder, manifest_name) -> None: ...
+def _make_files_writable(file_names) -> None: ...
+def run_imports(conanfile): ...
+def remove_imports(conanfile, copied_files, output) -> None: ...
+def run_deploy(conanfile, install_folder) -> None: ...
+
+class _FileImporter:
+    _conanfile: Incomplete
+    _dst_folder: Incomplete
+    copied_files: Incomplete
+    def __init__(self, conanfile, dst_folder) -> None: ...
+    def __call__(self, pattern, dst: str = ..., src: str = ..., root_package: Incomplete | None = ..., folder: bool = ..., ignore_case: bool = ..., excludes: Incomplete | None = ..., keep_path: bool = ...) -> None: ...

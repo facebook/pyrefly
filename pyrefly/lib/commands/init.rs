@@ -20,6 +20,7 @@ use tracing::error;
 use tracing::info;
 
 use crate::commands::check;
+use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
 use crate::config::config::ConfigFile;
@@ -66,7 +67,10 @@ impl InitArgs {
         input == "y" || input == "Y"
     }
 
-    pub fn run(&self) -> anyhow::Result<CommandExitStatus> {
+    pub fn run(
+        &self,
+        wrapper: Option<ConfigConfigurerWrapper>,
+    ) -> anyhow::Result<CommandExitStatus> {
         // 1. Create Pyrefly Config
         let create_config_result = self.create_config();
 
@@ -75,7 +79,7 @@ impl InitArgs {
             Ok((status, _)) if status != CommandExitStatus::Success => Ok(status),
             Ok((_, config_path)) => {
                 // 2. Run pyrefly check
-                let check_result = self.run_check(config_path.clone());
+                let check_result = self.run_check(config_path.clone(), wrapper.clone());
 
                 // Check if there are errors and if there are fewer than 100
                 if let Ok((_, errors)) = check_result {
@@ -85,7 +89,7 @@ impl InitArgs {
                     }
                     // 3a. Prompt error suppression if there are less than the maximum number of errors
                     else if error_count <= MAX_ERRORS_TO_PROMPT_SUPPRESSION {
-                        return self.prompt_error_suppression(config_path, error_count);
+                        return self.prompt_error_suppression(config_path, error_count, wrapper);
                     }
                 }
                 Ok(CommandExitStatus::Success)
@@ -96,6 +100,7 @@ impl InitArgs {
     fn run_check(
         &self,
         config_path: Option<PathBuf>,
+        wrapper: Option<ConfigConfigurerWrapper>,
     ) -> anyhow::Result<(CommandExitStatus, Vec<crate::error::error::Error>)> {
         info!("Running pyrefly check...");
 
@@ -103,23 +108,26 @@ impl InitArgs {
         let check_args = check::CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
 
         // Use get to get the filtered globs and config finder
-        let (filtered_globs, config_finder) =
-            FilesArgs::get(Vec::new(), config_path, ConfigOverrideArgs::default())?;
+        let (filtered_globs, config_finder) = FilesArgs::get(
+            Vec::new(),
+            config_path,
+            ConfigOverrideArgs::default(),
+            wrapper,
+        )?;
 
         // Run the check directly
-        match check_args.run_once(filtered_globs, config_finder) {
-            Ok((status, errors)) => Ok((status, errors)),
-            Err(e) => {
-                error!("Failed to run pyrefly check: {}", e);
-                Ok((CommandExitStatus::Success, Vec::new())) // Still return success to match original behavior
-            }
+        let res = check_args.run_once(filtered_globs, config_finder);
+        if let Err(e) = &res {
+            error!("Failed to run pyrefly check: {}", e);
         }
+        res
     }
 
     fn prompt_error_suppression(
         &self,
         config_path: Option<PathBuf>,
         error_count: usize,
+        wrapper: Option<ConfigConfigurerWrapper>,
     ) -> anyhow::Result<CommandExitStatus> {
         let prompt = format!(
             "Found {error_count} errors. We can add suppression comments (e.g., `pyrefly: ignore`) to silence them for you. Would you like to suppress them? (y/N): "
@@ -138,8 +146,12 @@ impl InitArgs {
             ]);
 
             // Use get to get the filtered globs and config finder
-            let (suppress_globs, suppress_config_finder) =
-                FilesArgs::get(Vec::new(), config_path, ConfigOverrideArgs::default())?;
+            let (suppress_globs, suppress_config_finder) = FilesArgs::get(
+                Vec::new(),
+                config_path,
+                ConfigOverrideArgs::default(),
+                wrapper,
+            )?;
 
             // Run the check with suppress-errors flag
             match suppress_args.run_once(suppress_globs, suppress_config_finder) {
@@ -260,12 +272,12 @@ mod test {
 
     fn run_init_on_dir(dir: &TempDir) -> anyhow::Result<CommandExitStatus> {
         let args = InitArgs::new(dir.path().to_path_buf());
-        args.run()
+        args.run(None)
     }
 
     fn run_init_on_file(dir: &TempDir, file: &str) -> anyhow::Result<CommandExitStatus> {
         let args = InitArgs::new(dir.path().join(file));
-        args.run()
+        args.run(None)
     }
 
     fn assert_success(status: CommandExitStatus) {

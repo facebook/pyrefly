@@ -5,7 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Things defined as `Dict = _Alias()` which should really be defined as `Dict = dict`.
+//! Handling for `typing._Alias`.
+//!
+//! Things defined as `Dict = _Alias()` should really be defined as `Dict = dict`.
 //! But there are a few nuances where it is a bit different, e.g. `Dict()` doesn't create a dictionary.
 //! See <https://github.com/python/typeshed/pull/13589> for details.
 

@@ -1,12 +1,15 @@
 [patch.crates-io]
+backtrace = { git = "https://github.com/rust-lang/backtrace-rs", rev = "df979dcf80027eb047d7bb9e0874710c15009f31" }
 cxx = { git = "https://github.com/facebookexperimental/cxx.git", rev = "870ebbecad0f6be394d4f9fb9bd62b551662651a" }
 cxx-build = { git = "https://github.com/facebookexperimental/cxx.git", rev = "870ebbecad0f6be394d4f9fb9bd62b551662651a" }
 displaydoc = { git = "https://github.com/yaahc/displaydoc", rev = "7dc6e324b1788a6b7fb9f3a1953c512923a3e9f0" }
 quickcheck = { git = "https://github.com/jakoschiko/quickcheck", rev = "6ecdf5bb4b0132ce66670b4d46453aa022ea892c" }
 
 [profile.release]
+debug = 1
 lto = true
 codegen-units = 1
+strip = false
 
 [workspace]
 members = [
@@ -14,6 +17,7 @@ members = [
   "crates/pyrefly_bundled",
   "crates/pyrefly_config",
   "crates/pyrefly_derive",
+  "crates/pyrefly_graph",
   "crates/pyrefly_python",
   "crates/pyrefly_types",
   "crates/pyrefly_util",
