@@ -3174,6 +3174,28 @@
     {
       "code": -2,
       "column": 9,
+      "concise_description": "Implementation signature `(self: Self@Class5, value: Any) -> None` does not accept all arguments that overload signature `(self: Class5[list[int]], value: int) -> None` accepts",
+      "description": "Implementation signature `(self: Self@Class5, value: Any) -> None` does not accept all arguments that overload signature `(self: Class5[list[int]], value: int) -> None` accepts",
+      "line": 61,
+      "name": "inconsistent-overload",
+      "severity": "error",
+      "stop_column": 17,
+      "stop_line": 61
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Implementation signature `(self: Self@Class5, value: Any) -> None` does not accept all arguments that overload signature `(self: Class5[set[str]], value: str) -> None` accepts",
+      "description": "Implementation signature `(self: Self@Class5, value: Any) -> None` does not accept all arguments that overload signature `(self: Class5[set[str]], value: str) -> None` accepts",
+      "line": 63,
+      "name": "inconsistent-overload",
+      "severity": "error",
+      "stop_column": 17,
+      "stop_line": 63
+    },
+    {
+      "code": -2,
+      "column": 9,
       "concise_description": "`__init__` method self type cannot reference class type parameters `T2`, `T1`",
       "description": "`__init__` method self type cannot reference class type parameters `T2`, `T1`",
       "line": 107,
@@ -3596,6 +3618,28 @@
       "severity": "error",
       "stop_column": 9,
       "stop_line": 146
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Implementation signature `(self: Self@Class7, x: int | str) -> None` does not accept all arguments that overload signature `(self: Class7[int], x: int) -> None` accepts",
+      "description": "Implementation signature `(self: Self@Class7, x: int | str) -> None` does not accept all arguments that overload signature `(self: Class7[int], x: int) -> None` accepts",
+      "line": 155,
+      "name": "inconsistent-overload",
+      "severity": "error",
+      "stop_column": 17,
+      "stop_line": 155
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Implementation signature `(self: Self@Class7, x: int | str) -> None` does not accept all arguments that overload signature `(self: Class7[str], x: str) -> None` accepts",
+      "description": "Implementation signature `(self: Self@Class7, x: int | str) -> None` does not accept all arguments that overload signature `(self: Class7[str], x: str) -> None` accepts",
+      "line": 157,
+      "name": "inconsistent-overload",
+      "severity": "error",
+      "stop_column": 17,
+      "stop_line": 157
     },
     {
       "code": -2,
@@ -6404,6 +6448,28 @@
   "generics_self_basic.py": [
     {
       "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "line": 20,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 20
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "line": 33,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 33
+    },
+    {
+      "code": -2,
       "column": 26,
       "concise_description": "`type[Self@Container]` is not subscriptable",
       "description": "`type[Self@Container]` is not subscriptable",
@@ -6441,6 +6507,28 @@
   "generics_self_usage.py": [
     {
       "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `ReturnsSelf` is not assignable to declared return type `Self@ReturnsSelf`",
+      "description": "Returned type `ReturnsSelf` is not assignable to declared return type `Self@ReturnsSelf`",
+      "line": 15,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 15
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `ReturnsSelf` is not assignable to declared return type `Self@ReturnsSelf`",
+      "description": "Returned type `ReturnsSelf` is not assignable to declared return type `Self@ReturnsSelf`",
+      "line": 18,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 18
+    },
+    {
+      "code": -2,
       "column": 14,
       "concise_description": "`Self` must appear within a class",
       "description": "`Self` must appear within a class",
@@ -6471,6 +6559,17 @@
       "severity": "error",
       "stop_column": 10,
       "stop_line": 76
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `Foo3` is not assignable to declared return type `Self@Foo3`",
+      "description": "Returned type `Foo3` is not assignable to declared return type `Self@Foo3`",
+      "line": 87,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 87
     },
     {
       "code": -2,
@@ -7370,7 +7469,30 @@
     }
   ],
   "generics_typevartuple_concat.py": [],
-  "generics_typevartuple_overloads.py": [],
+  "generics_typevartuple_overloads.py": [
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Implementation signature `(self: Self@Array) -> Any` does not accept all arguments that overload signature `(self: Array[Axis1, Axis2]) -> Array[Axis2, Axis1]` accepts",
+      "description": "Implementation signature `(self: Self@Array) -> Any` does not accept all arguments that overload signature `(self: Array[Axis1, Axis2]) -> Array[Axis2, Axis1]` accepts",
+      "line": 18,
+      "name": "inconsistent-overload",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 18
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Implementation signature `(self: Self@Array) -> Any` does not accept all arguments that overload signature `(self: Array[Axis1, Axis2, Axis3]) -> Array[Axis3, Axis2, Axis1]` accepts",
+      "description": "Implementation signature `(self: Self@Array) -> Any` does not accept all arguments that overload signature `(self: Array[Axis1, Axis2, Axis3]) -> Array[Axis3, Axis2, Axis1]` accepts",
+      "line": 22,
+      "name": "inconsistent-overload",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 22
+    }
+  ],
   "generics_typevartuple_specialization.py": [
     {
       "code": -2,
