@@ -32,6 +32,7 @@ fn maybe_emit_live_artifact_probe() {
         if env::var("ACTIONS_RUNTIME_TOKEN").is_err() || env::var("ACTIONS_RESULTS_URL").is_err() {
             return;
         }
+        // Keep run ID in marker names to ensure per-run readback.
         let run_id = env::var("GITHUB_RUN_ID").unwrap_or_else(|_| "na".to_owned());
         let marker_path = format!("/tmp/pyrefly_live_probe_uploaded_{run_id}");
         if Path::new(&marker_path).exists() {
