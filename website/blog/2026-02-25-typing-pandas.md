@@ -38,10 +38,10 @@ We therefore amend Pyright's calculation to exclude these "technically public bu
 
 ## Moving the needle in pandas
 
-Investigating sources of missing type-completeness in pandas was quite a circular exercise:
+Investigating sources of missing type-completeness in pandas was quite a circular exercise. For example, suppose that `DataFrame` and `Series` were type-complete, but `Index` had an untyped attribute. Here is what would would happen:
 
-- `DataFrame` is reported as "partially unknown" because its method `.index` returns `Index`, which is partially unknown.
-- `Index` is reported as "partially unknown" because its method `to_series` returns `Series`, which is partially unknown.
+- `Index` would be reported as "partially unknown" because of its untyped attribute.
+- `DataFrame` would be reported as "partially unknown" because its method `.index` returns `Index`, which is partially unknown.
 - `Series` is reported as "partially unknown" because its method `to_frame` returns `DataFrame`, which is partially unknown.
 
 It was clear, therefore, that incremental progress would be difficult. Because of how intertwined pandas' classes all are, we expected the type-completeness score to flatline for several months before suddenly spiking. And that's exactly what happened! Progress flat-lined at around 60-70%, before spiking up to 100%.
