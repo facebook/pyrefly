@@ -58,6 +58,7 @@ use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
@@ -99,6 +100,7 @@ assert_words!(KeyClassField, 4);
 assert_bytes!(KeyClassSynthesizedFields, 4);
 assert_bytes!(KeyAnnotation, 12);
 assert_bytes!(KeyClassMetadata, 4);
+assert_bytes!(KeyDjangoRelations, 0);
 assert_bytes!(KeyClassMro, 4);
 assert_bytes!(KeyAbstractClassCheck, 4);
 assert_words!(KeyLegacyTypeParam, 1);
@@ -116,6 +118,7 @@ assert_words!(BindingClass, 15);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 9);
+assert_words!(BindingDjangoRelations, 2);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_words!(BindingClassField, 11);
@@ -147,6 +150,7 @@ pub enum AnyIdx {
     KeyUndecoratedFunctionRange(Idx<KeyUndecoratedFunctionRange>),
     KeyAnnotation(Idx<KeyAnnotation>),
     KeyClassMetadata(Idx<KeyClassMetadata>),
+    KeyDjangoRelations(Idx<KeyDjangoRelations>),
     KeyClassMro(Idx<KeyClassMro>),
     KeyAbstractClassCheck(Idx<KeyAbstractClassCheck>),
     KeyLegacyTypeParam(Idx<KeyLegacyTypeParam>),
@@ -218,6 +222,9 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyClassMetadata(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMetadata>(*idx)
             }
+            AnyIdx::KeyDjangoRelations(idx) => {
+                $self.$method::<$crate::binding::binding::KeyDjangoRelations>(*idx)
+            }
             AnyIdx::KeyClassMro(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMro>(*idx)
             }
@@ -288,6 +295,9 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyClassMetadata(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMetadata>(*idx, $($args),+)
             }
+            AnyIdx::KeyDjangoRelations(idx) => {
+                $self.$method::<$crate::binding::binding::KeyDjangoRelations>(*idx, $($args),+)
+            }
             AnyIdx::KeyClassMro(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMro>(*idx, $($args),+)
             }
@@ -331,6 +341,7 @@ impl DisplayWith<Bindings> for AnyIdx {
             Self::KeyUndecoratedFunctionRange(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyAnnotation(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMetadata(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyDjangoRelations(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMro(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyAbstractClassCheck(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyLegacyTypeParam(idx) => write!(f, "{}", ctx.display(*idx)),
@@ -351,11 +362,53 @@ pub enum AnyExportedKey {
     KeyVariance(KeyVariance),
     KeyExport(KeyExport),
     KeyClassMetadata(KeyClassMetadata),
+    KeyDjangoRelations(KeyDjangoRelations),
     KeyClassMro(KeyClassMro),
     KeyAbstractClassCheck(KeyAbstractClassCheck),
     KeyTypeAlias(KeyTypeAlias),
 }
 
+/// Represents a changed export for fine-grained incremental invalidation.
+/// This is either a name (for `KeyExport`), a class index (for class-related keys),
+/// a wildcard set change (for `from M import *`), or a name existence change.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ChangedExport {
+    /// A changed export name (from `KeyExport`). The type of this export changed.
+    Name(Name),
+    /// A changed class (from class-related keys like `KeyClassField`, `KeyClassMetadata`, etc.).
+    ClassDefIndex(ClassDefIndex),
+    /// A name was added or removed from the module's definitions.
+    /// This is detected at the Exports step, before types are computed.
+    NameExistence(Name),
+    /// The metadata of an export changed (is_reexport, implicitly_imported_submodule, deprecation, special_export).
+    /// This is detected at the Exports step by comparing Definition metadata.
+    Metadata(Name),
+    /// A changed type alias
+    TypeAliasIndex(TypeAliasIndex),
+    /// Django reverse relations changed for the module.
+    DjangoRelations,
+}
+
+impl AnyExportedKey {
+    /// Convert this key to the corresponding `ChangedExport`.
+    /// `KeyExport` maps to `ChangedExport::Name`, class-related keys map to
+    /// `ChangedExport::ClassDefIndex`, and other exported keys use their own variants.
+    pub fn to_changed_export(&self) -> ChangedExport {
+        match self {
+            AnyExportedKey::KeyExport(k) => ChangedExport::Name(k.0.clone()),
+            AnyExportedKey::KeyTParams(k) => ChangedExport::ClassDefIndex(k.0),
+            AnyExportedKey::KeyClassBaseType(k) => ChangedExport::ClassDefIndex(k.0),
+            AnyExportedKey::KeyClassField(k) => ChangedExport::ClassDefIndex(k.0),
+            AnyExportedKey::KeyClassSynthesizedFields(k) => ChangedExport::ClassDefIndex(k.0),
+            AnyExportedKey::KeyVariance(k) => ChangedExport::ClassDefIndex(k.0),
+            AnyExportedKey::KeyClassMetadata(k) => ChangedExport::ClassDefIndex(k.0),
+            AnyExportedKey::KeyDjangoRelations(_) => ChangedExport::DjangoRelations,
+            AnyExportedKey::KeyClassMro(k) => ChangedExport::ClassDefIndex(k.0),
+            AnyExportedKey::KeyAbstractClassCheck(k) => ChangedExport::ClassDefIndex(k.0),
+            AnyExportedKey::KeyTypeAlias(k) => ChangedExport::TypeAliasIndex(k.0),
+        }
+    }
+}
 /// Any key that sets `EXPORTED` to `true` should not include positions
 /// Incremental updates depend on knowing when a file's exports changed, which uses equality between exported keys
 /// Moving code around should not cause all dependencies to be re-checked
@@ -575,6 +628,22 @@ impl Keyed for KeyClassMetadata {
 impl Exported for KeyClassMetadata {
     fn to_anykey(&self) -> AnyExportedKey {
         AnyExportedKey::KeyClassMetadata(self.clone())
+    }
+}
+impl Keyed for KeyDjangoRelations {
+    const EXPORTED: bool = true;
+    type Value = BindingDjangoRelations;
+    type Answer = DjangoReverseRelationIndex;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyDjangoRelations(idx)
+    }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyDjangoRelations(self.clone()))
+    }
+}
+impl Exported for KeyDjangoRelations {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyDjangoRelations(self.clone())
     }
 }
 impl Keyed for KeyClassMro {
@@ -1461,6 +1530,22 @@ impl Ranged for KeyClassMetadata {
 impl DisplayWith<ModuleInfo> for KeyClassMetadata {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyClassMetadata(class{})", self.0)
+    }
+}
+
+/// Key for Django reverse relationship metadata within a module.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyDjangoRelations;
+
+impl Ranged for KeyDjangoRelations {
+    fn range(&self) -> TextRange {
+        TextRange::default()
+    }
+}
+
+impl DisplayWith<ModuleInfo> for KeyDjangoRelations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyDjangoRelations")
     }
 }
 
@@ -2890,6 +2975,18 @@ impl DisplayWith<Bindings> for BindingClassMetadata {
             "BindingClassMetadata({}, ..)",
             ctx.display(self.class_idx)
         )
+    }
+}
+
+/// Binding for Django relations in a module, used to synthesize reverse relationships.
+#[derive(Clone, Debug)]
+pub struct BindingDjangoRelations {
+    pub fields: Box<[Idx<KeyClassField>]>,
+}
+
+impl DisplayWith<Bindings> for BindingDjangoRelations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &Bindings) -> fmt::Result {
+        write!(f, "BindingDjangoRelations(len={})", self.fields.len())
     }
 }
 
