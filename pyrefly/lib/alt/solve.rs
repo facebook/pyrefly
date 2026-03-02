@@ -3121,6 +3121,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .collect(),
                     )
                 };
+                // Cap excessively wide inferred return types to Any. During iterative
+                // SCC solving, mutual recursion can cause union widths to grow
+                // exponentially across iterations (e.g. 74 → 1247 → 1M in sympy).
+                // Capping at 20 covers 99%+ of naturally-occurring unions while
+                // preventing pathological blowup.
+                const MAX_INFERRED_RETURN_UNION_WIDTH: usize = 20;
+                let return_ty = if return_ty.union_width() > MAX_INFERRED_RETURN_UNION_WIDTH {
+                    self.heap.mk_any_implicit()
+                } else {
+                    return_ty
+                };
                 if is_generator {
                     let yield_ty = self.unions({
                         let yield_tys =

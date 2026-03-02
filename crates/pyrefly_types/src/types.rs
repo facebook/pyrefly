@@ -839,6 +839,14 @@ impl Type {
         matches!(self, Type::Union(_))
     }
 
+    /// Returns the number of top-level alternatives in a union, or 1 for non-union types.
+    pub fn union_width(&self) -> usize {
+        match self {
+            Type::Union(u) => u.members.len(),
+            _ => 1,
+        }
+    }
+
     pub fn is_never(&self) -> bool {
         matches!(self, Type::Never(_))
     }
