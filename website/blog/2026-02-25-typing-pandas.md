@@ -71,7 +71,7 @@ The full script can be viewed [here](https://github.com/pandas-dev/pandas-stubs/
 
 ## Beyond Pyright - what about "Pyrefly report"?
 
-Pyright's verifytypes feature takes about 2 and a half minutes to run in pandas-stubs. There's room of improvement here - so much so, that the Pyrefly team is working on a [`pyrefly report`](https://pyrefly.org/en/docs/report/) which would work similarly. The `pyrefly report` API is not yet considered stable, so for now pandas-stubs uses Pyright's `--verifytypes` command, but hopefully a faster tool is on the horizon!
+Pyright's `--verifytypes` feature takes about 2 and a half minutes to run in pandas-stubs. There's room of improvement here - so much so, that the Pyrefly team is working on a [`pyrefly report`](https://pyrefly.org/en/docs/report/) which would work similarly. The `pyrefly report` API is not yet considered stable, so for now pandas-stubs uses Pyright's `--verifytypes` command, but hopefully a faster tool is on the horizon!
 
 ## Conclusion and next steps
 
