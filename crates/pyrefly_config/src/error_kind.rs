@@ -31,7 +31,8 @@ use yansi::Painted;
     Eq,
     Hash,
     Deserialize,
-    Serialize
+    Serialize,
+    ValueEnum
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -81,6 +82,8 @@ impl Severity {
 #[derive(Display, Sequence, Deserialize, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorKind {
+    /// Attempting to call a method marked with `@abstractmethod`.
+    AbstractMethodCall,
     /// Attempting to annotate a name with incompatible annotations.
     /// e.g. when a name is annotated in multiple branches of an if statement
     AnnotationMismatch,
@@ -98,6 +101,8 @@ pub enum ErrorKind {
     BadClassDefinition,
     /// Attempting to use a type that cannot be used as a contextmanager in a `with` statement.
     BadContextManager,
+    /// An entry in user-defined `__all__` does not exist in the module.
+    BadDunderAll,
     /// A function definition has some typing-related error.
     /// e.g. putting a non-default argument after a default argument.
     BadFunctionDefinition,
@@ -151,6 +156,9 @@ pub enum ErrorKind {
     InconsistentInheritance,
     /// An inconsistency between the signature of a function overload and the implementation.
     InconsistentOverload,
+    /// An inconsistency between a function parameter's type in an overload signature and its
+    /// default value in the implementation.
+    InconsistentOverloadDefault,
     /// Internal Pyrefly error.
     InternalError,
     /// Attempting to write an annotation that is invalid for some reason.
@@ -170,6 +178,8 @@ pub enum ErrorKind {
     InvalidOverload,
     /// An error related to ParamSpec definition or usage.
     InvalidParamSpec,
+    /// An error caused by an invalid match pattern.
+    InvalidPattern,
     /// A use of `typing.Self` in a context where Pyrefly does not recognize it as
     /// mapping to a valid class type.
     InvalidSelfType,
@@ -177,7 +187,7 @@ pub enum ErrorKind {
     /// e.g. calling `super(Y, x)` on an object `x` that does not match the class `Y`.
     InvalidSuperCall,
     /// Incorrect Python syntax, construct is not allowed in this position.
-    /// In many cases a syntax error will also be reported.
+    /// In many cases a parse error will also be reported.
     InvalidSyntax,
     /// An error related to type alias usage or definition.
     InvalidTypeAlias,
@@ -185,6 +195,8 @@ pub enum ErrorKind {
     InvalidTypeVar,
     /// An error caused by incorrect usage or definition of a TypeVarTuple.
     InvalidTypeVarTuple,
+    /// An error caused by a type variable being used in a position incompatible with its declared variance,
+    InvalidVariance,
     /// Attempting to use `yield` in a way that is not allowed.
     /// e.g. `yield from` with something that's not an iterable.
     InvalidYield,
@@ -197,6 +209,8 @@ pub enum ErrorKind {
     MissingImport,
     /// Accessing an attribute that does not exist on a module.
     MissingModuleAttribute,
+    /// A method overrides a parent class method but does not have the `@override` decorator.
+    MissingOverrideDecorator,
     /// The source code for an imported package is missing.
     MissingSource,
     /// We are using bundled stubs for a package but the source code is missing.
@@ -205,6 +219,11 @@ pub enum ErrorKind {
     NoAccess,
     /// Attempting to call an overloaded function, but none of the signatures match.
     NoMatchingOverload,
+    /// The SCC fixpoint iteration did not converge within the maximum number of
+    /// iterations. The inferred type may be incorrect; adding annotations can help.
+    NonConvergentRecursion,
+    /// Matching on an enum without covering all possible cases.
+    NonExhaustiveMatch,
     /// Attempting to use something that isn't a type where a type is expected.
     /// This is a very general error and should be used sparingly.
     NotAType,
@@ -214,6 +233,8 @@ pub enum ErrorKind {
     NotCallable,
     /// Attempting to use a non-iterable value as an iterable.
     NotIterable,
+    /// Accessing a `NotRequired` TypedDict key without first proving it exists.
+    NotRequiredKeyAccess,
     /// Unpacking an open TypedDict that may contain a bad key via inheritance.
     OpenUnpacking,
     /// An error related to parsing or syntax.
@@ -222,20 +243,43 @@ pub enum ErrorKind {
     ProtocolImplicitlyDefinedAttribute,
     /// The attribute exists but cannot be modified.
     ReadOnly,
+    /// Attempting to annotate or redefine a name with a type that conflicts with an existing annotation in scope.
+    Redefinition,
     /// Warning when casting a value to a type it is already compatible with.
     RedundantCast,
     /// Attempting to use value that is equivalent to True or always False in boolean context.
     RedundantCondition,
     /// Raised by a call to reveal_type().
     RevealType,
+    /// An attribute is missing a type annotation and is initialized with the `None` literal.
+    UnannotatedAttribute,
+    /// A function parameter is missing a type annotation.
+    UnannotatedParameter,
+    /// A function is missing a return type annotation.
+    UnannotatedReturn,
     /// Attempting to use a name that may be unbound or uninitialized
     UnboundName,
     /// An error caused by a keyword argument used in the wrong place.
     UnexpectedKeyword,
     /// An error caused by passing a positional argument for a keyword-only parameter.
     UnexpectedPositionalArgument,
+    /// Attempting to use a type checker directive without importing it from `typing`.
+    UnimportedDirective,
     /// Attempting to use a name that is not defined.
     UnknownName,
+    /// Identity comparison (`is` or `is not`) between types that are provably disjoint
+    /// or between literals whose comparison result is statically known.
+    UnnecessaryComparison,
+    /// A return or yield that can never be reached.
+    /// This occurs when a return/yield follows a statement that always exits,
+    /// such as return, raise, break, or continue.
+    Unreachable,
+    /// `__all__` is defined but cannot be statically analyzed.
+    UnresolvableDunderAll,
+    /// Protocols decorated with `@runtime_checkable` can be used in `isinstance` checks
+    /// The runtime only checks that an attribute with that name is present, so the
+    /// type checker must warn if the types are not compatible.
+    UnsafeOverlap,
     /// Attempting to use a feature that is not yet supported.
     Unsupported,
     /// Attempting to `del` something that cannot be deleted
@@ -246,6 +290,11 @@ pub enum ErrorKind {
     UntypedImport,
     /// Result of async function call is never used or awaited
     UnusedCoroutine,
+    /// A suppression comment is unused (no error to suppress, or specific codes are unused)
+    UnusedIgnore,
+    /// The inferred variance of a type variable does not match its declared variance.
+    /// For example, a type variable used only in covariant positions in a protocol should be declared covariant.
+    VarianceMismatch,
 }
 
 impl std::str::FromStr for ErrorKind {
@@ -281,19 +330,42 @@ impl ErrorKind {
     }
 
     pub fn default_severity(self) -> Severity {
+        // IMPORTANT: When updating these, also update error-kinds.mdx in the docs
         match self {
-            ErrorKind::RevealType => Severity::Info,
             ErrorKind::Deprecated => Severity::Warn,
-            ErrorKind::RedundantCast => Severity::Warn,
-            // TODO(rechen): re-enable this once we figure out how to make it less noisy.
-            ErrorKind::UntypedImport => Severity::Ignore,
-            ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
+            ErrorKind::ImplicitImport => Severity::Warn,
+            ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
+            ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
+            ErrorKind::NonExhaustiveMatch => Severity::Warn,
+            ErrorKind::NonConvergentRecursion => Severity::Warn,
+            ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::RedundantCast => Severity::Warn,
+            ErrorKind::RedundantCondition => Severity::Warn,
+            ErrorKind::RevealType => Severity::Info,
+            ErrorKind::UnannotatedAttribute => Severity::Ignore,
+            ErrorKind::UnannotatedParameter => Severity::Ignore,
+            ErrorKind::UnannotatedReturn => Severity::Ignore,
+            ErrorKind::UnnecessaryComparison => Severity::Warn,
+            ErrorKind::Unreachable => Severity::Warn,
+            ErrorKind::UnresolvableDunderAll => Severity::Warn,
+            // TODO: up severity to Warn when https://github.com/facebook/pyrefly/issues/1950 is fixed
+            ErrorKind::UntypedImport => Severity::Ignore,
+            ErrorKind::UnusedIgnore => Severity::Ignore,
+            ErrorKind::VarianceMismatch => Severity::Warn,
             _ => Severity::Error,
         }
+    }
+
+    /// Returns true if this error kind is a type checker directive rather than
+    /// a real diagnostic. Directives bypass suppression, baseline exclusion,
+    /// and min-severity filtering, but can still be disabled via explicit
+    /// per-kind severity overrides (e.g. `--ignore reveal-type`).
+    pub fn is_directive(self) -> bool {
+        matches!(self, ErrorKind::RevealType)
     }
 
     /// Returns the public documentation URL for this error kind.
@@ -313,6 +385,7 @@ mod tests {
     use pulldown_cmark::HeadingLevel;
     use pulldown_cmark::Parser;
     use pulldown_cmark::Tag;
+    use pulldown_cmark::TagEnd;
 
     use super::*;
     #[test]
@@ -335,14 +408,17 @@ mod tests {
         let mut last_error_kind = None;
         for event in Parser::new(&doc_contents) {
             match event {
-                Event::End(Tag::Heading(HeadingLevel::H1, ..)) => {
+                Event::End(TagEnd::Heading(HeadingLevel::H1)) => {
                     // Don't start checking for error kinds until we get past the document title
                     start = true;
                 }
-                Event::Start(Tag::Heading(HeadingLevel::H2, ..)) => {
+                Event::Start(Tag::Heading {
+                    level: HeadingLevel::H2,
+                    ..
+                }) => {
                     in_header = true;
                 }
-                Event::End(Tag::Heading(HeadingLevel::H2, ..)) => {
+                Event::End(TagEnd::Heading(HeadingLevel::H2)) => {
                     in_header = false;
                 }
                 Event::Text(doc_error_kind) if start && in_header => {

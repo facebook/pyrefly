@@ -45,6 +45,7 @@ interface SandboxResultsProps {
     pyodideStatus: PyodideStatus;
     activeTab: string;
     setActiveTab: (tab: string) => void;
+    height?: number; // Dynamic height in pixels (from resizable splitter)
 }
 
 function ErrorMessage({
@@ -132,17 +133,22 @@ export default function SandboxResults({
     pythonOutput,
     pyodideStatus,
     activeTab,
-    setActiveTab = () => { },
+    setActiveTab = () => {},
+    height,
 }: SandboxResultsProps): React.ReactElement {
     const activeToolbarTab = activeTab;
 
     const hasTypecheckErrors =
         errors !== undefined && errors !== null && errors.length > 0;
 
+    // Use dynamic height if provided, otherwise fall back to default CSS
+    const containerStyle = height ? { height: `${height}px` } : undefined;
+
     return (
         <div
             id="sandbox-results-container"
             {...stylex.props(styles.resultsContainer)}
+            style={containerStyle}
         >
             <div {...stylex.props(styles.resultsToolbar)}>
                 <ul {...stylex.props(styles.tabs, styles.tabsEnabled)}>
@@ -173,30 +179,32 @@ export default function SandboxResults({
                     <pre {...stylex.props(styles.resultBody)}>
                         <ul {...stylex.props(styles.errorsList)}>
                             {hasTypecheckErrors ? (
-                                errors.map((error, i) => (
-                                    <li
-                                        key={i}
-                                        {...stylex.props(
-                                            i > 0 && styles.errorItemSibling
-                                        )}
-                                    >
-                                        <ErrorMessage
+                                errors
+                                    .filter((error) => error.severity > 1)
+                                    .map((error, i) => (
+                                        <li
                                             key={i}
-                                            error={error}
-                                            goToDef={goToDef}
-                                        />
-                                    </li>
-                                ))
+                                            {...stylex.props(
+                                                i > 0 && styles.errorItemSibling
+                                            )}
+                                        >
+                                            <ErrorMessage
+                                                key={i}
+                                                error={error}
+                                                goToDef={goToDef}
+                                            />
+                                        </li>
+                                    ))
                             ) : (
                                 <li>
                                     {internalError
                                         ? `Pyrefly encountered an internal error: ${internalError}.`
                                         : errors === undefined ||
                                             errors === null
-                                            ? 'Pyrefly failed to fetch errors.'
-                                            : errors?.length === 0
-                                                ? 'No errors!'
-                                                : null}
+                                          ? 'Pyrefly failed to fetch errors.'
+                                          : errors?.length === 0
+                                            ? 'No errors!'
+                                            : null}
                                 </li>
                             )}
                         </ul>
@@ -211,10 +219,10 @@ export default function SandboxResults({
                         {pyodideStatus === PyodideStatus.NOT_INITIALIZED
                             ? 'No output, please press the ▶️ Run button.'
                             : pyodideStatus === PyodideStatus.INITIALIZING
-                                ? 'Loading Python interpreter...'
-                                : pyodideStatus === PyodideStatus.RUNNING
-                                    ? 'Running...'
-                                    : pythonOutput.trimStart()}
+                              ? 'Loading Python interpreter...'
+                              : pyodideStatus === PyodideStatus.RUNNING
+                                ? 'Running...'
+                                : pythonOutput.trimStart()}
                     </pre>
                 )}
                 {/* TODO (T217536145): Add JSON tab to sandbox */}

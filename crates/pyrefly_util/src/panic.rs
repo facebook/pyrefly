@@ -6,6 +6,7 @@
  */
 
 use std::backtrace::Backtrace;
+use std::io::Write;
 use std::panic::PanicHookInfo;
 use std::sync::Once;
 use std::sync::atomic::AtomicBool;
@@ -32,12 +33,20 @@ pub fn print_panic(info: &PanicHookInfo<'_>) {
     static PANIC_LOCK: Once = Once::new();
 
     PANIC_LOCK.call_once(|| {
+        // Use {:#} (alternate format) to print full backtraces including
+        // instruction pointer addresses. The default short format omits
+        // addresses, which makes backtraces from stripped binaries blank.
         error!(
-            "Thread panicked, shutting down: {info}\nBacktrace:\n{}",
+            "Thread panicked, shutting down: {info}\nBacktrace:\n{:#}",
             Backtrace::force_capture()
         );
 
-        let out = |x: &str| anstream::eprintln!("{} {x}", Paint::magenta("PANIC"));
+        // Use writeln! instead of eprintln! to avoid panicking if stderr is closed.
+        // This can happen, for example, when stderr is connected to an LSP client which
+        // closes the connection before Pyrefly language server exits.
+        let out = |x: &str| {
+            let _ = writeln!(anstream::stderr(), "{} {x}", Paint::magenta("PANIC"));
+        };
 
         out("Sorry, Pyrefly crashed, this is always a bug in Pyrefly itself.");
         if cfg!(fbcode_build) {

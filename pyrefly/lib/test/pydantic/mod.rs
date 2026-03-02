@@ -7,9 +7,11 @@
 
 #![cfg(test)]
 mod aliases;
+mod base_settings;
 mod config;
+mod dataclasses;
 mod extra;
 mod field;
 mod root_model;
-mod strict;
+mod strictness;
 mod util;

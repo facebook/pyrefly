@@ -8,7 +8,9 @@
 use std::collections::HashMap;
 
 use pyrefly_python::ast::Ast;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::types::Type;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::Stmt;
@@ -18,9 +20,21 @@ use serde::Serialize;
 use starlark_map::Hashed;
 
 use crate::binding::binding::Key;
+use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::location::PysaLocation;
+use crate::report::pysa::module::ModuleId;
 use crate::report::pysa::types::PysaType;
+use crate::report::pysa::types::is_bound_method_like;
+use crate::report::pysa::types::preprocess_type;
+
+/// Represents information about a global variable, collected in a pre-analysis step.
+/// See `GlobalVariable` for the type exported to Pysa. This only store memory-efficient information.
+#[derive(Debug, Clone)]
+pub struct GlobalVariableBase {
+    pub type_: Option<Type>,
+    pub name: Name,
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct GlobalVariable {
@@ -29,38 +43,83 @@ pub struct GlobalVariable {
     pub location: PysaLocation,
 }
 
+/// A reference to a global variable.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct GlobalVariableRef {
+    pub module_id: ModuleId,
+    pub module_name: ModuleName, // For debugging purposes only. Reader should use the module id.
+    pub name: Name,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModuleGlobalVariables(HashMap<ShortIdentifier, GlobalVariableBase>);
+
+impl ModuleGlobalVariables {
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    pub fn get(&self, short_identifier: ShortIdentifier) -> Option<&GlobalVariableBase> {
+        self.0.get(&short_identifier)
+    }
+
+    pub fn contains(&self, name: &Name) -> bool {
+        self.0.values().any(|global| global.name == *name)
+    }
+}
+
+impl GlobalVariable {
+    fn from_base(
+        identifier: ShortIdentifier,
+        base: &GlobalVariableBase,
+        context: &ModuleContext,
+    ) -> Self {
+        Self {
+            type_: base
+                .type_
+                .as_ref()
+                .map(|type_| PysaType::from_type(type_, context)),
+            location: PysaLocation::from_text_range(
+                identifier.range(),
+                &context.answers_context.module_info,
+            ),
+        }
+    }
+}
+
 fn visit_assign_target(
     target: &Expr,
-    global_variables: &mut HashMap<Name, GlobalVariable>,
-    context: &ModuleContext,
+    global_variables: &mut ModuleGlobalVariables,
+    context: &ModuleAnswersContext,
 ) {
     Ast::expr_lvalue(target, &mut |global: &ExprName| {
+        let short_identifier = ShortIdentifier::expr_name(global);
         let type_ = context
             .bindings
-            .key_to_idx_hashed_opt(Hashed::new(&Key::Definition(ShortIdentifier::expr_name(
-                global,
-            ))))
+            .key_to_idx_hashed_opt(Hashed::new(&Key::Definition(short_identifier)))
             .and_then(|idx| context.answers.get_idx(idx));
         if let Some(type_) = type_.as_ref()
-            && type_.ty().is_type_variable()
+            && (type_.ty().is_raw_legacy_type_variable() || is_bound_method_like(type_.ty()))
         {
-            // Don't export type variable globals.
+            // Don't export:
+            // - Type variable, such as `T = TypeVar("T")`
+            // - Aliases to bound method, such as `inst = Random(); random = inst.random`
             return;
         }
-        let location = PysaLocation::new(context.module_info.display_range(global.range()));
         global_variables
-            .entry(global.id.clone())
-            .or_insert(GlobalVariable {
-                type_: type_.map(|type_| PysaType::from_type(type_.ty(), context)),
-                location,
+            .0
+            .entry(short_identifier)
+            .or_insert(GlobalVariableBase {
+                type_: type_.map(|type_| preprocess_type(type_.ty(), context)),
+                name: global.id.clone(),
             });
     });
 }
 
 fn visit_statement(
     stmt: &Stmt,
-    global_variables: &mut HashMap<Name, GlobalVariable>,
-    context: &ModuleContext,
+    global_variables: &mut ModuleGlobalVariables,
+    context: &ModuleAnswersContext,
 ) {
     match stmt {
         Stmt::Assign(assign) => {
@@ -128,16 +187,39 @@ fn visit_statement(
 
 fn visit_statements<'a>(
     statements: impl Iterator<Item = &'a Stmt>,
-    global_variables: &mut HashMap<Name, GlobalVariable>,
-    context: &ModuleContext,
+    global_variables: &mut ModuleGlobalVariables,
+    context: &ModuleAnswersContext,
 ) {
     for stmt in statements {
         visit_statement(stmt, global_variables, context);
     }
 }
 
-pub fn export_global_variables(context: &ModuleContext) -> HashMap<Name, GlobalVariable> {
-    let mut global_variables = HashMap::new();
+/// Collect global variables for a single module.
+pub fn collect_global_variables_for_module(
+    context: &ModuleAnswersContext,
+) -> ModuleGlobalVariables {
+    let mut global_variables = ModuleGlobalVariables::new();
     visit_statements(context.ast.body.iter(), &mut global_variables, context);
+    global_variables
+}
+
+pub fn export_global_variables(
+    module_global_variables: &ModuleGlobalVariables,
+    context: &ModuleContext,
+) -> HashMap<Name, GlobalVariable> {
+    let mut global_variables = HashMap::new();
+    for (short_identifier, global) in &module_global_variables.0 {
+        let new_global = GlobalVariable::from_base(*short_identifier, global, context);
+        global_variables
+            .entry(global.name.clone())
+            .and_modify(|existing_global: &mut GlobalVariable| {
+                // Preserve the entry with the lowest location.
+                if new_global.location < existing_global.location {
+                    *existing_global = new_global.clone();
+                }
+            })
+            .or_insert(new_global);
+    }
     global_variables
 }

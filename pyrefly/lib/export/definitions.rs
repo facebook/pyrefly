@@ -13,13 +13,16 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::Deprecation;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
+use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprStarred;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Operator;
 use ruff_python_ast::Pattern;
@@ -28,11 +31,13 @@ use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtExpr;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::types::globals::ImplicitGlobal;
 
@@ -76,6 +81,19 @@ pub enum DefinitionStyle {
     Delete,
 }
 
+impl DefinitionStyle {
+    /// Returns true if this definition style represents an import from another module.
+    pub fn is_import(&self) -> bool {
+        matches!(
+            self,
+            DefinitionStyle::ImportAs(..)
+                | DefinitionStyle::ImportAsEq(..)
+                | DefinitionStyle::Import(..)
+                | DefinitionStyle::ImportModule(..)
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Definition {
     /// If the definition occurs multiple times, the lowest `DefinitionStyle` is used (e.g. prefer `Local`).
@@ -88,6 +106,10 @@ pub struct Definition {
     /// If the first statement in a definition (class, function) is a string literal, PEP 257 convention
     /// states that is the docstring.
     pub docstring_range: Option<TextRange>,
+    /// The range of the textually last assignment site. When there is only one
+    /// definition, this equals `range`. Used to determine if a variable is
+    /// reassigned after a given point (e.g. after a nested function definition).
+    pub last_range: TextRange,
 }
 
 impl Definition {
@@ -104,6 +126,10 @@ impl Definition {
         if other < self.style {
             self.style = other;
             self.range = range;
+        }
+        // Track the textually last assignment site.
+        if range.start() > self.last_range.start() {
+            self.last_range = range;
         }
         // If we've merged a Definition, then there are multiple definition sites.
         //
@@ -130,15 +156,33 @@ pub struct Definitions {
     /// All the modules that are imported with `from x import *`.
     pub import_all: SmallMap<ModuleName, TextRange>,
     /// The `__all__` variable contents.
-    pub dunder_all: Vec<DunderAllEntry>,
+    pub dunder_all: DunderAll,
     /// If the containing module `foo` is a __init__ file, then this is the set of submodules
     /// that are guaranteed to be imported under `foo` when `foo` is itself imported in downstream
     /// files.
     pub implicitly_imported_submodules: SmallSet<Name>,
     /// Deprecated names that are defined in this module.
-    pub deprecated: SmallSet<Name>,
+    pub deprecated: SmallMap<Name, Deprecation>,
+    /// Names that are marked `Final`
+    pub final_names: SmallSet<Name>,
     /// Special exports defined in this module
     pub special_exports: SmallMap<Name, SpecialExport>,
+    /// Names that are read (not just defined) in this scope.
+    /// Used to compute implicit captures when entering nested function scopes.
+    pub name_reads: SmallSet<Name>,
+}
+
+/// Whether `__all__` was explicitly defined by the user or synthesized from module definitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum DunderAllKind {
+    /// `__all__` was synthesized from module definitions
+    #[default]
+    Inferred,
+    /// `__all__` was explicitly defined by the user
+    Specified,
+    /// `__all__` was explicitly defined but could not be statically analyzed.
+    /// The range points to the RHS of the assignment, for diagnostics.
+    Unresolvable(TextRange),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -149,26 +193,68 @@ pub enum DunderAllEntry {
     Remove(TextRange, Name),
 }
 
+/// The `__all__` variable contents with tracking of whether it was user-specified.
+#[derive(Debug, Clone, Default)]
+pub struct DunderAll {
+    pub kind: DunderAllKind,
+    pub entries: Vec<DunderAllEntry>,
+}
+
 impl DunderAllEntry {
     fn is_all(x: &Expr) -> bool {
         matches!(x, Expr::Name(ExprName { id, .. }) if id == &dunder::ALL)
     }
 
-    fn as_list(x: &Expr) -> Vec<Self> {
+    /// Try to statically resolve the RHS of an `__all__` assignment.
+    /// Returns `None` if the expression cannot be analyzed (e.g. a function call,
+    /// variable reference, or comprehension). Returns `Some(entries)` on success,
+    /// including `Some(vec![])` for legitimately empty containers like `[]` or `()`.
+    fn as_list(x: &Expr) -> Option<Vec<Self>> {
         match x {
-            Expr::List(x) => x.elts.iter().filter_map(DunderAllEntry::as_item).collect(),
-            Expr::Tuple(x) => x.elts.iter().filter_map(DunderAllEntry::as_item).collect(),
+            Expr::List(x) => Self::as_elts_all(&x.elts),
+            Expr::Tuple(x) => Self::as_elts_all(&x.elts),
             Expr::Attribute(ExprAttribute { value, attr, .. })
                 if let Expr::Name(name) = &**value
                     && attr.id == dunder::ALL =>
             {
-                vec![DunderAllEntry::Module(
+                Some(vec![DunderAllEntry::Module(
                     name.range,
                     ModuleName::from_name(&name.id),
-                )]
+                )])
             }
-            _ => Vec::new(),
+            Expr::BinOp(ExprBinOp {
+                left,
+                op: Operator::Add,
+                right,
+                ..
+            }) => {
+                let mut result = Self::as_list(left)?;
+                result.extend(Self::as_list(right)?);
+                Some(result)
+            }
+            _ => None,
         }
+    }
+
+    /// Handle a single element inside a list/tuple literal in `__all__`.
+    /// For starred expressions like `*foo.__all__`, delegates to `as_list` to
+    /// recursively resolve the unpacked value. For everything else, tries
+    /// `as_item` (which handles string literals).
+    fn as_elts(x: &Expr) -> Option<Vec<Self>> {
+        match x {
+            Expr::Starred(ExprStarred { value, .. }) => Self::as_list(value),
+            _ => Self::as_item(x).map(|item| vec![item]),
+        }
+    }
+
+    /// Try to resolve all elements of a list/tuple. Returns `None` if any
+    /// element is unresolvable.
+    fn as_elts_all(elts: &[Expr]) -> Option<Vec<Self>> {
+        let mut result = Vec::new();
+        for elt in elts {
+            result.extend(Self::as_elts(elt)?);
+        }
+        Some(result)
     }
 
     fn as_item(x: &Expr) -> Option<Self> {
@@ -181,15 +267,17 @@ impl DunderAllEntry {
     }
 }
 
-struct DefinitionsBuilder<'a> {
+struct DefinitionsBuilder {
     module_name: ModuleName,
     is_init: bool,
-    sys_info: &'a SysInfo,
+    sys_info: SysInfo,
     inner: Definitions,
 }
 
 fn is_private_name(name: &Name) -> bool {
-    name.starts_with('_')
+    // Names starting with underscore are private, except for a single underscore `_`
+    // which is commonly used as an alias for gettext.
+    name.starts_with('_') && name.as_str() != "_"
 }
 
 fn implicitly_imported_submodule(
@@ -203,13 +291,25 @@ fn implicitly_imported_submodule(
         .cloned()
 }
 
-fn is_deprecated_decorator(decorator: &Decorator) -> bool {
-    decorator.expression.as_call_expr().is_some_and(|x| {
-        x.func.as_name_expr().is_some_and(|x| {
-            x.id == "deprecated"
-                || x.id == "warnings.deprecated"
-                || x.id == "typing_extensions.deprecated"
-        })
+/// Check if an annotation refers to `Final` or `Final[T]`,
+/// handling both bare names and qualified forms like `typing.Final`.
+fn is_final_annotation(annotation: &Expr) -> bool {
+    let target = match annotation {
+        Expr::Subscript(sub) => &*sub.value,
+        other => other,
+    };
+    let (base, value) = match target {
+        Expr::Name(x) => (None, &x.id),
+        Expr::Attribute(ExprAttribute {
+            value: box Expr::Name(base),
+            attr,
+            ..
+        }) => (Some(&base.id), &attr.id),
+        _ => return false,
+    };
+    SpecialExport::new(value).is_some_and(|special| {
+        special == SpecialExport::Final
+            && base.is_none_or(|base| special.defined_in(ModuleName::from_name(base)))
     })
 }
 
@@ -221,7 +321,7 @@ fn is_overload_decorator(decorator: &Decorator) -> bool {
 }
 
 impl Definitions {
-    pub fn new(x: &[Stmt], module_name: ModuleName, is_init: bool, sys_info: &SysInfo) -> Self {
+    pub fn new(x: &[Stmt], module_name: ModuleName, is_init: bool, sys_info: SysInfo) -> Self {
         let mut builder = DefinitionsBuilder {
             module_name,
             sys_info,
@@ -229,6 +329,7 @@ impl Definitions {
             inner: Definitions::default(),
         };
         builder.stmts(x);
+
         builder.inner
     }
 
@@ -250,20 +351,26 @@ impl Definitions {
                     style: DefinitionStyle::ImplicitGlobal,
                     needs_anywhere: false,
                     docstring_range: None,
+                    last_range: TextRange::default(),
                 },
             );
         }
     }
 
-    /// Ensure that `dunder_all` is populated, synthesising it if `__all__` isn't present.
+    /// Ensure that `dunder_all` is populated, synthesising it if `__all__` isn't present
+    /// or if `__all__` is present but cannot be statically analyzed.
     pub fn ensure_dunder_all(&mut self, style: ModuleStyle) {
-        if self.definitions.contains_key(&dunder::ALL) {
-            // Explicitly defined, so don't redefine it
+        if self.definitions.contains_key(&dunder::ALL)
+            && !matches!(self.dunder_all.kind, DunderAllKind::Unresolvable(_))
+        {
+            // Explicitly defined and resolvable, so don't redefine it
             return;
         }
         if style == ModuleStyle::Executable {
             for (x, range) in self.import_all.iter() {
-                self.dunder_all.push(DunderAllEntry::Module(*range, *x));
+                self.dunder_all
+                    .entries
+                    .push(DunderAllEntry::Module(*range, *x));
             }
         }
         for (name, def) in self.definitions.iter() {
@@ -277,9 +384,20 @@ impl Definitions {
                     ))
             {
                 self.dunder_all
+                    .entries
                     .push(DunderAllEntry::Name(def.range, name.clone()));
             }
         }
+    }
+
+    /// Names that are read but not locally defined in this scope.
+    /// These are implicit captures from enclosing scopes.
+    pub fn implicit_captures(&self) -> SmallSet<Name> {
+        self.name_reads
+            .iter()
+            .filter(|name| !self.definitions.contains_key(name.as_str()))
+            .cloned()
+            .collect()
     }
 
     /// Add these names to `dunder_all`, if they are defined in the module.
@@ -287,13 +405,14 @@ impl Definitions {
         for name in extra {
             if let Some(def) = self.definitions.get(name) {
                 self.dunder_all
+                    .entries
                     .push(DunderAllEntry::Name(def.range, name.clone()))
             }
         }
     }
 }
 
-impl<'a> DefinitionsBuilder<'a> {
+impl DefinitionsBuilder {
     fn stmts(&mut self, xs: &[Stmt]) {
         for x in xs {
             self.stmt(x);
@@ -317,6 +436,7 @@ impl<'a> DefinitionsBuilder<'a> {
                     style,
                     needs_anywhere: false,
                     docstring_range: body.and_then(Docstring::range_from_stmts),
+                    last_range: range,
                 });
             }
         }
@@ -363,6 +483,38 @@ impl<'a> DefinitionsBuilder<'a> {
         Ast::pattern_lvalue(x, &mut |x| {
             self.add_identifier(x, DefinitionStyle::Unannotated(SymbolKind::Variable))
         });
+    }
+
+    /// Resolve bare module names in `DunderAllEntry::Module` entries to their
+    /// fully qualified names using import definitions in scope.
+    ///
+    /// When `as_list` sees `foo.__all__`, it creates `ModuleName::from_name("foo")`
+    /// which is a bare unqualified name. If `foo` was imported via a relative import
+    /// (e.g. `from . import foo`), the actual module is fully qualified (e.g. `pkg.foo`).
+    /// This method resolves such bare names using the definitions already collected.
+    fn resolve_module_entries(&self, entries: &mut [DunderAllEntry]) {
+        for entry in entries.iter_mut() {
+            if let DunderAllEntry::Module(_, module_name) = entry {
+                let key = Name::new(module_name.as_str());
+                if let Some(def) = self.inner.definitions.get(&key) {
+                    match &def.style {
+                        DefinitionStyle::Import(base) | DefinitionStyle::ImportAsEq(base) => {
+                            *module_name = base.append(&key);
+                        }
+                        DefinitionStyle::ImportAs(base, original) => {
+                            if ModuleName::from_name(original) == *base {
+                                // `import X as Y` — base is already the full module path
+                                *module_name = *base;
+                            } else {
+                                // `from X import Y as Z` — base is the source module
+                                *module_name = base.append(original);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
     fn stmt(&mut self, x: &Stmt) {
@@ -428,7 +580,10 @@ impl<'a> DefinitionsBuilder<'a> {
                             && a.name.id == dunder::ALL
                             && let Some(module) = name
                         {
-                            self.inner.dunder_all = vec![DunderAllEntry::Module(x.range, module)]
+                            self.inner.dunder_all = DunderAll {
+                                kind: DunderAllKind::Specified,
+                                entries: vec![DunderAllEntry::Module(x.range, module)],
+                            }
                         }
                         self.add_identifier(a.asname.as_ref().unwrap_or(&a.name), style);
                     }
@@ -440,13 +595,11 @@ impl<'a> DefinitionsBuilder<'a> {
                 decorator_list,
                 ..
             }) => {
-                // If the class is decorated with `@deprecated`, we mark it as deprecated.
-                let mut is_deprecated = false;
-                for d in decorator_list {
-                    is_deprecated = is_deprecated || is_deprecated_decorator(d);
-                }
-                if is_deprecated {
-                    self.inner.deprecated.insert(name.id.clone());
+                if let Some(decoration) = decorator_list
+                    .iter()
+                    .find_map(|d| parse_deprecation(&d.expression))
+                {
+                    self.inner.deprecated.insert(name.id.clone(), decoration);
                 }
                 self.add_identifier_with_body(
                     name,
@@ -478,7 +631,21 @@ impl<'a> DefinitionsBuilder<'a> {
                 for t in &x.targets {
                     self.expr_lvalue(t);
                     if DunderAllEntry::is_all(t) {
-                        self.inner.dunder_all = DunderAllEntry::as_list(&x.value);
+                        match DunderAllEntry::as_list(&x.value) {
+                            Some(mut entries) => {
+                                self.resolve_module_entries(&mut entries);
+                                self.inner.dunder_all = DunderAll {
+                                    kind: DunderAllKind::Specified,
+                                    entries,
+                                };
+                            }
+                            None => {
+                                self.inner.dunder_all = DunderAll {
+                                    kind: DunderAllKind::Unresolvable(x.value.range()),
+                                    entries: Vec::new(),
+                                };
+                            }
+                        }
                     }
                 }
             }
@@ -489,8 +656,23 @@ impl<'a> DefinitionsBuilder<'a> {
                 if let Some(v) = &x.value
                     && DunderAllEntry::is_all(&x.target)
                 {
-                    self.inner.dunder_all = DunderAllEntry::as_list(v.as_ref());
+                    match DunderAllEntry::as_list(v.as_ref()) {
+                        Some(mut entries) => {
+                            self.resolve_module_entries(&mut entries);
+                            self.inner.dunder_all = DunderAll {
+                                kind: DunderAllKind::Specified,
+                                entries,
+                            };
+                        }
+                        None => {
+                            self.inner.dunder_all = DunderAll {
+                                kind: DunderAllKind::Unresolvable(v.range()),
+                                entries: Vec::new(),
+                            };
+                        }
+                    }
                 }
+                let has_final_annotation = is_final_annotation(&x.annotation);
                 match &*x.target {
                     Expr::Name(x) => {
                         self.add_name(
@@ -501,6 +683,9 @@ impl<'a> DefinitionsBuilder<'a> {
                                 ShortIdentifier::expr_name(x),
                             ),
                         );
+                        if has_final_annotation {
+                            self.inner.final_names.insert(x.id.clone());
+                        }
                     }
                     _ => self.expr_lvalue(&x.target),
                 }
@@ -508,9 +693,19 @@ impl<'a> DefinitionsBuilder<'a> {
             Stmt::AugAssign(x) => {
                 self.named_in_expr(&x.value);
                 if DunderAllEntry::is_all(&x.target) && x.op == Operator::Add {
-                    self.inner
-                        .dunder_all
-                        .extend(DunderAllEntry::as_list(&x.value));
+                    match DunderAllEntry::as_list(&x.value) {
+                        Some(mut entries) => {
+                            self.resolve_module_entries(&mut entries);
+                            self.inner.dunder_all.kind = DunderAllKind::Specified;
+                            self.inner.dunder_all.entries.extend(entries);
+                        }
+                        None => {
+                            self.inner.dunder_all = DunderAll {
+                                kind: DunderAllKind::Unresolvable(x.value.range()),
+                                entries: Vec::new(),
+                            };
+                        }
+                    }
                 }
                 if let Expr::Name(name) = &*x.target {
                     self.add_name(
@@ -541,21 +736,36 @@ impl<'a> DefinitionsBuilder<'a> {
                     && arguments.len() == 1
                     && arguments.keywords.is_empty()
                 {
+                    self.inner.dunder_all.kind = DunderAllKind::Specified;
                     match attr.as_str() {
-                        "extend" => self
-                            .inner
-                            .dunder_all
-                            .extend(DunderAllEntry::as_list(&arguments.args[0])),
-                        "append" => self
-                            .inner
-                            .dunder_all
-                            .extend(DunderAllEntry::as_item(&arguments.args[0])),
+                        "extend" => match DunderAllEntry::as_list(&arguments.args[0]) {
+                            Some(mut entries) => {
+                                self.resolve_module_entries(&mut entries);
+                                self.inner.dunder_all.entries.extend(entries);
+                            }
+                            None => {
+                                self.inner.dunder_all = DunderAll {
+                                    kind: DunderAllKind::Unresolvable(arguments.args[0].range()),
+                                    entries: Vec::new(),
+                                };
+                            }
+                        },
+                        "append" => match DunderAllEntry::as_item(&arguments.args[0]) {
+                            Some(entry) => self.inner.dunder_all.entries.push(entry),
+                            None => {
+                                self.inner.dunder_all = DunderAll {
+                                    kind: DunderAllKind::Unresolvable(arguments.args[0].range()),
+                                    entries: Vec::new(),
+                                };
+                            }
+                        },
                         "remove" => {
                             if let Some(DunderAllEntry::Name(range, remove)) =
                                 DunderAllEntry::as_item(&arguments.args[0])
                             {
                                 self.inner
                                     .dunder_all
+                                    .entries
                                     .push(DunderAllEntry::Remove(range, remove));
                             }
                         }
@@ -564,7 +774,9 @@ impl<'a> DefinitionsBuilder<'a> {
                 }
             }
             Stmt::TypeAlias(x) => {
-                self.named_in_expr(&x.value);
+                // Note: We don't call named_in_expr here because named expressions
+                // are not allowed inside type aliases (PEP 695). Type aliases create
+                // their own scope, so any walrus operators would be scoped there anyway.
                 if matches!(&*x.name, Expr::Name(_)) {
                     self.expr_lvalue(&x.name)
                 }
@@ -576,15 +788,21 @@ impl<'a> DefinitionsBuilder<'a> {
                 ..
             }) => {
                 let mut is_overload = false;
-                let mut is_deprecated = false;
+                let mut deprecated_decoration = None;
                 for d in decorator_list {
                     is_overload = is_overload || is_overload_decorator(d);
-                    is_deprecated = is_deprecated || is_deprecated_decorator(d);
+                    if deprecated_decoration.is_none() {
+                        deprecated_decoration = parse_deprecation(&d.expression);
+                    }
                 }
                 // If the function is not an overload and decorated with
                 // `@deprecated`, we mark it as deprecated.
-                if is_deprecated && !is_overload {
-                    self.inner.deprecated.insert(name.id.clone());
+                if let Some(deprecated_decoration) = deprecated_decoration
+                    && !is_overload
+                {
+                    self.inner
+                        .deprecated
+                        .insert(name.id.clone(), deprecated_decoration);
                 }
                 self.add_identifier_with_body(
                     name,
@@ -627,7 +845,8 @@ impl<'a> DefinitionsBuilder<'a> {
             }
             Stmt::If(x) => {
                 self.named_in_expr(&x.test);
-                for (_, body) in self.sys_info.pruned_if_branches(x) {
+                let sys_info = self.sys_info;
+                for (_, body) in sys_info.pruned_if_branches(x) {
                     self.stmts(body);
                 }
                 return; // We went through the relevant branches already
@@ -649,30 +868,56 @@ impl<'a> DefinitionsBuilder<'a> {
                     self.named_in_expr(c);
                 }
             }
-            Stmt::Return(..)
-            | Stmt::Pass(..)
-            | Stmt::Break(..)
-            | Stmt::Continue(..)
-            | Stmt::IpyEscapeCommand(..) => {}
+            Stmt::Return(x) => {
+                if let Some(value) = &x.value {
+                    self.named_in_expr(value);
+                }
+            }
+            Stmt::Pass(..) | Stmt::Break(..) | Stmt::Continue(..) | Stmt::IpyEscapeCommand(..) => {}
         }
         x.recurse(&mut |xs| self.stmt(xs))
     }
 
-    /// Accumulate names defined by walrus operators in an expression.
+    /// Accumulate names defined by walrus operators in an expression,
+    /// and collect all name reads for implicit capture analysis.
     fn named_in_expr(&mut self, x: &Expr) {
         match x {
             Expr::Named(expr_named) => {
                 self.expr_lvalue(&expr_named.target);
+                expr_named.value.recurse(&mut |x| self.named_in_expr(x));
             }
-            Expr::Lambda(..)
-            | Expr::SetComp(..)
-            | Expr::DictComp(..)
-            | Expr::ListComp(..)
-            | Expr::Generator(..) => {
-                // These expressions define a scope, so walrus operators only define a name
-                // within that scope, not in the surrounding statement's scope.
+            Expr::Name(name) => {
+                self.inner.name_reads.insert(name.id.clone());
+            }
+            // Lambda defines a fully separate scope; walrus operators inside
+            // a lambda are scoped to the lambda, not the enclosing scope.
+            Expr::Lambda(..) => {}
+            // Per PEP 572, walrus operators inside comprehensions assign to
+            // the enclosing scope, not the comprehension scope. We recurse
+            // to find walrus targets but skip name reads (those belong to the
+            // comprehension's own scope).
+            Expr::SetComp(..) | Expr::DictComp(..) | Expr::ListComp(..) | Expr::Generator(..) => {
+                x.recurse(&mut |x| self.walrus_targets_in_expr(x))
             }
             _ => x.recurse(&mut |x| self.named_in_expr(x)),
+        }
+    }
+
+    /// Find walrus operator targets inside comprehension bodies.
+    /// Only accumulates definitions (not name reads), since name reads inside
+    /// comprehensions belong to the comprehension's own scope.
+    fn walrus_targets_in_expr(&mut self, x: &Expr) {
+        match x {
+            Expr::Named(expr_named) => {
+                self.expr_lvalue(&expr_named.target);
+                expr_named
+                    .value
+                    .recurse(&mut |x| self.walrus_targets_in_expr(x));
+            }
+            // Stop at lambdas — walrus inside lambda-in-comprehension is
+            // scoped to the lambda.
+            Expr::Lambda(..) => {}
+            _ => x.recurse(&mut |x| self.walrus_targets_in_expr(x)),
         }
     }
 }
@@ -735,9 +980,9 @@ mod tests {
             &Ast::parse(contents, PySourceType::Python).0.body,
             module_name,
             is_init,
-            &SysInfo::default(),
+            SysInfo::default(),
         );
-        res.dunder_all.iter_mut().for_each(unrange);
+        res.dunder_all.entries.iter_mut().for_each(unrange);
         res
     }
 
@@ -812,6 +1057,8 @@ match x():
                 "qux", "moo", "mod", "x", "z", "w", "n", "X", "Y", "case0", "case1",
             ],
         );
+        // No explicit __all__, so it should be inferred
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Inferred);
     }
 
     #[test]
@@ -830,9 +1077,10 @@ match (x7 := 42):
     case int(): pass
 (x8 := 42)[y] = 42
 assert (x9 := 42), (x10 := "oops")
+# Named expressions inside type aliases and lambdas should not appear in definitions.
 type y = (x11 := int)
-# Named expressions inside expression-level scopes should not appear in definitions.
-lambda x: (z := 42)
+lambda x: (z2 := 42)
+# PEP 572: Named expressions inside comprehensions DO assign to the enclosing scope.
 {z := "str" for _ in [1]}
 {(z := "str"):1 for _ in [1]}
 [z for x in [1, 2, 3] if z := x > 2]
@@ -842,7 +1090,7 @@ lambda x: (z := 42)
         assert_definition_names(
             &defs,
             &[
-                "x0", "y", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
+                "x0", "y", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "z",
             ],
         );
     }
@@ -866,6 +1114,8 @@ def bar(x: str) -> str: ...
         );
         assert_import_all(&defs, &[]);
         assert_definition_names(&defs, &["overload", "foo", "bar"]);
+        // No explicit __all__, so it should be inferred
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Inferred);
 
         let foo = defs.definitions.get(&Name::new_static("foo")).unwrap();
         assert_eq!(
@@ -902,6 +1152,7 @@ __all__.remove('r')
         );
         assert_import_all(&defs, &["foo"]);
         assert_definition_names(&defs, &["a", "b", "__all__"]);
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Specified);
 
         let loc = TextRange::default();
         let a = &DunderAllEntry::Name(loc, Name::new_static("a"));
@@ -909,7 +1160,7 @@ __all__.remove('r')
         let foo = &DunderAllEntry::Module(loc, ModuleName::from_str("foo"));
         let r = &DunderAllEntry::Remove(loc, Name::new_static("r"));
         assert_eq!(
-            defs.dunder_all.map(|x| x),
+            defs.dunder_all.entries.map(|x| x),
             vec![a, b, a, b, foo, a, b, foo, a, r]
         );
     }
@@ -925,10 +1176,11 @@ __all__: list[str] = ["a", "b"]
         "#,
         );
         assert_definition_names(&defs, &["a", "b", "__all__"]);
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Specified);
         let loc = TextRange::default();
         let a = &DunderAllEntry::Name(loc, Name::new_static("a"));
         let b = &DunderAllEntry::Name(loc, Name::new_static("b"));
-        assert_eq!(defs.dunder_all.map(|x| x), vec![a, b]);
+        assert_eq!(defs.dunder_all.entries.map(|x| x), vec![a, b]);
     }
 
     #[test]
@@ -942,14 +1194,61 @@ from _collections_abc import __all__ as __all__
         );
         assert_import_all(&defs, &["_collections_abc"]);
         assert_definition_names(&defs, &["__all__"]);
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Specified);
 
         assert_eq!(
-            defs.dunder_all,
+            defs.dunder_all.entries,
             vec![DunderAllEntry::Module(
                 TextRange::default(),
                 ModuleName::from_str("_collections_abc")
             )]
         );
+    }
+
+    #[test]
+    fn test_all_binop_add_two_lists() {
+        let defs = calculate_unranged_definitions_with_defaults(
+            r#"
+a = 1
+b = 2
+__all__ = ["a"] + ["b"]
+"#,
+        );
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Specified);
+        let loc = TextRange::default();
+        let a = &DunderAllEntry::Name(loc, Name::new_static("a"));
+        let b = &DunderAllEntry::Name(loc, Name::new_static("b"));
+        assert_eq!(defs.dunder_all.entries.map(|x| x), vec![a, b]);
+    }
+
+    #[test]
+    fn test_all_binop_add_with_module() {
+        let defs = calculate_unranged_definitions_with_defaults(
+            r#"
+a = 1
+__all__ = ["a"] + foo.__all__
+"#,
+        );
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Specified);
+        let loc = TextRange::default();
+        let a = &DunderAllEntry::Name(loc, Name::new_static("a"));
+        let foo = &DunderAllEntry::Module(loc, ModuleName::from_str("foo"));
+        assert_eq!(defs.dunder_all.entries.map(|x| x), vec![a, foo]);
+    }
+
+    #[test]
+    fn test_all_starred_in_list() {
+        let defs = calculate_unranged_definitions_with_defaults(
+            r#"
+a = 1
+__all__ = [*foo.__all__, "a"]
+"#,
+        );
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Specified);
+        let loc = TextRange::default();
+        let foo = &DunderAllEntry::Module(loc, ModuleName::from_str("foo"));
+        let a = &DunderAllEntry::Name(loc, Name::new_static("a"));
+        assert_eq!(defs.dunder_all.entries.map(|x| x), vec![foo, a]);
     }
 
     #[test]
@@ -1026,5 +1325,97 @@ del x
         assert_definition_names(&defs, &["x"]);
         let x = defs.definitions.get(&Name::new_static("x")).unwrap();
         assert!(!x.needs_anywhere);
+    }
+
+    #[test]
+    fn test_all_unresolvable_function_call() {
+        let defs = calculate_unranged_definitions_with_defaults(
+            r#"
+def generate_all():
+    return ["x"]
+x = 1
+__all__ = generate_all()
+"#,
+        );
+        assert!(
+            matches!(defs.dunder_all.kind, DunderAllKind::Unresolvable(_)),
+            "A function call RHS should produce Unresolvable"
+        );
+    }
+
+    #[test]
+    fn test_all_unresolvable_variable() {
+        let defs = calculate_unranged_definitions_with_defaults(
+            r#"
+x = 1
+some_var = ["x"]
+__all__ = some_var
+"#,
+        );
+        assert!(
+            matches!(defs.dunder_all.kind, DunderAllKind::Unresolvable(_)),
+            "A bare variable RHS should produce Unresolvable"
+        );
+    }
+
+    #[test]
+    fn test_all_empty_list_is_specified() {
+        let defs = calculate_unranged_definitions_with_defaults(
+            r#"
+x = 1
+__all__ = []
+"#,
+        );
+        assert_eq!(
+            defs.dunder_all.kind,
+            DunderAllKind::Specified,
+            "An empty list literal should produce Specified, not Unresolvable"
+        );
+        assert!(defs.dunder_all.entries.is_empty());
+    }
+
+    #[test]
+    fn test_all_empty_tuple_is_specified() {
+        let defs = calculate_unranged_definitions_with_defaults(
+            r#"
+x = 1
+__all__ = ()
+"#,
+        );
+        assert_eq!(
+            defs.dunder_all.kind,
+            DunderAllKind::Specified,
+            "An empty tuple literal should produce Specified, not Unresolvable"
+        );
+        assert!(defs.dunder_all.entries.is_empty());
+    }
+
+    #[test]
+    fn test_all_unresolvable_list_comprehension() {
+        let defs = calculate_unranged_definitions_with_defaults(
+            r#"
+x = 1
+__all__ = [name for name in dir() if not name.startswith("_")]
+"#,
+        );
+        assert!(
+            matches!(defs.dunder_all.kind, DunderAllKind::Unresolvable(_)),
+            "A list comprehension RHS should produce Unresolvable"
+        );
+    }
+
+    #[test]
+    fn test_all_unresolvable_annotated() {
+        let defs = calculate_unranged_definitions_with_defaults(
+            r#"
+x = 1
+some_var = ["x"]
+__all__: list[str] = some_var
+"#,
+        );
+        assert!(
+            matches!(defs.dunder_all.kind, DunderAllKind::Unresolvable(_)),
+            "An annotated assignment with unresolvable RHS should produce Unresolvable"
+        );
     }
 }

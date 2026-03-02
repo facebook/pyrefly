@@ -22,10 +22,10 @@ def g(a: list[str], b: list[int]) -> None:
 testcase!(
     test_first_use_reads_name_twice_narrowing,
     r#"
-from typing import reveal_type
+from typing import assert_type
 def test(x: list[int]) -> tuple[list[int], int]:
     y = x
-    return (y, 0 if 0 in reveal_type(y) else 1)  # E: revealed type: list[int]
+    return (y, 0 if 0 in assert_type(y, list[int]) else 1)
 "#,
 );
 
@@ -78,6 +78,17 @@ x = []
 def f(x: list[Literal[4]]): ...
 f(x)
 assert_type(x, list[Literal[4]])
+"#,
+);
+
+testcase!(
+    test_empty_list_append_pow,
+    r#"
+from typing import assert_type
+def f(a: int, b: int, c: int) -> None:
+    x = []
+    x.append(pow(a, b, c))
+    assert_type(x, list[int])
 "#,
 );
 
@@ -330,4 +341,159 @@ assert_type(z, None)
 from chained_first_use_with_inconsistent_pins import x
 assert_type(x, list[Any])
 "#,
+);
+
+// Tests for partial type inference in loops.
+// These tests verify that first-use detection works correctly through phi nodes
+// when BoundName bindings are deferred until after AST traversal.
+
+testcase!(
+    test_partial_type_first_use_in_for_loop,
+    r#"
+from typing import assert_type
+x = []
+for i in range(5):
+    x.append(i)
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    test_partial_type_first_use_in_while_loop,
+    r#"
+from typing import assert_type
+x = []
+i = 0
+while i < 5:
+    x.append(i)
+    i += 1
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    test_partial_type_first_use_in_nested_loops,
+    r#"
+from typing import assert_type
+x = []
+for i in range(5):
+    for j in range(3):
+        x.append(i + j)
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    test_partial_type_secondary_read_in_loop,
+    r#"
+from typing import assert_type
+x = []
+for i in range(5):
+    x.append(i)
+    y = len(x)  # secondary read of x, doesn't reassign
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    test_empty_container_constructor_call,
+    r#"
+from typing import assert_type
+
+x = list()
+x.append(1)
+assert_type(x, list[int])
+
+y = set()
+y.add(2)
+assert_type(y, set[int])
+
+z = dict()
+z['k'] = 3
+assert_type(z, dict[str, int])
+    "#,
+);
+
+testcase!(
+    bug = "Container contents should be promoted",
+    test_redundant_empty_container_constructor_call,
+    r#"
+from typing import assert_type
+
+x = list([])
+x.append(1)
+assert_type(x, list[int])  # E: assert_type(list[Literal[1]], list[int])
+
+y = dict({})
+y['k'] = 3
+assert_type(y, dict[str, int])  # E: assert_type(dict[Literal['k'], Literal[3]], dict[str, int])
+    "#,
+);
+
+testcase!(
+    test_container_of_unknown_function_parameter,
+    r#"
+from typing import Any, assert_type
+def f(a):
+    x = list(a)
+    x.append(1)
+    assert_type(x, list[Any])
+
+    y = set(a)
+    y.add(2)
+    assert_type(y, set[Any])
+
+    z = dict(a)
+    z['k'] = 3
+    assert_type(z, dict[Any, Any])
+    "#,
+);
+
+testcase!(
+    test_partial_quantified_in_function,
+    r#"
+from typing import assert_type
+
+def f[T](x: T | None) -> list[T]: ...
+
+x = f(None)
+x.append(5)
+assert_type(x, list[int])
+    "#,
+);
+
+testcase!(
+    test_partial_quantified_in_class_constructor,
+    r#"
+from typing import assert_type
+
+class A[T]:
+    def __new__[T2](cls, x: T2 | None) -> A[T2]: ...
+    def add(self, x: T): ...
+
+a = A(None)
+a.add(5)
+assert_type(a, A[int])
+    "#,
+);
+
+testcase!(
+    test_should_not_infer_on_first_use_if_solved_to_any,
+    r#"
+from typing import Any, assert_type
+
+def f[T](x: list[T]) -> list[T]:
+    return x
+
+def g(x: Any):
+    y = f(x)
+    y.append(1)
+    assert_type(y, list[Any])
+
+# Make sure Any::Error behaves the same way as Any::Explicit
+def h(x: ThisIsANameError):  # E: Could not find name
+    y = f(x)
+    y.append(1)
+    assert_type(y, list[Any])
+    "#,
 );

@@ -1,0 +1,6 @@
+from conans.client.graph.graph import BINARY_SKIP as BINARY_SKIP, RECIPE_CONSUMER as RECIPE_CONSUMER, RECIPE_EDITABLE as RECIPE_EDITABLE, RECIPE_VIRTUAL as RECIPE_VIRTUAL
+from conans.client.output import Color as Color
+from conans.model.ref import PackageReference as PackageReference
+
+def _get_python_requires(conanfile): ...
+def print_graph(deps_graph, out) -> None: ...

@@ -80,6 +80,34 @@ Point3(1)  # E: Missing argument `y` in function `Point3.__new__`
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2734
+// Starred expressions in field lists can't be fully resolved statically,
+// so the namedtuple has dynamic fields. String literals alongside the
+// starred expression are still extracted as known fields.
+testcase!(
+    test_named_tuple_spread_fields_from_namedtuple,
+    r#"
+import collections
+from typing import assert_type, Any
+
+BaseFieldInfo = collections.namedtuple("BaseFieldInfo", ["name", "type_code", "size"])
+ExtendedFieldInfo = collections.namedtuple(
+    "ExtendedFieldInfo",
+    [*BaseFieldInfo._fields, "extra", "comment"],
+)
+
+# Constructor accepts any args since field positions are unknown
+info = ExtendedFieldInfo("col1", 1, 100, "extra_val", "a comment")
+# Also valid: fewer args, since we can't know which are required
+info2 = ExtendedFieldInfo("col1", 1)
+# Known fields are accessible as attributes
+assert_type(info.extra, Any)
+assert_type(info.comment, Any)
+# Unknown fields are also accessible (dynamic)
+assert_type(info.anything, Any)
+    "#,
+);
+
 testcase!(
     test_named_tuple_functional_rename,
     r#"
@@ -98,8 +126,8 @@ testcase!(
     r#"
 from typing import NamedTuple, Required, NotRequired, ReadOnly, ClassVar, Final
 class MyTuple(NamedTuple):
-    v: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict or NamedTuple members
-    w: Final[int]  # E: `Final` may not be used for TypedDict or NamedTuple members
+    v: ClassVar[int]  # E: `ClassVar` may not be used for NamedTuple members
+    w: Final[int]  # E: `Final` may not be used for NamedTuple members
     x: NotRequired[int]  # E: `NotRequired` may only be used for TypedDict members
     y: Required[int]  # E: `Required` may only be used for TypedDict members
     z: ReadOnly[int]  # E: `ReadOnly` may only be used for TypedDict members
@@ -163,8 +191,8 @@ class Pair2[T](NamedTuple):
     y: T
 
 def test(p: Pair, p2: Pair2[bytes]):
-    reveal_type(p.__iter__)  # E: BoundMethod[Pair, (self: Pair) -> Iterable[int | str]]
-    reveal_type(p2.__iter__)  # E: BoundMethod[Pair2[bytes], (self: Pair2[bytes]) -> Iterable[bytes | int]]
+    reveal_type(p.__iter__)  # E: (self: Pair) -> Iterable[int | str]
+    reveal_type(p2.__iter__)  # E: (self: Pair2[bytes]) -> Iterable[bytes | int]
     "#,
 );
 
@@ -211,6 +239,23 @@ Pair(y="foo")  # E: Missing argument `x` in function `Pair.__new__`
 );
 
 testcase!(
+    test_named_tuple_custom_new_default,
+    r#"
+from typing import NamedTuple, Self
+
+class A(NamedTuple):
+    x: int
+
+class B(A):
+    def __new__(cls, x: int = 0) -> Self:
+        return super().__new__(cls, x)
+
+B()
+B(1)
+    "#,
+);
+
+testcase!(
     test_named_tuple_defaults,
     r#"
 from collections import namedtuple
@@ -218,6 +263,14 @@ x = 2
 Tup = namedtuple("Tup", ["a", "b"], defaults=(None, x))
 Tup2 = namedtuple("Tup2", ["a", "b"], defaults=[None, x])
 "#,
+);
+
+testcase!(
+    test_too_many_defaults,
+    r#"
+from collections import namedtuple
+Tup = namedtuple("Tup", ["a", "b"], defaults=(1, 2, 3))  # E: Too many defaults: expected at most 2, got 3
+    "#,
 );
 
 testcase!(
@@ -348,7 +401,6 @@ class B(A):
 );
 
 testcase!(
-    bug = "The asserted type is wrong",
     test_custom_iter,
     r#"
 from typing import assert_type, Iterator, NamedTuple
@@ -357,7 +409,7 @@ class NT(NamedTuple):
     def __iter__(self) -> Iterator[str]: ...
 nt = NT(0)
 for x in nt:
-    assert_type(x, str)  # E: assert_type(int, str)
+    assert_type(x, str)
     "#,
 );
 
@@ -365,9 +417,9 @@ testcase!(
     test_collections_namedtuple_unexpected_keyword,
     r#"
 from collections import namedtuple
-X = namedtuple('X', [], nonsense=True)  # E: Unrecognized argument `nonsense` for named tuple definition
+X = namedtuple('X', [], nonsense=True)  # E: Unrecognized keyword argument `nonsense` in named tuple definition
 def f(kwargs):
-    Y = namedtuple('Y', [], **kwargs)  # E: Unrecognized argument for named tuple definition
+    Y = namedtuple('Y', [], **kwargs)  # E: Unpacking is not supported in named tuple definition
     "#,
 );
 
@@ -377,4 +429,244 @@ testcase!(
 from typing import NamedTuple
 N = NamedTuple('N', ())
     "#,
+);
+
+testcase!(
+    test_bad_field_def,
+    r#"
+from typing import NamedTuple
+N = NamedTuple('N', [('x', int, 'oops')])  # E: Expected (name, type) pair, got 3-tuple
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_collections_namedtuple,
+    r#"
+from collections import namedtuple
+from typing import Any, assert_type
+
+class Point(namedtuple("Point", ["x", "y"])):
+    pass
+
+p = Point(1, 2)
+assert_type(p.x, Any)
+assert_type(p.y, Any)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_typing_namedtuple,
+    r#"
+from typing import NamedTuple, assert_type
+
+class Point(NamedTuple("Point", [("x", int), ("y", str)])):
+    pass
+
+p = Point(1, "hello")
+assert_type(p.x, int)
+assert_type(p.y, str)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_with_extra_methods,
+    r#"
+from typing import NamedTuple, assert_type
+
+class Point(NamedTuple("Point", [("x", int), ("y", int)])):
+    def length_squared(self) -> int:
+        return self.x ** 2 + self.y ** 2
+
+p = Point(3, 4)
+assert_type(p.length_squared(), int)
+assert_type(p.x, int)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_string_fields,
+    r#"
+from collections import namedtuple
+from typing import Any, assert_type
+
+class Pair(namedtuple("Pair", "a b")):
+    pass
+
+p = Pair(1, 2)
+assert_type(p.a, Any)
+assert_type(p.b, Any)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_name_mismatch,
+    r#"
+from collections import namedtuple
+
+class Foo(namedtuple("Bar", ["x", "y"])):
+    pass
+
+f = Foo(1, 2)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_malformed,
+    r#"
+from collections import namedtuple
+from typing import NamedTuple
+
+class A(namedtuple()):  # E: Invalid expression form for base class
+    pass
+
+class B(namedtuple(42, ["x", "y"])):  # E: Invalid expression form for base class
+    pass
+
+class C(NamedTuple(42, [("x", int)])):  # E: Invalid expression form for base class
+    pass
+
+class D(namedtuple("D", 42)):  # E: Expected valid functional named tuple definition
+    pass
+
+class E(NamedTuple("E", 42)):  # E: Expected valid functional named tuple definition
+    pass
+    "#,
+);
+
+testcase!(
+    test_named_tuple_dynamic_fields,
+    r#"
+from collections import namedtuple
+from typing import assert_type, Any
+
+fields_map = (('x', int), ('y', str))
+foo1 = namedtuple('foo1', (name for name, _ in fields_map))  # E: Expected valid functional named tuple definition
+
+fields = [name for name, _ in fields_map]
+foo2 = namedtuple('foo2', fields)  # E: Expected valid functional named tuple definition
+
+instance1 = foo1()
+instance2 = foo2()
+
+# attribute access
+assert_type(instance1.x, Any)
+assert_type(instance1.anything, Any)
+assert_type(instance2.y, Any)
+
+# indexing
+assert_type(instance1[0], Any)
+assert_type(instance2[1], Any)
+    "#,
+);
+
+testcase!(
+    bug = "namedtuple + mixin is valid in CPython but we reject it",
+    test_named_tuple_base_class_call_with_mixin,
+    r#"
+from typing import assert_type, Any
+from collections import namedtuple
+
+class Mixin:
+    def greet(self) -> str:
+        return "hi"
+
+class B(namedtuple("B", ["x"]), Mixin):  # E: Named tuples do not support multiple inheritance
+    pass
+
+b = B(1)
+assert_type(b.x, Any)
+assert_type(b.greet(), str)
+    "#,
+);
+
+testcase!(
+    bug = "only the first namedtuple base's fields should be used",
+    test_named_tuple_base_class_call_two_namedtuples,
+    r#"
+from typing import assert_type, Any
+from collections import namedtuple
+
+class C(namedtuple("C1", ["x"]), namedtuple("C2", ["y"])):  # E: Named tuples do not support multiple inheritance
+    pass
+
+c = C(1)
+assert_type(c.x, Any)
+    "#,
+);
+
+testcase!(
+    bug = "only the first namedtuple base's fields should be used",
+    test_named_tuple_base_class_call_namedtuple_mixin_namedtuple,
+    r#"
+from typing import assert_type, Any
+from collections import namedtuple
+
+class Mixin:
+    def greet(self) -> str:
+        return "hi"
+
+class D(namedtuple("D1", ["x"]), Mixin, namedtuple("D2", ["y"])):  # E: Named tuples do not support multiple inheritance
+    pass
+
+d = D(1)
+assert_type(d.x, Any)
+assert_type(d.greet(), str)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/832
+testcase!(
+    test_functional_namedtuple_base_class_with_new,
+    r#"
+from collections import namedtuple
+
+class QConfig(namedtuple("QConfig", ["activation", "weight"])):
+    def __new__(cls, activation, weight):
+        return super().__new__(cls, activation, weight)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2622
+// `import collections.abc` should not break special handling of `collections.namedtuple`.
+testcase!(
+    test_named_tuple_collections_submodule_import,
+    r#"
+import collections
+import collections.abc
+
+Point = collections.namedtuple("Point", ["x", "y"])
+p = Point(x=1, y=2)
+    "#,
+);
+
+// `import collections.abc` alone (without explicit `import collections`) should still
+// allow `collections.namedtuple` to work, since `import X.Y` implicitly imports `X`.
+testcase!(
+    test_named_tuple_collections_submodule_import_only,
+    r#"
+import collections.abc
+
+Point = collections.namedtuple("Point", ["x", "y"])
+p = Point(x=1, y=2)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2455
+testcase!(
+    test_named_tuple_typevar_bound,
+    r#"
+from typing import TypeVar, NamedTuple, assert_type
+
+MyCustomModelT = TypeVar(name="MyCustomModelT", bound=NamedTuple)
+
+class ImplementedModel(NamedTuple):
+    name: str
+    age: int
+
+def arbitrary_method(_name: str, _age: int, _model: type[MyCustomModelT]) -> MyCustomModelT:
+    return _model(name=_name, age=_age)  # E: Unexpected keyword argument `name` in function `tuple.__new__`  # E: Unexpected keyword argument `age` in function `tuple.__new__`
+
+o = arbitrary_method("a", 2, ImplementedModel)
+assert_type(o, ImplementedModel)
+"#,
 );

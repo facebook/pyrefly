@@ -28,6 +28,7 @@ use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
 use tracing::info;
 
+use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::state::load::LspFile;
@@ -130,11 +131,12 @@ impl<'a> RenameUsageVisitor<'a> {
 /// If the client supports `workspace.workspaceEdit.documentChanges`, the response will use
 /// `document_changes` instead of `changes` for better ordering guarantees and version checking.
 pub fn will_rename_files(
-    state: &Arc<State>,
+    state: &State,
     transaction: &Transaction<'_>,
-    _open_files: &Arc<RwLock<HashMap<std::path::PathBuf, Arc<LspFile>>>>,
+    _open_files: &RwLock<HashMap<std::path::PathBuf, Arc<LspFile>>>,
     params: RenameFilesParams,
     supports_document_changes: bool,
+    path_remapper: Option<&PathRemapper>,
 ) -> Option<WorkspaceEdit> {
     info!(
         "will_rename_files called with {} file(s)",
@@ -200,7 +202,7 @@ pub fn will_rename_files(
 
         let config = state
             .config_finder()
-            .python_file(old_module_name, &module_path);
+            .python_file(old_handle.module_kind(), &module_path);
         let new_module_name = ModuleName::from_path(
             &new_path,
             config.search_path().chain(
@@ -265,7 +267,7 @@ pub fn will_rename_files(
                 let edits_for_file = visitor.take_edits();
 
                 if !edits_for_file.is_empty() {
-                    let uri = module_info_to_uri(&module_info)?;
+                    let uri = module_info_to_uri(&module_info, path_remapper)?;
                     info!(
                         "    Found {} import(s) to update in {}",
                         edits_for_file.len(),

@@ -4,6 +4,13 @@ title: Migrating from Mypy
 description: How to switch your type checker configuration from Mypy to Pyrefly
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 ## Running Pyrefly
 
 Like mypy, pyrefly can be given a list of files to check:
@@ -131,9 +138,44 @@ This is equivalent to mypy's `disable_error_code`, though of course the [error c
 
 This table shows the mapping between mypy's [error codes](https://mypy.readthedocs.io/en/stable/error_code_list.html) and pyrefly's [error kinds](error-kinds.mdx).
 
-This table will be expanded as more diagnostics are supported.
-
 | Mypy | Pyrefly |
 | ------- | ------- |
+| abstract | bad-instantiation |
+| arg-type | bad-argument-type |
+| assert-type | assert-type |
+| assignment | bad-assignment |
 | attr-defined | missing-attribute |
+| await-not-async | not-async |
+| call-arg | bad-argument-count |
+| call-overload | no-matching-overload |
+| deprecated | deprecated |
+| dict-item | bad-typed-dict |
+| import | missing-import |
+| import-not-found | missing-import |
+| import-untyped | untyped-import |
+| index | bad-index, unsupported-operation |
+| metaclass | invalid-inheritance |
+| name-defined | unknown-name |
+| no-overload-impl | invalid-overload |
+| no-untyped-def | implicit-any |
+| operator | unsupported-operation |
+| override | bad-override |
+| possibly-undefined | unbound-name |
+| redundant-cast | redundant-cast |
+| redundant-expr | redundant-condition |
+| return | bad-return |
+| return-value | bad-return |
+| syntax | parse-error |
+| top-level-await | not-async |
+| truthy-bool | redundant-condition |
+| truthy-function | redundant-condition |
+| truthy-iterable | redundant-condition |
+| type-arg | implicit-any |
+| type-var | bad-specialization |
+| typeddict-readonly-mutated | read-only |
+| typeddict-unknown-key | bad-typed-dict-key |
 | union-attr | missing-attribute |
+| unused-awaitable | unused-coroutine |
+| unused-coroutine | unused-coroutine |
+| used-before-def | unbound-name |
+| valid-type | invalid-annotation |

@@ -19,7 +19,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if cls.class_object().is_builtin("tuple") && cls.targs().as_slice().len() == 1 {
             let tuple_targ: Type = cls.targs().as_slice()[0].clone();
-            return Some(Tuple::unbounded(tuple_targ));
+            return Some(Tuple::Unbounded(Box::new(tuple_targ)));
         }
         let class_bases = self.get_base_types_for_class(cls.class_object());
         if let Some(Type::Tuple(tuple)) = class_bases
@@ -28,7 +28,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .map(Type::Tuple)
             .map(|ty| cls.targs().substitute_into(ty))
         {
-            return Some(simplify_tuples(tuple));
+            return Some(simplify_tuples(tuple, self.heap));
         }
         None
     }

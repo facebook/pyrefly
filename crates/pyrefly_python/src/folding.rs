@@ -11,7 +11,9 @@ use ruff_python_ast::Stmt;
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::visitor::walk_body;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 
+use crate::comment_section::CommentSection;
 use crate::docstring::Docstring;
 use crate::module::Module;
 
@@ -147,7 +149,58 @@ pub fn folding_ranges(
         Visitor::visit_stmt(&mut collector, stmt);
     }
 
+    // Add comment section folding ranges
+    add_comment_section_ranges(&mut collector.ranges, module);
+
     collector.ranges.sort_by_key(|(range, _)| range.start());
     collector.ranges.dedup();
     collector.ranges
+}
+
+/// Add folding ranges for comment sections.
+/// Each section folds from its line to the line before the next section at the same or higher level.
+fn add_comment_section_ranges(
+    ranges: &mut Vec<(TextRange, Option<FoldingRangeKind>)>,
+    module: &Module,
+) {
+    let sections = CommentSection::extract_from_module(module);
+
+    for (i, section) in sections.iter().enumerate() {
+        // Find the end of this section by looking for the next section at the same or higher level
+        let end_line = if let Some(next_section_idx) = sections[i + 1..]
+            .iter()
+            .position(|s| s.level <= section.level)
+        {
+            // End at the line before the next section
+            let next_section = &sections[i + 1 + next_section_idx];
+            if next_section.line_number > 0 {
+                next_section.line_number - 1
+            } else {
+                next_section.line_number
+            }
+        } else {
+            // No next section at same/higher level, fold to end of file
+            module.lined_buffer().line_count() as u32 - 1
+        };
+
+        // Only create a folding range if there's at least one line to fold
+        if end_line > section.line_number {
+            let line_start = module.lined_buffer().line_start(
+                pyrefly_util::lined_buffer::LineNumber::from_zero_indexed(section.line_number),
+            );
+            let line_end = if (end_line as usize) < module.lined_buffer().line_count() {
+                module.lined_buffer().line_start(
+                    pyrefly_util::lined_buffer::LineNumber::from_zero_indexed(end_line + 1),
+                )
+            } else {
+                // Last line in file - use the actual end of content
+                // Safely convert length to TextSize
+                TextSize::try_from(module.contents().len())
+                    .unwrap_or_else(|_| TextSize::new(u32::MAX))
+            };
+
+            let range = TextRange::new(line_start, line_end);
+            ranges.push((range, Some(FoldingRangeKind::Region)));
+        }
+    }
 }

@@ -6,13 +6,25 @@
  */
 
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 
+/// Indicates whether a `Final` variable was initialized at the point of declaration
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, TypeEq, Visit, VisitMut, PartialOrd, Ord
+)]
+pub enum IsFinalVariableInitialized {
+    Yes,
+    No,
+}
+
 /// Represents the specific reason why a field is read-only, to provide better error messages
-#[derive(Debug, Clone, PartialEq, Eq, Hash, TypeEq, VisitMut)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, TypeEq, Visit, VisitMut, PartialOrd, Ord
+)]
 pub enum ReadOnlyReason {
     /// Field is marked with a `Final` qualifier
-    Final,
+    Final(IsFinalVariableInitialized),
     /// Field is marked with a `ReadOnly` qualifier
     ReadOnlyQualifier,
     /// Field is a frozen dataclass member
@@ -34,7 +46,12 @@ pub enum ReadOnlyReason {
 impl ReadOnlyReason {
     pub fn error_message(&self) -> String {
         match self {
-            ReadOnlyReason::Final => "This field is marked as Final".to_owned(),
+            ReadOnlyReason::Final(IsFinalVariableInitialized::Yes) => {
+                "This field is marked as Final, and an initial value is provided".to_owned()
+            }
+            ReadOnlyReason::Final(IsFinalVariableInitialized::No) => {
+                "This field is marked as Final".to_owned()
+            }
             ReadOnlyReason::ReadOnlyQualifier => "This field is marked as ReadOnly".to_owned(),
             ReadOnlyReason::FrozenDataclass => "This field is a frozen dataclass member".to_owned(),
             ReadOnlyReason::NamedTuple => "This field is a NamedTuple member".to_owned(),

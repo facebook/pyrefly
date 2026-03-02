@@ -3,6 +3,13 @@ title: Installation
 description: How to install Pyrefly
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 Pyrefly is available on [PyPI](https://pypi.org/project/pyrefly/) with a new release every Monday. We often release more frequently when shipping new features and bug fixes.
 
 ## Install
@@ -11,7 +18,7 @@ You can use `uv`, `poetry`, `pip`, `pixi` or `conda` to install Pyrefly. The fol
 
 * `pyrefly init` will update your `pyproject.toml` file (or create a `pyrefly.toml` file) in your project directory, including some basic configuration. It will also attempt to [migrate](../migrating-to-pyrefly) your existing type checker configuration.
 * `pyrefly check --summarize-errors` will run the Pyrefly type checker on your project, providing a list of type errors and a summary of error types. The `--summarize-errors` flag is optional, remove it if you don't want summary stats.
-* `pyrefly check --suppress-errors` will mark all existing errors as ignored, allowing you to start with a clean check.
+* `pyrefly suppress` will mark all existing errors as ignored, allowing you to start with a clean check. (You can also use `pyrefly check --suppress-errors`.)
 
 
 Simply `cd` into your project directory and run:
@@ -34,7 +41,7 @@ import TabItem from '@theme/TabItem';
     pyrefly check --summarize-errors
     ```
   </TabItem>
-  <TabItem value="uv" label="UV">
+  <TabItem value="uv" label="uv">
     ```
     uvx pyrefly init
     uvx pyrefly check --summarize-errors
@@ -71,10 +78,10 @@ Then, run `pyrefly check` again, and the tool will use your configuration option
 
 The tool may return a list of type errors; this is perfectly normal. You have a few options at this point:
 
-1. Use `# pyrefly: ignore` comments to silence the errors. This will get your project to a clean type-checking state, and you can reduce the number of errors as you go. We've included a script that can do this for you:
+1. Use `# pyrefly: ignore` comments to silence the errors. This will get your project to a clean type-checking state, and you can reduce the number of errors as you go. We've included a command that can do this for you:
 
 ```
-pyrefly check --suppress-errors
+pyrefly suppress
 ```
 
 2. Use extra configuration options to silence specific categories of errors or exclude files with more errors than average.
@@ -87,7 +94,7 @@ Upgrading the version of Pyrefly you're using or a third-party library you depen
 
 ```
 # Step 1
-pyrefly check --suppress-errors
+pyrefly suppress
 ```
 
 ```
@@ -97,7 +104,7 @@ pyrefly check --suppress-errors
 
 ```
 # Step 3
-pyrefly check --remove-unused-ignores
+pyrefly suppress --remove-unused
 ```
 
 Repeat these steps until you achieve a clean formatting run and a clean type check.
@@ -149,8 +156,19 @@ jobs:
       - name: Install Pyrefly
         run: pip install pyrefly
 
-      - name: Run Pyrefly Type Checker
-        run: pyrefly check
+        - name: Run Pyrefly Type Checker
+          run: pyrefly check
+```
+
+### Inline PR Annotations
+
+Pyrefly can emit errors as [GitHub Actions workflow commands](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions) so that type errors appear inline when reviewing pull requests.
+
+To enable this, pass `--output-format=github`:
+
+```
+        - name: Run Pyrefly Type Checker
+          run: pyrefly check --output-format=github
 ```
 
 ### A few notes about this setup:
@@ -159,8 +177,8 @@ jobs:
 - Simply drop in `pyrefly check` to existing workflows that build and test your environment.
 
 ```
-      - name: Run Pyrefly Type Checker
-        run: pyrefly check
+        - name: Run Pyrefly Type Checker
+          run: pyrefly check
 ```
 
 - Your `pyrefly.toml` or Pyrefly configs in your `pyproject.toml` will be automatically detected. Learn how to [configure Pyrefly here](../configuration).
@@ -175,63 +193,8 @@ We maintain a dedicated repository for this integration here: [facebook/pyrefly-
 
 That repository contains:
 
-- Two pre-commit hooks depending on your setup
+- A pre-commit hook
 - Installation instructions
 - Example configuration snippets for your project and CI
 
 To get started, follow the setup steps in the repo’s [README](https://github.com/facebook/pyrefly-pre-commit#readme).
-
-### Install pre-commit
-
-You only need to do this once per clone. You can also include this in your as script or in your build/setup commands like `setup.py` or `setup.cfg` so it's installed for everyone.
-
-```bash
-# 1. Once per clone
-pip install pre-commit          # or pipx install pre‑commit
-pre-commit install              # writes .git/hooks/pre-commit
-
-# 2. Upgrade hooks when you bump versions in YAML
-pre-commit autoupdate
-
-# 3. Manual full run (good before the first push or when you add the hook)
-pre-commit run --all-files
-```
-
-### Testing the hook
-
-**1. Introduce a cheap error**
-
-Edit any `.py` file and deliberately return `None` where the function is annotated to return `int`.
-
-```python
-def foo() -> int:
-    return None
-```
-
-**2. Stage & commit**
-
-Output:
-
-```bash
-git add test.py
-git commit -m "test: pre‑commit hook check"
-pyrefly check............................................................Failed
-- hook id: pyrefly-typecheck-system
-- exit code: 1
-
- INFO Checking project configured at `/myproject/pyrefly.toml`
-ERROR /myproject/test.py:2:12-16: Returned type `None` is not assignable to declared return type `int` [bad-return]
-```
-
-You should see Pyrefly fail as above, preventing the commit from being created.
-
-**3. Fix & recommit**
-
-Correct the code, `git add` it again, and re‑run `git commit`; this time the hook passes.
-
-### How this helps your project
-
-- **Earlier feedback**: Developers see type mistakes immediately, not minutes later in CI.
-- **Consistent enforcement**: Every commit—local or on CI—runs the same pyrefly check command.
-- **Clean history**: Because Pyrefly checks before the commit object is created, you avoid "fix type error" fix‑up commits.
-- **Culture of quality**: Blocking problems at the doorstep raises the baseline for new contributors.

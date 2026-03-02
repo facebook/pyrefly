@@ -189,6 +189,8 @@ class _Params(TypedDict, total=False):
     default_search: str | None
     dynamic_mpd: bool | None
     extractor_args: Mapping[str, Mapping[str, Any]] | None
+    js_runtimes: dict[str, dict[str, str] | None]
+    remote_components: set[Literal["ejs:npm", "ejs:github"]]
     encoding: str | None
     extract_flat: bool | Literal["in_playlist", "discard", "discard_in_playlist"] | None
     live_from_start: bool | None
@@ -208,7 +210,7 @@ class _Params(TypedDict, total=False):
     download_ranges: Callable[[Any, YoutubeDL], Iterator[_DownloadRange]] | None
     force_keyframes_at_cuts: bool | None
     list_thumbnails: str | None
-    playlist_items: Collection[int] | None
+    playlist_items: str | None
     match_filter: NotRequired[Callable[[Mapping[str, Any], bool], str | None] | Callable[[Mapping[str, Any]], str | None] | None]
     color: _Color | None
     ffmpeg_location: str | None

@@ -1,0 +1,19 @@
+from _typeshed import Incomplete
+from conans.errors import ConanException as ConanException, NotFoundException as NotFoundException
+from conans.search.search import filter_by_revision as filter_by_revision, filter_outdated as filter_outdated, search_packages as search_packages, search_recipes as search_recipes
+from typing import NamedTuple
+
+class Search:
+    _cache: Incomplete
+    _remote_manager: Incomplete
+    _remotes: Incomplete
+    def __init__(self, cache, remote_manager, remotes) -> None: ...
+    def search_recipes(self, pattern, remote_name: Incomplete | None = ..., case_sensitive: bool = ...): ...
+
+    class remote_ref(NamedTuple):
+        ordered_packages: Incomplete
+        recipe_hash: Incomplete
+    def search_packages(self, ref: Incomplete | None = ..., remote_name: Incomplete | None = ..., query: Incomplete | None = ..., outdated: bool = ...): ...
+    def _search_packages_in_local(self, ref: Incomplete | None = ..., query: Incomplete | None = ..., outdated: bool = ...): ...
+    def _search_packages_in_all(self, ref: Incomplete | None = ..., query: Incomplete | None = ..., outdated: bool = ...): ...
+    def _search_packages_in(self, remote_name, ref: Incomplete | None = ..., query: Incomplete | None = ..., outdated: bool = ...): ...

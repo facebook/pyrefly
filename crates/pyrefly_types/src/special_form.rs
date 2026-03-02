@@ -20,6 +20,8 @@ use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::name::Name;
 
 use crate::annotation::Qualifier;
+use crate::heap::TypeHeap;
+use crate::literal::LitStyle;
 use crate::types::NeverStyle;
 use crate::types::Type;
 
@@ -72,12 +74,14 @@ impl SpecialForm {
         SpecialForm::from_str(name.as_str()).ok()
     }
 
-    pub fn to_type(self) -> Type {
+    pub fn to_type(self, heap: &TypeHeap) -> Type {
         match self {
-            SpecialForm::LiteralString => Type::type_form(Type::LiteralString),
-            SpecialForm::Never => Type::type_form(Type::Never(NeverStyle::Never)),
-            SpecialForm::NoReturn => Type::type_form(Type::Never(NeverStyle::NoReturn)),
-            _ => Type::type_form(Type::SpecialForm(self)),
+            SpecialForm::LiteralString => {
+                heap.mk_type_form(heap.mk_literal_string(LitStyle::Explicit))
+            }
+            SpecialForm::Never => heap.mk_type_form(heap.mk_never_style(NeverStyle::Never)),
+            SpecialForm::NoReturn => heap.mk_type_form(heap.mk_never_style(NeverStyle::NoReturn)),
+            _ => heap.mk_type_form(heap.mk_special_form(self)),
         }
     }
 
@@ -104,6 +108,18 @@ impl SpecialForm {
             Self::Required => Some(Qualifier::Required),
             Self::TypeAlias => Some(Qualifier::TypeAlias),
             _ => None,
+        }
+    }
+
+    pub fn isinstance_safe(self) -> bool {
+        match self {
+            Self::Callable
+            | Self::Generic
+            | Self::Protocol
+            | Self::Tuple
+            | Self::Type
+            | Self::Union => true,
+            _ => false,
         }
     }
 }

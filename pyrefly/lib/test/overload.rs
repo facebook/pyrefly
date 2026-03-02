@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+// @lint-ignore-every SPELL
+
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -111,6 +113,27 @@ def test(o: C):
 );
 
 testcase!(
+    test_overload_method_name_matches_class,
+    r#"
+from typing import assert_type, overload
+
+class A:
+    @overload
+    def B(self, x: int) -> B: ...
+    @overload
+    def B(self, x: str) -> B: ...
+    def B(self, x):
+        return B()
+
+class B:
+    x: int
+
+assert_type(A().B(0).x, int)
+assert_type(A().B("1").x, int)
+    "#,
+);
+
+testcase!(
     test_overload_arg_errors,
     r#"
 from typing import overload, assert_type
@@ -127,6 +150,86 @@ def h(x: str) -> str: ...
 assert_type(f(g(0)), int) # E: Argument `Literal[0]` is not assignable to parameter `x` with type `str`
 assert_type(f(h(0)), str) # E: Argument `Literal[0]` is not assignable to parameter `x` with type `str`
 "#,
+);
+
+testcase!(
+    test_overload_default_incompatible,
+    r#"
+from typing import Literal, overload
+
+@overload
+def foo(a: Literal[True] = ...) -> None: ...  # E: Default `Literal[False]` from implementation is not assignable to overload parameter `a` with type `Literal[True]`
+@overload
+def foo(a: Literal[False]) -> int: ...
+def foo(a: bool = False) -> None | int:
+    return 1 if not a else None
+"#,
+);
+
+testcase!(
+    test_overload_default_matches_one_signature,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int = ..., y: None = ...) -> None: ...
+
+# In this situation, we're forced to write `y: int = ...` to avoid a
+# "parameter without a default follows parameter with a default" syntax error,
+# even though any call that omits `y` will match the first overload above.
+# So we should not error here even though `y`'s `None` default is not an `int`.
+@overload
+def f(x: int = ..., y: int = ...) -> int: ...
+
+def f(x: int = 0, y: int | None = None):
+    if y is None:
+        return None
+    return x + y
+
+# Make sure using a `None` default instead of `...` in the overload works as well.
+@overload
+def g(x: int = ..., y: None = None) -> None: ...
+@overload
+def g(x: int = ..., y: int = ...) -> int: ...
+def g(x: int = 0, y: int | None = None):
+    if y is None:
+        return None
+    return x + y
+"#,
+);
+
+testcase!(
+    test_overload_default_does_not_match_second_signature,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int, y: None = ...) -> str: ...
+
+# False negative: an `f()` call (no args) matches this overload, but `y`'s default of `None` is
+# inconsistent with its type of `int` in the signature. We allow this in order to avoid a false
+# positive in test_overload_default_matches_one_signature.
+@overload
+def f(x: int = ..., y: int = ...) -> int: ...
+
+def f(x: int = 0, y: int | None = None) -> str | int: ...
+"#,
+);
+
+// See `dataclasses_transform_field.py` in the conformance test suite.
+// This pattern is used to indicate that the value of one parameter is implicitly specified by
+// another, which is useful for expressing dataclass transforms.
+testcase!(
+    test_overload_default_do_not_check_non_ellipsis,
+    r#"
+from typing import Literal, overload
+
+@overload
+def f(x: int, y: Literal[True] = True): ...
+@overload
+def f(x: None, y: Literal[False] = False): ...
+def f(x: int | None, y: bool = False): ...
+    "#,
 );
 
 testcase!(
@@ -306,6 +409,74 @@ f(b"")  # E: No matching overload found for function `f`
 );
 
 testcase!(
+    test_overload_assignable_to_callable_union,
+    r#"
+from typing import Callable, overload
+
+@overload
+def foo(x: int) -> str: ...
+@overload
+def foo(x: str) -> str: ...
+def foo(x: int | str) -> str:
+    return str(x)
+
+bar: Callable[[int | str], str] = foo
+baz: Callable[[int | str | bytes], str] = foo  # E: not assignable
+    "#,
+);
+
+testcase!(
+    test_overload_assignable_to_callable_union_multi_param,
+    r#"
+from typing import Callable, overload
+
+@overload
+def foo(x: int, y: bytes) -> int: ...
+@overload
+def foo(x: int, y: str) -> int: ...
+def foo(x: int, y: bytes | str) -> int:
+    return 0
+
+bar: Callable[[int, bytes | str], int] = foo
+    "#,
+);
+
+testcase!(
+    test_overload_assignable_to_callable_return_supertype,
+    r#"
+from typing import Callable, overload
+
+@overload
+def foo(x: int) -> bool: ...
+@overload
+def foo(x: str) -> bool: ...
+def foo(x: int | str) -> bool:
+    return False
+
+bar: Callable[[int | str], int] = foo
+baz: Callable[[int | str], str] = foo  # E: not assignable
+    "#,
+);
+
+testcase!(
+    test_overload_assignable_to_callable_return_union,
+    r#"
+from typing import Callable, overload
+
+@overload
+def foo(x: int) -> int: ...
+@overload
+def foo(x: str) -> str: ...
+def foo(x: int | str) -> int | str:
+    return x
+
+bar: Callable[[int | str], int | str] = foo
+baz: Callable[[int | str], int | str | bytes] = foo
+qux: Callable[[int | str], int] = foo  # E: not assignable
+    "#,
+);
+
+testcase!(
     test_final_decoration_on_top_level_function,
     r#"
 from typing import assert_type, final, overload
@@ -454,7 +625,7 @@ testcase!(
 from typing import Callable, overload
 class defaulty[K, V]:
     @overload
-    def __init__(self: defaulty[str, V], **kwargs: V) -> None: ...
+    def __init__(self: defaulty[str, V], **kwargs: V) -> None: ... # E: `__init__` method self type cannot reference class type parameter `V`
     @overload
     def __init__(self, default_factory: Callable[[], V] | None, /) -> None: ...
     def __init__(self, *args, **kwargs) -> None:
@@ -481,6 +652,25 @@ class C[T](Iterable[T]):
 
 def g(x: int):
     f(C(x))
+    "#,
+);
+
+testcase!(
+    test_overload_type_form_inference,
+    r#"
+from typing import assert_type, overload
+
+class C: ...
+
+@overload
+def foo[T](x: type[T]) -> T: ...  # E: Overloaded function must have an implementation
+@overload
+def foo(x: int) -> int: ...
+
+def bar[T](x: type[T]) -> T: ...
+
+assert_type(foo(C), C)
+assert_type(bar(C), C)
     "#,
 );
 
@@ -576,16 +766,44 @@ def foo() -> int: # E: Function declared to return `int` but is missing an expli
 );
 
 testcase!(
-    test_return_consistency,
+    test_return_consistency_explicit_return,
     r#"
 from typing import overload
 
 @overload
-def f(x: int) -> int: ...
+def f1(x: int) -> int: ...
 @overload
-def f(x: str) -> str: ...  # E: Overload return type `str` is not assignable to implementation return type `int`
-def f(x: int | str) -> int:
+def f1(x: str) -> str: ...  # E: Overload return type `str` is not assignable to implementation return type `int`
+def f1(x: int | str) -> int:
     return int(x)
+
+@overload
+def f2(x: int) -> int: ...
+@overload
+def f2(x: str) -> str: ...
+def f2(x: int | str) -> int | str:
+    return x
+    "#,
+);
+
+testcase!(
+    test_return_consistency_inferred_return,
+    r#"
+from typing import overload
+
+@overload
+def f1(a: int) -> int: ...
+@overload
+def f1(a: str) -> str: ...  # E: Overload return type `str` is not assignable to implementation return type `int`
+def f1(a):
+    return 1
+
+@overload
+def f2(a: int) -> int: ...
+@overload
+def f2(a: str) -> str: ...
+def f2(a):
+    return 1 if a else ""
     "#,
 );
 
@@ -626,6 +844,20 @@ def f(x: int) -> int: ...
 @overload
 def f(x: str) -> int: ...  # E: Implementation signature `(x: int) -> int` does not accept all arguments that overload signature `(x: str) -> int` accepts
 def f(x: int) -> int:
+    return x
+    "#,
+);
+
+testcase!(
+    test_typevar_bound_consistency,
+    r#"
+from typing import overload
+
+@overload
+def f[T: str](x: T) -> T: ...  # E: `str` is not assignable to upper bound `bytes` of type variable `T`
+@overload
+def f[T: bytes](x: T) -> T: ...
+def f[T: bytes](x: T) -> T:
     return x
     "#,
 );
@@ -1066,7 +1298,7 @@ def f3(x: Callable[[], None]) -> str: ...
 def f3(x: Any) -> int | str: ...
 
 def g(x: Callable[..., None], y: Callable[[Callable[..., None]], None]):
-    assert_type(f1(x), Any)
+    assert_type(f1(x), int)
     assert_type(f2(y), int)
     assert_type(f3(x), int)
     "#,
@@ -1241,5 +1473,226 @@ class Foo[T]:
     @overload
     def test(self, obj: T, cls: type[T]) -> int: ...
     def test(self, obj: T | None, cls: type[T]) -> str | int: ...
+    "#,
+);
+
+testcase!(
+    test_literal_selection,
+    r#"
+import contextlib
+import os
+from typing import AnyStr, IO, Generator, Literal, assert_type, overload
+
+@overload
+@contextlib.contextmanager
+def atomic_file(
+    dest: str | os.PathLike[str], mode: Literal["wb", "w+b"] = ..., **kwargs
+) -> Generator[IO[bytes], None, None]: ...
+@overload
+@contextlib.contextmanager
+def atomic_file(
+    dest: str | os.PathLike[str], mode: Literal["w", "w+", "wt", "w+t"], **kwargs
+) -> Generator[IO[str], None, None]: ...
+@overload
+@contextlib.contextmanager
+def atomic_file(
+    dest: str | os.PathLike[str], mode: str, **kwargs
+) -> Generator[IO[AnyStr], None, None]: ...
+
+@contextlib.contextmanager
+def atomic_file(
+    dest: str | os.PathLike[str], mode: str = "w+b", **kwargs
+) -> Generator[IO, None, None]:
+    ...
+
+with atomic_file("foo", "w") as f:
+    assert_type(f, IO[str])
+    "#,
+);
+
+testcase!(
+    test_literalstring_or_str_overloads,
+    r#"
+from typing import Any, LiteralString, overload
+
+class PathLike[T]: ...
+
+def normpath[T](path: PathLike[T]) -> T: ...
+
+@overload
+def relpath(path: LiteralString) -> LiteralString: ...
+@overload
+def relpath(path: str) -> str: ...
+def relpath(path) -> Any: ...
+
+def f(path: Any, data: Any) -> dict[str, Any]:
+    outputs = {}
+    relative_normalized_path = relpath(normpath(path))
+    outputs[relative_normalized_path] = data
+    return outputs
+    "#,
+);
+
+testcase!(
+    test_one_overload_is_typeis,
+    r#"
+from typing import TypeIs, assert_type, overload
+
+@overload
+def f(x: str) -> str: ...
+@overload
+def f(x: int) -> TypeIs[bool]: ...
+def f(x):
+    if isinstance(x, str):
+        return x
+    else:
+        return isinstance(x, bool)
+
+def g(x: str, y: int):
+    assert_type(f(x), str)
+    assert_type(f(y), bool)
+    if f(x):
+        assert_type(x, str)
+    if f(y):
+        assert_type(y, bool)
+    "#,
+);
+
+testcase!(
+    test_tuple_any_with_tuple_ambigious_overload,
+    r#"
+from typing import Any, Literal, Never, overload, assert_type
+
+@overload
+def ndim(shape: tuple[Never, ...]) -> int: ...
+@overload
+def ndim(shape: tuple[int]) -> Literal[1]: ...
+@overload
+def ndim(shape: tuple[int, int]) -> Literal[2]: ...
+@overload
+def ndim(shape: tuple[int, ...]) -> int: ...
+def ndim(shape: tuple[int, ...]) -> int:
+    return len(shape)
+
+def demo_gradual(s: tuple[Any, ...]):
+    assert_type(ndim(s), Any)
+
+def demo_one(s: tuple[int]):
+    assert_type(ndim(s), Literal[1])
+
+def demo_two(s: tuple[int, int]):
+    assert_type(ndim(s), Literal[2])
+
+def demo_variadic(s: tuple[int, ...]):
+    assert_type(ndim(s), int)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2600.
+testcase!(
+    test_materialization_does_not_leak_into_partial_contained,
+    r#"
+def f(x: None):
+    config = {}
+    # Intentionally introduce Error types.
+    for k, v in x:  # E: Type `None` is not iterable
+        config.setdefault(k, v)
+    for k in config:
+        if k == "hello":
+            pass
+    "#,
+);
+
+testcase!(
+    bug = "op(A[Any], A[Any]) should be treated as ambiguous",
+    test_ambiguous,
+    r#"
+from typing import Any, overload, assert_type
+
+class A[T]:  # covariant
+    def get(self) -> T: ...
+
+@overload
+def op(l: A[None], r: A[None]) -> A[None]: ...
+@overload
+def op(l: A[None], r: A[Any]) -> A[None]: ...
+@overload
+def op(l: A[Any], r: A[None]) -> A[None]: ...
+@overload
+def op(l: A[Any], r: A[Any]) -> A[Any]: ...
+def op(l, r) -> A[None | Any]: ...
+
+def test(x: A[None], y: A[Any]) -> None:
+    assert_type(op(x, x), A[None])
+    assert_type(op(x, y), A[None])
+    assert_type(op(y, x), A[None])
+    assert_type(op(y, y), Any)  # E: assert_type(A[None], Any)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2043
+testcase!(
+    test_overload_paramspec_unify_with_ellipsis_callable,
+    r#"
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar, overload
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+@overload
+def foo(func: Callable[P, R]) -> Callable[P, R]: ...
+@overload
+def foo() -> None: ...
+
+def foo(func: None | Callable[..., R] = None) -> None | Callable[..., R]:
+    return func
+    "#,
+);
+
+// The spec only says to eliminate overloads without variadic parameters if an indeterminate number
+// of parameters is supplied, but mypy, pyright, and ty appear to do the opposite as well:
+// if a fixed number of parameters is supplied, overloads with variadic parameters are eliminated.
+testcase!(
+    test_eliminate_variadic,
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f1(x: str) -> str: ...
+@overload
+def f1(x: str, *args) -> int: ...
+def f1(x, *args) -> str | int: ...
+
+@overload
+def f2(x: str) -> str: ...
+@overload
+def f2(x: str, **kwargs) -> int: ...
+def f2(x, **kwargs) -> str | int: ...
+
+def g(x):
+    assert_type(f1(x), str)
+    assert_type(f2(x), str)
+    "#,
+);
+
+testcase!(
+    test_eliminate_overload_using_argument_count_even_with_error,
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: int, y: str) -> str: ...
+def f(x, y="") -> int | str: ...
+
+def g(x: int | None):
+    # We should report the mismatch between `int` and `int | None` rather than "No matching overload",
+    # since we know only the first overload can match based on argument count.
+    e = f(x)  # E: `int | None` is not assignable to parameter `x` with type `int`
+    # Even though the call failed, we know that the second overload cannot match based on argument
+    # count, so we should use the return type from the first overload.
+    assert_type(e, int)
     "#,
 );

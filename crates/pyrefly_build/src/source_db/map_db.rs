@@ -12,9 +12,10 @@ use std::path::Path;
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_util::interned_path::InternedPath;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -68,11 +69,11 @@ impl SourceDatabase for MapDatabase {
 
     fn lookup(
         &self,
-        module: &ModuleName,
+        module: ModuleName,
         _: Option<&Path>,
         style: Option<ModuleStyle>,
     ) -> Option<ModulePath> {
-        let paths = self.0.get(module)?;
+        let paths = self.0.get(&module)?;
         let style = style.unwrap_or(ModuleStyle::Interface);
         if let Some(result) = paths.iter().find(|p| p.style() == style) {
             return Some(result.dupe());
@@ -80,19 +81,23 @@ impl SourceDatabase for MapDatabase {
         Some(paths.last().dupe())
     }
 
-    fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle> {
+    fn handle_from_module_path(&self, module_path: &ModulePath) -> Option<Handle> {
         let (name, _) = self
             .0
             .iter()
-            .find(|(_, paths)| paths.iter().any(|p| p == &module_path))?;
-        Some(Handle::new(name.dupe(), module_path, self.1.dupe()))
+            .find(|(_, paths)| paths.iter().any(|p| p == module_path))?;
+        Some(Handle::new(name.dupe(), module_path.dupe(), self.1.dupe()))
     }
 
-    fn requery_source_db(&self, _: SmallSet<ModulePathBuf>) -> anyhow::Result<bool> {
-        Ok(false)
+    fn query_source_db(
+        &self,
+        _: SmallSet<InternedPath>,
+        _: bool,
+    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
+        (Ok(false), TelemetrySourceDbRebuildInstanceStats::default())
     }
 
-    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern<'_>> {
+    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern> {
         self.0
             .values()
             .flatten()
@@ -102,5 +107,9 @@ impl SourceDatabase for MapDatabase {
 
     fn get_target(&self, _: Option<&Path>) -> Option<Target> {
         None
+    }
+
+    fn get_generated_files(&self) -> SmallSet<InternedPath> {
+        SmallSet::new()
     }
 }

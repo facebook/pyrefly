@@ -30,7 +30,7 @@ from collections.abc import (
 from contextlib import AbstractAsyncContextManager as AsyncContextManager, AbstractContextManager as ContextManager
 from re import Match as Match, Pattern as Pattern
 from types import GenericAlias, ModuleType
-from typing import (  # noqa: Y022,Y037,Y038,Y039,UP035
+from typing import (  # noqa: Y022,Y037,Y038,Y039,UP035,RUF100
     IO as IO,
     TYPE_CHECKING as TYPE_CHECKING,
     AbstractSet as AbstractSet,
@@ -384,6 +384,7 @@ else:
         def __init__(self, name: str, tp: AnnotationForm) -> None: ...
         def __call__(self, obj: _T, /) -> _T: ...
         __supertype__: type | NewType
+        __name__: str
         if sys.version_info >= (3, 10):
             def __or__(self, other: Any) -> _SpecialForm: ...
             def __ror__(self, other: Any) -> _SpecialForm: ...

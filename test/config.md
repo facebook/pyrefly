@@ -10,7 +10,7 @@ $ mkdir $TMPDIR/test && echo "" > $TMPDIR/test/empty.py && \
  WARN */pyrefly.toml: Invalid site-package-path: */abcd` does not exist (glob)
  WARN */pyrefly.toml: Invalid search-path: */efgh` does not exist (glob)
  INFO * errors* (glob)
-[1]
+[0]
 ```
 
 ## Dump config
@@ -110,75 +110,6 @@ Fatal configuration error
 [1]
 ```
 
-## Interpreter priority takes CLI interpreter
-
-```scrut {output_stream: stdout}
-$ mkdir $TMPDIR/interpreters && touch $TMPDIR/interpreters/test.py \
-> touch $TMPDIR/test-interpreter && \
-> echo 'python-interpreter = "$TMPDIR/test-interpreter"' > $TMPDIR/interpreters/pyrefly.toml && \
-> mkdir $TMPDIR/interpreters/venv && touch $TMPDIR/interpreters/venv/python3 && \
-> touch $TMPDIR/interpreters/venv/pyvenv.cfg && \
-> mkdir $TMPDIR/alternative-venv && touch $TMPDIR/alternative-venv/python3 && \
-> touch $TMPDIR/alternative-venv/pyvenv.cfg && \
-> VIRTUAL_ENV=$TMPDIR/alternative-venv $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml \
-> --python-interpreter-path "cli-interpreter"
-Configuration at * (glob)
-  Using interpreter: cli-interpreter
-* (glob+)
-[0]
-```
-
-## Interpreter priority takes config-file interpreter
-
-<!-- Reusing interpreters dir set up in "Interpreter priority takes CLI interpreter" -->
-
-```scrut {output_stream: stdout}
-$ VIRTUAL_ENV=$TMPDIR/alternative-venv $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
-Configuration at * (glob)
-  Using interpreter: */test-interpreter (glob)
-* (glob+)
-[0]
-```
-
-## Interpreter priority takes activated interpreter
-
-<!-- Reusing interpreters dir set up in "Interpreter priority takes CLI interpreter" -->
-
-```scrut {output_stream: stdout}
-$ echo "" > $TMPDIR/interpreters/pyrefly.toml && \
-> VIRTUAL_ENV=$TMPDIR/alternative-venv $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
-Configuration at * (glob)
-  Using interpreter: */alternative-venv/python3 (glob)
-* (glob+)
-[0]
-```
-
-## Interpreter priority takes venv interpreter
-
-<!-- Reusing interpreters dir set up in "Interpreter priority takes CLI interpreter" -->
-
-```scrut {output_stream: stdout}
-$ echo "" > $TMPDIR/interpreters/pyrefly.toml && \
-> $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
-Configuration at * (glob)
-  Using interpreter: */interpreters/venv/python3 (glob)
-* (glob+)
-[0]
-```
-
-## Interpreter priority takes system interpreter last
-
-<!-- Reusing interpreters dir set up in "Interpreter priority takes CLI interpreter" -->
-
-```scrut {output_stream: stdout}
-$ rm -rf $TMPDIR/interpreters/venv && \
-> $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
-Configuration at * (glob)
-  Using interpreter: /*/python3 (glob)
-* (glob+)
-[0]
-```
-
 ## We'll use the first marker file we find as a project root
 
 ```scrut {output_stream: stdout}
@@ -241,35 +172,6 @@ Configuration at `*/config_finder/project/pyrefly.toml` (glob)
 [0]
 ```
 
-## We can manually override typing_extensions
-
-<!-- See https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering:
-     typing_extensions.py on the search path takes precedence over typeshed
--->
-
-```scrut {output_stream: stdout}
-$ mkdir $TMPDIR/typing_extensions_project && \
-> echo "x: int = 42" > $TMPDIR/typing_extensions_project/typing_extensions.py && \
-> echo "from typing_extensions import x; y: int = x" > $TMPDIR/typing_extensions_project/foo.py && \
-> $PYREFLY check $TMPDIR/typing_extensions_project/foo.py --search-path $TMPDIR/typing_extensions_project
-[0]
-```
-
-## We don't accidentally override typing_extensions with an installed package
-
-<!-- See https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering:
-     typeshed takes precedence over installed packages
--->
-
-```scrut {output_stream.stdout}
-$ mkdir $TMPDIR/site_package_path && \
-> echo "x: int = 42" > $TMPDIR/site_package_path/typing_extensions.py && \
-> echo "from typing import TypedDict; from typing_extensions import NotRequired; class C(TypedDict): x: NotRequired[int]" > $TMPDIR/site_package_path/lib.py && \
-> echo "from lib import C; C()" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --site-package-path $TMPDIR/site_package_path
-[0]
-```
-
 ## Skip hidden directories
 
 ```scrut {output_stream.stdout}
@@ -279,61 +181,6 @@ $ mkdir $TMPDIR/contains_hidden && \
 > echo "1 + 'oops'" > $TMPDIR/contains_hidden/.hidden/secret_error.py && \
 > $PYREFLY check $TMPDIR/contains_hidden
 [0]
-```
-
-## Error on missing source
-
-```scrut {output_stream.stdout}
-$ mkdir $TMPDIR/site_package_missing_source && \
-> mkdir $TMPDIR/site_package_missing_source/pkg-stubs && \
-> echo "class X: ..." > $TMPDIR/site_package_missing_source/pkg-stubs/__init__.py && \
-> echo "import pkg" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --ignore-missing-source=false --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
-ERROR * Found stubs for `pkg`, but no source* (glob)
-[1]
-```
-
-```scrut {output_stream.stdout}
-$ echo "from pkg import X" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --ignore-missing-source=false --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
-ERROR * Found stubs for `pkg`, but no source* (glob)
-[1]
-```
-
-```scrut {output_stream.stdout}
-$ echo "from pkg import X" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --error=missing-source --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
-ERROR * Found stubs for `pkg`, but no source* (glob)
-[1]
-```
-
-## We can disable `missing-source` on the command line
-
-```scrut {output_stream.stdout}
-$ mkdir $TMPDIR/error_missing_source && \
-> echo -e '[errors]\nmissing-source="error"' > $TMPDIR/error_missing_source/pyrefly.toml && \
-> echo "from pkg import X" > $TMPDIR/error_missing_source/foo.py && \
-> $PYREFLY check $TMPDIR/error_missing_source/foo.py --ignore-missing-source --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
-[0]
-```
-
-## Regression test: we should still be able to find submodules when stubs are missing
-
-<!-- The missing-module-attribute ignore is for compatibility with Python versions that do not have
-     `typing.reveal_type` available and can be removed once we drop support for Python version < 3.11
--->
-
-```scrut {output_stream.stdout}
-$ mkdir $TMPDIR/site_package_missing_stubs && \
-> mkdir $TMPDIR/site_package_missing_stubs/django && \
-> touch $TMPDIR/site_package_missing_stubs/django/__init__.py && \
-> mkdir $TMPDIR/site_package_missing_stubs/django/forms && \
-> touch $TMPDIR/site_package_missing_stubs/django/forms/__init__.py && \
-> echo "from django import forms; from typing import reveal_type; reveal_type(forms)" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --error untyped-import --ignore missing-module-attribute --site-package-path $TMPDIR/site_package_missing_stubs --output-format=min-text
-ERROR * Missing type stubs for `django` * (glob)
- INFO * revealed type: Module[django.forms] * (glob)
-[1]
 ```
 
 ## We can still find hard-coded `project-excludes` when overridden

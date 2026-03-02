@@ -5,13 +5,20 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
+use std::mem;
+
 use itertools::Itertools;
 use pyrefly_python::dunder;
 use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::meta_shape_dsl::MetaShapeFunction;
+use pyrefly_types::tensor_ops_registry::TensorOpsRegistry;
+use pyrefly_types::tuple::Tuple;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use pyrefly_util::display::count;
+use pyrefly_util::display::pluralize;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -25,6 +32,7 @@ use ruff_text_size::TextRange;
 use starlark_map::ordered_map::OrderedMap;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -39,13 +47,13 @@ use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::display::function_suffix;
 use crate::solver::solver::QuantifiedHandle;
+use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
-use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -158,9 +166,11 @@ impl<'a> CallKeyword<'a> {
                 // See test::overload::test_kwargs_materialization - we need to turn this
                 // into Mapping[str, Any] to correctly materialize the `**kwargs` type.
                 solver
-                    .stdlib
-                    .mapping(solver.stdlib.str().clone().to_type(), ty.clone())
-                    .to_type()
+                    .heap
+                    .mk_class_type(solver.stdlib.mapping(
+                        solver.heap.mk_class_type(solver.stdlib.str().clone()),
+                        ty.clone(),
+                    ))
                     .materialize()
             } else {
                 ty.materialize()
@@ -230,7 +240,10 @@ impl<'a> CallArg<'a> {
                     if ty.is_any() {
                         // See test::overload::test_varargs_materialization - we need to turn this
                         // into Iterable[Any] to correctly materialize the `*args` type.
-                        solver.stdlib.iterable(ty.clone()).to_type().materialize()
+                        solver
+                            .heap
+                            .mk_class_type(solver.stdlib.iterable(ty.clone()))
+                            .materialize()
                     } else {
                         ty.materialize()
                     }
@@ -251,16 +264,36 @@ impl<'a> CallArg<'a> {
         match self {
             Self::Arg(TypeOrExpr::Type(ty, _)) => CallArgPreEval::Type(ty, false),
             Self::Arg(TypeOrExpr::Expr(e)) => CallArgPreEval::Expr(e, false),
-            Self::Star(e, range) => {
+            Self::Star(e, _range) => {
+                // Special-case list/set/tuple literals with statically known element count.
+                // Only do this if there are no starred elements inside the literal.
+                if let TypeOrExpr::Expr(expr) = e {
+                    let literal_elts: Option<&[Expr]> = match expr {
+                        Expr::List(list_expr) => Some(&list_expr.elts),
+                        Expr::Set(set_expr) => Some(&set_expr.elts),
+                        Expr::Tuple(tuple_expr) => Some(&tuple_expr.elts),
+                        _ => None,
+                    };
+                    if let Some(elts) = literal_elts {
+                        let has_starred = elts.iter().any(|elt| matches!(elt, Expr::Starred(_)));
+                        if !has_starred {
+                            let tys: Vec<Type> = elts
+                                .iter()
+                                .map(|elt| solver.expr_infer(elt, arg_errors))
+                                .collect();
+                            return CallArgPreEval::Fixed(tys, 0);
+                        }
+                    }
+                }
                 let ty = e.infer(solver, arg_errors);
-                let iterables = solver.iterate(&ty, *range, arg_errors, None);
+                let iterables = solver.iterate(&ty, *_range, arg_errors, None);
                 // If we have a union of iterables, use a fixed length only if every iterable is
                 // fixed and has the same length. Otherwise, use star.
                 let mut fixed_lens = Vec::new();
                 for x in iterables.iter() {
                     match x {
                         Iterable::FixedLen(xs) => fixed_lens.push(xs.len()),
-                        Iterable::OfType(_) => {}
+                        Iterable::OfType(_) | Iterable::OfTypeVarTuple(_) => {}
                     }
                 }
                 if !fixed_lens.is_empty()
@@ -308,6 +341,7 @@ impl CallArgPreEval<'_> {
         matches!(self, Self::Star(..))
     }
 
+    /// Check the argument against a parameter hint and return the inferred argument type.
     fn post_check<Ans: LookupAnswer>(
         &mut self,
         solver: &AnswersSolver<Ans>,
@@ -319,7 +353,7 @@ impl CallArgPreEval<'_> {
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-    ) {
+    ) -> Option<Type> {
         let tcc = &|| TypeCheckContext {
             kind: if vararg {
                 TypeCheckKind::CallVarArgs(false, param_name.cloned(), callable_name.cloned())
@@ -332,22 +366,26 @@ impl CallArgPreEval<'_> {
             Self::Type(ty, done) => {
                 *done = true;
                 solver.check_type(ty, hint, range, call_errors, tcc);
+                Some((*ty).clone())
             }
             Self::Expr(x, done) => {
                 *done = true;
-                solver.expr_with_separate_check_errors(
+                Some(solver.expr_with_separate_check_errors(
                     x,
                     Some((hint, call_errors, tcc)),
                     arg_errors,
-                );
+                ))
             }
             Self::Star(ty, done) => {
                 *done = vararg;
                 solver.check_type(ty, hint, range, call_errors, tcc);
+                Some(ty.clone())
             }
             Self::Fixed(tys, i) => {
-                solver.check_type(&tys[*i], hint, range, call_errors, tcc);
+                let arg_ty = tys[*i].clone();
+                solver.check_type(&arg_ty, hint, range, call_errors, tcc);
                 *i += 1;
+                Some(arg_ty)
             }
         }
     }
@@ -361,6 +399,18 @@ impl CallArgPreEval<'_> {
             }
             Self::Fixed(_, i) => {
                 *i += 1;
+            }
+        }
+    }
+
+    // Similar to post_skip but it skips to the end of any fixed length arguments.
+    fn mark_done(&mut self) {
+        match self {
+            Self::Type(_, done) | Self::Expr(_, done) | Self::Star(_, done) => {
+                *done = true;
+            }
+            Self::Fixed(tys, i) => {
+                *i = tys.len();
             }
         }
     }
@@ -429,7 +479,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             CallArg::Star(x, _) => {
                 let mut ty = x.infer(self, errors);
                 self.expand_vars_mut(&mut ty);
-                matches!(ty, Type::Args(q2) if &*q2 == q)
+                // This can either be `P.args` or `tuple[Any, ...]`
+                matches!(&ty, Type::Args(q2) if &**q2 == q)
+                    || self.is_subset_eq(&ty, &self.heap.mk_unbounded_tuple(self.heap.mk_never()))
             }
             _ => false,
         }
@@ -443,7 +495,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> bool {
         let mut ty = x.value.infer(self, errors);
         self.expand_vars_mut(&mut ty);
-        matches!(ty, Type::Kwargs(q2) if &*q2 == q)
+        // This can either be `P.kwargs` or `dict[str, Any]`
+        matches!(&ty, Type::Kwargs(q2) if &**q2 == q)
+            || self.is_subset_eq(
+                &ty,
+                &self.heap.mk_class_type(self.stdlib.dict(
+                    self.heap.mk_class_type(self.stdlib.str().clone()),
+                    self.heap.mk_never(),
+                )),
+            )
     }
 
     // See comment on `callable_infer` about `arg_errors` and `call_errors`.
@@ -455,13 +515,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // See test::paramspec::test_paramspec_twice for an example of this.
         mut paramspec: Option<Var>,
         self_arg: Option<CallArg>,
+        mut self_qs: Option<QuantifiedHandle>,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
+        // If Some, records parameter-name → argument-type bindings (for meta-shape inference).
+        bound_args: &mut Option<HashMap<String, Type>>,
     ) {
+        fn record(bound: &mut Option<HashMap<String, Type>>, name: &Name, ty: Type) {
+            if let Some(map) = bound.as_mut() {
+                map.insert(name.to_string(), ty);
+            }
+        }
         // We want to work mostly with references, but some things are taken from elsewhere,
         // so have some owners to capture them.
         let param_list_owner = Owner::new();
@@ -480,7 +548,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             )
         };
-        let iargs = self_arg.iter().chain(args.iter());
+
+        let keyword_arg_names: SmallSet<&Name> = keywords
+            .iter()
+            .filter_map(|kw| kw.arg.map(|id| &id.id))
+            .collect();
+
         // Creates a reversed copy of the parameters that we iterate through from back to front,
         // so that we can easily peek at and pop from the end.
         let mut rparams: Vec<&Param> = params.items().iter().rev().collect::<Vec<_>>();
@@ -490,6 +563,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut extra_arg_pos: Option<TextRange> = None;
         let mut unpacked_vararg: Option<(Option<&Name>, &Type)> = None;
         let mut unpacked_vararg_matched_args: Vec<CallArgPreEval<'_>> = Vec::new();
+        let mut variadic_name: Option<&Name> = None;
+        let mut variadic_collected: Vec<Type> = Vec::new();
 
         let var_to_rparams = |var| {
             let ps = match self.solver().force_var(var) {
@@ -503,7 +578,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 t => {
                     error(
                         call_errors,
-                        range,
+                        arguments_range,
                         ErrorKind::BadArgumentType,
                         format!("Expected `{}` to be a ParamSpec value", self.for_display(t)),
                     );
@@ -512,7 +587,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             param_list_owner.push(ps).items().iter().rev().collect()
         };
-        for arg in iargs {
+        for arg in self_arg.iter().chain(args.iter()) {
             let mut arg_pre = arg.pre_eval(self, arg_errors);
             while arg_pre.step() {
                 let param = if let Some(p) = rparams.last() {
@@ -533,6 +608,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         name,
                         kind: kind @ (PosParamKind::PositionalOnly | PosParamKind::Positional),
                     }) => {
+                        // For unknown-length star args, stop consuming positional parameters
+                        // when we reach a one that has a corresponding keyword argument.
+                        // This is unsound, but prevents false positive "multiple values" errors.
+                        if arg_pre.is_star()
+                            && kind == PosParamKind::Positional
+                            && name.is_some_and(|n| keyword_arg_names.contains(n))
+                        {
+                            arg_pre.mark_done();
+                            break;
+                        }
                         num_positional_params += 1;
                         rparams.pop();
                         if let Some(name) = name
@@ -542,7 +627,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             // We ignore positional-only parameters because they can't be passed in by name.
                             seen_names.insert(name, ty);
                         }
-                        arg_pre.post_check(
+                        let arg_ty = arg_pre.post_check(
                             self,
                             callable_name,
                             ty,
@@ -552,7 +637,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             arg_errors,
                             call_errors,
                             context,
-                        )
+                        );
+                        if let Some(name) = name
+                            && let Some(ty) = arg_ty
+                        {
+                            record(bound_args, name, ty);
+                        }
                     }
                     Some(PosParam {
                         ty,
@@ -569,17 +659,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ty,
                         name,
                         kind: PosParamKind::Variadic,
-                    }) => arg_pre.post_check(
-                        self,
-                        callable_name,
-                        ty,
-                        name,
-                        true,
-                        arg.range(),
-                        arg_errors,
-                        call_errors,
-                        context,
-                    ),
+                    }) => {
+                        let arg_ty = arg_pre.post_check(
+                            self,
+                            callable_name,
+                            ty,
+                            name,
+                            true,
+                            arg.range(),
+                            arg_errors,
+                            call_errors,
+                            context,
+                        );
+                        if bound_args.is_some() {
+                            if let Some(name) = name {
+                                variadic_name = Some(name);
+                            }
+                            if let Some(ty) = arg_ty {
+                                variadic_collected.push(ty);
+                            }
+                        }
+                    }
                     None => {
                         arg_pre.post_infer(self, arg_errors);
                         if !arg_pre.is_star() {
@@ -592,6 +692,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             }
+            // `self_qs` contains type parameters referenced in the `self` type. Pyrefly follows
+            // mypy and pyright's lead in solving type parameters in `self` as soon as `self` is
+            // matched. That is:
+            //     class A:
+            //         def f[T](self: T, other: T): ...
+            //     A().f(0)  # T = A, passing 0 is an error
+            // Contrast this to how type parameters usually behave:
+            //     def f[T](x: T, other: T): ...
+            //     f(A(), 0)  # T = A | int
+            if let Some(self_qs) = mem::take(&mut self_qs) {
+                let specialization_errors = self
+                    .solver()
+                    .finish_quantified(self_qs, self.solver().infer_with_first_use);
+                if let Err(errors) = specialization_errors {
+                    self.add_specialization_errors(errors, arg.range(), call_errors, context);
+                }
+            }
+        }
+        // Record collected variadic args as a tuple for meta-shape binding.
+        if let Some(name) = variadic_name {
+            record(
+                bound_args,
+                name,
+                Type::Tuple(Tuple::Concrete(variadic_collected)),
+            );
         }
         if let Some((unpacked_name, unpacked_param_ty)) = unpacked_vararg {
             let mut prefix = Vec::new();
@@ -630,22 +755,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             let unpacked_args_ty = match middle.len() {
-                0 => Type::tuple(prefix),
-                1 => Type::Tuple(Tuple::unpacked(
+                0 => self.heap.mk_concrete_tuple(prefix),
+                1 => self.heap.mk_unpacked_tuple(
                     prefix,
-                    Type::Tuple(Tuple::unbounded(middle.pop().unwrap())),
+                    self.heap.mk_unbounded_tuple(middle.pop().unwrap()),
                     suffix,
-                )),
-                _ => Type::Tuple(Tuple::unpacked(
-                    prefix,
-                    Type::Tuple(Tuple::unbounded(self.unions(middle))),
-                    suffix,
-                )),
+                ),
+                _ => {
+                    let unpacked_variadic_args_count = middle
+                        .iter()
+                        .filter(|x| matches!(x, Type::ElementOfTypeVarTuple(_)))
+                        .count();
+                    if unpacked_variadic_args_count > 1 {
+                        error(
+                            arg_errors,
+                            arguments_range,
+                            ErrorKind::BadArgumentType,
+                            "Expected at most one unpacked variadic argument".to_owned(),
+                        );
+                    }
+                    self.heap.mk_unpacked_tuple(
+                        prefix,
+                        self.heap.mk_unbounded_tuple(self.unions(middle)),
+                        suffix,
+                    )
+                }
             };
             self.check_type(
                 &unpacked_args_ty,
                 unpacked_param_ty,
-                range,
+                arguments_range,
                 arg_errors,
                 &|| TypeCheckContext {
                     kind: TypeCheckKind::CallVarArgs(
@@ -688,6 +827,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 }
+                Param::VarArg(_, Type::Unpack(box unpacked)) => {
+                    // If we have a TypeVarTuple *args with no matched arguments, resolve it to empty tuple
+                    self.is_subset_eq(unpacked, &self.heap.mk_concrete_tuple(Vec::new()));
+                }
                 Param::VarArg(..) => {}
                 Param::Pos(name, ty, required) | Param::KwOnly(name, ty, required) => {
                     kwparams.insert(name, (ty, required == &Required::Required));
@@ -701,9 +844,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 (type_owner.push(field.ty), field.required),
                             );
                         });
-                    if let ExtraItems::Extra(extra) =
-                        self.typed_dict_extra_items(typed_dict.class_object())
-                    {
+                    if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(typed_dict) {
                         kwargs = Some((name.as_ref(), type_owner.push(extra.ty)))
                     }
                     kwargs_is_unpack = true;
@@ -747,16 +888,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     format!("Multiple values for argument `{name}`"),
                                 );
                                 hint = Some(*ty);
-                            } else if let Some((ty, required)) = kwparams.get(name) {
+                            } else if let Some((ty, _)) = kwparams.get(name) {
                                 seen_names.insert(name, *ty);
-                                if *required && !field.required {
-                                    error(
-                                        call_errors,
-                                        kw.range,
-                                        ErrorKind::MissingArgument,
-                                        format!("Expected key `{name}` to be required"),
-                                    );
-                                }
                                 hint = Some(*ty)
                             } else if kwargs.is_none() && !kwargs_is_unpack {
                                 unexpected_keyword_error(name, kw.range);
@@ -776,7 +909,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         match self.unwrap_mapping(&ty) {
                             Some((key, value)) => {
-                                if self.is_subset_eq(&key, &self.stdlib.str().clone().to_type()) {
+                                if self.is_subset_eq(
+                                    &key,
+                                    &self.heap.mk_class_type(self.stdlib.str().clone()),
+                                ) {
                                     if let Some((name, want)) = kwargs.as_ref() {
                                         self.check_type(
                                             &value,
@@ -851,35 +987,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         },
                         context: context.map(|ctx| ctx()),
                     };
-                    match kw.value {
-                        TypeOrExpr::Expr(x) => {
-                            self.expr_with_separate_check_errors(
-                                x,
-                                hint.map(|ty| (ty, call_errors, tcc)),
-                                arg_errors,
-                            );
-                        }
+                    let arg_ty = match kw.value {
+                        TypeOrExpr::Expr(x) => self.expr_with_separate_check_errors(
+                            x,
+                            hint.map(|ty| (ty, call_errors, tcc)),
+                            arg_errors,
+                        ),
                         TypeOrExpr::Type(x, range) => {
                             if let Some(hint) = &hint
                                 && !hint.is_any()
                             {
                                 self.check_type(x, hint, range, call_errors, tcc);
                             }
+                            (*x).clone()
                         }
-                    }
+                    };
+                    record(bound_args, &id.id, arg_ty);
                 }
             }
         }
         if missing_unnamed_posonly > 0 || !missing_named_posonly.is_empty() {
-            let range = keywords.first().map_or(range, |kw| kw.range);
+            let range = keywords.first().map_or(arguments_range, |kw| kw.range);
             let msg = if missing_unnamed_posonly == 0 {
                 format!(
-                    "Missing positional argument{} {}",
-                    if missing_named_posonly.len() == 1 {
-                        ""
-                    } else {
-                        "s"
-                    },
+                    "Missing {} {}",
+                    pluralize(missing_named_posonly.len(), "positional argument"),
                     missing_named_posonly
                         .iter()
                         .map(|name| format!("`{name}`"))
@@ -918,7 +1050,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         error(
                             call_errors,
-                            range,
+                            arguments_range,
                             ErrorKind::MissingArgument,
                             format!("Missing argument `{name}`"),
                         );
@@ -962,10 +1094,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     // Call a function with the given arguments. The arguments are contextually typed, if possible.
-    // We pass two error collectors into this function:
+    // We pass two error collectors into this function and return specialization errors separately:
     // * arg_errors is used to infer the types of arguments, before passing them to the function.
     // * call_errors is used for (1) call signature matching, e.g. arity issues and (2) checking the
     //   types of arguments against the types of parameters.
+    // * We often use call_errors to check whether a call succeeded, which specialization errors
+    //   should not affect, so we return them separately. The caller must add them to the appropriate
+    //   error collector.
     // Callers can pass the same error collector for both, and most callers do. We use two collectors
     // for overload matching.
     pub fn callable_infer(
@@ -976,24 +1111,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut self_obj: Option<Type>,
         mut args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         mut ctor_targs: Option<&mut TArgs>,
-    ) -> Type {
-        let (qs, mut callable) = if let Some(tparams) = tparams {
+    ) -> (Type, Vec<TypeVarSpecializationError>) {
+        // Look up meta-shape early so we can conditionally collect bound args.
+        // Only consult the registry when tensor_shapes is enabled to avoid
+        // unnecessary DSL parsing and per-call HashMap lookups.
+        let meta_shape_func = if self.solver().tensor_shapes {
+            Self::lookup_meta_shape(callable_name)
+        } else {
+            None
+        };
+        let mut bound_args: Option<HashMap<String, Type>> = meta_shape_func.map(|_| HashMap::new());
+
+        let (callable_qs, mut callable) = if let Some(tparams) = tparams {
             // If we have a hint, we want to try to instantiate against it first, so we can contextually type
             // arguments. If we don't match the hint, we need to throw away any instantiations we might have made.
             // By invariant, hint will be None if we are calling a constructor.
-            if let Some(hint) = hint {
-                let (qs_, callable_) = self.instantiate_fresh_callable(tparams, callable.clone());
+            if let Some(hint) = hint
+                && !self.solver().is_partial(hint.ty())
+            {
+                let (qs, callable_) = self.instantiate_fresh_callable(tparams, callable.clone());
                 if self.is_subset_eq(&callable_.ret, hint.ty())
-                    && !self.solver().has_instantiation_errors(&qs_)
+                    && !self.solver().has_instantiation_errors(&qs)
                 {
-                    (qs_, callable_)
+                    (qs, callable_)
                 } else {
+                    // Even though these quantifieds aren't used, let's make sure to not leave
+                    // unfinished quantifieds around.
+                    let _ = self.solver().finish_quantified(qs, false);
                     self.instantiate_fresh_callable(tparams, callable)
                 }
             } else {
@@ -1002,8 +1152,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             (QuantifiedHandle::empty(), callable)
         };
-        if let Some(targs) = ctor_targs.as_mut() {
-            self.solver().freshen_class_targs(targs, self.uniques);
+        let (self_qs, remaining_callable_qs) = if self_obj.is_some()
+            && let Some(first_param) = callable.get_first_param()
+            // TODO(https://github.com/facebook/pyrefly/issues/105): handle nested vars
+            && matches!(first_param, Type::Var(_))
+        {
+            // Quantifieds in `self` need to be finished as soon as `self_arg` is matched, unlike
+            // other quantifieds that are finished at the end of the call, so we split them out to
+            // be handled separately.
+            let (self_qs, remaining_qs) = callable_qs.partition_by(&first_param);
+            (Some(self_qs), remaining_qs)
+        } else {
+            (None, callable_qs)
+        };
+        let ctor_qs = if let Some(targs) = ctor_targs.as_mut() {
+            let qs = self.solver().freshen_class_targs(targs, self.uniques);
             let mp = targs.substitution_map();
             callable.params.visit_mut(&mut |t| t.subst_mut(&mp));
             if let Some(obj) = self_obj.as_mut() {
@@ -1017,8 +1180,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self_obj = Some((*obj).clone().subst(&mp));
                 args = rest;
             }
-        }
-        let self_arg = self_obj.as_ref().map(|ty| CallArg::ty(ty, range));
+            qs
+        } else {
+            QuantifiedHandle::empty()
+        };
+        let self_arg = self_obj.as_ref().map(|ty| CallArg::ty(ty, arguments_range));
         match callable.params {
             Params::List(params) => {
                 self.callable_infer_params(
@@ -1026,12 +1192,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &params,
                     None,
                     self_arg,
+                    self_qs,
                     args,
                     keywords,
-                    range,
+                    arguments_range,
                     arg_errors,
                     call_errors,
                     context,
+                    &mut bound_args,
                 );
             }
             Params::Ellipsis | Params::Materialization => {
@@ -1048,12 +1216,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &params.prepend_types(&concatenate),
                         None,
                         self_arg,
+                        self_qs,
                         args,
                         keywords,
-                        range,
+                        arguments_range,
                         arg_errors,
                         call_errors,
                         context,
+                        &mut bound_args,
                     ),
                     // This can happen with a signature like `(f: Callable[P, None], *args: P.args, **kwargs: P.kwargs)`.
                     // Before we match an argument to `f`, we don't know what `P` is, so we don't have an answer for the Var yet.
@@ -1062,12 +1232,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &ParamList::new_types(concatenate.into_vec()),
                         Some(var),
                         self_arg,
+                        self_qs,
                         args,
                         keywords,
-                        range,
+                        arguments_range,
                         arg_errors,
                         call_errors,
                         context,
+                        &mut bound_args,
                     ),
                     Type::Quantified(q) => {
                         if !args
@@ -1079,7 +1251,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         {
                             self.error(
                                 call_errors,
-                                range,
+                                arguments_range,
                                 ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
                                 format!(
                                     "Expected *-unpacked {}.args and **-unpacked {}.kwargs",
@@ -1093,12 +1265,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &ParamList::new_types(concatenate.into_vec()),
                                 None,
                                 self_arg,
+                                self_qs,
                                 &args[0..args.len() - 1],
                                 &keywords[0..keywords.len() - 1],
-                                range,
+                                arguments_range,
                                 arg_errors,
                                 call_errors,
                                 context,
+                                &mut bound_args,
                             );
                         }
                     }
@@ -1107,7 +1281,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // This could well be our error, but not really sure
                         self.error(
                             call_errors,
-                            range,
+                            arguments_range,
                             ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
                             format!("Unexpected ParamSpec type: `{}`", self.for_display(p)),
                         );
@@ -1118,17 +1292,166 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(targs) = ctor_targs {
             self.solver().generalize_class_targs(targs);
         }
-        if let Err(e) = self.solver().finish_quantified(qs) {
-            for e in e {
-                let kind = TypeCheckKind::TypeVarSpecialization(e.name);
-                self.error(
-                    call_errors,
-                    range,
-                    ErrorInfo::new(kind.as_error_kind(), context),
-                    kind.format_error(&e.got, &e.want, self.module().name()),
-                );
-            }
+        let mut errors = self
+            .solver()
+            .finish_quantified(remaining_callable_qs, self.solver().infer_with_first_use)
+            .map_or_else(|e| e.to_vec(), |_| Vec::new());
+        if let Err(e) = self
+            .solver()
+            .finish_quantified(ctor_qs, self.solver().infer_with_first_use)
+        {
+            errors.extend(e);
         }
-        self.solver().finish_function_return(callable.ret)
+
+        // Apply meta-shape inference if bound args were collected
+        let ret = if let Some(meta_shape_func) = meta_shape_func
+            && let Some(mut bound) = bound_args
+        {
+            // For bound method calls, ensure `self` is in bound_args so that
+            // inject_module_attrs can resolve module fields (e.g., start_dim, end_dim).
+            // The self param may not be recorded by callable_infer_params if it's
+            // positional-only without a name.
+            if let Some(ref obj) = self_obj {
+                bound
+                    .entry("self".to_owned())
+                    .or_insert_with(|| obj.clone());
+            }
+            // Auto-inject module field values for DSL params not in bound_args.
+            // When a DSL function expects params like `start_dim` that aren't method
+            // parameters but are fields on `self`, resolve them from the module instance.
+            self.inject_module_attrs(&mut bound, meta_shape_func, arguments_range);
+
+            self.apply_meta_shape(
+                callable.ret.clone(),
+                meta_shape_func,
+                &bound,
+                arguments_range,
+                arg_errors,
+            )
+        } else {
+            callable.ret.clone()
+        };
+
+        (self.solver().finish_function_return(ret), errors)
+    }
+
+    /// Look up whether a callable has a registered meta-shape function.
+    fn lookup_meta_shape(callable_name: Option<&FunctionKind>) -> Option<&dyn MetaShapeFunction> {
+        use std::sync::OnceLock;
+        static TENSOR_OPS_REGISTRY: OnceLock<TensorOpsRegistry> = OnceLock::new();
+
+        let func_id = callable_name.and_then(|fk| match fk {
+            FunctionKind::Def(box_func_id) => Some(box_func_id.as_ref()),
+            _ => None,
+        })?;
+
+        let qualified_name = if let Some(cls) = &func_id.cls {
+            format!("{}.{}.{}", func_id.module.name(), cls.name(), func_id.name)
+        } else {
+            format!("{}.{}", func_id.module.name(), func_id.name)
+        };
+
+        let registry = TENSOR_OPS_REGISTRY.get_or_init(TensorOpsRegistry::new);
+        registry.get(&qualified_name)
+    }
+
+    /// Auto-inject module field values into `bound_args` for DSL parameters
+    /// that aren't method parameters but match fields on `self`.
+    ///
+    /// This enables DSL functions for module methods (e.g., `nn.Flatten.forward`)
+    /// to access constructor-captured values (e.g., `start_dim`, `end_dim`) without
+    /// extending the DSL grammar. The DSL function declares them as regular parameters
+    /// with defaults, and this method resolves them from `self`'s class fields.
+    ///
+    /// For fields typed as `Dim[T]`, unwraps to `T` so the DSL's `extract_dsl_val`
+    /// can handle them as plain literal ints.
+    fn inject_module_attrs(
+        &self,
+        bound_args: &mut HashMap<String, Type>,
+        meta_shape_func: &dyn MetaShapeFunction,
+        _range: TextRange,
+    ) {
+        // For NNModule instances, inject captured fields directly into bound_args.
+        // The NNModule's fields already contain plain Type values from the constructor,
+        // so no Dim[T] unwrapping is needed.
+        if let Some(Type::NNModule(module)) = bound_args.get("self") {
+            let module = module.clone();
+            for param_name in meta_shape_func.param_names() {
+                if param_name == "self" || bound_args.contains_key(param_name) {
+                    continue;
+                }
+                let name = Name::new(param_name);
+                if let Some(ty) = module.fields.get(&name) {
+                    bound_args.insert(param_name.to_owned(), ty.clone());
+                }
+            }
+            return;
+        }
+
+        let cls = match bound_args.get("self") {
+            Some(Type::ClassType(cls)) => cls.clone(),
+            _ => return,
+        };
+
+        for param_name in meta_shape_func.param_names() {
+            if param_name == "self" || bound_args.contains_key(param_name) {
+                continue;
+            }
+
+            // Look up the field directly on the class, avoiding error reporting.
+            let attr_name = Name::new(param_name);
+            let field = match self.get_field_from_current_class_only(cls.class_object(), &attr_name)
+            {
+                Some(f) => f,
+                None => continue,
+            };
+
+            // Substitute type parameters (e.g., _Dim[S] with S=1 → Dim[1]).
+            let field_ty = cls.targs().substitution().substitute_into(field.ty());
+
+            // Unwrap Dim[T] → T so the DSL can extract literal ints.
+            // After type param substitution, Dim[S] with S=0 becomes Type::Dim(Size(Literal(0))).
+            // For Optional[Dim[T]] (i.e., Dim[T] | None): if T is bound, unwrap to T;
+            // if T is unbound (Any), resolve to None — the DSL models missing values as None.
+            let unwrapped = match field_ty {
+                Type::Dim(inner) => *inner,
+                Type::Union(ref u) => {
+                    let dim_inner = u.members.iter().find_map(|m| match m {
+                        Type::Dim(inner) => Some(inner.as_ref().clone()),
+                        _ => None,
+                    });
+                    match dim_inner {
+                        Some(Type::Any(_)) => Type::None,
+                        Some(inner) => inner,
+                        None => field_ty,
+                    }
+                }
+                other => other,
+            };
+            bound_args.insert(param_name.to_owned(), unwrapped);
+        }
+    }
+
+    /// Apply a meta-shape function using pre-bound arguments.
+    fn apply_meta_shape(
+        &self,
+        ret_type: Type,
+        meta_shape_func: &dyn MetaShapeFunction,
+        bound_args: &HashMap<String, Type>,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        match meta_shape_func.evaluate(bound_args, &ret_type) {
+            Some(Ok(ty)) => ty,
+            Some(Err(shape_error)) => {
+                errors.add(
+                    range,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    vec1![format!("{}", shape_error)],
+                );
+                ret_type
+            }
+            None => ret_type,
+        }
     }
 }

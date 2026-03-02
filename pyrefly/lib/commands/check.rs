@@ -24,11 +24,16 @@ use anyhow::Context as _;
 use clap::Parser;
 use clap::ValueEnum;
 use dupe::Dupe as _;
+use percent_encoding::AsciiSet;
+use percent_encoding::CONTROLS;
+use percent_encoding::utf8_percent_encode;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::config::ConfigFile;
+use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::finder::ConfigError;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::args::clap_env;
@@ -47,22 +52,48 @@ use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::info;
 
+use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::error::error::print_error_counts;
+use crate::error::legacy::LegacyError;
 use crate::error::legacy::LegacyErrors;
+use crate::error::legacy::severity_to_str;
 use crate::error::summarize::print_error_summary;
 use crate::error::suppress;
+use crate::error::suppress::SerializedError;
 use crate::module::typeshed::stdlib_search_path;
 use crate::report;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
+use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::ProgressBarSubscriber;
+
+/// Result data from a non-watch check run, used for telemetry logging.
+pub struct CheckResult {
+    /// CLI-visible diagnostics in the legacy JSON format, suitable for serialization.
+    pub legacy_errors: Vec<LegacyError>,
+    /// Number of files (modules) that were checked.
+    pub checked_file_count: usize,
+}
+
+impl CheckResult {
+    /// Build a `CheckResult` from the raw error list.
+    fn from_errors(errors: &[Error], relative_to: &Path, checked_file_count: usize) -> Self {
+        Self {
+            legacy_errors: errors
+                .iter()
+                .map(|e| LegacyError::from_error(relative_to, e))
+                .collect(),
+            checked_file_count,
+        }
+    }
+}
 
 /// Check the given files.
 #[deny(clippy::missing_docs_in_private_items)]
@@ -87,11 +118,22 @@ pub struct FullCheckArgs {
 }
 
 impl FullCheckArgs {
-    pub async fn run(self) -> anyhow::Result<CommandExitStatus> {
+    pub async fn run(
+        self,
+        wrapper: Option<ConfigConfigurerWrapper>,
+    ) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
         self.config_override.validate()?;
-        let (files_to_check, config_finder) = self.files.resolve(self.config_override)?;
+        let (files_to_check, config_finder) = self.files.resolve(self.config_override, wrapper)?;
         run_check(self.args, self.watch, files_to_check, config_finder).await
     }
+}
+
+/// Resolve the `--relative-to` argument to a concrete path for error reporting.
+fn resolve_relative_to(relative_to: Option<&String>) -> PathBuf {
+    relative_to.map_or_else(
+        || std::env::current_dir().ok().unwrap_or_default(),
+        |x| PathBuf::from_str(x.as_str()).unwrap(),
+    )
 }
 
 async fn run_check(
@@ -99,7 +141,7 @@ async fn run_check(
     watch: bool,
     files_to_check: Box<dyn Includes>,
     config_finder: ConfigFinder,
-) -> anyhow::Result<CommandExitStatus> {
+) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
     if watch {
         let roots = files_to_check.roots();
         info!(
@@ -109,16 +151,14 @@ async fn run_check(
         let watcher = Watcher::notify(&roots)?;
         args.run_watch(watcher, files_to_check, config_finder)
             .await?;
-        Ok(CommandExitStatus::Success)
+        Ok((CommandExitStatus::Success, None))
     } else {
-        match args.run_once(files_to_check, config_finder) {
-            Ok((status, _)) => Ok(status),
-            Err(e) => Err(e),
-        }
+        let (status, _, check_result) = args.run_once(files_to_check, config_finder)?;
+        Ok((status, Some(check_result)))
     }
 }
 
-#[derive(Debug, Clone, ValueEnum, Default)]
+#[derive(Debug, Clone, ValueEnum, Default, PartialEq, Eq)]
 enum OutputFormat {
     /// Minimal text output, one line per error
     MinText,
@@ -127,6 +167,8 @@ enum OutputFormat {
     FullText,
     /// JSON output
     Json,
+    /// Emit GitHub Actions workflow commands
+    Github,
     /// Only show error count, omitting individual errors
     OmitErrors,
 }
@@ -166,8 +208,12 @@ pub struct SnippetCheckArgs {
 }
 
 impl SnippetCheckArgs {
-    pub async fn run(self) -> anyhow::Result<CommandExitStatus> {
-        let (_, config_finder) = FilesArgs::get(vec![], self.config, self.config_override)?;
+    pub async fn run(
+        self,
+        wrapper: Option<ConfigConfigurerWrapper>,
+    ) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
+        let (_, config_finder) =
+            FilesArgs::get(vec![], self.config, self.config_override, wrapper)?;
         let check_args = CheckArgs {
             output: self.output,
             behavior: BehaviorArgs {
@@ -175,13 +221,10 @@ impl SnippetCheckArgs {
                 suppress_errors: false,
                 expectations: false,
                 remove_unused_ignores: false,
-                all: false,
             },
         };
-        match check_args.run_once_with_snippet(self.code, config_finder) {
-            Ok((status, _)) => Ok(status),
-            Err(e) => Err(e),
-        }
+        let (status, check_result) = check_args.run_once_with_snippet(self.code, config_finder)?;
+        Ok((status, Some(check_result)))
     }
 }
 
@@ -204,6 +247,9 @@ struct OutputArgs {
     /// Report type traces.
     #[arg(long, value_name = "OUTPUT_FILE")]
     report_trace: Option<PathBuf>,
+    /// Experimental: generate a JSON dependency graph of all modules to the specified file. This is unstable and should only be used for debugging.
+    #[arg(long, value_name = "OUTPUT_FILE")]
+    dependency_graph: Option<PathBuf>,
     /// Process each module individually to figure out how long each step takes.
     #[arg(long, value_name = "OUTPUT_FILE")]
     report_timings: Option<PathBuf>,
@@ -213,6 +259,9 @@ struct OutputArgs {
     /// Generate a Pysa-compatible JSON file for each module
     #[arg(long, value_name = "OUTPUT_FILE")]
     report_pysa: Option<PathBuf>,
+    /// Generate a CinderX-format type report (experimental, internal-only).
+    #[arg(long, value_name = "OUTPUT_DIR", hide = true)]
+    report_cinderx: Option<PathBuf>,
     /// Count the number of each error kind. Prints the top N [default=5] errors, sorted by count, or all errors if N is 0.
     #[arg(
         long,
@@ -234,18 +283,20 @@ struct OutputArgs {
     )]
     summarize_errors: Option<usize>,
 
-    /// Filter the error summary to show only a specific error kind (e.g., bad-assignment, missing-return, etc.).
-    /// Must be used in conjunction with --summarize-errors.
+    /// Filter errors to show only a specific error kind (e.g., bad-assignment, missing-return, etc.).
+    /// Can be passed multiple times or as a comma-separated list.
     #[arg(
         long,
         value_enum,
         value_name = "ERROR_KIND",
-        hide_possible_values = true
+        hide_possible_values = true,
+        value_delimiter = ','
     )]
-    only: Option<crate::config::error_kind::ErrorKind>,
+    only: Option<Vec<ErrorKind>>,
 
-    /// By default show the number of errors. Pass `--summary` to show information about lines checked and time/memory,
-    /// or `--summary=none` to hide the summary line entirely.
+    /// By default show a progress bar and the number of errors.
+    /// Pass `--summary` to additionally show information about lines checked and time/memory,
+    /// or `--summary=none` to hide the progress bar and summary line entirely.
     #[arg(
         long,
         default_missing_value = "full",
@@ -255,6 +306,10 @@ struct OutputArgs {
         default_value_t
     )]
     summary: Summary,
+
+    /// Suppress the progress bar during type checking.
+    #[arg(long)]
+    no_progress_bar: bool,
 
     /// When specified, strip this prefix from any paths in the output.
     /// Pass "" to show absolute paths. When omitted, we will use the current working directory.
@@ -268,6 +323,11 @@ struct OutputArgs {
     /// When specified, emit a sorted/formatted JSON of the errors to the baseline file
     #[arg(long, requires("baseline"))]
     update_baseline: bool,
+
+    /// Minimum severity level for errors to be displayed.
+    /// Errors below this severity will not be shown. Defaults to "error".
+    #[arg(long, value_enum)]
+    min_severity: Option<Severity>,
 }
 
 #[derive(Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
@@ -294,9 +354,6 @@ struct BehaviorArgs {
     /// Remove unused ignores from the input files.
     #[arg(long)]
     remove_unused_ignores: bool,
-    /// If we are removing unused ignores, should we remove all unused ignores or only Pyrefly specific `pyrefly: ignore`s?
-    #[arg(long, requires("remove_unused_ignores"))]
-    all: bool,
 }
 
 impl OutputFormat {
@@ -373,6 +430,7 @@ impl OutputFormat {
             Self::MinText => Self::write_error_text_to_file(path, relative_to, errors, false),
             Self::FullText => Self::write_error_text_to_file(path, relative_to, errors, true),
             Self::Json => Self::write_error_json_to_file(path, relative_to, errors),
+            Self::Github => Self::write_error_github_to_file(path, errors),
             Self::OmitErrors => Ok(()),
         }
     }
@@ -382,9 +440,82 @@ impl OutputFormat {
             Self::MinText => Self::write_error_text_to_console(relative_to, errors, false),
             Self::FullText => Self::write_error_text_to_console(relative_to, errors, true),
             Self::Json => Self::write_error_json_to_console(relative_to, errors),
+            Self::Github => Self::write_error_github_to_console(errors),
             Self::OmitErrors => Ok(()),
         }
     }
+
+    fn write_error_github(writer: &mut impl Write, errors: &[Error]) -> anyhow::Result<()> {
+        for error in errors {
+            if let Some(command) = github_actions_command(error) {
+                writeln!(writer, "{command}")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn buffered_write_error_github(writer: impl Write, errors: &[Error]) -> anyhow::Result<()> {
+        let mut writer = BufWriter::new(writer);
+        Self::write_error_github(&mut writer, errors)?;
+        writer.flush()?;
+        Ok(())
+    }
+
+    fn write_error_github_to_file(path: &Path, errors: &[Error]) -> anyhow::Result<()> {
+        let file = File::create(path)?;
+        Self::buffered_write_error_github(file, errors)
+    }
+
+    fn write_error_github_to_console(errors: &[Error]) -> anyhow::Result<()> {
+        Self::buffered_write_error_github(stdout(), errors)
+    }
+}
+
+fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
+    let normalized = severity_to_str(severity);
+    match normalized.as_str() {
+        "ignore" => None,
+        "warn" => Some("warning"),
+        "info" => Some("notice"),
+        "error" => Some("error"),
+        _ => None,
+    }
+}
+
+fn github_actions_command(error: &Error) -> Option<String> {
+    let command = severity_to_github_command(error.severity())?;
+    let range = error.display_range();
+    let file = github_actions_path(error.path().as_path());
+    let params = format!(
+        "file={},line={},col={},endLine={},endColumn={},title={}",
+        escape_workflow_property(&file),
+        range.start.line_within_file().get(),
+        range.start.column().get(),
+        range.end.line_within_file().get(),
+        range.end.column().get(),
+        escape_workflow_property(&format!("Pyrefly {}", error.error_kind().to_name())),
+    );
+    let message = escape_workflow_data(&error.msg());
+    Some(format!("::{command} {params}::{message}"))
+}
+
+const WORKFLOW_DATA_ENCODE_SET: &AsciiSet = &CONTROLS.add(b'%');
+const WORKFLOW_PROPERTY_ENCODE_SET: &AsciiSet = &WORKFLOW_DATA_ENCODE_SET.add(b':').add(b',');
+
+fn github_actions_path(path: &Path) -> String {
+    let mut path_str = path.to_string_lossy().into_owned();
+    if std::path::MAIN_SEPARATOR != '/' {
+        path_str = path_str.replace(std::path::MAIN_SEPARATOR, "/");
+    }
+    path_str
+}
+
+fn escape_workflow_data(value: &str) -> String {
+    utf8_percent_encode(value, WORKFLOW_DATA_ENCODE_SET).to_string()
+}
+
+fn escape_workflow_property(value: &str) -> String {
+    utf8_percent_encode(value, WORKFLOW_PROPERTY_ENCODE_SET).to_string()
 }
 
 /// A data structure to facilitate the creation of handles for all the files we want to check.
@@ -413,29 +544,27 @@ impl Handles {
         for path in &self.path_data {
             let unknown = ModuleName::unknown();
             configs
-                .entry(config_finder.python_file(unknown, path))
+                .entry(config_finder.python_file(ModuleNameWithKind::guaranteed(unknown), path))
                 .or_insert_with(SmallSet::new)
                 .insert(path.dupe());
         }
 
-        let mut errors = Vec::new();
-        let mut reloaded_configs = SmallSet::new();
-        for (config, files) in &configs {
-            match config.requery_source_db(files) {
-                Ok(reload) if reload => {
-                    reloaded_configs.insert(config.dupe());
-                }
-                Err(error) => {
-                    errors.push(ConfigError::error(error));
-                }
-                _ => (),
-            }
-        }
+        // TODO(connernilsen): wire in force logic
+        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false, None).0;
         let result = configs
             .iter()
             .flat_map(|(c, files)| files.iter().map(|p| c.handle_from_module_path(p.dupe())))
             .collect();
-        (result, reloaded_configs, errors)
+        let reloaded_configs = configs
+            .into_iter()
+            .map(|x| x.0)
+            .filter(|c| {
+                c.source_db
+                    .as_ref()
+                    .is_some_and(|db| reloaded_source_dbs.contains(db))
+            })
+            .collect();
+        (result, reloaded_configs, Vec::new())
     }
 
     fn update<'a>(
@@ -452,11 +581,6 @@ impl Handles {
                 .remove(&ModulePath::filesystem(file.to_path_buf()));
         }
     }
-}
-
-struct RequireLevels {
-    specified: Require,
-    default: Require,
 }
 
 async fn get_watcher_events(watcher: &mut Watcher) -> anyhow::Result<CategorizedEvents> {
@@ -538,11 +662,13 @@ impl Timings {
 }
 
 impl CheckArgs {
+    /// Run a one-shot type check. Returns the exit status, the CLI-visible errors,
+    /// and a `CheckResult` suitable for telemetry logging.
     pub fn run_once(
-        self,
+        mut self,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
-    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>, CheckResult)> {
         let mut timings = Timings::new();
         let list_files_start = Instant::now();
         let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
@@ -553,7 +679,14 @@ impl CheckArgs {
             Timings::show(timings.list_files),
         );
         if expanded_file_list.is_empty() {
-            return Ok((CommandExitStatus::Success, Vec::new()));
+            return Ok((
+                CommandExitStatus::Success,
+                Vec::new(),
+                CheckResult {
+                    legacy_errors: Vec::new(),
+                    checked_file_count: 0,
+                },
+            ));
         }
 
         let holder = Forgetter::new(State::new(config_finder), true);
@@ -566,20 +699,41 @@ impl CheckArgs {
             true,
         );
         let (loaded_handles, _, sourcedb_errors) = handles.all(holder.as_ref().config_finder());
-        self.run_inner(
+
+        // If CLI doesn't provide baseline or min-severity, get from config
+        if (self.output.baseline.is_none() || self.output.min_severity.is_none())
+            && let Some(handle) = loaded_handles.first()
+        {
+            let config = holder.as_ref().config_finder().python_file(
+                ModuleNameWithKind::guaranteed(handle.module()),
+                handle.path(),
+            );
+            if self.output.baseline.is_none() {
+                self.output.baseline = config.baseline.clone();
+            }
+            if self.output.min_severity.is_none() {
+                self.output.min_severity = config.min_severity;
+            }
+        }
+
+        let checked_file_count = loaded_handles.len();
+        let relative_to = resolve_relative_to(self.output.relative_to.as_ref());
+        let (status, errors) = self.run_inner(
             timings,
             transaction.as_mut(),
             &loaded_handles,
             sourcedb_errors,
             require_levels.specified,
-        )
+        )?;
+        let check_result = CheckResult::from_errors(&errors, &relative_to, checked_file_count);
+        Ok((status, errors, check_result))
     }
 
     pub fn run_once_with_snippet(
-        self,
+        mut self,
         code: String,
         config_finder: ConfigFinder,
-    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+    ) -> anyhow::Result<(CommandExitStatus, CheckResult)> {
         // Create a virtual module path for the snippet
         let path = PathBuf::from_str("snippet")?;
         let module_path = ModulePath::memory(path);
@@ -588,12 +742,20 @@ impl CheckArgs {
         let holder = Forgetter::new(State::new(config_finder), true);
 
         // Create a single handle for the virtual module
-        let sys_info = holder
+        let config = holder
             .as_ref()
             .config_finder()
-            .python_file(module_name, &module_path)
-            .get_sys_info();
+            .python_file(ModuleNameWithKind::guaranteed(module_name), &module_path);
+        let sys_info = config.get_sys_info();
         let handle = Handle::new(module_name, module_path.clone(), sys_info);
+
+        // If CLI doesn't provide baseline or min-severity, get from config
+        if self.output.baseline.is_none() {
+            self.output.baseline = config.baseline.clone();
+        }
+        if self.output.min_severity.is_none() {
+            self.output.min_severity = config.min_severity;
+        }
 
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
@@ -609,17 +771,19 @@ impl CheckArgs {
             Some(Arc::new(FileContents::from_source(code))),
         )]);
 
-        self.run_inner(
+        let relative_to = resolve_relative_to(self.output.relative_to.as_ref());
+        let (status, errors) = self.run_inner(
             Timings::new(),
             transaction.as_mut(),
             &[handle],
             vec![],
             require_levels.specified,
-        )
+        )?;
+        Ok((status, CheckResult::from_errors(&errors, &relative_to, 1)))
     }
 
     pub async fn run_watch(
-        self,
+        mut self,
         mut watcher: Watcher,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
@@ -630,11 +794,33 @@ impl CheckArgs {
         let require_levels = self.get_required_levels();
         let mut handles = Handles::new(expanded_file_list);
         let state = State::new(config_finder);
+
+        // Track if CLI provided values - if so, never override them with config values
+        let cli_provided_baseline = self.output.baseline.is_some();
+        let cli_provided_min_severity = self.output.min_severity.is_some();
+
         let mut transaction = state.new_committable_transaction(require_levels.default, None);
         loop {
             let timings = Timings::new();
             let (loaded_handles, reloaded_configs, sourcedb_errors) =
                 handles.all(state.config_finder());
+
+            // If CLI didn't provide these values, get from config on every iteration
+            // to pick up config file changes
+            if (!cli_provided_baseline || !cli_provided_min_severity)
+                && let Some(handle) = loaded_handles.first()
+            {
+                let config = state.config_finder().python_file(
+                    ModuleNameWithKind::guaranteed(handle.module()),
+                    handle.path(),
+                );
+                if !cli_provided_baseline {
+                    self.output.baseline = config.baseline.clone();
+                }
+                if !cli_provided_min_severity {
+                    self.output.min_severity = config.min_severity;
+                }
+            }
             let mut_transaction = transaction.as_mut();
             mut_transaction.invalidate_find_for_configs(reloaded_configs);
             let res = self.run_inner(
@@ -644,7 +830,7 @@ impl CheckArgs {
                 sourcedb_errors,
                 require_levels.specified,
             );
-            state.commit_transaction(transaction);
+            state.commit_transaction(transaction, None);
             if let Err(e) = res {
                 eprintln!("{e:#}");
             }
@@ -669,7 +855,7 @@ impl CheckArgs {
             || self.output.debug_info.is_some()
             || self.output.report_trace.is_some()
             || self.output.report_glean.is_some()
-            || self.output.report_pysa.is_some();
+            || self.output.report_cinderx.is_some();
         RequireLevels {
             specified: if retain {
                 Require::Everything
@@ -678,7 +864,10 @@ impl CheckArgs {
             },
             default: if retain {
                 Require::Everything
-            } else if self.behavior.check_all || stdlib_search_path().is_some() {
+            } else if self.behavior.check_all
+                || stdlib_search_path().is_some()
+                || self.output.report_pysa.is_some()
+            {
                 Require::Errors
             } else {
                 Require::Exports
@@ -696,10 +885,21 @@ impl CheckArgs {
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
+        if let Some(pysa_directory) = &self.output.report_pysa {
+            let reporter = report::pysa::PysaReporter::new(pysa_directory, handles)?;
+            transaction.set_pysa_reporter(Some(reporter));
+        }
+
         let type_check_start = Instant::now();
-        transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
-        transaction.run(handles, require);
-        transaction.set_subscriber(None);
+        let show_progress_bar =
+            self.output.summary != Summary::None && !self.output.no_progress_bar;
+        if show_progress_bar {
+            transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+        }
+        transaction.run(handles, require, None);
+        if show_progress_bar {
+            transaction.set_subscriber(None);
+        }
 
         let loads = if self.behavior.check_all {
             transaction.get_all_errors()
@@ -711,9 +911,12 @@ impl CheckArgs {
         let report_errors_start = Instant::now();
         let mut config_errors = transaction.get_config_errors();
         config_errors.append(&mut sourcedb_errors);
-        let config_errors_count = config_errors.len();
+        let mut config_errors_count = 0;
         for error in config_errors {
             error.print();
+            if error.severity() >= Severity::Error {
+                config_errors_count += 1;
+            }
         }
 
         let relative_to = self.output.relative_to.as_ref().map_or_else(
@@ -723,13 +926,77 @@ impl CheckArgs {
 
         let errors = loads
             .collect_errors_with_baseline(self.output.baseline.as_deref(), relative_to.as_path());
+        let (directives, ordinary_errors) = if let Some(only) = &self.output.only {
+            let only = only.iter().collect::<SmallSet<_>>();
+            (
+                errors
+                    .directives
+                    .into_iter()
+                    .filter(|e| only.contains(&e.error_kind()))
+                    .collect(),
+                errors
+                    .ordinary
+                    .into_iter()
+                    .filter(|e| only.contains(&e.error_kind()))
+                    .collect(),
+            )
+        } else {
+            (errors.directives, errors.ordinary)
+        };
 
-        // We update the baseline file if requested, after reporting any new errors using the old baseline
+        // Collect unused ignore errors for display (respects severity configuration)
+        let unused_ignore_errors = loads.collect_unused_ignore_errors_for_display();
+        let mut ordinary_errors: Vec<_> = if let Some(only) = &self.output.only {
+            let only = only.iter().collect::<SmallSet<_>>();
+            let filtered: Vec<_> = unused_ignore_errors
+                .ordinary
+                .into_iter()
+                .filter(|e| only.contains(&e.error_kind()))
+                .collect();
+            ordinary_errors.into_iter().chain(filtered).collect()
+        } else {
+            ordinary_errors
+                .into_iter()
+                .chain(unused_ignore_errors.ordinary)
+                .collect()
+        };
+
+        // Suppress operates on ordinary diagnostics only — directives are
+        // structurally excluded since they live in `directives`, not `ordinary_errors`.
+        if self.behavior.suppress_errors {
+            // TODO: Move this into separate command
+            let serialized_errors: Vec<SerializedError> = ordinary_errors
+                .iter()
+                .filter_map(SerializedError::from_error)
+                .filter(|e| !e.is_unused_ignore())
+                .collect();
+            suppress::suppress_errors(serialized_errors);
+        }
+        if self.behavior.remove_unused_ignores {
+            // TODO: Move this into separate command
+            let unused_errors = loads.collect_unused_ignore_errors();
+            suppress::remove_unused_ignores(unused_errors);
+        }
+
+        // Filter by minimum severity. Directives are not subject to this
+        // filter — they are merged separately in the output step below.
+        let min_severity = self.output.min_severity.unwrap_or(Severity::Error);
+        ordinary_errors.retain(|e| e.severity() >= min_severity);
+
+        // We update the baseline file if requested, after reporting any new
+        // errors using the old baseline. Directives are structurally excluded
+        // — they live in `directives`, not `ordinary_errors`. The baseline only
+        // tracks errors that meet the min-severity threshold.
         if self.output.update_baseline
             && let Some(baseline_path) = &self.output.baseline
         {
-            let mut new_baseline = errors.shown.clone();
-            new_baseline.extend(errors.baseline);
+            let mut new_baseline = ordinary_errors.clone();
+            new_baseline.extend(
+                errors
+                    .baseline
+                    .into_iter()
+                    .filter(|e| e.severity() >= min_severity),
+            );
             new_baseline.sort_by_cached_key(|error| {
                 (
                     error.path().to_string(),
@@ -745,40 +1012,57 @@ impl CheckArgs {
             )?;
         }
 
+        // Count only ordinary errors for exit code determination. Directives
+        // (e.g. reveal_type) do not contribute to the error count.
+        let mut ordinary_errors_count = config_errors_count;
+        for error in &ordinary_errors {
+            if error.severity() >= Severity::Error {
+                ordinary_errors_count += 1;
+            }
+        }
+
+        // Merge directives into the display list, re-sorting by module
+        // name, path, and source range so output preserves file/line
+        // interleaving across modules.
+        let mut output_errors = ordinary_errors;
+        output_errors.extend(directives);
+        output_errors.sort_by_cached_key(|e| {
+            (
+                e.module().name(),
+                e.path().dupe(),
+                e.range().start(),
+                e.range().end(),
+            )
+        });
+
         if let Some(path) = &self.output.output {
             self.output.output_format.write_errors_to_file(
                 path,
                 relative_to.as_path(),
-                &errors.shown,
+                &output_errors,
             )?;
         } else {
             self.output
                 .output_format
-                .write_errors_to_console(relative_to.as_path(), &errors.shown)?;
+                .write_errors_to_console(relative_to.as_path(), &output_errors)?;
         }
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {
-            print_error_counts(&errors.shown, limit);
+            print_error_counts(&output_errors, limit);
         }
         if self.output.summarize_errors.is_some() {
-            print_error_summary(&errors.shown, self.output.only);
-        }
-        let mut shown_errors_count = config_errors_count;
-        for error in &errors.shown {
-            if error.severity() >= Severity::Error {
-                shown_errors_count += 1;
-            }
+            print_error_summary(&output_errors);
         }
         timings.report_errors = report_errors_start.elapsed();
 
         if self.output.summary != Summary::None {
             let suppress_count = errors.suppressed.len();
             if suppress_count == 0 {
-                info!("{}", count(shown_errors_count, "error"))
+                info!("{}", count(ordinary_errors_count, "error"))
             } else {
                 info!(
                     "{} ({} suppressed)",
-                    count(shown_errors_count, "error"),
+                    count(ordinary_errors_count, "error"),
                     number_thousands(suppress_count)
                 )
             };
@@ -817,15 +1101,18 @@ impl CheckArgs {
             fs_anyhow::create_dir_all(glean)?;
             for handle in handles {
                 // Generate a safe filename using hash to avoid OS filename length limits
-                let module_hash = blake3::hash(handle.module().to_string().as_bytes());
+                let module_hash = blake3::hash(handle.path().to_string().as_bytes());
                 fs_anyhow::write(
                     &glean.join(format!("{}.json", &module_hash)),
                     report::glean::glean(transaction, handle),
                 )?;
             }
         }
-        if let Some(pysa_directory) = &self.output.report_pysa {
-            report::pysa::write_results(pysa_directory, transaction)?;
+        if let Some(pysa_reporter) = transaction.take_pysa_reporter() {
+            report::pysa::write_project_file(&pysa_reporter, transaction, handles, &output_errors)?;
+        }
+        if let Some(cinderx_directory) = &self.output.report_cinderx {
+            report::cinderx::write_results(cinderx_directory, transaction)?;
         }
         if let Some(path) = &self.output.report_binding_memory {
             fs_anyhow::write(path, report::binding_memory::binding_memory(transaction))?;
@@ -833,19 +1120,104 @@ impl CheckArgs {
         if let Some(path) = &self.output.report_trace {
             fs_anyhow::write(path, report::trace::trace(transaction))?;
         }
-        if self.behavior.suppress_errors {
-            suppress::suppress_errors(errors.shown.clone());
-        }
-        if self.behavior.remove_unused_ignores {
-            suppress::remove_unused_ignores(&loads, self.behavior.all);
+        if let Some(path) = &self.output.dependency_graph {
+            fs_anyhow::write(
+                path,
+                report::dependency_graph::dependency_graph(transaction, handles),
+            )?;
         }
         if self.behavior.expectations {
             loads.check_against_expectations()?;
-            Ok((CommandExitStatus::Success, errors.shown))
-        } else if shown_errors_count > 0 {
-            Ok((CommandExitStatus::UserError, errors.shown))
+            Ok((CommandExitStatus::Success, output_errors))
+        } else if ordinary_errors_count > 0 {
+            Ok((CommandExitStatus::UserError, output_errors))
         } else {
-            Ok((CommandExitStatus::Success, errors.shown))
+            Ok((CommandExitStatus::Success, output_errors))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
+    use vec1::Vec1;
+    use vec1::vec1;
+
+    use super::*;
+
+    fn sample_error(msg: Vec1<String>) -> Error {
+        let module = Module::new(
+            ModuleName::from_str("sample"),
+            ModulePath::filesystem(PathBuf::from("/repo/foo.py")),
+            Arc::new("x = 1\n".to_owned()),
+        );
+        Error::new(
+            module,
+            TextRange::new(TextSize::from(0), TextSize::from(1)),
+            msg,
+            ErrorKind::BadAssignment,
+        )
+    }
+
+    #[test]
+    fn github_actions_command_includes_full_path_and_metadata() {
+        let cmd = github_actions_command(&sample_error(vec1!["bad".into()]))
+            .expect("should emit command");
+        assert!(cmd.starts_with("::error "), "{cmd}");
+        assert!(
+            cmd.contains("file=/repo/foo.py"),
+            "full path expected, got {cmd}"
+        );
+        assert!(
+            cmd.contains("title=Pyrefly bad-assignment"),
+            "title missing, got {cmd}"
+        );
+        assert!(cmd.ends_with("::bad"));
+    }
+
+    #[test]
+    fn github_actions_command_respects_severity_mapping() {
+        let warning = sample_error(vec1!["bad".into()]).with_severity(Severity::Warn);
+        let notice = sample_error(vec1!["bad".into()]).with_severity(Severity::Info);
+        let ignored = sample_error(vec1!["bad".into()]).with_severity(Severity::Ignore);
+        assert!(
+            github_actions_command(&warning)
+                .unwrap()
+                .starts_with("::warning "),
+            "warning severity not mapped"
+        );
+        assert!(
+            github_actions_command(&notice)
+                .unwrap()
+                .starts_with("::notice "),
+            "info severity not mapped"
+        );
+        assert!(github_actions_command(&ignored).is_none());
+    }
+
+    #[test]
+    fn escape_helpers_follow_workflow_spec() {
+        assert_eq!(
+            escape_workflow_data("line1\nline2\r% done"),
+            "line1%0Aline2%0D%25 done"
+        );
+        assert_eq!(escape_workflow_property("file:name,py"), "file%3Aname%2Cpy");
+    }
+
+    #[test]
+    fn github_output_format_writes_commands() {
+        let errors = vec![sample_error(vec1!["bad".into()])];
+        let mut buf = Vec::new();
+        OutputFormat::write_error_github(&mut buf, &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("::error file=/repo/foo.py"));
+        assert!(output.ends_with("::bad\n"));
     }
 }

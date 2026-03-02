@@ -272,11 +272,11 @@ testcase!(
     test_with_contextmanager,
     r#"
 import contextlib
-from typing import Iterator
+from typing import Generator
 
 @contextlib.contextmanager
-def f() -> Iterator[str]:
-    return iter([""])
+def f() -> Generator[str, None, None]:
+    yield ""
 
 def g() -> bool:
     with f():
@@ -322,4 +322,40 @@ class Foo:
 with Foo() as foo:
     assert_type(foo, int)
     "#,
+);
+
+testcase!(
+    bug = "conformance: Context manager with bool/__exit__ should not narrow type after raise in if block",
+    test_context_manager_exception_suppression_conformance,
+    r#"
+from typing import Any, Literal, assert_type
+
+class CMBase:
+    def __enter__(self) -> None:
+        pass
+
+class Suppress1(CMBase):
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        return True
+
+class Suppress2(CMBase):
+    def __exit__(self, exc_type, exc_value, traceback) -> Literal[True]:
+        return True
+
+# When __exit__ returns bool or Literal[True], exceptions may be suppressed
+# so we should NOT narrow x based on the raise
+def suppress1(x: int | str) -> None:
+    if isinstance(x, int):
+        with Suppress1():
+            raise ValueError
+    # pyrefly incorrectly narrows x to str here, but exception might be suppressed
+    assert_type(x, int | str)  # E: assert_type(str, int | str) failed
+
+def suppress2(x: int | str) -> None:
+    if isinstance(x, int):
+        with Suppress2():
+            raise ValueError
+    # pyrefly incorrectly narrows x to str here, but exception might be suppressed
+    assert_type(x, int | str)  # E: assert_type(str, int | str) failed
+"#,
 );
