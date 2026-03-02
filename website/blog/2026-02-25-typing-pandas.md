@@ -67,7 +67,7 @@ The general idea is:
 - Run `pyright` against the pandas package in that temporary virtual environment.
 - Postprocess the output to remove technically-public-but-actually-private symbols.
 
-The full script can be viewed [here](https://github.com/pandas-dev/pandas-stubs/blob/7ed11d172cd31c61b1adef265e196a1bb8b352da/scripts/type_completeness.py).
+The full script can be viewed [in the pandas-stubs repo](https://github.com/pandas-dev/pandas-stubs/blob/7ed11d172cd31c61b1adef265e196a1bb8b352da/scripts/type_completeness.py).
 
 ## Beyond Pyright - what about "Pyrefly report"?
 
