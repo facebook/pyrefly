@@ -480,6 +480,31 @@ Definition Result:
 }
 
 #[test]
+fn keyword_argument_test_class_field() {
+    let code = r#"
+class Foo:
+    x: int
+
+def test() -> None:
+    Foo(x=1)
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+6 |     Foo(x=1)
+            ^
+Definition Result:
+3 |     x: int
+        ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn keyword_argument_test_multiple_methods() {
     let code = r#"
 class A:
