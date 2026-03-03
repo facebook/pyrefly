@@ -1606,6 +1606,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let sig_for_input_check = |sig: &Callable| {
             let mut sig = sig.clone();
+            // If the first argument is Self, we convert the SelfType to a ClassType for input signature check.
+            if let Params::List(ref mut params) = sig.params {
+                if let Some(Param::PosOnly(_, ty, _)) | Some(Param::Pos(_, ty, _)) =
+                    params.items().first()
+                {
+                    if let Type::SelfType(cls) = ty {
+                        let class_type = self.heap.mk_class_type(cls.clone());
+                        let first_param = params
+                            .clone()
+                            .into_items()
+                            .into_iter()
+                            .next()
+                            .expect("first param exists");
+                        let rest = params.clone().into_items().into_iter().skip(1);
+                        let updated_param = match first_param {
+                            Param::PosOnly(name, _, required) => {
+                                Param::PosOnly(name, class_type, required)
+                            }
+                            Param::Pos(name, _, required) => Param::Pos(name, class_type, required),
+                            _ => unreachable!(),
+                        };
+                        let new_params =
+                            ParamList::new(std::iter::once(updated_param).chain(rest).collect());
+                        sig.params = Params::List(new_params);
+                    }
+                }
+            }
             // Set the return type to `Any` so that we check just the input signature.
             sig.ret = self.heap.mk_any_implicit();
             sig
@@ -1655,22 +1682,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // signature of the overload and that the return type of the overload is assignable
             // to the return type of the implementation. (Note that the two assignability checks
             // are in opposite directions.)
-            self.check_type(
-                &self
-                    .heap
-                    .mk_callable_from(sig_for_input_check(&impl_func.signature)),
-                &self
-                    .heap
-                    .mk_callable_from(sig_for_input_check(&overload_func.signature)),
-                *range,
-                errors,
-                &|| {
-                    TypeCheckContext::of_kind(TypeCheckKind::OverloadInput(
-                        original_overload_func.signature.clone(),
-                        impl_sig.clone(),
-                    ))
-                },
-            );
+            let got = &self
+                .heap
+                .mk_callable_from(sig_for_input_check(&impl_func.signature));
+            let want = &self
+                .heap
+                .mk_callable_from(sig_for_input_check(&overload_func.signature));
+            // eprintln!("impl sig for input check: {}", self.for_display(got.clone()));
+            // eprintln!("overload sig for input check: {}", self.for_display(want.clone()));
+            self.check_type(got, want, *range, errors, &|| {
+                TypeCheckContext::of_kind(TypeCheckKind::OverloadInput(
+                    original_overload_func.signature.clone(),
+                    impl_sig.clone(),
+                ))
+            });
+            // eprintln!("impl sig: {}", self.for_display(impl_func.signature.ret.clone()));
+            // eprintln!("overload sig: {}", self.for_display(overload_func.signature.ret.clone()));
             self.check_type(
                 &overload_func.signature.ret,
                 &impl_func.signature.ret,
