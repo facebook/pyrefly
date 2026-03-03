@@ -478,6 +478,7 @@ pub(crate) struct OldData {
 struct ModuleData {
     handle: Handle,
     config: ArcId<ConfigFile>,
+    effective_sys_info: SysInfo,
     state: ModuleState,
     imports: HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>,
     deps: HashMap<Handle, ModuleDeps>,
@@ -495,6 +496,7 @@ struct ModuleData {
 struct ModuleDataMut {
     handle: Handle,
     config: RwLock<ArcId<ConfigFile>>,
+    effective_sys_info: RwLock<SysInfo>,
     state: ModuleStateMut,
     /// Pre-rebuild data saved for diffing at the Solutions step.
     /// Populated during `clean()`, consumed during `demand()` at Solutions.
@@ -533,6 +535,7 @@ impl ModuleData {
         ModuleDataMut {
             handle: self.handle.dupe(),
             config: RwLock::new(self.config.dupe()),
+            effective_sys_info: RwLock::new(self.effective_sys_info.dupe()),
             state: self.state.clone_for_mutation(),
             old: Default::default(),
             imports: RwLock::new(self.imports.clone()),
@@ -545,9 +548,11 @@ impl ModuleData {
 
 impl ModuleDataMut {
     fn new(handle: Handle, require: Require, config: ArcId<ConfigFile>, now: Epoch) -> Self {
+        let effective_sys_info = handle.sys_info().dupe();
         Self {
             handle,
             config: RwLock::new(config),
+            effective_sys_info: RwLock::new(effective_sys_info),
             state: ModuleStateMut::new(require, now),
             old: Default::default(),
             imports: Default::default(),
@@ -562,6 +567,7 @@ impl ModuleDataMut {
         let ModuleDataMut {
             handle,
             config,
+            effective_sys_info,
             state,
             old: _,
             imports,
@@ -572,11 +578,24 @@ impl ModuleDataMut {
         ModuleData {
             handle,
             config: config.into_inner(),
+            effective_sys_info: effective_sys_info.into_inner(),
             state: state.take_and_freeze(),
             imports: imports.into_inner(),
             deps: deps.into_inner(),
             rdeps: rdeps.into_inner(),
             tensor_shapes: tensor_shapes.into_inner(),
+        }
+    }
+
+    fn effective_sys_info(&self) -> SysInfo {
+        if let Some(ast) = self.state.get_ast().as_deref() {
+            let base = self.handle.sys_info();
+            let effective =
+                module_sys_info_override(base, Some(ast)).unwrap_or_else(|| base.dupe());
+            *self.effective_sys_info.write() = effective.dupe();
+            effective
+        } else {
+            self.effective_sys_info.read().dupe()
         }
     }
 
@@ -1523,18 +1542,12 @@ impl<'a> Transaction<'a> {
                     module_ids: &reporter.module_ids,
                     stdlib: stdlib.dupe(),
                 });
-            let sys_info_override = module_sys_info_override(
-                module_data.handle.sys_info(),
-                module_data.state.get_ast().as_deref(),
-            );
-            let sys_info = sys_info_override
-                .as_ref()
-                .unwrap_or(module_data.handle.sys_info());
+            let sys_info = module_data.effective_sys_info();
             let ctx = Context {
                 require,
                 module: module_data.handle.module(),
                 path: module_data.handle.path(),
-                sys_info,
+                sys_info: &sys_info,
                 memory: &self.memory_lookup(),
                 uniques: &self.data.state.uniques,
                 stdlib: &stdlib,
@@ -2783,13 +2796,7 @@ impl<'a> TransactionHandle<'a> {
         path: Option<&ModulePath>,
         dep: ModuleDep,
     ) -> FindingOrError<&'a ArcId<ModuleDataMut>> {
-        let sys_info_override = module_sys_info_override(
-            self.module_data.handle.sys_info(),
-            self.module_data.state.get_ast().as_deref(),
-        );
-        let sys_info = sys_info_override
-            .as_ref()
-            .unwrap_or(self.module_data.handle.sys_info());
+        let sys_info = self.module_data.effective_sys_info();
         let handle = match path {
             Some(path) => {
                 // Explicit path — already resolved. Bypass imports entirely.
