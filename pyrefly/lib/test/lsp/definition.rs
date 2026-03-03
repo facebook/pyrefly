@@ -96,11 +96,15 @@ if not TYPE_CHECKING:
 # main.py
 5 |     x = 1
         ^
-Definition Result: None
+Definition Result:
+5 |     x = 1
+        ^
 
 7 |     y = x
             ^
-Definition Result: None
+Definition Result:
+5 |     x = 1
+        ^
 "#
         .trim(),
         report.trim(),
@@ -1667,7 +1671,9 @@ if False:
 # main.py
 4 |     print(x)
               ^
-Definition Result: None
+Definition Result:
+2 | x = 5
+    ^
 
 "#
         .trim(),
