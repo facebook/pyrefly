@@ -982,13 +982,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let parent_hint = parent_param_hints
                 .as_mut()
                 .and_then(|hint| hint.take_vararg());
+            // If the first parameter is variadic, implicit self/cls is packed into *args.
+            // Don't use it as the vararg element type; consume it so it won't apply later.
+            let _ = std::mem::take(self_type);
+            let mut vararg_self_type = None;
             let ParamTypeResult {
                 ty, is_unannotated, ..
             } = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
                 stub_or_impl,
-                self_type,
+                &mut vararg_self_type,
                 parent_hint,
                 errors,
             );

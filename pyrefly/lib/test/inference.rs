@@ -127,6 +127,17 @@ def h(cls) -> None: ...  # E: `h` is missing an annotation for parameter `cls`
 );
 
 testcase!(
+    test_classmethod_vararg_call_does_not_bind_self,
+    r#"
+class C:
+    @classmethod
+    def create(*args, **kwargs): ...
+
+C.create(42)
+"#,
+);
+
+testcase!(
     test_implicit_any_with_complete_annotations,
     TestEnv::new().enable_implicit_any_error(),
     r#"
