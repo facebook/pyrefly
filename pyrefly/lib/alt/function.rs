@@ -1698,13 +1698,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             });
             // eprintln!("impl sig: {}", self.for_display(impl_func.signature.ret.clone()));
             // eprintln!("overload sig: {}", self.for_display(overload_func.signature.ret.clone()));
-            self.check_type(
-                &overload_func.signature.ret,
-                &impl_func.signature.ret,
-                *range,
-                errors,
-                &|| TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn),
-            );
+            let overload_ret = if let Type::SelfType(cls) = &overload_func.signature.ret {
+                self.heap.mk_class_type(cls.clone())
+            } else {
+                overload_func.signature.ret.clone()
+            };
+            let impl_func_ret = if let Type::SelfType(cls) = &impl_func.signature.ret {
+                self.heap.mk_class_type(cls.clone())
+            } else {
+                impl_func.signature.ret.clone()
+            };
+            self.check_type(&overload_ret, &impl_func_ret, *range, errors, &|| {
+                TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn)
+            });
             if let Err(specialization_errors) = self.solver().finish_quantified(vs, false) {
                 let mut msg = vec1![format!(
                     "Overload signature `{}` is not consistent with implementation signature `{}`",
