@@ -7,9 +7,11 @@
 
 //! Display a type. The complexity comes from if we have two classes with the same name,
 //! we want to display disambiguating information (e.g. module name or location).
+use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Display;
 
+use dupe::Dupe;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::qname::QName;
@@ -113,6 +115,8 @@ pub struct TypeDisplayContext<'a> {
     /// Display mode for formatting
     lsp_display_mode: LspDisplayMode,
     always_display_module_name: bool,
+    /// Modules encountered while formatting, used downstream (e.g. to decide which imports are required).
+    modules: RefCell<SmallSet<ModuleName>>,
     always_display_expanded_unions: bool,
     /// Optional stdlib reference for resolving builtin type locations
     stdlib: Option<&'a Stdlib>,
@@ -184,6 +188,27 @@ impl<'a> TypeDisplayContext<'a> {
 
     pub fn set_stdlib(&mut self, stdlib: &'a Stdlib) {
         self.stdlib = Some(stdlib);
+    }
+
+    fn module_from_qname_or(&self, qname: Option<&QName>, fallback: &str) -> ModuleName {
+        qname
+            .map(|qname| qname.module_name())
+            .unwrap_or_else(|| ModuleName::from_str(fallback))
+    }
+
+    fn write_module_prefix(&self, output: &mut impl TypeOutput, module: ModuleName) -> fmt::Result {
+        self.modules.borrow_mut().insert(module);
+        output.write_str(module.as_str())?;
+        output.write_str(".")
+    }
+
+    /// Modules referenced while formatting types with module-qualified names.
+    pub fn referenced_modules(&self) -> SmallSet<ModuleName> {
+        let mut modules = SmallSet::new();
+        for module in self.modules.borrow().iter() {
+            modules.insert(module.dupe());
+        }
+        modules
     }
 
     /// Get the QName for a special form, enabling go-to-definition functionality.
@@ -276,6 +301,9 @@ impl<'a> TypeDisplayContext<'a> {
         name: &str,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
+        self.modules
+            .borrow_mut()
+            .insert(ModuleName::from_str(module));
         if self.always_display_module_name {
             output.write_str(module)?;
             output.write_str(".")?;
@@ -434,6 +462,10 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::TypeVar(t) => {
                 let type_var_qname = self.stdlib.map(|s| s.type_var().qname());
+                if self.always_display_module_name {
+                    let module = self.module_from_qname_or(type_var_qname, "typing");
+                    self.write_module_prefix(output, module)?;
+                }
                 output.write_builtin("TypeVar", type_var_qname)?;
                 output.write_str("[")?;
                 output.write_qname(t.qname())?;
@@ -441,6 +473,10 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::TypeVarTuple(t) => {
                 let type_var_tuple_qname = self.stdlib.map(|s| s.type_var_tuple().qname());
+                if self.always_display_module_name {
+                    let module = self.module_from_qname_or(type_var_tuple_qname, "typing");
+                    self.write_module_prefix(output, module)?;
+                }
                 output.write_builtin("TypeVarTuple", type_var_tuple_qname)?;
                 output.write_str("[")?;
                 output.write_qname(t.qname())?;
@@ -448,6 +484,10 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::ParamSpec(t) => {
                 let param_spec_qname = self.stdlib.map(|s| s.param_spec().qname());
+                if self.always_display_module_name {
+                    let module = self.module_from_qname_or(param_spec_qname, "typing");
+                    self.write_module_prefix(output, module)?;
+                }
                 output.write_builtin("ParamSpec", param_spec_qname)?;
                 output.write_str("[")?;
                 output.write_qname(t.qname())?;
@@ -460,20 +500,22 @@ impl<'a> TypeDisplayContext<'a> {
 
             // Other things
             Type::Literal(lit) => {
-                if self.always_display_module_name {
-                    output.write_str("typing.")?;
-                }
                 let literal_qname = self.get_special_form_qname("Literal");
+                if self.always_display_module_name {
+                    let module = self.module_from_qname_or(literal_qname, "typing");
+                    self.write_module_prefix(output, module)?;
+                }
                 output.write_builtin("Literal", literal_qname)?;
                 output.write_str("[")?;
                 output.write_lit(&lit.value)?;
                 output.write_str("]")
             }
             Type::LiteralString(_) => {
-                if self.always_display_module_name {
-                    output.write_str("typing.")?;
-                }
                 let qname = self.get_special_form_qname("LiteralString");
+                if self.always_display_module_name {
+                    let module = self.module_from_qname_or(qname, "typing");
+                    self.write_module_prefix(output, module)?;
+                }
                 output.write_builtin("LiteralString", qname)
             }
             Type::Callable(box c) => {
@@ -627,24 +669,27 @@ impl<'a> TypeDisplayContext<'a> {
                 }
             }
             Type::Never(NeverStyle::NoReturn) => {
-                if self.always_display_module_name {
-                    output.write_str("typing.")?;
-                }
                 let qname = self.get_special_form_qname("NoReturn");
+                if self.always_display_module_name {
+                    let module = self.module_from_qname_or(qname, "typing");
+                    self.write_module_prefix(output, module)?;
+                }
                 output.write_builtin("NoReturn", qname)
             }
             Type::Never(NeverStyle::Never) => {
-                if self.always_display_module_name {
-                    output.write_str("typing.")?;
-                }
                 let qname = self.get_special_form_qname("Never");
+                if self.always_display_module_name {
+                    let module = self.module_from_qname_or(qname, "typing");
+                    self.write_module_prefix(output, module)?;
+                }
                 output.write_builtin("Never", qname)
             }
             Type::Union(box Union { members: types, .. }) if types.is_empty() => {
-                if self.always_display_module_name {
-                    output.write_str("typing.")?;
-                }
                 let qname = self.get_special_form_qname("Never");
+                if self.always_display_module_name {
+                    let module = self.module_from_qname_or(qname, "typing");
+                    self.write_module_prefix(output, module)?;
+                }
                 output.write_builtin("Never", qname)
             }
             Type::Union(box Union {

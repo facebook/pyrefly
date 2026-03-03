@@ -5,13 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::iter::once;
 use std::sync::Arc;
 
 use pyrefly_build::handle::Handle;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::LitEnum;
 use pyrefly_types::literal::Literal;
@@ -31,11 +31,16 @@ use ruff_text_size::TextSize;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::UnpackedPosition;
+use crate::state::ide::import_regular_import_edit;
+use crate::state::import_tracker::ImportTracker;
 use crate::state::lsp::AllOffPartial;
 use crate::state::lsp::InlayHintConfig;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
+use crate::types::display::TypeDisplayContext;
+use crate::types::stdlib::Stdlib;
+use crate::types::type_output::OutputWithLocations;
 use crate::types::types::Type;
 
 pub struct InlayHintData {
@@ -44,6 +49,13 @@ pub struct InlayHintData {
     pub label_parts: Vec<(String, Option<TextRangeWithModule>)>,
     /// Whether double-clicking should insert the type annotation.
     pub insertable: bool,
+    /// Additional edits (e.g., imports) required to make the insertion valid.
+    pub import_edits: Vec<(TextSize, String)>,
+}
+
+struct RenderedTypeHint {
+    label_parts: Vec<(String, Option<TextRangeWithModule>)>,
+    import_edits: Vec<(TextSize, String)>,
 }
 
 #[derive(Debug)]
@@ -87,6 +99,154 @@ pub fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<
 }
 
 impl<'a> Transaction<'a> {
+    fn render_type_hint(
+        &self,
+        ty: &Type,
+        handle: &Handle,
+        tracker: Option<&ImportTracker>,
+        ast: Option<&ModModule>,
+        stdlib: &Stdlib,
+    ) -> RenderedTypeHint {
+        let current_module = handle.module();
+        let mut ctx = TypeDisplayContext::new(&[ty]);
+        ctx.set_stdlib(stdlib);
+        ctx.always_display_module_name_except_builtins();
+        let mut output = OutputWithLocations::new(&ctx);
+        ctx.fmt_helper_generic(ty, false, &mut output).unwrap();
+        let parts = output.parts().to_vec();
+
+        let mut adjusted_parts: Vec<(String, Option<TextRangeWithModule>)> =
+            Vec::with_capacity(parts.len());
+        let handle_module_parts = |module_text: &str,
+                                   mut name_part: (String, Option<TextRangeWithModule>),
+                                   dot_part: Option<(String, Option<TextRangeWithModule>)>|
+         -> Option<Vec<(String, Option<TextRangeWithModule>)>> {
+            if module_text.is_empty() {
+                return None;
+            }
+            let loc = name_part.1.as_ref()?;
+            let module_name = loc.module.name();
+            let module_name_str = module_name.as_str();
+            let module_matches = module_text == module_name_str
+                || (module_text == "typing" && module_name_str == "typing_extensions")
+                || (module_text == "typing_extensions" && module_name_str == "typing");
+            if !module_matches {
+                return None;
+            }
+            if module_name == current_module {
+                return Some(vec![name_part]);
+            }
+            let tracker = tracker?;
+            let name = name_part.0.as_str();
+            let alt_module = if module_name.as_str() == "typing" {
+                Some(ModuleName::from_str("typing_extensions"))
+            } else if module_name.as_str() == "typing_extensions" {
+                Some(ModuleName::from_str("typing"))
+            } else {
+                None
+            };
+            if let Some(alias) = tracker
+                .imported_name_alias(module_name, name)
+                .or_else(|| alt_module.and_then(|m| tracker.imported_name_alias(m, name)))
+            {
+                if alias != name_part.0 {
+                    name_part.0 = alias.to_owned();
+                }
+                return Some(vec![name_part]);
+            }
+            if let Some(alias) = tracker.alias_for_module(module_name) {
+                return Some(match dot_part {
+                    Some(dot_part) => vec![(alias, None), dot_part, name_part],
+                    None => vec![(format!("{alias}."), None), name_part],
+                });
+            }
+            None
+        };
+        let mut i = 0;
+        while i < parts.len() {
+            if i + 1 < parts.len()
+                && parts[i].1.is_none()
+                && parts[i].0.ends_with('.')
+                && parts[i + 1].1.is_some()
+            {
+                let module_text = parts[i].0.trim_end_matches('.');
+                let name_part = parts[i + 1].clone();
+                if let Some(replacement) = handle_module_parts(module_text, name_part, None) {
+                    adjusted_parts.extend(replacement);
+                    i += 2;
+                    continue;
+                }
+            }
+            if i + 2 < parts.len()
+                && parts[i].1.is_none()
+                && parts[i + 1].1.is_none()
+                && parts[i + 1].0 == "."
+                && parts[i + 2].1.is_some()
+            {
+                let name_part = parts[i + 2].clone();
+                let dot_part = parts[i + 1].clone();
+                if let Some(replacement) =
+                    handle_module_parts(&parts[i].0, name_part, Some(dot_part))
+                {
+                    adjusted_parts.extend(replacement);
+                    i += 3;
+                    continue;
+                }
+            }
+            adjusted_parts.push(parts[i].clone());
+            i += 1;
+        }
+
+        let mut import_edits = Vec::new();
+        if let (Some(tracker), Some(ast)) = (tracker, ast) {
+            let mut maybe_add_import = |module_text: &str, loc: &TextRangeWithModule| {
+                let module_name = loc.module.name();
+                let module_to_import = if module_text == module_name.as_str() {
+                    Some(module_name)
+                } else if module_text == "typing" || module_text == "typing_extensions" {
+                    Some(ModuleName::from_str(module_text))
+                } else {
+                    None
+                };
+                if let Some(module_to_import) = module_to_import
+                    && !tracker.has_module_import(module_to_import)
+                    && let Some(handle_to_import) =
+                        self.import_handle(handle, module_to_import, None).finding()
+                {
+                    let (position, insert_text, _) =
+                        import_regular_import_edit(ast, handle_to_import, None);
+                    import_edits.push((position, insert_text));
+                }
+            };
+            let mut i = 0;
+            while i < adjusted_parts.len() {
+                if i + 1 < adjusted_parts.len()
+                    && adjusted_parts[i].1.is_none()
+                    && adjusted_parts[i].0.ends_with('.')
+                    && adjusted_parts[i + 1].1.is_some()
+                    && let Some(loc) = &adjusted_parts[i + 1].1
+                {
+                    maybe_add_import(adjusted_parts[i].0.trim_end_matches('.'), loc);
+                }
+                if i + 2 < adjusted_parts.len()
+                    && adjusted_parts[i].1.is_none()
+                    && adjusted_parts[i + 1].1.is_none()
+                    && adjusted_parts[i + 1].0 == "."
+                    && adjusted_parts[i + 2].1.is_some()
+                    && let Some(loc) = &adjusted_parts[i + 2].1
+                {
+                    maybe_add_import(&adjusted_parts[i].0, loc);
+                }
+                i += 1;
+            }
+        }
+
+        RenderedTypeHint {
+            label_parts: adjusted_parts,
+            import_edits,
+        }
+    }
+
     pub fn inlay_hints(
         &self,
         handle: &Handle,
@@ -135,6 +295,8 @@ impl<'a> Transaction<'a> {
         };
         let bindings = self.get_bindings(handle)?;
         let stdlib = self.get_stdlib(handle);
+        let ast = self.get_ast(handle);
+        let import_tracker = ast.as_deref().map(ImportTracker::from_ast);
         let mut res = Vec::new();
         for idx in bindings.keys::<Key>() {
             match bindings.idx_to_key(idx) {
@@ -156,19 +318,22 @@ impl<'a> Transaction<'a> {
                                     {
                                         ty = return_ty;
                                     }
-                                    // Use get_types_with_locations to get type parts with location info
-                                    let type_parts = ty.get_types_with_locations(Some(&stdlib));
-                                    let label_parts = once((" -> ".to_owned(), None))
-                                        .chain(
-                                            type_parts
-                                                .iter()
-                                                .map(|(text, loc)| (text.clone(), loc.clone())),
-                                        )
-                                        .collect();
+                                    let rendered = self.render_type_hint(
+                                        &ty,
+                                        handle,
+                                        import_tracker.as_ref(),
+                                        ast.as_deref(),
+                                        stdlib.as_ref(),
+                                    );
+                                    let mut label_parts =
+                                        Vec::with_capacity(rendered.label_parts.len() + 1);
+                                    label_parts.push((" -> ".to_owned(), None));
+                                    label_parts.extend(rendered.label_parts);
                                     res.push(InlayHintData {
                                         position: fun.def.parameters.range.end(),
                                         label_parts,
                                         insertable: true,
+                                        import_edits: rendered.import_edits,
                                     });
                                 }
                             }
@@ -213,19 +378,21 @@ impl<'a> Transaction<'a> {
                         is_unpacked && !ty.is_any()
                     };
                     if should_show {
-                        // Use get_types_with_locations to get type parts with location info
-                        let type_parts = ty.get_types_with_locations(Some(&stdlib));
-                        let label_parts = once((": ".to_owned(), None))
-                            .chain(
-                                type_parts
-                                    .iter()
-                                    .map(|(text, loc)| (text.clone(), loc.clone())),
-                            )
-                            .collect();
+                        let rendered = self.render_type_hint(
+                            &ty,
+                            handle,
+                            import_tracker.as_ref(),
+                            ast.as_deref(),
+                            stdlib.as_ref(),
+                        );
+                        let mut label_parts = Vec::with_capacity(rendered.label_parts.len() + 1);
+                        label_parts.push((": ".to_owned(), None));
+                        label_parts.extend(rendered.label_parts);
                         res.push(InlayHintData {
                             position: key.range().end(),
                             label_parts,
                             insertable: !is_unpacked,
+                            import_edits: rendered.import_edits,
                         });
                     }
                 }
@@ -241,6 +408,7 @@ impl<'a> Transaction<'a> {
                         position: pos,
                         label_parts: vec![(text, None)],
                         insertable: true,
+                        import_edits: Vec::new(),
                     }),
             );
         }
