@@ -21,6 +21,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::keywords::get_keywords;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
@@ -29,6 +30,7 @@ use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -836,6 +838,127 @@ impl Transaction<'_> {
         }
     }
 
+    fn enclosing_class_def_for_completion(
+        ast: &ModModule,
+        position: TextSize,
+    ) -> Option<(&StmtClassDef, bool)> {
+        let covering_nodes = Ast::locate_node(ast, position);
+        let mut saw_function = false;
+        for node in covering_nodes.iter() {
+            match node {
+                AnyNodeRef::StmtFunctionDef(_) => {
+                    saw_function = true;
+                }
+                AnyNodeRef::StmtClassDef(class_def) => {
+                    return Some((class_def, saw_function));
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn add_attribute_completions_for_type(
+        &self,
+        handle: &Handle,
+        base_type: Type,
+        expected_type: Option<&Type>,
+        filter: Option<&Identifier>,
+        completions: &mut Vec<RankedCompletion>,
+    ) {
+        self.ad_hoc_solve(handle, "completion_attributes", |solver| {
+            let matcher = filter.map(|_| SkimMatcherV2::default().smart_case());
+            solver
+                .completions(base_type, None, true)
+                .iter()
+                .filter(|attr| {
+                    if let Some(filter) = filter
+                        && let Some(ref matcher) = matcher
+                    {
+                        matcher
+                            .fuzzy_match(attr.name.as_str(), filter.as_str())
+                            .is_some()
+                    } else {
+                        true
+                    }
+                })
+                .for_each(|attr| {
+                    let kind = match attr.ty {
+                        Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
+                        Some(Type::Function(_) | Type::Overload(_)) => {
+                            Some(CompletionItemKind::FUNCTION)
+                        }
+                        Some(Type::Module(_)) => Some(CompletionItemKind::MODULE),
+                        Some(Type::ClassDef(_)) => Some(CompletionItemKind::CLASS),
+                        _ => Some(CompletionItemKind::FIELD),
+                    };
+                    let detail = attr
+                        .ty
+                        .clone()
+                        .map(|t| t.as_lsp_string(LspDisplayMode::Hover));
+                    let documentation = self.get_docstring_for_attribute(handle, attr);
+                    let is_incompatible = self.is_incompatible_with_expected_type(
+                        handle,
+                        expected_type,
+                        attr.ty.as_ref(),
+                    );
+                    let source = if attr.is_reexport {
+                        CompletionSource::Reexport
+                    } else {
+                        CompletionSource::Local
+                    };
+                    completions.push(RankedCompletion {
+                        item: CompletionItem {
+                            label: attr.name.as_str().to_owned(),
+                            detail,
+                            kind,
+                            documentation,
+                            tags: if attr.is_deprecated {
+                                Some(vec![CompletionItemTag::DEPRECATED])
+                            } else {
+                                None
+                            },
+                            ..Default::default()
+                        },
+                        source,
+                        is_incompatible,
+                    });
+                });
+        });
+    }
+
+    fn add_class_body_override_completions(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        identifier: &Identifier,
+        allow_inside_function: bool,
+        completions: &mut Vec<RankedCompletion>,
+    ) {
+        let Some(ast) = self.get_ast(handle) else {
+            return;
+        };
+        let Some((class_def, saw_function)) =
+            Self::enclosing_class_def_for_completion(ast.as_ref(), position)
+        else {
+            return;
+        };
+        if saw_function && !allow_inside_function {
+            return;
+        }
+        let key = Key::Definition(ShortIdentifier::new(&class_def.name));
+        let Some(class_type) = self.get_type(handle, &key) else {
+            return;
+        };
+        self.add_attribute_completions_for_type(
+            handle,
+            class_type,
+            None,
+            Some(identifier),
+            completions,
+        );
+    }
+
     /// Core completion implementation returning items and incomplete flag.
     pub(crate) fn completion_sorted_opt_with_incomplete<F>(
         &self,
@@ -977,52 +1100,13 @@ impl Transaction<'_> {
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
                 {
-                    self.ad_hoc_solve(handle, "completion_attributes", |solver| {
-                        solver
-                            .completions(base_type, None, true)
-                            .iter()
-                            .for_each(|x| {
-                                let kind = match x.ty {
-                                    Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
-                                    Some(Type::Function(_) | Type::Overload(_)) => {
-                                        Some(CompletionItemKind::FUNCTION)
-                                    }
-                                    Some(Type::Module(_)) => Some(CompletionItemKind::MODULE),
-                                    Some(Type::ClassDef(_)) => Some(CompletionItemKind::CLASS),
-                                    _ => Some(CompletionItemKind::FIELD),
-                                };
-                                let ty = &x.ty;
-                                let detail =
-                                    ty.clone().map(|t| t.as_lsp_string(LspDisplayMode::Hover));
-                                let documentation = self.get_docstring_for_attribute(handle, x);
-                                let is_incompatible = self.is_incompatible_with_expected_type(
-                                    handle,
-                                    expected_type.as_ref(),
-                                    ty.as_ref(),
-                                );
-                                let source = if x.is_reexport {
-                                    CompletionSource::Reexport
-                                } else {
-                                    CompletionSource::Local
-                                };
-                                result.push(RankedCompletion {
-                                    item: CompletionItem {
-                                        label: x.name.as_str().to_owned(),
-                                        detail,
-                                        kind,
-                                        documentation,
-                                        tags: if x.is_deprecated {
-                                            Some(vec![CompletionItemTag::DEPRECATED])
-                                        } else {
-                                            None
-                                        },
-                                        ..Default::default()
-                                    },
-                                    source,
-                                    is_incompatible,
-                                });
-                            });
-                    });
+                    self.add_attribute_completions_for_type(
+                        handle,
+                        base_type,
+                        expected_type.as_ref(),
+                        None,
+                        &mut result,
+                    );
                 }
             }
             Some(IdentifierWithContext {
@@ -1045,6 +1129,17 @@ impl Transaction<'_> {
                 }
                 if matches!(context, IdentifierContext::MethodDef { .. }) {
                     Self::add_magic_method_completions(&identifier, &mut result);
+                }
+                if matches!(context, IdentifierContext::MethodDef { .. })
+                    || matches!(context, IdentifierContext::Expr(ExprContext::Store))
+                {
+                    self.add_class_body_override_completions(
+                        handle,
+                        position,
+                        &identifier,
+                        matches!(context, IdentifierContext::MethodDef { .. }),
+                        &mut result,
+                    );
                 }
                 self.add_kwargs_completions(handle, position, &mut result);
                 Self::add_keyword_completions(handle, &mut result);

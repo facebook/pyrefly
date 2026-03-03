@@ -369,6 +369,32 @@ fn test_completion_keywords() {
 }
 
 #[test]
+fn test_completion_class_override_members() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("basic"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+    interaction.client.did_change(
+        "foo.py",
+        "from typing import *\nfrom abc import ABC, abstractmethod\n\nclass A(ABC):\n    @property\n    @abstractmethod\n    def error_message(self):\n        \"\"\"\n        Child classes must provide a error message string.\n        \"\"\"\n        ...\n\nclass B(A):\n    erro = \"\"\n",
+    );
+
+    interaction
+        .client
+        .completion("foo.py", 13, 8)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| item.label == "error_message")
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_import_completion_skips_hidden_directories() {
     let root = get_test_files_root();
     let workspace = root.path().join("basic");
