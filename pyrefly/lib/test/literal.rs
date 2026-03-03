@@ -422,10 +422,8 @@ assert_type(x, Literal["a", "b"])
 "#,
 );
 
-
 // Regression test for https://github.com/facebook/pyrefly/issues/2633
 testcase!(
-    bug = "Should not error for union of literals after annotation",
     test_literal_union_annotated,
     r#"
 from typing import Annotated, Literal, TypeAlias
@@ -434,6 +432,6 @@ One: TypeAlias = Literal[1]
 Two: TypeAlias = Annotated[Literal[2], "irrelevant"]
 OneOrTwo: TypeAlias = One | Two
 
-Spam: TypeAlias = Literal[OneOrTwo]  # E: Invalid type inside literal, `Literal[1] | Two`
+Spam: TypeAlias = Literal[OneOrTwo]
 "#,
 );
