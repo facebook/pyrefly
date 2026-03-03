@@ -38,6 +38,7 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingTypeAlias;
+use crate::binding::binding::ExhaustiveBinding;
 use crate::binding::binding::ExhaustivenessKind;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::IsAsync;
@@ -48,6 +49,7 @@ use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::RaisedException;
+use crate::binding::binding::TypeAliasBinding;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -122,7 +124,7 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(&mut test, &mut Usage::Narrowing(None));
         let narrow_ops = NarrowOps::from_expr(self, Some(&test));
         let static_test = self.sys_info.evaluate_bool(&test);
-        self.insert_binding(Key::Anon(test_range), Binding::Expr(None, test));
+        self.insert_binding(Key::Anon(test_range), Binding::Expr(None, Box::new(test)));
         if let Some(mut msg_expr) = msg {
             let mut base = self.scopes.clone_current_flow();
             // Negate the narrowing of the test expression when typechecking
@@ -206,11 +208,11 @@ impl<'a> BindingsBuilder<'a> {
             }
         }
         self.bind_legacy_type_var_or_typing_alias(name, |ann| {
-            Binding::TypeVar(
+            Binding::TypeVar(Box::new((
                 ann,
                 Ast::expr_name_identifier(name.clone()),
                 Box::new(call.clone()),
-            )
+            )))
         })
     }
 
@@ -235,22 +237,22 @@ impl<'a> BindingsBuilder<'a> {
     fn assign_param_spec(&mut self, name: &ExprName, call: &mut ExprCall) {
         self.ensure_type_var_tuple_and_param_spec_args(call);
         self.bind_legacy_type_var_or_typing_alias(name, |ann| {
-            Binding::ParamSpec(
+            Binding::ParamSpec(Box::new((
                 ann,
                 Ast::expr_name_identifier(name.clone()),
                 Box::new(call.clone()),
-            )
+            )))
         })
     }
 
     fn assign_type_var_tuple(&mut self, name: &ExprName, call: &mut ExprCall) {
         self.ensure_type_var_tuple_and_param_spec_args(call);
         self.bind_legacy_type_var_or_typing_alias(name, |ann| {
-            Binding::TypeVarTuple(
+            Binding::TypeVarTuple(Box::new((
                 ann,
                 Ast::expr_name_identifier(name.clone()),
                 Box::new(call.clone()),
-            )
+            )))
         })
     }
 
@@ -269,7 +271,7 @@ impl<'a> BindingsBuilder<'a> {
         }
         // The second argument is the type
         if let Some(expr) = iargs.next() {
-            self.ensure_type(expr, tparams_builder);
+            self.ensure_type_with_usage(expr, tparams_builder, &mut Usage::TypeAliasRhs);
         }
         // There shouldn't be any other positional arguments
         for arg in iargs {
@@ -286,7 +288,11 @@ impl<'a> BindingsBuilder<'a> {
             } else if let Some(id) = &kw.arg
                 && id.id == "value"
             {
-                self.ensure_type(&mut kw.value, tparams_builder);
+                self.ensure_type_with_usage(
+                    &mut kw.value,
+                    tparams_builder,
+                    &mut Usage::TypeAliasRhs,
+                );
             } else {
                 self.ensure_expr(&mut kw.value, static_type_usage);
             }
@@ -418,7 +424,7 @@ impl<'a> BindingsBuilder<'a> {
             expr: value.map(Box::new),
         };
         let idx_type_alias = self.insert_binding(key_type_alias, binding_type_alias);
-        let binding = Binding::TypeAlias {
+        let binding = Binding::TypeAlias(Box::new(TypeAliasBinding {
             name: name.id.clone(),
             tparams: TypeAliasParams::TypeAliasType {
                 declared_params: type_params,
@@ -426,7 +432,7 @@ impl<'a> BindingsBuilder<'a> {
             },
             key_type_alias: idx_type_alias,
             range: call.range(),
-        };
+        }));
         self.insert_binding_current(assigned, binding);
     }
 
@@ -480,7 +486,7 @@ impl<'a> BindingsBuilder<'a> {
                 .record_or_reject_return(ret, x, self.scopes.is_definitely_unreachable())
         {
             match oops_top_level.value {
-                Some(v) => self.insert_binding_current(ret, Binding::Expr(None, *v)),
+                Some(v) => self.insert_binding_current(ret, Binding::Expr(None, v)),
                 None => self.insert_binding_current(ret, Binding::None),
             };
             self.error(
@@ -525,7 +531,10 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         self.ensure_expr(target, delete_idx.usage());
                     }
-                    self.insert_binding_current(delete_idx, Binding::Delete(target.clone()));
+                    self.insert_binding_current(
+                        delete_idx,
+                        Binding::Delete(Box::new(target.clone())),
+                    );
                 }
             }
             Stmt::Assign(ref x)
@@ -538,7 +547,7 @@ impl<'a> BindingsBuilder<'a> {
                 //
                 // For example, we treat `typing.List` as if it were an import of `builtins.list`.
                 self.bind_legacy_type_var_or_typing_alias(name, |_| {
-                    Binding::Import(module, forward, None)
+                    Binding::Import(Box::new((module, forward, None)))
                 })
             }
             Stmt::Assign(mut x) => {
@@ -786,14 +795,14 @@ impl<'a> BindingsBuilder<'a> {
                         self.ensure_expr_name(name, assigned.usage());
                         self.ensure_expr(&mut x.value, assigned.usage());
                         let ann = self.bind_current(&name.id, &assigned, FlowStyle::Other);
-                        let binding = Binding::AugAssign(ann, x.clone());
+                        let binding = Binding::AugAssign(ann, Box::new(x.clone()));
                         self.insert_binding_current(assigned, binding);
                     }
                     Expr::Attribute(attr) => {
                         let mut x_cloned = x.clone();
                         self.bind_attr_assign(attr.clone(), &mut x.value, move |expr, ann| {
                             *x_cloned.value = expr.clone();
-                            ExprOrBinding::Binding(Binding::AugAssign(ann, x_cloned))
+                            ExprOrBinding::Binding(Binding::AugAssign(ann, Box::new(x_cloned)))
                         });
                     }
                     Expr::Subscript(subscr) => {
@@ -803,7 +812,7 @@ impl<'a> BindingsBuilder<'a> {
                             &mut x.value,
                             move |expr, ann| {
                                 *x_cloned.value = expr.clone();
-                                ExprOrBinding::Binding(Binding::AugAssign(ann, x_cloned))
+                                ExprOrBinding::Binding(Binding::AugAssign(ann, Box::new(x_cloned)))
                             },
                         );
                     }
@@ -835,7 +844,7 @@ impl<'a> BindingsBuilder<'a> {
                     if let Some(params) = &mut x.type_params {
                         self.type_params(params);
                     }
-                    self.ensure_type(&mut x.value, &mut None);
+                    self.ensure_type_with_usage(&mut x.value, &mut None, &mut Usage::TypeAliasRhs);
                     // Pop the type alias scope before binding the definition
                     self.scopes.pop();
                     let range = x.value.range();
@@ -845,12 +854,12 @@ impl<'a> BindingsBuilder<'a> {
                         expr: x.value,
                     };
                     let idx_type_alias = self.insert_binding(key_type_alias, binding_type_alias);
-                    let binding = Binding::TypeAlias {
+                    let binding = Binding::TypeAlias(Box::new(TypeAliasBinding {
                         name: name.id.clone(),
                         tparams: TypeAliasParams::Scoped(x.type_params.map(|x| *x)),
                         key_type_alias: idx_type_alias,
                         range,
-                    };
+                    }));
                     self.bind_definition(
                         &Ast::expr_name_identifier(name),
                         binding,
@@ -880,7 +889,7 @@ impl<'a> BindingsBuilder<'a> {
                 // (must be done before x.iter is moved)
                 let loop_definitely_runs = is_definitely_nonempty_iterable(&x.iter);
                 self.bind_target_with_expr(&mut x.target, &mut x.iter, &|expr, ann| {
-                    Binding::IterableValue(ann, expr.clone(), IsAsync::new(x.is_async))
+                    Binding::IterableValue(ann, Box::new(expr.clone()), IsAsync::new(x.is_async))
                 });
                 // Note that we set up the loop *after* the header is fully bound, because the
                 // loop iterator is only evaluated once before the loop begins. But the loop header
@@ -1022,12 +1031,12 @@ impl<'a> BindingsBuilder<'a> {
                         };
                     self.insert_binding(
                         Key::Exhaustive(ExhaustivenessKind::IfElif, if_range),
-                        Binding::Exhaustive {
+                        Binding::Exhaustive(Box::new(ExhaustiveBinding {
                             kind: ExhaustivenessKind::IfElif,
                             subject_idx,
                             subject_range,
                             exhaustiveness_info: info_for_binding,
-                        },
+                        })),
                     );
                 }
                 if exhaustive {
@@ -1055,8 +1064,10 @@ impl<'a> BindingsBuilder<'a> {
                     let expr_range = item.context_expr.range();
                     let mut context = self.declare_current_idx(Key::ContextExpr(expr_range));
                     self.ensure_expr(&mut item.context_expr, context.usage());
-                    let context_idx = self
-                        .insert_binding_current(context, Binding::Expr(None, item.context_expr));
+                    let context_idx = self.insert_binding_current(
+                        context,
+                        Binding::Expr(None, Box::new(item.context_expr)),
+                    );
                     if let Some(mut opts) = item.optional_vars {
                         let make_binding =
                             |ann| Binding::ContextValue(ann, context_idx, expr_range, kind);
@@ -1188,7 +1199,11 @@ impl<'a> BindingsBuilder<'a> {
                             }
                             self.bind_definition(
                                 &asname,
-                                Binding::Module(m, m.components(), None),
+                                Binding::Module(Box::new((
+                                    m,
+                                    m.components().into_boxed_slice(),
+                                    None,
+                                ))),
                                 FlowStyle::ImportAs(m),
                             );
                         }
@@ -1196,8 +1211,12 @@ impl<'a> BindingsBuilder<'a> {
                             let first = m.first_component();
                             let module_key = self.scopes.existing_module_import_at(&first);
                             let key = self.insert_binding(
-                                Key::Import(first.clone(), x.name.range),
-                                Binding::Module(m, vec![first.clone()], module_key),
+                                Key::Import(Box::new((first.clone(), x.name.range))),
+                                Binding::Module(Box::new((
+                                    m,
+                                    Box::new([first.clone()]),
+                                    module_key,
+                                ))),
                             );
                             // Register the import using the first component (e.g., "os" from "os.path")
                             // since that's the name that gets bound and used in code
@@ -1287,7 +1306,7 @@ impl<'a> BindingsBuilder<'a> {
                     None
                 };
                 let key = self
-                    .insert_binding_current(current, Binding::StmtExpr(*x.value, special_export));
+                    .insert_binding_current(current, Binding::StmtExpr(x.value, special_export));
                 // Track this StmtExpr as the trailing statement for type-based termination
                 self.scopes.set_last_stmt_expr(Some(key));
             }
@@ -1340,9 +1359,9 @@ impl<'a> BindingsBuilder<'a> {
                 && let Some(wildcards) = self.lookup.get_wildcard(m)
             {
                 for name in wildcards.iter_hashed() {
-                    let key = Key::Import(name.into_key().clone(), x.range);
+                    let key = Key::Import(Box::new((name.into_key().clone(), x.range)));
                     let val = if self.lookup.export_exists(m, &name) {
-                        Binding::Import(m, name.into_key().clone(), None)
+                        Binding::Import(Box::new((m, name.into_key().clone(), None)))
                     } else {
                         self.error(
                             x.range,
@@ -1390,7 +1409,7 @@ impl<'a> BindingsBuilder<'a> {
                             deprecated.as_error_message(format!("`{}` is deprecated", x.name));
                         self.error_multiline(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
                     }
-                    Binding::Import(m, x.name.id.clone(), original_name_range)
+                    Binding::Import(Box::new((m, x.name.id.clone(), original_name_range)))
                 } else {
                     // Try submodule lookup first, then fall back to __getattr__
                     let x_as_module_name = m.append(&x.name.id);
@@ -1400,11 +1419,15 @@ impl<'a> BindingsBuilder<'a> {
                     };
                     let is_not_found = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
                     if finding {
-                        Binding::Module(x_as_module_name, x_as_module_name.components(), None)
+                        Binding::Module(Box::new((
+                            x_as_module_name,
+                            x_as_module_name.components().into_boxed_slice(),
+                            None,
+                        )))
                     } else if self.lookup.export_exists(m, &dunder::GETATTR) {
                         // Module has __getattr__, which means any attribute can be accessed.
                         // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
-                        Binding::ImportViaGetattr(m, x.name.id.clone())
+                        Binding::ImportViaGetattr(Box::new((m, x.name.id.clone())))
                     } else if is_not_found {
                         self.error(
                             x.range,

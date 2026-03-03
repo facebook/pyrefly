@@ -20,6 +20,7 @@ use tracing::error;
 use tracing::info;
 
 use crate::commands::check;
+use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
 use crate::config::config::ConfigFile;
@@ -37,15 +38,25 @@ pub struct InitArgs {
     /// If this is the path to a pyproject.toml, the config will be written as a `[tool.pyrefly]` entry in that file.
     #[arg(default_value_os_t = PathBuf::from("."))]
     path: PathBuf,
+    /// Run without interactive prompts, using safe defaults (decline all).
+    /// Useful for CI, scripted workflows, or running init before check in automated pipelines.
+    #[arg(long)]
+    non_interactive: bool,
 }
 
 impl InitArgs {
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            non_interactive: false,
+        }
     }
 
     pub fn new_migration(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            non_interactive: false,
+        }
     }
 
     fn check_for_pyproject_file(path: &Path) -> bool {
@@ -56,9 +67,10 @@ impl InitArgs {
         pyproject_path.exists()
     }
 
-    fn prompt_user_confirmation(prompt: &str) -> bool {
-        if cfg!(test) {
-            // decline confirmation, mocking user input
+    /// Prompts the user for a y/N confirmation. Returns `false` without prompting
+    /// when `non_interactive` is set, providing safe defaults for CI and scripted use.
+    fn prompt_user_confirmation(&self, prompt: &str) -> bool {
+        if self.non_interactive {
             return false;
         }
         let input = Self::read_from_stdin(prompt);
@@ -66,7 +78,10 @@ impl InitArgs {
         input == "y" || input == "Y"
     }
 
-    pub fn run(&self) -> anyhow::Result<CommandExitStatus> {
+    pub fn run(
+        &self,
+        wrapper: Option<ConfigConfigurerWrapper>,
+    ) -> anyhow::Result<CommandExitStatus> {
         // 1. Create Pyrefly Config
         let create_config_result = self.create_config();
 
@@ -75,7 +90,7 @@ impl InitArgs {
             Ok((status, _)) if status != CommandExitStatus::Success => Ok(status),
             Ok((_, config_path)) => {
                 // 2. Run pyrefly check
-                let check_result = self.run_check(config_path.clone());
+                let check_result = self.run_check(config_path.clone(), wrapper.clone());
 
                 // Check if there are errors and if there are fewer than 100
                 if let Ok((_, errors)) = check_result {
@@ -85,7 +100,7 @@ impl InitArgs {
                     }
                     // 3a. Prompt error suppression if there are less than the maximum number of errors
                     else if error_count <= MAX_ERRORS_TO_PROMPT_SUPPRESSION {
-                        return self.prompt_error_suppression(config_path, error_count);
+                        return self.prompt_error_suppression(config_path, error_count, wrapper);
                     }
                 }
                 Ok(CommandExitStatus::Success)
@@ -96,6 +111,7 @@ impl InitArgs {
     fn run_check(
         &self,
         config_path: Option<PathBuf>,
+        wrapper: Option<ConfigConfigurerWrapper>,
     ) -> anyhow::Result<(CommandExitStatus, Vec<crate::error::error::Error>)> {
         info!("Running pyrefly check...");
 
@@ -103,8 +119,12 @@ impl InitArgs {
         let check_args = check::CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
 
         // Use get to get the filtered globs and config finder
-        let (filtered_globs, config_finder) =
-            FilesArgs::get(Vec::new(), config_path, ConfigOverrideArgs::default())?;
+        let (filtered_globs, config_finder) = FilesArgs::get(
+            Vec::new(),
+            config_path,
+            ConfigOverrideArgs::default(),
+            wrapper,
+        )?;
 
         // Run the check directly
         let res = check_args.run_once(filtered_globs, config_finder);
@@ -118,12 +138,13 @@ impl InitArgs {
         &self,
         config_path: Option<PathBuf>,
         error_count: usize,
+        wrapper: Option<ConfigConfigurerWrapper>,
     ) -> anyhow::Result<CommandExitStatus> {
         let prompt = format!(
             "Found {error_count} errors. We can add suppression comments (e.g., `pyrefly: ignore`) to silence them for you. Would you like to suppress them? (y/N): "
         );
 
-        if Self::prompt_user_confirmation(&prompt) {
+        if self.prompt_user_confirmation(&prompt) {
             info!("Running pyrefly check with suppress-errors flag...");
 
             // Create check args with suppress-errors flag
@@ -136,8 +157,12 @@ impl InitArgs {
             ]);
 
             // Use get to get the filtered globs and config finder
-            let (suppress_globs, suppress_config_finder) =
-                FilesArgs::get(Vec::new(), config_path, ConfigOverrideArgs::default())?;
+            let (suppress_globs, suppress_config_finder) = FilesArgs::get(
+                Vec::new(),
+                config_path,
+                ConfigOverrideArgs::default(),
+                wrapper,
+            )?;
 
             // Run the check with suppress-errors flag
             match suppress_args.run_once(suppress_globs, suppress_config_finder) {
@@ -167,7 +192,7 @@ impl InitArgs {
                 "The project at `{}` has already been initialized for pyrefly. Run `pyrefly check` to see type errors. Re-initialize and write a new section? (y/N): ",
                 dir.display()
             );
-            if !Self::prompt_user_confirmation(&prompt) {
+            if !self.prompt_user_confirmation(&prompt) {
                 return Ok((CommandExitStatus::UserError, None));
             }
         }
@@ -257,13 +282,23 @@ mod test {
     }
 
     fn run_init_on_dir(dir: &TempDir) -> anyhow::Result<CommandExitStatus> {
-        let args = InitArgs::new(dir.path().to_path_buf());
-        args.run()
+        let mut args = InitArgs::new(dir.path().to_path_buf());
+        args.non_interactive = true;
+        args.run(None)
     }
 
     fn run_init_on_file(dir: &TempDir, file: &str) -> anyhow::Result<CommandExitStatus> {
-        let args = InitArgs::new(dir.path().join(file));
-        args.run()
+        let mut args = InitArgs::new(dir.path().join(file));
+        args.non_interactive = true;
+        args.run(None)
+    }
+
+    fn run_init_non_interactive(dir: &TempDir) -> anyhow::Result<CommandExitStatus> {
+        let args = InitArgs {
+            path: dir.path().to_path_buf(),
+            non_interactive: true,
+        };
+        args.run(None)
     }
 
     fn assert_success(status: CommandExitStatus) {
@@ -580,6 +615,40 @@ k = [\"v\"]
         let tmp = tempfile::tempdir()?;
         create_file_in(tmp.path(), "pyrefly.toml", None)?;
         let status = run_init_on_file(&tmp, "pyproject.toml")?;
+        assert_user_error(status);
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_interactive_empty_dir() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let status = run_init_non_interactive(&tmp)?;
+        assert_success(status);
+        check_file_in(tmp.path(), "pyrefly.toml", &["project-includes"])
+    }
+
+    #[test]
+    fn test_non_interactive_with_mypy_config() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        create_file_in(
+            tmp.path(),
+            "mypy.ini",
+            Some(b"[mypy]\nignore_missing_imports = True"),
+        )?;
+        let status = run_init_non_interactive(&tmp)?;
+        assert_success(status);
+        check_file_in(
+            tmp.path(),
+            "pyrefly.toml",
+            &["ignore-missing-imports = [\"*\"]"],
+        )
+    }
+
+    #[test]
+    fn test_non_interactive_existing_config() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        create_file_in(tmp.path(), "pyrefly.toml", None)?;
+        let status = run_init_non_interactive(&tmp)?;
         assert_user_error(status);
         Ok(())
     }

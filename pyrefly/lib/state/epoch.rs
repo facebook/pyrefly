@@ -5,6 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
+
 use dupe::Dupe;
 
 #[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq)]
@@ -35,11 +38,26 @@ pub struct Epochs {
     pub computed: Epoch,
 }
 
-impl Epochs {
-    pub fn new(now: Epoch) -> Self {
-        Self {
-            checked: now,
-            computed: now,
-        }
+#[derive(Debug)]
+pub struct AtomicEpoch(AtomicU32);
+
+impl AtomicEpoch {
+    pub fn new(epoch: Epoch) -> Self {
+        Self(AtomicU32::new(epoch.0))
+    }
+
+    pub fn load(&self) -> Epoch {
+        Epoch(self.0.load(Ordering::Acquire))
+    }
+
+    pub fn store(&self, epoch: Epoch) {
+        self.0.store(epoch.0, Ordering::Release);
+    }
+
+    /// Used when the write is followed by a Release store on a
+    /// different variable that readers check first (e.g., `checked`
+    /// synchronizes reads of `current_step` and `computed`).
+    pub fn store_relaxed(&self, epoch: Epoch) {
+        self.0.store(epoch.0, Ordering::Relaxed);
     }
 }

@@ -27,11 +27,13 @@ use tracing::info;
 
 use crate::error::error::Error;
 
-/// Regex to match pyrefly/type ignore comments with optional error codes and trailing semicolon.
-/// Preserves any following comments (e.g., "# pyrefly: ignore [x]; # other" -> "# other").
+/// Regex to match pyrefly/type ignore comments with optional error codes and trailing text.
+/// Consumes all non-`#` characters after the ignore pattern, so trailing comment text is
+/// removed, but a separate `# ...` comment is preserved
+/// (e.g., "# pyrefly: ignore [x] # other" -> "# other").
 static IGNORE_COMMENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"#\s*pyrefly:\s*ignore\s*(\[[^\]]*\])?\s*;?\s*|#\s*type:\s*ignore\s*(\[[^\]]*\])?\s*;?\s*",
+        r"#\s*pyrefly:\s*ignore\s*(\[[^\]]*\])?\s*(?:;\s*)?[^#]*|#\s*type:\s*ignore\s*(\[[^\]]*\])?\s*(?:;\s*)?[^#]*",
     )
     .unwrap()
 });
@@ -1049,6 +1051,30 @@ a: int = "" # pyrefly: ignore [bad-assignment]
     }
 
     #[test]
+    fn test_remove_unused_ignore_with_trailing_comment_text() {
+        // Trailing text after the ignore pattern must be consumed, not left behind as bare
+        // code. A separate `# ...` comment should be preserved.
+        // Uses distinct statements to avoid unreachable-code errors from multiple returns.
+        let input = r#"
+def f() -> int:
+    # pyrefly: ignore what I said
+    x = 1
+    # pyrefly: ignore [missing-import] this should also work
+    y = 2
+    # pyrefly: ignore # this should be preserved
+    return x + y
+"#;
+        let want = r#"
+def f() -> int:
+    x = 1
+    y = 2
+    # this should be preserved
+    return x + y
+"#;
+        assert_remove_ignores(input, want, 3);
+    }
+
+    #[test]
     fn test_add_suppressions_preserves_crlf_line_endings() {
         let before = "\r\nx: str = 1\r\n";
         let after = "\r\n# pyrefly: ignore [bad-assignment]\r\nx: str = 1\r\n";
@@ -1268,6 +1294,185 @@ y = "# pyrefly: ignore [bad-assignment]"
 x: str = 1
 y = "# pyrefly: ignore [bad-assignment]"
 "##,
+        );
+    }
+
+    #[test]
+    fn test_suppress_inside_multiline_fstring() {
+        // Errors inside multi-line f-strings are skipped because there is no valid
+        // place to insert a comment suppression inside a string literal.
+        let input = r#"
+def foo() -> str:
+    return f"""
+result: {1 + "a"}
+"""
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+def foo() -> str:
+    return f"""
+result: {1 + "a"}
+"""
+"#,
+        );
+    }
+
+    #[test]
+    fn test_suppress_inside_multiline_fstring_variable() {
+        // Errors inside multi-line f-strings are skipped.
+        let input = r#"
+def bar() -> None:
+    x = f"""
+value: {1 + "a"}
+"""
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+def bar() -> None:
+    x = f"""
+value: {1 + "a"}
+"""
+"#,
+        );
+    }
+
+    #[test]
+    fn test_suppress_inside_multiline_fstring_multiple_errors() {
+        // Multiple errors inside the same multi-line f-string are all skipped.
+        let input = r#"
+def baz() -> str:
+    return f"""
+a: {1 + "x"}
+b: {1 + "y"}
+"""
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+def baz() -> str:
+    return f"""
+a: {1 + "x"}
+b: {1 + "y"}
+"""
+"#,
+        );
+    }
+
+    #[test]
+    fn test_suppress_single_line_triple_quoted_string() {
+        // Error on the same line as the triple-quote opening should work normally.
+        let input = r#"
+x: int = """hello"""
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+# pyrefly: ignore [bad-assignment]
+x: int = """hello"""
+"#,
+        );
+    }
+
+    #[test]
+    fn test_suppress_multiline_fstring_error_on_opening_line() {
+        // Errors inside f-string interpolations are swallowed (no valid place
+        // for a suppression comment), so no suppression comment is added.
+        let input = r#"
+def foo() -> str:
+    return f"""{1 + "a"}
+rest
+"""
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+def foo() -> str:
+    return f"""{1 + "a"}
+rest
+"""
+"#,
+        );
+    }
+
+    #[test]
+    fn test_suppress_single_line_triple_quoted_fstring() {
+        // Errors inside f-string interpolations are swallowed (no valid place
+        // for a suppression comment), so no suppression comment is added.
+        let input = r#"
+x: str = f"""{1 + "a"}"""
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+x: str = f"""{1 + "a"}"""
+"#,
+        );
+    }
+
+    #[test]
+    fn test_suppress_inside_and_outside_multiline_fstring() {
+        // The error outside the f-string is suppressed normally. The error
+        // inside the f-string is skipped because there is no valid place for
+        // a comment suppression inside a string literal.
+        let input = r#"
+def foo() -> str:
+    x: int = "not an int"
+    return f"""
+result: {1 + "a"}
+"""
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+def foo() -> str:
+    # pyrefly: ignore [bad-assignment]
+    x: int = "not an int"
+    return f"""
+result: {1 + "a"}
+"""
+"#,
+        );
+    }
+
+    #[test]
+    fn test_suppress_inside_multiline_fstring_single_quotes() {
+        // Errors inside single-quote triple-quoted f-strings are also skipped.
+        let input = r#"
+def foo() -> str:
+    return f'''
+result: {1 + "a"}
+'''
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+def foo() -> str:
+    return f'''
+result: {1 + "a"}
+'''
+"#,
+        );
+    }
+
+    #[test]
+    fn test_suppress_multiline_fstring_error_on_closing_line() {
+        // Error on the closing line of a multi-line f-string is skipped.
+        let input = r#"
+def foo() -> str:
+    return f"""
+text
+result: {1 + "a"}"""
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+def foo() -> str:
+    return f"""
+text
+result: {1 + "a"}"""
+"#,
         );
     }
 }

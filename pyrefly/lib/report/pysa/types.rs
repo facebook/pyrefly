@@ -224,7 +224,7 @@ fn strip_typevar(type_: &Type) -> Option<TypeVariableRestriction> {
 pub fn has_superclass(class: &Class, want: &Class, context: &ModuleContext) -> bool {
     context
         .transaction
-        .ad_hoc_solve(&context.handle, |solver| {
+        .ad_hoc_solve(&context.handle, "pysa_has_superclass", |solver| {
             solver.type_order().has_superclass(class, want)
         })
         .unwrap()

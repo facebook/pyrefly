@@ -9,10 +9,12 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_types::dimension::SizeExpr;
-use pyrefly_types::dimension::simplify;
+use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::tensor::TensorType;
+use pyrefly_types::tensor::broadcast_shapes;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
@@ -72,6 +74,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
+    /// Try to handle binary operations on symbolic integer types (Dim, SizeExpr, TypeVar Quantified).
+    /// Returns Some(result_type) if the operation was handled, None otherwise.
     fn try_symint_binop(&self, op: Operator, lhs: &Type, rhs: &Type) -> Option<Type> {
         // Only handle if tensor shapes feature is enabled
         if !self.solver().tensor_shapes {
@@ -130,10 +134,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Perform the operation on the dimension types
         let result_ty = match op {
-            Operator::Add => simplify(self.heap.mk_size(SizeExpr::add(l_type, r_type))),
-            Operator::Sub => simplify(self.heap.mk_size(SizeExpr::sub(l_type, r_type))),
-            Operator::Mult => simplify(self.heap.mk_size(SizeExpr::mul(l_type, r_type))),
-            Operator::FloorDiv => simplify(self.heap.mk_size(SizeExpr::floor_div(l_type, r_type))),
+            Operator::Add => canonicalize(self.heap.mk_size(SizeExpr::add(l_type, r_type))),
+            Operator::Sub => canonicalize(self.heap.mk_size(SizeExpr::sub(l_type, r_type))),
+            Operator::Mult => canonicalize(self.heap.mk_size(SizeExpr::mul(l_type, r_type))),
+            Operator::FloorDiv => {
+                canonicalize(self.heap.mk_size(SizeExpr::floor_div(l_type, r_type)))
+            }
             _ => unreachable!(),
         };
 
@@ -333,6 +339,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Optimisation: If we have `Union[a, b] | Union[c, d]`, instead of unioning
         // (a | c) | (a | d) | (b | c) | (b | d), we can just do one union.
         if x.op == Operator::BitOr
+            && !lhs.is_any()
+            && !rhs.is_any()
             && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
             && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
         {
@@ -364,6 +372,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Type::Tuple(r) = rhs
                 {
                     self.tuple_concat(l, r)
+                } else if matches!(
+                    x.op,
+                    Operator::Add
+                        | Operator::Sub
+                        | Operator::Mult
+                        | Operator::Div
+                        | Operator::Mod
+                        | Operator::Pow
+                        | Operator::FloorDiv
+                ) && let Type::Tensor(l_tensor) = lhs
+                    && let Type::Tensor(r_tensor) = rhs
+                {
+                    // Tensor element-wise operations with broadcasting
+                    self.broadcast_tensor_binop(l_tensor, r_tensor, x.range, errors)
                 } else if let Some(result) = self.try_symint_binop(x.op, lhs, rhs) {
                     result
                 } else {
@@ -559,7 +581,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Type::Dim(inner_ty) = t {
                     let zero = self.heap.mk_size(SizeExpr::Literal(0));
                     let result_ty =
-                        simplify(self.heap.mk_size(SizeExpr::sub(zero, (**inner_ty).clone())));
+                        canonicalize(self.heap.mk_size(SizeExpr::sub(zero, (**inner_ty).clone())));
                     return self.heap.mk_dim(result_ty);
                 }
                 let f = |lit: &Lit| lit.negate();
@@ -687,6 +709,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             // All other combinations: no warning
             _ => {}
+        }
+    }
+
+    /// Handle element-wise binary operations on tensors with broadcasting.
+    /// broadcast_shapes handles all shape variants: Concrete shapes are broadcast
+    /// precisely, Unpacked shapes match suffix then middles then prefixes, and
+    /// mixed Concrete+Unpacked aligns against the suffix.
+    fn broadcast_tensor_binop(
+        &self,
+        left: &TensorType,
+        right: &TensorType,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        match broadcast_shapes(&left.shape, &right.shape) {
+            Ok(result_shape) => TensorType::new(left.base_class.clone(), result_shape).to_type(),
+            Err(err) => {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                    format!("Cannot broadcast tensor shapes: {}", err),
+                );
+                Type::any_error()
+            }
         }
     }
 }

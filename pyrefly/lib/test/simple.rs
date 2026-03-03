@@ -475,7 +475,7 @@ testcase!(
 def f(x: str) -> str:
     return x
 
-x = f"abc{f(1)}def"  # E: Argument `Literal[1]` is not assignable to parameter `x` with type `str`
+x = f"abc{f(1)}def"
 "#,
 );
 
@@ -886,6 +886,15 @@ Y = Annotated[int] # E: `Annotated` needs at least one piece of metadata in addi
 );
 
 testcase!(
+    test_annotated_dunder_doc,
+    r#"
+from typing import Annotated, assert_type
+x = Annotated[int, "meta"].__doc__
+assert_type(x, str | None)
+    "#,
+);
+
+testcase!(
     test_nested_string_annotation,
     r#"
 x: "'int'" = 1  # E: Expected a type form, got instance of `Literal['int']`
@@ -952,6 +961,17 @@ assert_type(type(x5), type[str])
 class TD(TypedDict): ...
 x6: TD = {}
 assert_type(type(x6), type[dict])
+"#,
+);
+
+testcase!(
+    test_assert_nonetype,
+    r#"
+from types import NoneType
+from typing import assert_type
+
+def f(x: int | NoneType):
+    assert_type(x, int | None)
 "#,
 );
 
@@ -1067,6 +1087,13 @@ testcase!(
 # This parse error results in two identical Identifiers, which previously caused a panic.
 a = True if # E: Parse
 "#,
+);
+
+testcase!(
+    test_syntax_error_resulting_in_empty_defintion,
+    r#"
+@:a=1 # E: Parse # E: Could not find name `a`
+    "#,
 );
 
 testcase!(
@@ -1890,6 +1917,22 @@ from typing import assert_type
 class Foo:
     def __class_getitem__(cls, item: int) -> str:
         return str(item)
+
+assert_type(Foo[0], str)
+"#,
+);
+
+testcase!(
+    test_class_metaclass_getitem,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    def __getitem__(self, item: int) -> str:
+        return str(item)
+
+class Foo(metaclass=Meta):
+    pass
 
 assert_type(Foo[0], str)
 "#,

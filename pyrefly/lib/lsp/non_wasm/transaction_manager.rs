@@ -61,7 +61,11 @@ impl<'a> TransactionManager<'a> {
         self.saved_state
             .take()
             .and_then(|saved_state| saved_state.restore())
-            .unwrap_or_else(|| state.transaction())
+            .unwrap_or_else(|| {
+                let mut t = state.transaction();
+                t.set_fresh();
+                t
+            })
     }
 
     /// This function should be called once we finished using transaction for an LSP request.

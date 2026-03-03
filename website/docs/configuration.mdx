@@ -428,6 +428,31 @@ types (like `object`, `str`, ...) and types/type signatures from stdlib modules.
 - Default: none (resolves to bundled typeshed)
 - Flag equivalent: `--typeshed-path`
 
+### `baseline`
+
+Path to a baseline JSON file for comparing type errors. Errors matching the baseline
+are suppressed, so only newly-introduced errors are reported. This is useful when
+introducing type checking to a project for the first time, or when rolling out
+changes that would otherwise produce many new errors at once.
+
+To generate (or re-generate) the baseline file, run:
+
+```
+pyrefly check --baseline="<path to baseline file>" --update-baseline
+```
+
+See the [Error Suppressions docs](./error-suppressions.mdx#baseline-files-experimental) for
+more details on how baseline files work.
+
+- Type: path to a JSON file
+- Default: none (no baseline)
+- Flag equivalent: `--baseline`
+- Notes:
+    - `baseline` is a **project-level setting** and cannot be overridden in
+      [`sub-config`](#sub-configs) sections.
+    - Errors suppressed by the baseline file are still shown in the IDE.
+    - Errors are matched with the baseline by file, error code, and column number.
+
 ### `errors`
 
 Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.
@@ -467,6 +492,16 @@ _only_ want to see type errors on CLI/CI runs.
 - Notes: if you want to disable errors on CLI/CI runs as well, or if you're looking
   to turn on/off specific errors, you may be looking for the [`errors`](#errors) config
   option instead.
+
+### `skip-lsp-config-indexing`
+
+Disables automatic project indexing when running Pyrefly as a language server.
+Enabling this may speed up LSP startup and reduce resource usage on large projects,
+at the cost of some language server features that rely on a full project index.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: none
 
 ### `replace-imports-with-any`
 

@@ -503,6 +503,7 @@ fn build_callsite_edits(
             definition.metadata.clone(),
             definition.definition_range,
             &definition.module,
+            true,
         ) else {
             continue;
         };

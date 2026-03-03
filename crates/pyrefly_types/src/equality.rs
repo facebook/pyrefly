@@ -325,6 +325,7 @@ mod tests {
 
     #[derive(TypeEq, PartialEq, Eq, Debug)]
     enum WithLifetime<'t> {
+        #[allow(dead_code)]
         Unused(std::marker::PhantomData<&'t ()>),
         Value(i32),
     }

@@ -844,7 +844,7 @@ fn test_parse_pylance_configs() {
             {
                 "pyrefly": {"displayTypeErrors": "force-off"},
                 "analysis": {
-                    "diagnosticMode": "workspace",
+                    "diagnosticMode": "openFilesOnly",
                     "importFormat": "relative",
                     "inlayHints": {
                         "callArgumentNames": "on",

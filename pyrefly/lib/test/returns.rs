@@ -231,8 +231,7 @@ def f(b: bool) -> int:
 );
 
 testcase!(
-    bug = "conformance: Unreachable code after NoReturn should not be type-checked",
-    test_return_never_unreachable_wrong_type,
+    test_return_never_unreachable,
     r#"
 from typing import NoReturn
 
@@ -243,7 +242,6 @@ def f(x: int) -> int:
     if x > 0:
         return x
     stop()
-    return "wrong type"  # E: Returned type `Literal['wrong type']` is not assignable to declared return type `int`
 "#,
 );
 
@@ -593,5 +591,34 @@ def return_object_non_list(name: str) -> Base:
     else:
         o = B()
     return o
+"#,
+);
+
+testcase!(
+    test_infer_none_for_pruned_if_last_statement,
+    r#"
+from typing import assert_type
+
+def foo():
+    print(42)
+    if False:
+        print(1)
+
+assert_type(foo(), None)
+"#,
+);
+
+testcase!(
+    test_pruned_if_last_statement_no_bad_override,
+    r#"
+class A:
+    def foo(self):
+        print(42)
+        if False:
+            print(1)
+
+class B(A):
+    def foo(self):
+        print(3)
 "#,
 );

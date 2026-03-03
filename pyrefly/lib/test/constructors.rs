@@ -656,7 +656,7 @@ class B[T: int | A[Any] = Any]:
     def __new__(cls, x: list[A[T]]) -> B[A[T]]: ...
 
 assert_type(B([A(0)]), B[A[int]])
-B([A("oops")])  # E: `str` is not assignable to upper bound `A[Any] | int` of type variable `T`
+B([A("oops")])  # E: `str` is not assignable to upper bound `A | int` of type variable `T`
     "#,
 );
 
@@ -684,6 +684,19 @@ def takes_Cstr_wrong(x: Callable[[str], C[int]]) -> None:
 takes_Cint(C)
 takes_Cstr(C)
 takes_Cstr_wrong(C) # E: Argument `type[C]` is not assignable to parameter `x` with type `(str) -> C[int]` in function `takes_Cstr_wrong`
+    "#,
+);
+
+testcase!(
+    test_init_to_callable_generics,
+    r#"
+from typing import Generic, TypeVar, assert_type, Callable
+T = TypeVar("T")
+class C(Generic[T]):
+    def __init__[V](self: "C[V]", x: V) -> None: pass
+def takes_callable[V](x: Callable[[V], C[V]], y: V) -> C[V]: ...
+assert_type(takes_callable(C, 42), C[int])
+assert_type(takes_callable(C, "hello"), C[str])
     "#,
 );
 

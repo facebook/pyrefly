@@ -16,6 +16,7 @@ use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::tensor::TensorShape;
 use pyrefly_types::types::Union;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -217,6 +218,28 @@ fn on_type(
                 on_type(variance, inj, &sig.as_type(), on_edge, on_var);
             }
         }
+        Type::Tensor(tensor) => {
+            // Tensor dimensions are invariant - Tensor[2, 3] is not a subtype of Tensor[3, 2]
+            let mut visit_dim = |ty: &Type| {
+                on_type(Variance::Invariant, inj, ty, on_edge, on_var);
+            };
+            match &tensor.shape {
+                TensorShape::Concrete(dims) => {
+                    for dim in dims {
+                        visit_dim(dim);
+                    }
+                }
+                TensorShape::Unpacked(box (prefix, middle, suffix)) => {
+                    for dim in prefix {
+                        visit_dim(dim);
+                    }
+                    visit_dim(middle);
+                    for dim in suffix {
+                        visit_dim(dim);
+                    }
+                }
+            }
+        }
         Type::Callable(t) => {
             // Walk return type covariantly
             on_type(variance, inj, &t.ret, on_edge, on_var);
@@ -321,6 +344,12 @@ fn on_class(
                 Variance::Invariant
             };
         on_type(variance, true, ty, on_edge, on_var);
+
+        // For properties with both a getter and setter, the stored type is the setter function,
+        // but the getter is stored separately. Walk it so its covariant contribution is counted.
+        if let Some(getter) = ty.is_property_setter_with_getter() {
+            on_type(Variance::Covariant, true, &getter, on_edge, on_var);
+        }
     }
 }
 

@@ -675,3 +675,35 @@ def test_dict_first(dict_or_none: dict[str, Any] | None):
             pass
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1708
+testcase!(
+    test_match_exhaustive_literal_no_unbound,
+    r#"
+from typing import assert_never, Literal
+
+def func(x: Literal[1, 2]) -> None:
+    match x:
+        case 1:
+            y = 1
+        case 2:
+            y = 1
+        case _:
+            assert_never(x)
+
+    print(y)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1369
+testcase!(
+    test_match_object_with_tuple_pattern,
+    r#"
+def handle(o: object) -> int:
+    match o:
+        case ("a", 1): return 1
+        case ("b", 1): return 2
+        case ("c", 1): return 3
+    return 1
+"#,
+);

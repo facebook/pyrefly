@@ -507,7 +507,7 @@ fn test_crash_on_cross_module_type_alias_ref() {
     )
     .unwrap();
 
-    let finder = default_config_finder();
+    let finder = default_config_finder(None);
     let main_path = ModulePath::filesystem(main_proj.join("main.py"));
     let sys_info = SysInfo::new(PythonVersion::default(), PythonPlatform::linux());
     let handle = Handle::new(ModuleName::from_str("main"), main_path, sys_info);

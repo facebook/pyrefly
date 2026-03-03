@@ -68,6 +68,7 @@ use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::wasm::completion::CompletionOptions;
 use crate::state::ide::IntermediateDefinition;
+use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
@@ -511,7 +512,53 @@ pub struct FindDefinitionItem {
     pub module: Module,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct QuickfixAction {
+    title: String,
+    module_info: Module,
+    range: TextRange,
+    insert_text: String,
+    is_deprecated: bool,
+    is_private_import: bool,
+}
+
+impl QuickfixAction {
+    fn to_tuple(self) -> (String, Module, TextRange, String) {
+        (self.title, self.module_info, self.range, self.insert_text)
+    }
+}
+
+impl Ord for QuickfixAction {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Sort import code actions: non-private first, then non-deprecated, then alphabetically
+        match (self.is_private_import, other.is_private_import) {
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            _ => match (self.is_deprecated, other.is_deprecated) {
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                _ => self.title.cmp(&other.title),
+            },
+        }
+    }
+}
+
+impl PartialOrd for QuickfixAction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl<'a> Transaction<'a> {
+    fn allows_explicit_reexport(handle: &Handle) -> bool {
+        matches!(
+            handle.path().details(),
+            ModulePathDetails::FileSystem(_)
+                | ModulePathDetails::Namespace(_)
+                | ModulePathDetails::Memory(_)
+        )
+    }
+
     pub fn get_type(&self, handle: &Handle, key: &Key) -> Option<Type> {
         let idx = self.get_bindings(handle)?.key_to_idx(key);
         let answers = self.get_answers(handle)?;
@@ -916,9 +963,11 @@ impl<'a> Transaction<'a> {
             return ty;
         }
         let original = ty.clone();
-        self.ad_hoc_solve(handle, |solver| Self::callable_from_type(&solver, ty))
-            .and_then(|callable| callable)
-            .unwrap_or(original)
+        self.ad_hoc_solve(handle, "coerce_callable", |solver| {
+            Self::callable_from_type(&solver, ty)
+        })
+        .and_then(|callable| callable)
+        .unwrap_or(original)
     }
 
     /// Extract a callable type from `ty` by invoking the solver to find its `__call__` method.
@@ -998,6 +1047,7 @@ impl<'a> Transaction<'a> {
                                 symbol_kind: Some(SymbolKind::Module),
                                 docstring_range,
                                 deprecation: None,
+                                is_final: false,
                                 special_export: None,
                             },
                         ));
@@ -1067,6 +1117,7 @@ impl<'a> Transaction<'a> {
                             symbol_kind: Some(SymbolKind::Module),
                             docstring_range: None,
                             deprecation: None,
+                            is_final: false,
                             special_export: None,
                         },
                     ));
@@ -1080,6 +1131,7 @@ impl<'a> Transaction<'a> {
                         symbol_kind: Some(SymbolKind::Module),
                         docstring_range,
                         deprecation: None,
+                        is_final: false,
                         special_export: None,
                     },
                 ))
@@ -1317,7 +1369,7 @@ impl<'a> Transaction<'a> {
         base_type: Type,
         name: &Name,
     ) -> Vec<FindDefinitionItemWithDocstring> {
-        self.ad_hoc_solve(handle, |solver| {
+        self.ad_hoc_solve(handle, "attribute_definition", |solver| {
             let completions = |ty| solver.completions(ty, Some(name), false);
 
             match base_type {
@@ -1456,7 +1508,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn find_definition_for_imported_module(
+    pub(crate) fn find_definition_for_imported_module(
         &self,
         handle: &Handle,
         module_name: ModuleName,
@@ -1933,6 +1985,7 @@ impl<'a> Transaction<'a> {
         let ast = self.get_ast(handle)?;
         let errors = self.get_errors(vec![handle]).collect_errors().shown;
         let mut import_actions = Vec::new();
+        let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
         for error in errors {
             match error.error_kind() {
@@ -1943,62 +1996,50 @@ impl<'a> Transaction<'a> {
                         for (handle_to_import_from, export) in
                             self.search_exports_exact(unknown_name)
                         {
-                            let (position, insert_text, _) = insert_import_edit(
-                                &ast,
-                                self.config_finder(),
-                                handle.dupe(),
-                                handle_to_import_from.dupe(),
-                                unknown_name,
+                            self.create_quickfix_action_for_export(
+                                handle,
                                 import_format,
+                                &module_info,
+                                &ast,
+                                &mut import_actions,
+                                unknown_name,
+                                handle_to_import_from,
+                                export,
                             );
-                            let range = TextRange::at(position, TextSize::new(0));
-                            let is_deprecated = export.deprecation.is_some();
-                            let title = format!(
-                                "Insert import: `{}`{}",
-                                insert_text.trim(),
-                                if is_deprecated { " (deprecated)" } else { "" }
-                            );
-
-                            let is_private_import = handle_to_import_from
-                                .module()
-                                .components()
-                                .last()
-                                .is_some_and(|component| component.as_str().starts_with('_'));
-
-                            import_actions.push((
-                                title,
-                                module_info.dupe(),
-                                range,
-                                insert_text,
-                                is_deprecated,
-                                is_private_import,
-                            ));
                         }
 
+                        let aliased_module = self.create_quickfix_action_for_common_alias_import(
+                            handle,
+                            &module_info,
+                            &ast,
+                            &mut import_actions,
+                            unknown_name,
+                        );
+
                         for module_name in self.search_modules_fuzzy(unknown_name) {
-                            if module_name == handle.module() {
+                            if module_name == handle.module()
+                                || aliased_module.is_some_and(|m| m == module_name)
+                            {
                                 continue;
                             }
-                            if let Some(module_handle) =
-                                self.import_handle(handle, module_name, None).finding()
-                            {
-                                let (position, insert_text) =
-                                    import_regular_import_edit(&ast, module_handle);
-                                let range = TextRange::at(position, TextSize::new(0));
-                                let title = format!("Insert import: `{}`", insert_text.trim());
-                                let is_private_import = module_name
-                                    .components()
-                                    .last()
-                                    .is_some_and(|component| component.as_str().starts_with('_'));
-                                import_actions.push((
-                                    title,
-                                    module_info.dupe(),
-                                    range,
-                                    insert_text,
-                                    false,
-                                    is_private_import,
-                                ));
-                            }
+                            self.create_quickfix_action_for_fuzzy_match(
+                                handle,
+                                &module_info,
+                                &ast,
+                                &mut import_actions,
+                                module_name,
+                            );
+                        }
+
+                        if let Some(mut actions) = quick_fixes::generate_code::generate_code_actions(
+                            self,
+                            handle,
+                            &module_info,
+                            ast.as_ref(),
+                            error_range,
+                            unknown_name,
+                        ) {
+                            generate_actions.append(&mut actions);
                         }
                     }
                 }
@@ -2019,33 +2060,121 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        // Sort import code actions: non-private first, then non-deprecated, then alphabetically
-        import_actions.sort_by(
-            |(title1, _, _, _, is_deprecated1, is_private1),
-             (title2, _, _, _, is_deprecated2, is_private2)| {
-                match (is_private1, is_private2) {
-                    (true, false) => Ordering::Greater,
-                    (false, true) => Ordering::Less,
-                    _ => match (is_deprecated1, is_deprecated2) {
-                        (true, false) => Ordering::Greater,
-                        (false, true) => Ordering::Less,
-                        _ => title1.cmp(title2),
-                    },
-                }
-            },
-        );
+        import_actions.sort();
 
         // Keep only the first suggestion for each unique import text (after sorting,
         // this will be the public/non-deprecated version)
-        import_actions.dedup_by(|a, b| a.3 == b.3);
+        import_actions.dedup_by(|a, b| a.insert_text == b.insert_text);
 
         // Drop the deprecated flag and return
-        let mut actions: Vec<(String, Module, TextRange, String)> = import_actions
-            .into_iter()
-            .map(|(title, module, range, insert_text, _, _)| (title, module, range, insert_text))
-            .collect();
+        let mut actions: Vec<(String, Module, TextRange, String)> =
+            import_actions.into_iter().map(|a| a.to_tuple()).collect();
+        actions.extend(generate_actions);
         actions.extend(other_actions);
         (!actions.is_empty()).then_some(actions)
+    }
+
+    fn create_quickfix_action_for_common_alias_import(
+        &self,
+        handle: &Handle,
+        module_info: &Module,
+        ast: &std::sync::Arc<ModModule>,
+        import_actions: &mut Vec<QuickfixAction>,
+        unknown_name: &str,
+    ) -> Option<ModuleName> {
+        let module_name_str = common_alias_target_module(unknown_name)?;
+        let module_name = ModuleName::from_str(module_name_str);
+        if module_name == handle.module() {
+            return None;
+        }
+        let module_handle = self.import_handle(handle, module_name, None).finding()?;
+        let (position, insert_text, _) =
+            import_regular_import_edit(ast, module_handle, Some(unknown_name));
+        let range = TextRange::at(position, TextSize::new(0));
+        let title = format!("Use common alias: `{}`", insert_text.trim());
+        let is_private_import = module_name
+            .components()
+            .last()
+            .is_some_and(|component| component.as_str().starts_with('_'));
+        import_actions.push(QuickfixAction {
+            title,
+            module_info: module_info.dupe(),
+            range,
+            insert_text,
+            is_deprecated: false,
+            is_private_import,
+        });
+        Some(module_name)
+    }
+
+    fn create_quickfix_action_for_fuzzy_match(
+        &self,
+        handle: &Handle,
+        module_info: &Module,
+        ast: &std::sync::Arc<ModModule>,
+        import_actions: &mut Vec<QuickfixAction>,
+        module_name: ModuleName,
+    ) {
+        if let Some(module_handle) = self.import_handle(handle, module_name, None).finding() {
+            let (position, insert_text, _) = import_regular_import_edit(ast, module_handle, None);
+            let range = TextRange::at(position, TextSize::new(0));
+            let title = format!("Insert import: `{}`", insert_text.trim());
+            let is_private_import = module_name
+                .components()
+                .last()
+                .is_some_and(|component| component.as_str().starts_with('_'));
+            import_actions.push(QuickfixAction {
+                title,
+                module_info: module_info.dupe(),
+                range,
+                insert_text,
+                is_deprecated: false,
+                is_private_import,
+            });
+        }
+    }
+
+    fn create_quickfix_action_for_export(
+        &self,
+        handle: &Handle,
+        import_format: ImportFormat,
+        module_info: &Module,
+        ast: &std::sync::Arc<ModModule>,
+        import_actions: &mut Vec<QuickfixAction>,
+        unknown_name: &str,
+        handle_to_import_from: Handle,
+        export: Export,
+    ) {
+        let (position, insert_text, _) = insert_import_edit(
+            ast,
+            self.config_finder(),
+            handle.dupe(),
+            handle_to_import_from.dupe(),
+            unknown_name,
+            import_format,
+        );
+        let range = TextRange::at(position, TextSize::new(0));
+        let is_deprecated = export.deprecation.is_some();
+        let title = format!(
+            "Insert import: `{}`{}",
+            insert_text.trim(),
+            if is_deprecated { " (deprecated)" } else { "" }
+        );
+
+        let is_private_import = handle_to_import_from
+            .module()
+            .components()
+            .last()
+            .is_some_and(|component| component.as_str().starts_with('_'));
+
+        import_actions.push(QuickfixAction {
+            title,
+            module_info: module_info.dupe(),
+            range,
+            insert_text,
+            is_deprecated,
+            is_private_import,
+        });
     }
 
     pub fn redundant_cast_fix_all_edits(
@@ -2349,7 +2478,12 @@ impl<'a> Transaction<'a> {
         Some(identifier_context?.identifier.range)
     }
 
-    pub fn find_local_references(&self, handle: &Handle, position: TextSize) -> Vec<TextRange> {
+    pub fn find_local_references(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        include_declaration: bool,
+    ) -> Vec<TextRange> {
         self.find_definition(
             handle,
             position,
@@ -2367,7 +2501,13 @@ impl<'a> Transaction<'a> {
                  docstring_range: _,
                  ..
              }| {
-                self.local_references_from_definition(handle, metadata, definition_range, &module)
+                self.local_references_from_definition(
+                    handle,
+                    metadata,
+                    definition_range,
+                    &module,
+                    include_declaration,
+                )
             },
         )
         .concat()
@@ -2418,6 +2558,7 @@ impl<'a> Transaction<'a> {
         definition_metadata: DefinitionMetadata,
         definition_name: &Name,
         definition_range: TextRange,
+        include_declaration: bool,
     ) -> Option<Vec<TextRange>> {
         let mut references = match definition_metadata {
             DefinitionMetadata::Attribute => self.local_attribute_references_from_local_definition(
@@ -2457,7 +2598,9 @@ impl<'a> Transaction<'a> {
         ) {
             references.extend(pytest_references);
         }
-        references.push(definition_range);
+        if include_declaration {
+            references.push(definition_range);
+        }
         Some(references)
     }
 
@@ -2467,6 +2610,7 @@ impl<'a> Transaction<'a> {
         definition_metadata: DefinitionMetadata,
         definition_range: TextRange,
         module: &Module,
+        include_declaration: bool,
     ) -> Option<Vec<TextRange>> {
         let mut references = if handle.path() != module.path() {
             self.local_references_from_external_definition(handle, definition_range, module)?
@@ -2477,6 +2621,7 @@ impl<'a> Transaction<'a> {
                 definition_metadata,
                 &definition_name,
                 definition_range,
+                include_declaration,
             )?
         };
         references.sort_by_key(|range| range.start());
@@ -2509,7 +2654,7 @@ impl<'a> Transaction<'a> {
         };
         // For each attribute we found above, we will test whether it actually will jump to the
         // given `definition`.
-        self.ad_hoc_solve(handle, |solver| {
+        self.ad_hoc_solve(handle, "attribute_references", |solver| {
             let mut references = Vec::new();
             for attribute in relevant_attributes {
                 if let Some(answers) = self.get_answers(handle)
@@ -2740,6 +2885,46 @@ impl<'a> Transaction<'a> {
         import_format: ImportFormat,
         options: CompletionOptions,
     ) -> (Vec<CompletionItem>, bool) {
+        self.completion_with_incomplete_impl(
+            handle,
+            position,
+            import_format,
+            options,
+            None::<fn(&CompletionItem) -> Option<usize>>,
+        )
+    }
+
+    pub fn completion_with_incomplete_mru<F>(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        import_format: ImportFormat,
+        options: CompletionOptions,
+        mru_index: F,
+    ) -> (Vec<CompletionItem>, bool)
+    where
+        F: FnMut(&CompletionItem) -> Option<usize>,
+    {
+        self.completion_with_incomplete_impl(
+            handle,
+            position,
+            import_format,
+            options,
+            Some(mru_index),
+        )
+    }
+
+    fn completion_with_incomplete_impl<F>(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        import_format: ImportFormat,
+        options: CompletionOptions,
+        mru_index: Option<F>,
+    ) -> (Vec<CompletionItem>, bool)
+    where
+        F: FnMut(&CompletionItem) -> Option<usize>,
+    {
         // Check if position is in a disabled range (comments)
         if let Some(module) = self.get_module_info(handle) {
             let disabled_ranges = Self::comment_ranges_for_module(&module);
@@ -2748,8 +2933,13 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        let (mut results, is_incomplete) =
-            self.completion_sorted_opt_with_incomplete(handle, position, import_format, options);
+        let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
+            handle,
+            position,
+            import_format,
+            options,
+            mru_index,
+        );
         results.sort_by(|item1, item2| {
             item1
                 .sort_text
@@ -2838,7 +3028,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn search_exports_exact(&self, name: &str) -> Vec<(Handle, Export)> {
-        self.search_exports(|handle, exports| {
+        self.search_exports(|handle, exports_data, exports| {
             let name = Name::new(name);
             match exports.get(&name) {
                 Some(location) => {
@@ -2847,7 +3037,9 @@ impl<'a> Transaction<'a> {
                     {
                         let mut results = vec![(canonical_handle.dupe(), export.clone())];
                         if canonical_handle != *handle
-                            && Self::should_include_reexport(handle, &canonical_handle)
+                            && (Self::should_include_reexport(handle, &canonical_handle)
+                                || (exports_data.is_explicit_reexport(&name)
+                                    && Self::allows_explicit_reexport(handle)))
                         {
                             results.push((handle.dupe(), export));
                         }
@@ -2862,7 +3054,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn search_exports_fuzzy(&self, pattern: &str) -> Vec<(Handle, String, Export)> {
-        let mut res = self.search_exports(|handle, exports| {
+        let mut res = self.search_exports(|handle, exports_data, exports| {
             let matcher = SkimMatcherV2::default().smart_case();
             let mut results = Vec::new();
             for (name, location) in exports.iter() {
@@ -2878,7 +3070,9 @@ impl<'a> Transaction<'a> {
                         export.clone(),
                     ));
                     if canonical_handle != *handle
-                        && Self::should_include_reexport(handle, &canonical_handle)
+                        && (Self::should_include_reexport(handle, &canonical_handle)
+                            || (exports_data.is_explicit_reexport(name)
+                                && Self::allows_explicit_reexport(handle)))
                     {
                         results.push((score, handle.dupe(), name_str.to_owned(), export));
                     }
@@ -3067,6 +3261,7 @@ impl<'a> CancellableTransaction<'a> {
         sys_info: &SysInfo,
         definition_kind: DefinitionMetadata,
         definition: TextRangeWithModule,
+        include_declaration: bool,
     ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
         let results = self.process_rdeps_with_definition(
             sys_info,
@@ -3082,6 +3277,7 @@ impl<'a> CancellableTransaction<'a> {
                         definition_kind.clone(),
                         patched_definition.range,
                         &patched_definition.module,
+                        include_declaration,
                     )
                     .unwrap_or_default();
                 if !references.is_empty()

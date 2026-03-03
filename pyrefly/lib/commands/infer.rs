@@ -21,6 +21,7 @@ use tracing::error;
 
 use crate::commands::check;
 use crate::commands::check::Handles;
+use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
 use crate::commands::files::get_project_config_for_current_dir;
 use crate::commands::util::CommandExitStatus;
@@ -210,9 +211,12 @@ fn hint_to_string(
 }
 
 impl InferArgs {
-    pub fn run(self) -> anyhow::Result<CommandExitStatus> {
+    pub fn run(
+        self,
+        wrapper: Option<ConfigConfigurerWrapper>,
+    ) -> anyhow::Result<CommandExitStatus> {
         self.config_override.validate()?;
-        let (files_to_check, config_finder) = self.files.resolve(self.config_override)?;
+        let (files_to_check, config_finder) = self.files.resolve(self.config_override, wrapper)?;
         Self::run_inner(files_to_check, config_finder, self.flags)
     }
 
@@ -263,7 +267,7 @@ impl InferArgs {
                     &stdlib,
                     &|cls| {
                         transaction
-                            .ad_hoc_solve(&handle, |solver| {
+                            .ad_hoc_solve(&handle, "infer_enum_metadata", |solver| {
                                 let meta = solver.get_metadata_for_class(cls);
                                 if meta.is_enum() {
                                     Some(solver.get_enum_members(cls).len())
@@ -283,7 +287,7 @@ impl InferArgs {
         // Add imports, if needed
         let check_args = check::CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
         let current_dir_config =
-            get_project_config_for_current_dir(ConfigOverrideArgs::default())?.0;
+            get_project_config_for_current_dir(ConfigOverrideArgs::default(), None)?.0;
         let config_finder = ConfigFinder::new_constant(current_dir_config);
         let state = holder.as_ref();
         match check_args.run_once(files_to_check, config_finder) {
@@ -420,7 +424,7 @@ mod test {
         t.add(&file_two_path.display().to_string(), file_two);
         t.add(&config_path.display().to_string(), configuration);
         let args = InferArgs::parse_from(["infer", "--config", &config_path.display().to_string()]);
-        let result = args.run();
+        let result = args.run(None);
         assert!(result.is_ok(), "infer command failed: {:?}", result.err());
 
         let got_file = fs_anyhow::read_to_string(&file_one_path).unwrap();

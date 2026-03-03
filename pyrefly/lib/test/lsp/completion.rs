@@ -321,7 +321,6 @@ dim.get(key="")
         report.contains(
             r#"
 Completion Results:
-- (Value) 'x': Literal['x'] inserting `x`
 - (Field) x: int
 - (Field) y: int
 - (Field) z: int
@@ -1550,12 +1549,17 @@ foo(
         ^
 Completion Results:
 - (Variable) x=: int
+- (Variable) y=: bool
 "#
         .trim(),
         report.trim(),
     );
 }
 
+/// When an argument is provided that narrows down the overload,
+/// only params from compatible overloads are shown. Here `1` (int)
+/// is compatible with `x: int` (second overload) but not `y: bool`
+/// (first overload), so only the second overload's params appear.
 #[test]
 fn kwargs_completion_overload_correct() {
     let code = r#"
@@ -1579,6 +1583,67 @@ foo(1,
 Completion Results:
 - (Variable) x=: int
 - (Variable) y=: str
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+/// When overloads share the same first arg and differ on later args,
+/// show params from all overloads (here both overloads accept `x: int`,
+/// so `y=` and `z=` should both appear).
+#[test]
+fn kwargs_completion_overload_shared_first_arg() {
+    let code = r#"
+from typing import overload
+@overload
+def foo(x: int, y: str): ...
+@overload
+def foo(x: int, z: bool): ...
+def foo(x, **kwargs): ...
+foo(1, 
+#      ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+8 | foo(1, 
+           ^
+Completion Results:
+- (Variable) x=: int
+- (Variable) y=: str
+- (Variable) z=: bool
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn kwargs_completion_overload_same_name_different_types() {
+    let code = r#"
+from typing import Any, overload
+@overload
+def foo(x: int) -> int: ...
+@overload
+def foo(x: str) -> str: ...
+def foo(x: Any) -> Any:
+    return x
+foo(
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+9 | foo(
+        ^
+Completion Results:
+- (Variable) x=: int
+- (Variable) x=: str
 "#
         .trim(),
         report.trim(),
@@ -1827,6 +1892,86 @@ Completion Results:
 }
 
 #[test]
+fn autoimport_common_alias_for_module() {
+    let code = r#"
+T = spio
+#       ^
+"#;
+    let files = [("main", code), ("scipy.io", "data = 1\n")];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true);
+    let autoimport = completions
+        .iter()
+        .find(|item| item.label == "spio")
+        .expect("expected spio to be in completions");
+    assert!(
+        autoimport
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.contains("import scipy.io as spio")),
+        "expected alias import detail for spio, got {:?}",
+        autoimport.detail
+    );
+    assert_eq!(autoimport.insert_text.as_deref(), Some("spio"));
+    let label_details = autoimport
+        .label_details
+        .as_ref()
+        .expect("auto import completion should include label details");
+    assert_eq!(
+        label_details.detail.as_deref(),
+        Some(" (import scipy.io as spio)")
+    );
+    assert_eq!(label_details.description.as_deref(), Some("scipy.io"));
+    assert!(
+        !completions.iter().any(|item| item.label == "scipy.io"),
+        "expected alias completion to suppress non-aliased scipy.io module suggestion"
+    );
+}
+
+#[test]
+fn autoimport_common_alias_bypasses_min_char_threshold() {
+    let code = r#"
+T = np
+#     ^
+"#;
+    let files = [("main", code), ("numpy", "data = 1\n")];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true);
+    let autoimport = completions
+        .iter()
+        .find(|item| item.label == "np")
+        .expect("expected np to be in completions");
+    assert!(
+        autoimport
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.contains("import numpy as np")),
+        "expected alias import detail for np, got {:?}",
+        autoimport.detail
+    );
+    assert_eq!(autoimport.insert_text.as_deref(), Some("np"));
+    let label_details = autoimport
+        .label_details
+        .as_ref()
+        .expect("auto import completion should include label details");
+    assert_eq!(
+        label_details.detail.as_deref(),
+        Some(" (import numpy as np)")
+    );
+    assert_eq!(label_details.description.as_deref(), Some("numpy"));
+}
+
+#[test]
 fn autoimport_prefers_public_reexport_for_dotted_private_module() {
     let code = r#"
 T = Thing
@@ -1855,6 +2000,41 @@ Completion Results:
 # _foo_bar.py
 
 # foo.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn autoimport_explicit_reexport_suggests_reexport_path() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("source", "Thing = 1\n"),
+            ("public", "from source import Thing as Thing\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from public import Thing
+
+- (Variable) Thing: from source import Thing
+
+
+
+# source.py
+
+# public.py
 "#
         .trim(),
         report.trim(),

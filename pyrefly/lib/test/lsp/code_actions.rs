@@ -549,6 +549,35 @@ my_export
 from d import my_export
 my_export
 # ^
+# Title: Generate variable `my_export`
+
+## Before:
+my_export
+# ^
+## After:
+my_export = None
+my_export
+# ^
+# Title: Generate function `my_export`
+
+## Before:
+my_export
+# ^
+## After:
+def my_export():
+    pass
+my_export
+# ^
+# Title: Generate class `my_export`
+
+## Before:
+my_export
+# ^
+## After:
+class my_export:
+    pass
+my_export
+# ^
 
 
 
@@ -587,6 +616,35 @@ BytesIO
 from _io import BytesIO
 BytesIO
 # ^
+# Title: Generate variable `BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+BytesIO = None
+BytesIO
+# ^
+# Title: Generate function `BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+def BytesIO():
+    pass
+BytesIO
+# ^
+# Title: Generate class `BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+class BytesIO:
+    pass
+BytesIO
+# ^
 "#
         .trim(),
         report.trim(),
@@ -616,9 +674,69 @@ my_module
 import my_module
 my_module
 # ^
+# Title: Generate variable `my_module`
+
+## Before:
+my_module
+# ^
+## After:
+my_module = None
+my_module
+# ^
+# Title: Generate function `my_module`
+
+## Before:
+my_module
+# ^
+## After:
+def my_module():
+    pass
+my_module
+# ^
+# Title: Generate class `my_module`
+
+## Before:
+my_module
+# ^
+## After:
+class my_module:
+    pass
+my_module
+# ^
 "#
         .trim(),
         report.trim()
+    );
+}
+
+#[test]
+fn insertion_test_common_alias_module_import() {
+    let code = r#"
+np
+# ^
+"#;
+    let files = [("numpy", "data = 1\n"), ("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let actions = state
+        .transaction()
+        .local_quickfix_code_actions_sorted(
+            handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+        )
+        .unwrap_or_default();
+    let (_, _, _, insert_text) = actions
+        .iter()
+        .find(|(title, _, _, _)| title == "Use common alias: `import numpy as np`")
+        .expect("expected common alias import code action");
+    assert_eq!(insert_text.trim(), "import numpy as np");
+    assert!(
+        !actions
+            .iter()
+            .any(|(_, _, _, insert_text)| insert_text.trim() == "import numpy"),
+        "expected alias import to suppress non-aliased import code action"
     );
 }
 
@@ -651,6 +769,41 @@ my_export
 ## After:
 # i am a comment
 from a import my_export
+my_export
+# ^
+# Title: Generate variable `my_export`
+
+## Before:
+# i am a comment
+my_export
+# ^
+## After:
+# i am a comment
+my_export = None
+my_export
+# ^
+# Title: Generate function `my_export`
+
+## Before:
+# i am a comment
+my_export
+# ^
+## After:
+# i am a comment
+def my_export():
+    pass
+my_export
+# ^
+# Title: Generate class `my_export`
+
+## Before:
+# i am a comment
+my_export
+# ^
+## After:
+# i am a comment
+class my_export:
+    pass
 my_export
 # ^
 "#
@@ -688,6 +841,41 @@ from a import my_export
 from typing import List
 my_export
 # ^
+# Title: Generate variable `my_export`
+
+## Before:
+from typing import List
+my_export
+# ^
+## After:
+from typing import List
+my_export = None
+my_export
+# ^
+# Title: Generate function `my_export`
+
+## Before:
+from typing import List
+my_export
+# ^
+## After:
+from typing import List
+def my_export():
+    pass
+my_export
+# ^
+# Title: Generate class `my_export`
+
+## Before:
+from typing import List
+my_export
+# ^
+## After:
+from typing import List
+class my_export:
+    pass
+my_export
+# ^
 "#
         .trim(),
         report.trim()
@@ -722,6 +910,41 @@ my_export
 ## After:
 from a import my_export
 from a import another_thing
+my_export
+# ^
+# Title: Generate variable `my_export`
+
+## Before:
+from a import another_thing
+my_export
+# ^
+## After:
+from a import another_thing
+my_export = None
+my_export
+# ^
+# Title: Generate function `my_export`
+
+## Before:
+from a import another_thing
+my_export
+# ^
+## After:
+from a import another_thing
+def my_export():
+    pass
+my_export
+# ^
+# Title: Generate class `my_export`
+
+## Before:
+from a import another_thing
+my_export
+# ^
+## After:
+from a import another_thing
+class my_export:
+    pass
 my_export
 # ^
 "#
@@ -885,6 +1108,504 @@ TypeVar('T')
 from typing import TypeVar
 TypeVar('T')
 # ^
+# Title: Generate variable `TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+TypeVar = None
+TypeVar('T')
+# ^
+# Title: Generate function `TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+def TypeVar(arg1: str):
+    pass
+TypeVar('T')
+# ^
+# Title: Generate class `TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+class TypeVar:
+    def __init__(self, arg1: str):
+        pass
+TypeVar('T')
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_infer_callsite_types() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "class UserId:\n    def __init__(self, value: int):\n        pass\n\nuser: UserId = UserId(1234)\nmyFunc(user)\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+6 | myFunc(user)
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc(user)
+# ^
+## After:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc = None
+myFunc(user)
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc(user)
+# ^
+## After:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+def myFunc(user: UserId):
+    pass
+myFunc(user)
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc(user)
+# ^
+## After:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+class myFunc:
+    def __init__(self, user: UserId):
+        pass
+myFunc(user)
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_mixed_param_types() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "x: int = 1\ny: str = \"hello\"\nz: float = 3.14\nmyFunc(x, y, z)\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+4 | myFunc(x, y, z)
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+myFunc(x, y, z)
+# ^
+## After:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+myFunc = None
+myFunc(x, y, z)
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+myFunc(x, y, z)
+# ^
+## After:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+def myFunc(x: int, y: str, z: float):
+    pass
+myFunc(x, y, z)
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+myFunc(x, y, z)
+# ^
+## After:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+class myFunc:
+    def __init__(self, x: int, y: str, z: float):
+        pass
+myFunc(x, y, z)
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_args_and_kwargs() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "x: int = 1\nargs: list[str] = [\"a\", \"b\"]\nkwargs: dict[str, int] = {\"a\": 1}\nmyFunc(x, *args, key=42, **kwargs)\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+4 | myFunc(x, *args, key=42, **kwargs)
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+myFunc(x, *args, key=42, **kwargs)
+# ^
+## After:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+myFunc = None
+myFunc(x, *args, key=42, **kwargs)
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+myFunc(x, *args, key=42, **kwargs)
+# ^
+## After:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+def myFunc(x: int, *args: list[str], key: int, **kwargs: dict[str, int]):
+    pass
+myFunc(x, *args, key=42, **kwargs)
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+myFunc(x, *args, key=42, **kwargs)
+# ^
+## After:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+class myFunc:
+    def __init__(self, x: int, *args: list[str], key: int, **kwargs: dict[str, int]):
+        pass
+myFunc(x, *args, key=42, **kwargs)
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_duplicate_param_names() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "class Obj:\n    val: int = 0\na: Obj = Obj()\nb: Obj = Obj()\nmyFunc(a.val, b.val)\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+5 | myFunc(a.val, b.val)
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+myFunc(a.val, b.val)
+# ^
+## After:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+myFunc = None
+myFunc(a.val, b.val)
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+myFunc(a.val, b.val)
+# ^
+## After:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+def myFunc(val: int, val_1: int):
+    pass
+myFunc(a.val, b.val)
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+myFunc(a.val, b.val)
+# ^
+## After:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+class myFunc:
+    def __init__(self, val: int, val_1: int):
+        pass
+myFunc(a.val, b.val)
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_complex_expressions() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "myFunc(42, len(\"test\"), [i for i in range(3)])\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+1 | myFunc(42, len("test"), [i for i in range(3)])
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+## After:
+myFunc = None
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+## After:
+def myFunc(arg1: int, arg2: int, arg3: list[int]):
+    pass
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+## After:
+class myFunc:
+    def __init__(self, arg1: int, arg2: int, arg3: list[int]):
+        pass
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_nested_call() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "def inner(x: int) -> str:\n    return str(x)\nouter(inner(42))\n# ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | outer(inner(42))
+      ^
+Code Actions Results:
+# Title: Generate variable `outer`
+
+## Before:
+def inner(x: int) -> str:
+    return str(x)
+outer(inner(42))
+# ^
+## After:
+def inner(x: int) -> str:
+    return str(x)
+outer = None
+outer(inner(42))
+# ^
+# Title: Generate function `outer`
+
+## Before:
+def inner(x: int) -> str:
+    return str(x)
+outer(inner(42))
+# ^
+## After:
+def inner(x: int) -> str:
+    return str(x)
+def outer(arg1: str):
+    pass
+outer(inner(42))
+# ^
+# Title: Generate class `outer`
+
+## Before:
+def inner(x: int) -> str:
+    return str(x)
+outer(inner(42))
+# ^
+## After:
+def inner(x: int) -> str:
+    return str(x)
+class outer:
+    def __init__(self, arg1: str):
+        pass
+outer(inner(42))
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_any_type_no_annotation() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", "from typing import Any\nx: Any = 1\nmyFunc(x)\n# ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | myFunc(x)
+      ^
+Code Actions Results:
+# Title: Generate variable `myFunc`
+
+## Before:
+from typing import Any
+x: Any = 1
+myFunc(x)
+# ^
+## After:
+from typing import Any
+x: Any = 1
+myFunc = None
+myFunc(x)
+# ^
+# Title: Generate function `myFunc`
+
+## Before:
+from typing import Any
+x: Any = 1
+myFunc(x)
+# ^
+## After:
+from typing import Any
+x: Any = 1
+def myFunc(x):
+    pass
+myFunc(x)
+# ^
+# Title: Generate class `myFunc`
+
+## Before:
+from typing import Any
+x: Any = 1
+myFunc(x)
+# ^
+## After:
+from typing import Any
+x: Any = 1
+class myFunc:
+    def __init__(self, x):
+        pass
+myFunc(x)
+# ^
 "#
         .trim(),
         report.trim()
@@ -932,6 +1653,88 @@ my_func()
 from a import my_func
 my_func()
 # ^
+# Title: Generate variable `my_func`
+
+## Before:
+my_func()
+# ^
+## After:
+my_func = None
+my_func()
+# ^
+# Title: Generate function `my_func`
+
+## Before:
+my_func()
+# ^
+## After:
+def my_func():
+    pass
+my_func()
+# ^
+# Title: Generate class `my_func`
+
+## Before:
+my_func()
+# ^
+## After:
+class my_func:
+    pass
+my_func()
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn generate_code_actions_in_function_scope() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", "def foo():\n    print(undef_var)\n#         ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 |     print(undef_var)
+              ^
+Code Actions Results:
+# Title: Generate variable `undef_var`
+
+## Before:
+def foo():
+    print(undef_var)
+#         ^
+## After:
+def foo():
+    undef_var = None
+    print(undef_var)
+#         ^
+# Title: Generate function `undef_var`
+
+## Before:
+def foo():
+    print(undef_var)
+#         ^
+## After:
+def foo():
+    def undef_var():
+        pass
+    print(undef_var)
+#         ^
+# Title: Generate class `undef_var`
+
+## Before:
+def foo():
+    print(undef_var)
+#         ^
+## After:
+def foo():
+    class undef_var:
+        pass
+    print(undef_var)
+#         ^
 "#
         .trim(),
         report.trim()
@@ -1179,6 +1982,65 @@ class Outer:
                 self.extracted_method(item)
                 # EXTRACT-END
             return len(data_list)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_excludes_vars_defined_in_selection() {
+    // variables defined within the selection should not become parameters, even
+    // when they are later used in augmented assignments (e.g., total += price).
+    let code = r#"
+def calculate_total_price(prices: list[int]) -> float:
+    # EXTRACT-START
+    total = 0
+    for price in prices:
+        total += price
+    with_tax = total * 1.085
+    # EXTRACT-END
+    return with_tax
+"#;
+    let updated = apply_first_extract_action(code).expect("expected extract refactor action");
+    let expected = r#"
+def extracted_function(prices):
+    total = 0
+    for price in prices:
+        total += price
+    with_tax = total * 1.085
+    return with_tax
+
+def calculate_total_price(prices: list[int]) -> float:
+    # EXTRACT-START
+    with_tax = extracted_function(prices)
+    # EXTRACT-END
+    return with_tax
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_includes_var_from_augmented_assign_without_prior_def() {
+    // When the selection contains only an augmented assignment (e.g., x += 1)
+    // without a prior definition of that variable, the variable must still be
+    // added as a parameter to the extracted function.
+    let code = r#"
+def update(x: int) -> int:
+    # EXTRACT-START
+    x += 1
+    # EXTRACT-END
+    return x
+"#;
+    let updated = apply_first_extract_action(code).expect("expected extract refactor action");
+    let expected = r#"
+def extracted_function(x):
+    x += 1
+    return x
+
+def update(x: int) -> int:
+    # EXTRACT-START
+    x = extracted_function(x)
+    # EXTRACT-END
+    return x
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }

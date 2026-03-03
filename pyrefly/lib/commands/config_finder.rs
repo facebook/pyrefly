@@ -31,6 +31,12 @@ use crate::module::third_party::BundledThirdParty;
 use crate::module::typeshed::BundledTypeshedStdlib;
 use crate::module::typeshed_third_party::BundledTypeshedThirdParty;
 
+/// A function that wraps a [`ConfigConfigurer`] with additional behavior.
+/// The function receives the "inner" configurer and returns a wrapped configurer
+/// that applies custom settings before delegating to the inner one.
+pub type ConfigConfigurerWrapper =
+    Arc<dyn Fn(Arc<dyn ConfigConfigurer>) -> Arc<dyn ConfigConfigurer> + Send + Sync>;
+
 /// Finalizes a config before being returned by a [`ConfigFinder`].
 pub trait ConfigConfigurer: Send + Sync + 'static {
     /// Sets additional options on, and calls configure to finalize and validate
@@ -81,8 +87,8 @@ impl ConfigConfigurer for DefaultConfigConfigurer {
     }
 }
 
-pub fn default_config_finder() -> ConfigFinder {
-    standard_config_finder(Arc::new(DefaultConfigConfigurer {}))
+pub fn default_config_finder(wrapper: Option<ConfigConfigurerWrapper>) -> ConfigFinder {
+    standard_config_finder(Arc::new(DefaultConfigConfigurer {}), wrapper)
 }
 
 struct DefaultConfigConfigurerWithOverrides {
@@ -119,16 +125,30 @@ impl ConfigConfigurer for DefaultConfigConfigurerWithOverrides {
 pub fn default_config_finder_with_overrides(
     args: ConfigOverrideArgs,
     ignore_errors: bool,
+    wrapper: Option<ConfigConfigurerWrapper>,
 ) -> ConfigFinder {
-    standard_config_finder(Arc::new(DefaultConfigConfigurerWithOverrides::new(
-        args,
-        ignore_errors,
-    )))
+    standard_config_finder(
+        Arc::new(DefaultConfigConfigurerWithOverrides::new(
+            args,
+            ignore_errors,
+        )),
+        wrapper,
+    )
 }
 
 /// Create a standard `ConfigFinder`, using the provided [`ConfigConfigurer`] to finalize
 /// the config before caching/returning it.
-pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFinder {
+///
+/// If `wrapper` is provided, it wraps the `configure` with additional behavior
+/// (e.g., applying internal-specific defaults) before delegation.
+pub fn standard_config_finder(
+    configure: Arc<dyn ConfigConfigurer>,
+    wrapper: Option<ConfigConfigurerWrapper>,
+) -> ConfigFinder {
+    let configure = match wrapper {
+        Some(wrap) => wrap(configure),
+        None => configure,
+    };
     let configure2 = configure.dupe();
     let configure3 = configure.dupe();
 
@@ -289,7 +309,7 @@ mod tests {
             + Sync
             + 'static,
         ) -> ConfigFinder {
-            standard_config_finder(Arc::new(TestConfigurer(Box::new(f))))
+            standard_config_finder(Arc::new(TestConfigurer(Box::new(f))), None)
         }
     }
 

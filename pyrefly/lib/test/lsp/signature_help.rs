@@ -1015,3 +1015,122 @@ Signature Help Result: active=0
         report.trim(),
     );
 }
+
+/// When one overload has more params than another, signature help should
+/// show all overloads regardless of which one matches the provided args.
+/// The active_signature should point to the best match.
+#[test]
+fn overloaded_function_active_signature_tracks_best_match() {
+    let code = r#"
+from typing import overload
+@overload
+def foo(x: int, y: str) -> int: ...
+@overload
+def foo(x: str) -> str: ...
+def foo(*args, **kwargs): ...
+
+foo("")
+#   ^
+foo(1, )
+#      ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+9 | foo("")
+        ^
+Signature Help Result: active=1
+- (x: int, y: str) -> int, parameters=[x: int, y: str], active parameter = 0
+- (x: str) -> str, parameters=[x: str], active parameter = 0
+
+11 | foo(1, )
+            ^
+Signature Help Result: active=0
+- (x: int, y: str) -> int, parameters=[x: int, y: str], active parameter = 1
+- (x: str) -> str, parameters=[x: str]
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+/// Signature help for overloads with keyword arguments should highlight
+/// the correct overload and parameter.
+#[test]
+fn overloaded_function_keyword_arg_test() {
+    let code = r#"
+from typing import overload
+@overload
+def bar(x: int, y: str) -> int: ...
+@overload
+def bar(x: int, z: bool) -> bool: ...
+def bar(*args, **kwargs): ...
+
+bar(1, y=)
+#      ^
+bar(1, z=)
+#      ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+9 | bar(1, y=)
+           ^
+Signature Help Result: active=0
+- (x: int, y: str) -> int, parameters=[x: int, y: str], active parameter = 1
+- (x: int, z: bool) -> bool, parameters=[x: int, z: bool]
+
+11 | bar(1, z=)
+            ^
+Signature Help Result: active=1
+- (x: int, y: str) -> int, parameters=[x: int, y: str]
+- (x: int, z: bool) -> bool, parameters=[x: int, z: bool], active parameter = 1
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+/// All overloads should be shown even when three or more exist,
+/// with the active signature pointing to the resolved overload.
+#[test]
+fn overloaded_function_three_overloads_test() {
+    let code = r#"
+from typing import overload
+@overload
+def baz(x: int) -> int: ...
+@overload
+def baz(x: str) -> str: ...
+@overload
+def baz(x: bool) -> bool: ...
+def baz(x): ...
+
+baz()
+#   ^
+baz(1)
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+11 | baz()
+         ^
+Signature Help Result: active=0
+- (x: int) -> int, parameters=[x: int], active parameter = 0
+- (x: str) -> str, parameters=[x: str], active parameter = 0
+- (x: bool) -> bool, parameters=[x: bool], active parameter = 0
+
+13 | baz(1)
+         ^
+Signature Help Result: active=0
+- (x: int) -> int, parameters=[x: int], active parameter = 0
+- (x: str) -> str, parameters=[x: str], active parameter = 0
+- (x: bool) -> bool, parameters=[x: bool], active parameter = 0
+"#
+        .trim(),
+        report.trim(),
+    );
+}

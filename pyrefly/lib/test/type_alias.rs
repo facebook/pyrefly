@@ -1075,7 +1075,6 @@ class ClassB_1(B_Alias_1[T_contra, T_co]): ...  # E: Type variable `T_contra` is
 );
 
 testcase!(
-    bug = "conformance: Should detect circular dependencies in TypeAliasType definitions",
     test_typealiastype_circular_conformance,
     r#"
 from typing import TypeAliasType, TypeVar
@@ -1089,11 +1088,11 @@ BadAlias4 = TypeAliasType("BadAlias4", "BadAlias4")  # E: cyclic self-reference 
 BadAlias5 = TypeAliasType("BadAlias5", T | "BadAlias5[str]", type_params=(T,))  # E: cyclic self-reference in `BadAlias5`
 
 # Mutual circular reference
-BadAlias6 = TypeAliasType("BadAlias6", "BadAlias7")
+BadAlias6 = TypeAliasType("BadAlias6", "BadAlias7")  # E: cyclic self-reference in `BadAlias6`
 BadAlias7 = TypeAliasType("BadAlias7", BadAlias6)  # E: cyclic self-reference in `BadAlias7`
 
 # Self-reference via list
-BadAlias21 = TypeAliasType("BadAlias21", list[BadAlias21])  # should error: circular dependency
+BadAlias21 = TypeAliasType("BadAlias21", list[BadAlias21])  # E: cyclic self-reference in `BadAlias21`
 "#,
 );
 
@@ -1132,7 +1131,7 @@ type RecursiveTypeAlias3 = RecursiveTypeAlias3  # E: cyclic self-reference in `R
 
 type RecursiveTypeAlias4[T] = T | RecursiveTypeAlias4[str]  # E: cyclic self-reference in `RecursiveTypeAlias4`
 
-type RecursiveTypeAlias6 = RecursiveTypeAlias7
+type RecursiveTypeAlias6 = RecursiveTypeAlias7  # E: cyclic self-reference in `RecursiveTypeAlias6`
 type RecursiveTypeAlias7 = RecursiveTypeAlias6  # E: cyclic self-reference in `RecursiveTypeAlias7`
 "#,
 );
@@ -1209,5 +1208,18 @@ def f(x: X):
 T = TypeVar("T")
 X = list[T]
 reveal_type([X])  # E: list[type[X[T]]]
+    "#,
+);
+
+testcase!(
+    bug = "Pyrefly gets tripped up by a self-referential bound in LoggerAdapter's type parameter",
+    test_logger_alias,
+    r#"
+from typing import Any
+import logging
+
+LoggerLike = logging.Logger | logging.LoggerAdapter[Any]
+
+def f(x: LoggerLike | None = None): ...  # E: Expected a type form, got instance of `UnionType | type[Logger | None] | Any`
     "#,
 );

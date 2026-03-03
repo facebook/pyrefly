@@ -22,6 +22,7 @@ use ruff_text_size::Ranged;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
+use crate::binding::binding::ExhaustiveBinding;
 use crate::binding::binding::ExhaustivenessKind;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExpect;
@@ -241,7 +242,7 @@ impl<'a> BindingsBuilder<'a> {
                         };
                         let match_key_idx = self.insert_binding_current(
                             match_key,
-                            Binding::PatternMatchMapping(match_key_expr, subject_idx),
+                            Binding::PatternMatchMapping(Box::new(match_key_expr), subject_idx),
                         );
                         let subject_at_key = key_name.and_then(|key| {
                             match_subject
@@ -361,7 +362,11 @@ impl<'a> BindingsBuilder<'a> {
                             .map(|s| s.with_facet(UnresolvedFacetKind::Attribute(attr.id.clone())));
                         let attr_key = self.insert_binding(
                             Key::Anon(attr.range()),
-                            Binding::PatternMatchClassKeyword(x.cls.clone(), attr, subject_idx),
+                            Binding::PatternMatchClassKeyword(Box::new((
+                                x.cls.clone(),
+                                attr,
+                                subject_idx,
+                            ))),
                         );
                         narrow_ops.and_all(self.bind_pattern(subject_for_attr, pattern, attr_key))
                     },
@@ -406,7 +411,7 @@ impl<'a> BindingsBuilder<'a> {
         let mut subject = self.declare_current_idx(Key::Anon(x.subject.range()));
         self.ensure_expr(&mut x.subject, subject.usage());
         let subject_idx =
-            self.insert_binding_current(subject, Binding::Expr(None, *x.subject.clone()));
+            self.insert_binding_current(subject, Binding::Expr(None, Box::new(*x.subject.clone())));
         let match_narrowing_subject = expr_to_subjects(&x.subject).first().cloned();
         let mut exhaustive = false;
         self.start_fork(x.range);
@@ -470,7 +475,10 @@ impl<'a> BindingsBuilder<'a> {
                     NarrowUseLocation::Span(guard.range()),
                     &Usage::Narrowing(None),
                 );
-                self.insert_binding(Key::Anon(guard.range()), Binding::Expr(None, *guard));
+                self.insert_binding(
+                    Key::Anon(guard.range()),
+                    Binding::Expr(None, Box::new(*guard)),
+                );
                 new_narrow_ops.and_all(guard_narrow_ops)
             }
             negated_prev_ops.and_all(new_narrow_ops.negate());
@@ -508,12 +516,12 @@ impl<'a> BindingsBuilder<'a> {
             // assume the match is not exhaustive (resolves to Type::None).
             self.insert_binding(
                 Key::Exhaustive(ExhaustivenessKind::Match, x.range),
-                Binding::Exhaustive {
+                Binding::Exhaustive(Box::new(ExhaustiveBinding {
                     kind: ExhaustivenessKind::Match,
                     subject_idx,
                     subject_range: x.subject.range(),
                     exhaustiveness_info,
-                },
+                })),
             );
         }
     }

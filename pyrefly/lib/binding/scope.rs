@@ -297,11 +297,11 @@ impl StaticInfo {
             })
         };
         match self.style {
-            StaticStyle::Anywhere(..) => Key::Anywhere(name.clone(), self.range),
+            StaticStyle::Anywhere(..) => Key::Anywhere(Box::new((name.clone(), self.range))),
             StaticStyle::Delete => Key::Delete(self.range),
             StaticStyle::MutableCapture(..) => Key::MutableCapture(short_identifier()),
-            StaticStyle::MergeableImport => Key::Import(name.clone(), self.range),
-            StaticStyle::ImplicitGlobal => Key::ImplicitGlobal(name.clone()),
+            StaticStyle::MergeableImport => Key::Import(Box::new((name.clone(), self.range))),
+            StaticStyle::ImplicitGlobal => Key::ImplicitGlobal(Box::new(name.clone())),
             StaticStyle::SingleDef(..) => Key::Definition(short_identifier()),
             StaticStyle::PossibleLegacyTParam => Key::PossibleLegacyTParam(self.range),
         }
@@ -647,24 +647,29 @@ impl FlowStyle {
     ) -> FlowStyle {
         let mut merged = styles.next().unwrap_or(FlowStyle::Other);
         for x in styles {
-            match (&merged, x) {
+            match (&mut merged, x) {
                 // If they're identical, keep it
-                (l, r) if l == &r => {}
+                (l, ref r) if *l == *r => {}
                 // Uninitialized-like branches merge into PossiblyUninitialized.
-                // MaybeInitialized is treated like PossiblyUninitialized for merge purposes.
-                (
-                    FlowStyle::Uninitialized
-                    | FlowStyle::PossiblyUninitialized
-                    | FlowStyle::MaybeInitialized(_),
-                    _,
-                )
-                | (
-                    _,
-                    FlowStyle::Uninitialized
-                    | FlowStyle::PossiblyUninitialized
-                    | FlowStyle::MaybeInitialized(_),
-                ) => {
+                // Must come before MaybeInitialized catch-all to avoid masking
+                // valid uninitialized paths.
+                (FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized, _)
+                | (_, FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized) => {
                     return FlowStyle::PossiblyUninitialized;
+                }
+                // Two MaybeInitialized: combine termination keys from both branches.
+                // Each branch independently needs its keys to be Never for that path
+                // to be initialized, so we collect all keys.
+                (FlowStyle::MaybeInitialized(keys), FlowStyle::MaybeInitialized(other_keys)) => {
+                    keys.extend(other_keys);
+                }
+                // MaybeInitialized + a fully initialized style: keep the MaybeInitialized
+                // keys since those paths still need verification at solve time.
+                (FlowStyle::MaybeInitialized(keys), _) => {
+                    merged = FlowStyle::MaybeInitialized(keys.clone());
+                }
+                (_, FlowStyle::MaybeInitialized(keys)) => {
+                    merged = FlowStyle::MaybeInitialized(keys);
                 }
                 // Unclear how to merge, default to None
                 _ => {
@@ -2174,7 +2179,7 @@ impl Scopes {
                             }
                         }
                         ClassFieldDefinition::AssignedInBody {
-                            value: ExprOrBinding::Expr(e.clone()),
+                            value: Box::new(ExprOrBinding::Expr(e.clone())),
                             annotation: static_info.annotation(),
                             alias_of,
                         }
@@ -2200,7 +2205,7 @@ impl Scopes {
                         name,
                         (
                             ClassFieldDefinition::DefinedInMethod {
-                                value,
+                                value: Box::new(value),
                                 annotation,
                                 method,
                             },
@@ -2369,7 +2374,7 @@ impl Scopes {
     /// - For other usages: Normal lookup behavior.
     pub fn look_up_name_for_read(&self, name: Hashed<&Name>, usage: &Usage) -> NameReadInfo {
         let skip_class_overload_function_definitions =
-            matches!(usage, Usage::StaticTypeInformation);
+            matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs);
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
 
@@ -2518,6 +2523,12 @@ impl ScopeTrace {
         let mut exportables = SmallMap::new();
         let scope = self.toplevel_scope();
         for (name, static_info) in scope.stat.0.iter_hashed() {
+            // Definitions with empty names are not actually accessible and should not be considered
+            // as exported. They are likely syntax errors, which are handled elsewhere.
+            if name.as_str() == "" {
+                continue;
+            }
+
             let exportable = match scope.flow.get_value_hashed(name) {
                 Some(FlowValue { idx: key, .. }) => {
                     if let Some(ann) = static_info.annotation() {
@@ -2696,7 +2707,10 @@ impl<'a> BindingsBuilder<'a> {
             self.insert_binding_idx(phi_idx, Binding::LoopPhi(loop_prior, branch_idxs));
             phi_idx
         } else {
-            self.insert_binding_idx(phi_idx, Binding::Phi(join_style, branch_infos));
+            self.insert_binding_idx(
+                phi_idx,
+                Binding::Phi(join_style, branch_infos.into_boxed_slice()),
+            );
             phi_idx
         }
     }
@@ -3026,7 +3040,7 @@ impl<'a> BindingsBuilder<'a> {
         // For each name and merge item, produce the merged FlowInfo for our new Flow
         let mut merged_flow_infos = SmallMap::with_capacity(merge_items.len());
         for (name, merge_item) in merge_items.into_iter_hashed() {
-            let phi_idx = self.idx_for_promise(Key::Phi(name.key().clone(), range));
+            let phi_idx = self.idx_for_promise(Key::Phi(Box::new((name.key().clone(), range))));
             merged_flow_infos.insert_hashed(
                 name,
                 self.merged_flow_info(
@@ -3061,7 +3075,7 @@ impl<'a> BindingsBuilder<'a> {
                 continue;
             }
             // We are promising to insert a binding for this key when we merge the flow
-            let phi_idx = self.idx_for_promise(Key::Phi(name.clone(), range));
+            let phi_idx = self.idx_for_promise(Key::Phi(Box::new((name.clone(), range))));
             match &mut info.value {
                 Some(value) => {
                     value.idx = phi_idx;

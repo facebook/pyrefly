@@ -89,6 +89,7 @@ use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
+use crate::types::display::LspDisplayMode;
 use crate::types::display::TypeDisplayContext;
 
 const REPR: Name = Name::new_static("__repr__");
@@ -281,6 +282,7 @@ fn type_to_string(ty: &Type) -> String {
     let mut ctx = TypeDisplayContext::new(&[ty]);
     ctx.always_display_module_name();
     ctx.always_display_expanded_unions();
+    ctx.set_lsp_display_mode(LspDisplayMode::Query);
     if is_static_method(ty) {
         format!("typing.StaticMethod[{}]", ctx.display(ty))
     } else if let Some(bound) = bound_of_type_var(ty) {
@@ -711,12 +713,14 @@ impl<'a> CalleesWithLocation<'a> {
         fallback_name: &str,
         callee_from_ancestor: F,
     ) -> Vec<Callee> {
-        let call_target = self.transaction.ad_hoc_solve(&self.handle, |solver| {
-            let mro = solver.get_mro_for_class(c);
-            iter::once(c)
-                .chain(mro.ancestors(solver.stdlib).map(|x| x.class_object()))
-                .find_map(|c| callee_from_ancestor(&solver, c))
-        });
+        let call_target = self
+            .transaction
+            .ad_hoc_solve(&self.handle, "query_mro", |solver| {
+                let mro = solver.get_mro_for_class(c);
+                iter::once(c)
+                    .chain(mro.ancestors(solver.stdlib).map(|x| x.class_object()))
+                    .find_map(|c| callee_from_ancestor(&solver, c))
+            });
         let class_name = Self::qname_to_string(c.qname());
         let target = if let Some(Some(t)) = call_target {
             t
@@ -1025,7 +1029,7 @@ impl Query {
                 Type::ClassType(c)
                     if c.name() == "classproperty" || c.name() == "cached_classproperty" =>
                 {
-                    let result_ty = c.targs().as_slice().get(1).unwrap();
+                    let result_ty = c.targs().as_slice().first().unwrap();
                     (Some(String::from("property")), result_ty)
                 }
                 _ => (None, ty),
@@ -1069,7 +1073,7 @@ impl Query {
                                 .and_then(|a| a.annotation.ty.clone())
                                 // Fall back to expression type trace
                                 .or_else(|| {
-                                    if let ExprOrBinding::Expr(expr) = value {
+                                    if let ExprOrBinding::Expr(expr) = value.as_ref() {
                                         answers.get_type_trace(expr.range())
                                     } else {
                                         None
@@ -1080,7 +1084,6 @@ impl Query {
                         }
                         _ => answers.get_idx(class_field_idx).map(|cf| cf.ty()),
                     };
-
                     let field_ty = field_ty?;
                     let (kind, field_ty) = get_kind_and_field_type(&field_ty);
 
@@ -1357,7 +1360,9 @@ impl Query {
                 let t = self.state.transaction();
                 let h = self.make_handle(name, ModulePath::filesystem(path));
                 let result = t
-                    .ad_hoc_solve(&h, |solver| solver.is_subset_eq(&sub_ty, &super_ty))
+                    .ad_hoc_solve(&h, "query_is_subset_eq", |solver| {
+                        solver.is_subset_eq(&sub_ty, &super_ty)
+                    })
                     .unwrap_or(false);
                 return Ok(result);
             }
@@ -1410,7 +1415,7 @@ impl Query {
         let result = if is_typed_dict_request {
             matches!(sub_ty, Type::TypedDict(_) | Type::PartialTypedDict(_))
         } else {
-            t.ad_hoc_solve(&h, |solver| {
+            t.ad_hoc_solve(&h, "query_is_subset_eq", |solver| {
                 solver.is_subset_eq(&sub_ty, &super_ty_opt.unwrap())
             })
             .unwrap_or(false)

@@ -103,7 +103,8 @@
                 "python.pyrefly.disableLanguageServices": {
                     "type": "boolean",
                     "default": false,
-                    "description": "If true, pyrefly will not provide other IDE services like completions, hover, definition, etc. To control type errors, see `python.pyrefly.displayTypeErrors`"
+                    "description": "If true, pyrefly will not provide other IDE services like completions, hover, definition, etc. To control type errors, see `python.pyrefly.displayTypeErrors`",
+                    "scope": "resource"
                 },
                 "python.pyrefly.displayTypeErrors": {
                     "type": "string",
@@ -114,7 +115,8 @@
                         "force-on",
                         "force-off",
                         "error-missing-imports"
-                    ]
+                    ],
+                    "scope": "resource"
                 },
                 "pyrefly.trace.server": {
                     "type": "string",
@@ -129,6 +131,7 @@
                     "type": "object",
                     "default": {},
                     "description": "Disable specific language services. Set individual services to true to disable them.",
+                    "scope": "resource",
                     "properties": {
                         "hover": {
                             "type": "boolean",
@@ -221,7 +224,17 @@
                 "python.pyrefly.streamDiagnostics": {
                     "type": "boolean",
                     "default": true,
-                    "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes. This is a global setting that applies to all workspaces."
+                    "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes.",
+                    "scope": "resource"
+                },
+                "python.pyrefly.diagnosticMode": {
+                    "type": "string",
+                    "default": "openFilesOnly",
+                    "description": "Controls the scope of Pyrefly's diagnostic analysis. When set to 'openFilesOnly', diagnostics are only provided for files that are currently open in the editor.",
+                    "enum": [
+                        "openFilesOnly"
+                    ],
+                    "scope": "resource"
                 },
                 "pyrefly.commentFoldingRanges": {
                     "type": "boolean",

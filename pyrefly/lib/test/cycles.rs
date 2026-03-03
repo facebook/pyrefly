@@ -585,3 +585,48 @@ def tokenize_lines(
                     contstr = line[start:]
 "#,
 );
+
+// Regression test for stack overflow in generated code with many fields.
+//
+// Generated Python classes have a `__repr__` method with sequential
+// `if self.fieldN is not None:` blocks that reassign `value` and call
+// `L.append(...)`, creating a phi chain in the SSA binding graph.
+//
+// Each if-block includes a stmt_expr (L.append) as the last statement,
+// which creates a termination_key for the branch. The phi's filter_map
+// termination check calls get_idx(term_key) to resolve it, triggering
+// the full expression chain within the block:
+//   L.append('...%s' % (value)) → value → repr(self.fN) → phi_(N-1)
+fn env_deep_phi_chain_term_expr() -> TestEnv {
+    use std::fmt::Write;
+
+    const NUM_FIELDS: usize = 1000;
+
+    let mut code = String::new();
+    code.push_str("class Struct:\n");
+
+    code.push_str("  def __init__(self):\n");
+    for i in 0..NUM_FIELDS {
+        writeln!(code, "    self.f{i} = None").unwrap();
+    }
+
+    code.push_str("  def serialize(self):\n");
+    code.push_str("    L: list[str] = []\n");
+    for i in 0..NUM_FIELDS {
+        writeln!(code, "    if self.f{i} is not None:").unwrap();
+        writeln!(code, "      value = repr(self.f{i})").unwrap();
+        writeln!(code, "      L.append('    f{i}=%s' % (value,))").unwrap();
+    }
+    code.push_str("    return value\n");
+
+    TestEnv::one("gen", &code)
+}
+
+testcase!(
+    deep_phi_chain_term_expr,
+    env_deep_phi_chain_term_expr(),
+    r#"
+from gen import Struct
+x = Struct().serialize()
+"#,
+);

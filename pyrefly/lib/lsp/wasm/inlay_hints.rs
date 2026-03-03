@@ -148,10 +148,11 @@ impl<'a> Transaction<'a> {
                                 {
                                     let fun = bindings.get(bindings.get(*x).undecorated_idx);
                                     if fun.def.is_async
-                                        && let Some(Some((_, _, return_ty))) = self
-                                            .ad_hoc_solve(handle, |solver| {
-                                                solver.unwrap_coroutine(&ty)
-                                            })
+                                        && let Some(Some((_, _, return_ty))) = self.ad_hoc_solve(
+                                            handle,
+                                            "inlay_hint_coroutine",
+                                            |solver| solver.unwrap_coroutine(&ty),
+                                        )
                                     {
                                         ty = return_ty;
                                     }
@@ -181,12 +182,8 @@ impl<'a> Transaction<'a> {
                 {
                     // For unpacked values, extract the element expression if available
                     let (e, is_unpacked) = match bindings.get(idx) {
-                        Binding::NameAssign {
-                            annotation: None,
-                            expr: e,
-                            ..
-                        } => (Some(&**e), false),
-                        Binding::Expr(None, e) => (Some(e), false),
+                        Binding::NameAssign(x) if x.annotation.is_none() => (Some(&*x.expr), false),
+                        Binding::Expr(None, e) => (Some(&**e), false),
                         Binding::UnpackedValue(None, unpack_idx, _, pos) => {
                             // Try to get the element expression from the unpacked source
                             let element_expr =
@@ -270,7 +267,7 @@ impl<'a> Transaction<'a> {
         }?;
 
         // Try to extract elements from tuple or list literals
-        let elts = match source_expr {
+        let elts = match &**source_expr {
             Expr::Tuple(tup) => Some(&tup.elts),
             Expr::List(lst) => Some(&lst.elts),
             _ => None,
@@ -463,6 +460,7 @@ impl<'a> Transaction<'a> {
                 handle.sys_info(),
                 definition_kind,
                 TextRangeWithModule::new(module_info, id.range()),
+                true,
             ) {
                 return references;
             }
@@ -597,21 +595,17 @@ impl<'a> Transaction<'a> {
                 key @ Key::Definition(_) if containers => {
                     if let Some(ty) = self.get_type(handle, key) {
                         let e = match bindings.get(idx) {
-                            Binding::NameAssign {
-                                annotation: None,
-                                expr: e,
-                                ..
-                            } => match &**e {
+                            Binding::NameAssign(x) if x.annotation.is_none() => match &*x.expr {
                                 Expr::List(ExprList { elts, .. }) => {
                                     if elts.is_empty() {
-                                        Some(&**e)
+                                        Some(&*x.expr)
                                     } else {
                                         None
                                     }
                                 }
                                 Expr::Dict(ExprDict { items, .. }) => {
                                     if items.is_empty() {
-                                        Some(&**e)
+                                        Some(&*x.expr)
                                     } else {
                                         None
                                     }

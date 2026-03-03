@@ -52,6 +52,7 @@ use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::info;
 
+use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::Severity;
@@ -95,9 +96,12 @@ pub struct FullCheckArgs {
 }
 
 impl FullCheckArgs {
-    pub async fn run(self) -> anyhow::Result<CommandExitStatus> {
+    pub async fn run(
+        self,
+        wrapper: Option<ConfigConfigurerWrapper>,
+    ) -> anyhow::Result<CommandExitStatus> {
         self.config_override.validate()?;
-        let (files_to_check, config_finder) = self.files.resolve(self.config_override)?;
+        let (files_to_check, config_finder) = self.files.resolve(self.config_override, wrapper)?;
         run_check(self.args, self.watch, files_to_check, config_finder).await
     }
 }
@@ -176,8 +180,12 @@ pub struct SnippetCheckArgs {
 }
 
 impl SnippetCheckArgs {
-    pub async fn run(self) -> anyhow::Result<CommandExitStatus> {
-        let (_, config_finder) = FilesArgs::get(vec![], self.config, self.config_override)?;
+    pub async fn run(
+        self,
+        wrapper: Option<ConfigConfigurerWrapper>,
+    ) -> anyhow::Result<CommandExitStatus> {
+        let (_, config_finder) =
+            FilesArgs::get(vec![], self.config, self.config_override, wrapper)?;
         let check_args = CheckArgs {
             output: self.output,
             behavior: BehaviorArgs {
@@ -213,6 +221,9 @@ struct OutputArgs {
     /// Report type traces.
     #[arg(long, value_name = "OUTPUT_FILE")]
     report_trace: Option<PathBuf>,
+    /// Experimental: generate a JSON dependency graph of all modules to the specified file. This is unstable and should only be used for debugging.
+    #[arg(long, value_name = "OUTPUT_FILE")]
+    dependency_graph: Option<PathBuf>,
     /// Process each module individually to figure out how long each step takes.
     #[arg(long, value_name = "OUTPUT_FILE")]
     report_timings: Option<PathBuf>,
@@ -381,7 +392,7 @@ impl OutputFormat {
             Self::MinText => Self::write_error_text_to_file(path, relative_to, errors, false),
             Self::FullText => Self::write_error_text_to_file(path, relative_to, errors, true),
             Self::Json => Self::write_error_json_to_file(path, relative_to, errors),
-            Self::Github => Self::write_error_github_to_file(path, relative_to, errors),
+            Self::Github => Self::write_error_github_to_file(path, errors),
             Self::OmitErrors => Ok(()),
         }
     }
@@ -391,46 +402,34 @@ impl OutputFormat {
             Self::MinText => Self::write_error_text_to_console(relative_to, errors, false),
             Self::FullText => Self::write_error_text_to_console(relative_to, errors, true),
             Self::Json => Self::write_error_json_to_console(relative_to, errors),
-            Self::Github => Self::write_error_github_to_console(relative_to, errors),
+            Self::Github => Self::write_error_github_to_console(errors),
             Self::OmitErrors => Ok(()),
         }
     }
 
-    fn write_error_github(
-        writer: &mut impl Write,
-        relative_to: &Path,
-        errors: &[Error],
-    ) -> anyhow::Result<()> {
+    fn write_error_github(writer: &mut impl Write, errors: &[Error]) -> anyhow::Result<()> {
         for error in errors {
-            if let Some(command) = github_actions_command(error, relative_to) {
+            if let Some(command) = github_actions_command(error) {
                 writeln!(writer, "{command}")?;
             }
         }
         Ok(())
     }
 
-    fn buffered_write_error_github(
-        writer: impl Write,
-        relative_to: &Path,
-        errors: &[Error],
-    ) -> anyhow::Result<()> {
+    fn buffered_write_error_github(writer: impl Write, errors: &[Error]) -> anyhow::Result<()> {
         let mut writer = BufWriter::new(writer);
-        Self::write_error_github(&mut writer, relative_to, errors)?;
+        Self::write_error_github(&mut writer, errors)?;
         writer.flush()?;
         Ok(())
     }
 
-    fn write_error_github_to_file(
-        path: &Path,
-        relative_to: &Path,
-        errors: &[Error],
-    ) -> anyhow::Result<()> {
+    fn write_error_github_to_file(path: &Path, errors: &[Error]) -> anyhow::Result<()> {
         let file = File::create(path)?;
-        Self::buffered_write_error_github(file, relative_to, errors)
+        Self::buffered_write_error_github(file, errors)
     }
 
-    fn write_error_github_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
-        Self::buffered_write_error_github(stdout(), relative_to, errors)
+    fn write_error_github_to_console(errors: &[Error]) -> anyhow::Result<()> {
+        Self::buffered_write_error_github(stdout(), errors)
     }
 }
 
@@ -445,10 +444,10 @@ fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
     }
 }
 
-fn github_actions_command(error: &Error, relative_to: &Path) -> Option<String> {
+fn github_actions_command(error: &Error) -> Option<String> {
     let command = severity_to_github_command(error.severity())?;
     let range = error.display_range();
-    let file = github_actions_path(error.path().as_path(), relative_to);
+    let file = github_actions_path(error.path().as_path());
     let params = format!(
         "file={},line={},col={},endLine={},endColumn={},title={}",
         escape_workflow_property(&file),
@@ -465,18 +464,8 @@ fn github_actions_command(error: &Error, relative_to: &Path) -> Option<String> {
 const WORKFLOW_DATA_ENCODE_SET: &AsciiSet = &CONTROLS.add(b'%');
 const WORKFLOW_PROPERTY_ENCODE_SET: &AsciiSet = &WORKFLOW_DATA_ENCODE_SET.add(b':').add(b',');
 
-fn github_actions_path(path: &Path, relative_to: &Path) -> String {
-    let relative = if relative_to.as_os_str().is_empty() {
-        path
-    } else {
-        path.strip_prefix(relative_to).unwrap_or(path)
-    };
-    let candidate = if relative.as_os_str().is_empty() {
-        path
-    } else {
-        relative
-    };
-    let mut path_str = candidate.to_string_lossy().into_owned();
+fn github_actions_path(path: &Path) -> String {
+    let mut path_str = path.to_string_lossy().into_owned();
     if std::path::MAIN_SEPARATOR != '/' {
         path_str = path_str.replace(std::path::MAIN_SEPARATOR, "/");
     }
@@ -979,7 +968,7 @@ impl CheckArgs {
             fs_anyhow::create_dir_all(glean)?;
             for handle in handles {
                 // Generate a safe filename using hash to avoid OS filename length limits
-                let module_hash = blake3::hash(handle.module().to_string().as_bytes());
+                let module_hash = blake3::hash(handle.path().to_string().as_bytes());
                 fs_anyhow::write(
                     &glean.join(format!("{}.json", &module_hash)),
                     report::glean::glean(transaction, handle),
@@ -987,13 +976,19 @@ impl CheckArgs {
             }
         }
         if let Some(pysa_directory) = &self.output.report_pysa {
-            report::pysa::write_results(pysa_directory, transaction, &shown_errors)?;
+            report::pysa::write_results(pysa_directory, transaction, handles, &shown_errors)?;
         }
         if let Some(path) = &self.output.report_binding_memory {
             fs_anyhow::write(path, report::binding_memory::binding_memory(transaction))?;
         }
         if let Some(path) = &self.output.report_trace {
             fs_anyhow::write(path, report::trace::trace(transaction))?;
+        }
+        if let Some(path) = &self.output.dependency_graph {
+            fs_anyhow::write(
+                path,
+                report::dependency_graph::dependency_graph(transaction, handles),
+            )?;
         }
         if self.behavior.suppress_errors {
             // TODO: Move this into separate command
@@ -1023,7 +1018,6 @@ impl CheckArgs {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -1052,13 +1046,13 @@ mod tests {
     }
 
     #[test]
-    fn github_actions_command_includes_relative_path_and_metadata() {
-        let cmd = github_actions_command(&sample_error(vec1!["bad".into()]), Path::new("/repo"))
+    fn github_actions_command_includes_full_path_and_metadata() {
+        let cmd = github_actions_command(&sample_error(vec1!["bad".into()]))
             .expect("should emit command");
         assert!(cmd.starts_with("::error "), "{cmd}");
         assert!(
-            cmd.contains("file=foo.py"),
-            "relative path expected, got {cmd}"
+            cmd.contains("file=/repo/foo.py"),
+            "full path expected, got {cmd}"
         );
         assert!(
             cmd.contains("title=Pyrefly bad-assignment"),
@@ -1073,18 +1067,18 @@ mod tests {
         let notice = sample_error(vec1!["bad".into()]).with_severity(Severity::Info);
         let ignored = sample_error(vec1!["bad".into()]).with_severity(Severity::Ignore);
         assert!(
-            github_actions_command(&warning, Path::new(""))
+            github_actions_command(&warning)
                 .unwrap()
                 .starts_with("::warning "),
             "warning severity not mapped"
         );
         assert!(
-            github_actions_command(&notice, Path::new(""))
+            github_actions_command(&notice)
                 .unwrap()
                 .starts_with("::notice "),
             "info severity not mapped"
         );
-        assert!(github_actions_command(&ignored, Path::new("")).is_none());
+        assert!(github_actions_command(&ignored).is_none());
     }
 
     #[test]
@@ -1100,9 +1094,9 @@ mod tests {
     fn github_output_format_writes_commands() {
         let errors = vec![sample_error(vec1!["bad".into()])];
         let mut buf = Vec::new();
-        OutputFormat::write_error_github(&mut buf, Path::new("/repo"), &errors).unwrap();
+        OutputFormat::write_error_github(&mut buf, &errors).unwrap();
         let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("::error file=foo.py"));
+        assert!(output.contains("::error file=/repo/foo.py"));
         assert!(output.ends_with("::bad\n"));
     }
 }

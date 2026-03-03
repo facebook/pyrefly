@@ -403,3 +403,21 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor i
 assert_type(x, LiteralString)
     "#,
 );
+
+testcase!(
+    test_literal_try_except_import,
+    r#"
+from typing import assert_type
+
+try:
+    from typing import Literal
+except ImportError:
+    from typing_extensions import Literal
+
+def fun(param: Literal["test"] = "test"):
+    assert_type(param, Literal["test"])
+
+x: Literal["a", "b"] = "a"
+assert_type(x, Literal["a", "b"])
+"#,
+);

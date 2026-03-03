@@ -341,7 +341,8 @@ impl TspInteraction {
     pub fn new() -> Self {
         init_test();
 
-        let (conn_server, conn_client) = Connection::memory();
+        let ((conn_server, server_reader), (conn_client, _client_reader)) = Connection::memory();
+        let client_receiver = conn_client.channel_receiver().clone();
 
         let args = TspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -356,14 +357,14 @@ impl TspInteraction {
 
         // Spawn the server thread and store its handle
         let thread_handle = thread::spawn(move || {
-            run_tsp(conn_server, args, &NoTelemetry)
+            run_tsp(conn_server, server_reader, args, &NoTelemetry, None)
                 .map(|_| ())
                 .map_err(|e| std::io::Error::other(e.to_string()))
         });
 
         server.server_thread = Some(thread_handle);
 
-        let client = TestTspClient::new(conn_client.receiver);
+        let client = TestTspClient::new(client_receiver);
 
         Self { server, client }
     }

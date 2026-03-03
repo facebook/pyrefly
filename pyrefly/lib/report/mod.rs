@@ -7,6 +7,7 @@
 
 pub mod binding_memory;
 pub mod debug_info;
+pub mod dependency_graph;
 pub mod glean;
 pub mod pysa;
 pub mod trace;

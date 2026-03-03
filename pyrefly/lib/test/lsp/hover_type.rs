@@ -520,7 +520,7 @@ foo(C)
 # main.py
 11 | foo(C)
        ^
-Hover Result: `(x: type[T]) -> T`
+Hover Result: `[T](x: type[T]) -> T`
 "#
         .trim(),
         report.trim(),

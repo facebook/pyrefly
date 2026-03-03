@@ -73,6 +73,7 @@ use crate::binding::pydantic::PydanticConfigDict;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
 use crate::types::annotation::Annotation;
+use crate::types::callable::FuncDefIndex;
 use crate::types::class::Class;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
@@ -87,7 +88,7 @@ use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
-assert_words!(Key, 6);
+assert_words!(Key, 2);
 assert_bytes!(KeyExpect, 12);
 assert_bytes!(KeyTypeAlias, 4);
 assert_words!(KeyExport, 3);
@@ -107,7 +108,7 @@ assert_words!(KeyDecorator, 1);
 assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
-assert_words!(Binding, 11);
+assert_words!(Binding, 6);
 assert_words!(BindingExpect, 16);
 assert_words!(BindingTypeAlias, 6);
 assert_words!(BindingAnnotation, 15);
@@ -117,14 +118,14 @@ assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 9);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
-assert_words!(BindingClassField, 21);
+assert_words!(BindingClassField, 11);
 assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 10);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 14);
+assert_words!(BindingUndecoratedFunction, 15);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -143,6 +144,7 @@ pub enum AnyIdx {
     KeyDecorator(Idx<KeyDecorator>),
     KeyDecoratedFunction(Idx<KeyDecoratedFunction>),
     KeyUndecoratedFunction(Idx<KeyUndecoratedFunction>),
+    KeyUndecoratedFunctionRange(Idx<KeyUndecoratedFunctionRange>),
     KeyAnnotation(Idx<KeyAnnotation>),
     KeyClassMetadata(Idx<KeyClassMetadata>),
     KeyClassMro(Idx<KeyClassMro>),
@@ -206,6 +208,9 @@ macro_rules! dispatch_anyidx {
             }
             AnyIdx::KeyUndecoratedFunction(idx) => {
                 $self.$method::<$crate::binding::binding::KeyUndecoratedFunction>(*idx)
+            }
+            AnyIdx::KeyUndecoratedFunctionRange(idx) => {
+                $self.$method::<$crate::binding::binding::KeyUndecoratedFunctionRange>(*idx)
             }
             AnyIdx::KeyAnnotation(idx) => {
                 $self.$method::<$crate::binding::binding::KeyAnnotation>(*idx)
@@ -274,6 +279,9 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyUndecoratedFunction(idx) => {
                 $self.$method::<$crate::binding::binding::KeyUndecoratedFunction>(*idx, $($args),+)
             }
+            AnyIdx::KeyUndecoratedFunctionRange(idx) => {
+                $self.$method::<$crate::binding::binding::KeyUndecoratedFunctionRange>(*idx, $($args),+)
+            }
             AnyIdx::KeyAnnotation(idx) => {
                 $self.$method::<$crate::binding::binding::KeyAnnotation>(*idx, $($args),+)
             }
@@ -320,6 +328,7 @@ impl DisplayWith<Bindings> for AnyIdx {
             Self::KeyDecorator(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyDecoratedFunction(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyUndecoratedFunction(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyUndecoratedFunctionRange(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyAnnotation(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMetadata(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMro(idx) => write!(f, "{}", ctx.display(*idx)),
@@ -345,44 +354,6 @@ pub enum AnyExportedKey {
     KeyClassMro(KeyClassMro),
     KeyAbstractClassCheck(KeyAbstractClassCheck),
     KeyTypeAlias(KeyTypeAlias),
-}
-
-/// Represents a changed export for fine-grained incremental invalidation.
-/// This is either a name (for `KeyExport`), a class index (for class-related keys),
-/// a wildcard set change (for `from M import *`), or a name existence change.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ChangedExport {
-    /// A changed export name (from `KeyExport`). The type of this export changed.
-    Name(Name),
-    /// A changed class (from class-related keys like `KeyClassField`, `KeyClassMetadata`, etc.).
-    ClassDefIndex(ClassDefIndex),
-    /// A name was added or removed from the module's definitions.
-    /// This is detected at the Exports step, before types are computed.
-    NameExistence(Name),
-    /// The metadata of an export changed (is_reexport, implicitly_imported_submodule, deprecation, special_export).
-    /// This is detected at the Exports step by comparing Definition metadata.
-    Metadata(Name),
-    /// A changed type alias
-    TypeAliasIndex(TypeAliasIndex),
-}
-
-impl AnyExportedKey {
-    /// Convert this key to the corresponding `ChangedExport`.
-    /// `KeyExport` maps to `ChangedExport::Name`, all other keys map to `ChangedExport::ClassDefIndex`.
-    pub fn to_changed_export(&self) -> ChangedExport {
-        match self {
-            AnyExportedKey::KeyExport(k) => ChangedExport::Name(k.0.clone()),
-            AnyExportedKey::KeyTParams(k) => ChangedExport::ClassDefIndex(k.0),
-            AnyExportedKey::KeyClassBaseType(k) => ChangedExport::ClassDefIndex(k.0),
-            AnyExportedKey::KeyClassField(k) => ChangedExport::ClassDefIndex(k.0),
-            AnyExportedKey::KeyClassSynthesizedFields(k) => ChangedExport::ClassDefIndex(k.0),
-            AnyExportedKey::KeyVariance(k) => ChangedExport::ClassDefIndex(k.0),
-            AnyExportedKey::KeyClassMetadata(k) => ChangedExport::ClassDefIndex(k.0),
-            AnyExportedKey::KeyClassMro(k) => ChangedExport::ClassDefIndex(k.0),
-            AnyExportedKey::KeyAbstractClassCheck(k) => ChangedExport::ClassDefIndex(k.0),
-            AnyExportedKey::KeyTypeAlias(k) => ChangedExport::TypeAliasIndex(k.0),
-        }
-    }
 }
 
 /// Any key that sets `EXPORTED` to `true` should not include positions
@@ -576,6 +547,13 @@ impl Keyed for KeyUndecoratedFunction {
         AnyIdx::KeyUndecoratedFunction(idx)
     }
 }
+impl Keyed for KeyUndecoratedFunctionRange {
+    type Value = BindingUndecoratedFunctionRange;
+    type Answer = UndecoratedFunctionRangeAnswer;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyUndecoratedFunctionRange(idx)
+    }
+}
 impl Keyed for KeyAnnotation {
     type Value = BindingAnnotation;
     type Answer = AnnotationWithTarget;
@@ -699,9 +677,9 @@ pub enum Key {
     /// I am an `import` at this location with this name.
     /// Used for `import foo.x` (the `foo` might not be literally present with `.` modules),
     /// and `from foo import *` (the names are injected from the exports)
-    Import(Name, TextRange),
+    Import(Box<(Name, TextRange)>),
     /// I am an implicit module-level global variable like `__file__` or `__doc__`.
-    ImplicitGlobal(Name),
+    ImplicitGlobal(Box<Name>),
     /// I am defined in this module at this location.
     Definition(ShortIdentifier),
     /// I am a mutable capture (`global` or `nonlocal`) declared at this location.
@@ -733,7 +711,7 @@ pub enum Key {
     /// I am an expression that appears in a `with` context.
     ContextExpr(TextRange),
     /// I am the result of joining several branches.
-    Phi(Name, TextRange),
+    Phi(Box<(Name, TextRange)>),
     /// I am the result of narrowing a type. The two ranges are the range at which the operation is
     /// defined and the one at which it is used. For example, in:
     ///   if x is None:
@@ -742,9 +720,9 @@ pub enum Key {
     ///       pass
     /// The `x is None` operation is defined once in the `if` test but generates two key/binding
     /// pairs, when it is used to narrow `x` in the `if` and the `else`, respectively.
-    Narrow(Name, TextRange, NarrowUseLocation),
+    Narrow(Box<(Name, TextRange, NarrowUseLocation)>),
     /// The binding definition site, anywhere it occurs
-    Anywhere(Name, TextRange),
+    Anywhere(Box<(Name, TextRange)>),
     /// Result of a super() call
     SuperInstance(TextRange),
     /// The intermediate used in an unpacking assignment.
@@ -774,7 +752,7 @@ pub enum Key {
 impl Ranged for Key {
     fn range(&self) -> TextRange {
         match self {
-            Self::Import(_, r) => *r,
+            Self::Import(x) => x.1,
             Self::ImplicitGlobal(_) => TextRange::default(),
             Self::Definition(x) => x.range(),
             Self::MutableCapture(x) => x.range(),
@@ -788,9 +766,9 @@ impl Ranged for Key {
             Self::Anon(r) => *r,
             Self::StmtExpr(r) => *r,
             Self::ContextExpr(r) => *r,
-            Self::Phi(_, r) => *r,
-            Self::Narrow(_, r, _) => *r,
-            Self::Anywhere(_, r) => *r,
+            Self::Phi(x) => x.1,
+            Self::Narrow(x) => x.1,
+            Self::Anywhere(x) => x.1,
             Self::SuperInstance(r) => *r,
             Self::Unpack(r) => *r,
             Self::UsageLink(r) => *r,
@@ -809,7 +787,7 @@ impl DisplayWith<ModuleInfo> for Key {
         let short = |x: &ShortIdentifier| format!("{} {}", ctx.display(x), ctx.display(&x.range()));
 
         match self {
-            Self::Import(n, r) => write!(f, "Key::Import({n} {})", ctx.display(r)),
+            Self::Import(x) => write!(f, "Key::Import({} {})", x.0, ctx.display(&x.1)),
             Self::ImplicitGlobal(n) => write!(f, "Key::Global({n})"),
             Self::Definition(x) => write!(f, "Key::Definition({})", short(x)),
             Self::MutableCapture(x) => write!(f, "Key::MutableCapture({})", short(x)),
@@ -822,16 +800,17 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::Anon(r) => write!(f, "Key::Anon({})", ctx.display(r)),
             Self::StmtExpr(r) => write!(f, "Key::StmtExpr({})", ctx.display(r)),
             Self::ContextExpr(r) => write!(f, "Key::ContextExpr({})", ctx.display(r)),
-            Self::Phi(n, r) => write!(f, "Key::Phi({n} {})", ctx.display(r)),
-            Self::Narrow(n, r1, r2) => {
+            Self::Phi(x) => write!(f, "Key::Phi({} {})", x.0, ctx.display(&x.1)),
+            Self::Narrow(x) => {
                 write!(
                     f,
-                    "Key::Narrow({n} {} {})",
-                    ctx.display(r1),
-                    ctx.display(r2)
+                    "Key::Narrow({} {} {})",
+                    x.0,
+                    ctx.display(&x.1),
+                    ctx.display(&x.2)
                 )
             }
-            Self::Anywhere(n, r) => write!(f, "Key::Anywhere({n} {})", ctx.display(r)),
+            Self::Anywhere(x) => write!(f, "Key::Anywhere({} {})", x.0, ctx.display(&x.1)),
             Self::ReturnType(x) => write!(f, "Key::Return({})", short(x)),
             Self::ReturnExplicit(r) => write!(f, "Key::ReturnExplicit({})", ctx.display(r)),
             Self::ReturnImplicit(x) => write!(f, "Key::ReturnImplicit({})", short(x)),
@@ -1257,6 +1236,48 @@ impl DisplayWith<ModuleInfo> for KeyUndecoratedFunction {
     }
 }
 
+/// Maps a FuncDefIndex to the function's ShortIdentifier, enabling lookup of
+/// the corresponding KeyUndecoratedFunction.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyUndecoratedFunctionRange(pub FuncDefIndex);
+
+impl Ranged for KeyUndecoratedFunctionRange {
+    fn range(&self) -> TextRange {
+        TextRange::default()
+    }
+}
+
+impl DisplayWith<ModuleInfo> for KeyUndecoratedFunctionRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyUndecoratedFunctionRange({})", self.0)
+    }
+}
+
+/// Trivial answer type for KeyUndecoratedFunctionRange — just a copy of the
+/// binding value (the function's ShortIdentifier).
+#[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
+pub struct UndecoratedFunctionRangeAnswer(pub ShortIdentifier);
+
+impl Display for UndecoratedFunctionRangeAnswer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "UndecoratedFunctionRangeAnswer({:?})", self.0.range())
+    }
+}
+
+/// Binding value for KeyUndecoratedFunctionRange.
+#[derive(Clone, Debug)]
+pub struct BindingUndecoratedFunctionRange(pub ShortIdentifier);
+
+impl DisplayWith<Bindings> for BindingUndecoratedFunctionRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
+        write!(
+            f,
+            "BindingUndecoratedFunctionRange({})",
+            ctx.module().display(&self.0)
+        )
+    }
+}
+
 /// A reference to a class.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyClass(pub ShortIdentifier);
@@ -1592,7 +1613,7 @@ impl IsAsync {
 #[derive(Clone, Debug)]
 pub enum FunctionParameter {
     Annotated(Idx<KeyAnnotation>),
-    Unannotated(Var, Idx<KeyUndecoratedFunction>, AnnotationTarget),
+    Unannotated(Idx<KeyUndecoratedFunction>, AnnotationTarget, Name),
 }
 
 /// Is the body of this function stubbed out (contains nothing but `...`)?
@@ -1671,6 +1692,7 @@ impl DisplayWith<Bindings> for BindingDecoratedFunction {
 
 #[derive(Clone, Debug)]
 pub struct BindingUndecoratedFunction {
+    pub def_index: FuncDefIndex,
     pub def: FunctionDefData,
     pub stub_or_impl: FunctionStubOrImpl,
     pub class_key: Option<Idx<KeyClass>>,
@@ -1723,12 +1745,6 @@ pub enum ReturnTypeKind {
     ShouldValidateAnnotation {
         range: TextRange,
         annotation: Idx<KeyAnnotation>,
-        /// Used to skip the validation for stub functions (returning `...`). This is
-        /// unsafe, but is convenient and matches Pyright's behavior.
-        stub_or_impl: FunctionStubOrImpl,
-        /// We keep this just so we can scan for `@abstractmethod` and use the info to decide
-        /// whether to skip the validation.
-        decorators: Box<[Idx<KeyDecorator>]>,
         implicit_return: Idx<Key>,
         is_generator: bool,
         has_explicit_return: bool,
@@ -1751,11 +1767,6 @@ pub enum ReturnTypeKind {
         /// whether these two fields are empty or not.
         yields: Box<[Idx<KeyYield>]>,
         yield_froms: Box<[Idx<KeyYieldFrom>]>,
-        /// Whether the function body is trivial (e.g., `pass`, `raise NotImplementedError()`).
-        /// Used to detect abstract methods in ABC subclasses.
-        body_is_trivial: bool,
-        /// The class metadata key, if this function is a method. Used to check if the class extends ABC.
-        class_metadata_key: Option<Idx<KeyClassMetadata>>,
     },
 }
 
@@ -1880,24 +1891,76 @@ pub enum TypeAliasParams {
     },
 }
 
+/// Data for a name assignment binding.
+#[derive(Clone, Debug)]
+pub struct NameAssign {
+    pub name: Name,
+    pub annotation: Option<(AnnotationStyle, Idx<KeyAnnotation>)>,
+    pub expr: Box<Expr>,
+    pub legacy_tparams: Option<Box<[Idx<KeyLegacyTypeParam>]>>,
+    pub is_in_function_scope: bool,
+    pub first_use: FirstUse,
+    /// The CompletedPartialType idx for this NameAssign, if infer_with_first_use
+    /// is enabled. Used at solve time for inline first-use pinning.
+    pub pinned_idx: Option<Idx<Key>>,
+}
+
+/// Data for a type alias binding.
+#[derive(Clone, Debug)]
+pub struct TypeAliasBinding {
+    pub name: Name,
+    pub tparams: TypeAliasParams,
+    pub key_type_alias: Idx<KeyTypeAlias>,
+    pub range: TextRange,
+}
+
+/// Data for a type alias reference binding.
+#[derive(Clone, Debug)]
+pub struct TypeAliasRefBinding {
+    pub name: Name,
+    pub key_type_alias: Idx<KeyTypeAlias>,
+    pub tparams: TypeAliasParams,
+}
+
+/// Data for assigning to an attribute.
+#[derive(Clone, Debug)]
+pub struct AssignToAttribute {
+    pub attr: ExprAttribute,
+    pub value: Box<ExprOrBinding>,
+    /// `Final` fields may be assigned inside `__init__`
+    pub allow_assign_to_final: bool,
+}
+
+/// Data for an exhaustiveness check binding.
+#[derive(Clone, Debug)]
+pub struct ExhaustiveBinding {
+    pub kind: ExhaustivenessKind,
+    pub subject_idx: Idx<Key>,
+    pub subject_range: TextRange,
+    /// Narrowing information needed to check exhaustiveness. None if we couldn't
+    /// determine the narrowing subject (e.g., complex expressions) or couldn't
+    /// accumulate narrow ops for it.
+    pub exhaustiveness_info: Option<(NarrowingSubject, (Box<NarrowOp>, TextRange))>,
+}
+
 #[derive(Clone, Debug)]
 pub enum Binding {
     /// An expression, optionally with a Key saying what the type must be.
     /// The Key must be a type of types, e.g. `Type::Type`.
-    Expr(Option<Idx<KeyAnnotation>>, Expr),
+    Expr(Option<Idx<KeyAnnotation>>, Box<Expr>),
     // This binding is created specifically for stand-alone `Stmt::Expr` statements.
     // Unlike the general `Expr` binding above, this separate binding allows us to
     // perform additional checks that are only relevant for expressions in `Stmt::Expr`,
     // such as verifying for unused awaitables.
     // The boolean is whether the expression is a call to something defined as a `SpecialExport`
-    StmtExpr(Expr, Option<SpecialExport>),
+    StmtExpr(Box<Expr>, Option<SpecialExport>),
     /// Propagate a type to a new binding. Takes an optional annotation to
     /// check against (which will override the computed type if they disagree).
     MultiTargetAssign(Option<Idx<KeyAnnotation>>, Idx<Key>, TextRange),
     /// TypeVar, ParamSpec, or TypeVarTuple
-    TypeVar(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>),
-    ParamSpec(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>),
-    TypeVarTuple(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>),
+    TypeVar(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
+    ParamSpec(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
+    TypeVarTuple(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
     /// An expression returned from a function.
     ReturnExplicit(ReturnExplicit),
     /// The implicit return from a function.
@@ -1907,7 +1970,7 @@ pub enum Binding {
     /// A value in an iterable expression, e.g. IterableValue(\[1\]) represents 1.
     /// The second argument is the expression being iterated.
     /// The third argument indicates whether iteration is async or not.
-    IterableValue(Option<Idx<KeyAnnotation>>, Expr, IsAsync),
+    IterableValue(Option<Idx<KeyAnnotation>>, Box<Expr>, IsAsync),
     /// A value produced by entering a context manager.
     /// The second argument is the expression of the context manager and its range.
     /// The fourth argument indicates whether the context manager is async or not.
@@ -1926,7 +1989,7 @@ pub enum Binding {
     AnnotatedType(Idx<KeyAnnotation>, Box<Binding>),
     /// A record of an "augmented assignment" statement like `x -= _`
     /// or `a.b *= _`. These desugar to special method calls.
-    AugAssign(Option<Idx<KeyAnnotation>>, StmtAugAssign),
+    AugAssign(Option<Idx<KeyAnnotation>>, Box<StmtAugAssign>),
     /// The None type, constructed lazily with TypeHeap during solving.
     None,
     /// An Any type with a specific style, constructed lazily with TypeHeap during solving.
@@ -1949,17 +2012,21 @@ pub enum Binding {
     /// An import statement, typically with Self::Import.
     /// The option range tracks the original name's location for renamed import.
     /// e.g. in `from foo import bar as baz`, we should track the range of `bar`.
-    Import(ModuleName, Name, Option<TextRange>),
+    Import(Box<(ModuleName, Name, Option<TextRange>)>),
     /// An import via module-level __getattr__ for incomplete stubs.
     /// See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
-    ImportViaGetattr(ModuleName, Name),
+    ImportViaGetattr(Box<(ModuleName, Name)>),
     /// A class definition, points to a BindingClass and any decorators.
     ClassDef(Idx<KeyClass>, Box<[Idx<KeyDecorator>]>),
     /// A forward reference to another binding.
     Forward(Idx<Key>),
+    /// A forward reference produced during first-use resolution of a partial type.
+    /// Behaves identically to `Forward` but marks that this indirection came from
+    /// the partial-type / first-use machinery.
+    ForwardToFirstUse(Idx<Key>),
     /// A phi node, representing the union of several alternative keys.
     /// Each BranchInfo contains the value key and optional termination key from one branch.
-    Phi(JoinStyle<Idx<Key>>, Vec<BranchInfo>),
+    Phi(JoinStyle<Idx<Key>>, Box<[BranchInfo]>),
     /// A phi node for a name that was defined above a loop. This can involve recursion
     /// due to reassingment in the loop, so we provide a prior idx of the type from above
     /// the loop, which can be used if the resulting Var is forced.
@@ -1969,55 +2036,43 @@ pub enum Binding {
     /// An import of a module.
     /// Also contains the path along the module to bind, and optionally a key
     /// with the previous import to this binding (in which case merge the modules).
-    Module(ModuleName, Vec<Name>, Option<Idx<Key>>),
+    Module(Box<(ModuleName, Box<[Name]>, Option<Idx<Key>>)>),
     /// A name that might be a legacy type parameter. Solving this gives the Quantified type if so.
     /// The TextRange is optional and controls whether to produce an error
     /// saying there are scoped type parameters for this function / class, and
     /// therefore the use of legacy type parameters is invalid.
     PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, Option<TextRange>),
     /// An assignment to a name.
-    NameAssign {
-        name: Name,
-        annotation: Option<(AnnotationStyle, Idx<KeyAnnotation>)>,
-        expr: Box<Expr>,
-        legacy_tparams: Option<Box<[Idx<KeyLegacyTypeParam>]>>,
-        is_in_function_scope: bool,
-    },
+    NameAssign(Box<NameAssign>),
     /// A type alias (legacy, scoped, or `TypeAliasType` call).
     /// Note that ambiguous assignments like `X = Foo` are handled via `NameAssign` bindings, which
     /// are possibly converted to type aliases in the answers phase. Only assignments that we can
     /// unambiguously determine are type aliases without type info get `TypeAlias` bindings.
-    TypeAlias {
-        name: Name,
-        tparams: TypeAliasParams,
-        key_type_alias: Idx<KeyTypeAlias>,
-        range: TextRange,
-    },
+    TypeAlias(Box<TypeAliasBinding>),
+    /// A reference to a type alias, produced when a name in a type alias RHS
+    /// resolves to another type alias definition. Directly produces a
+    /// `Forallable::TypeAlias(TypeAliasData::Ref(...))` at solve time.
+    TypeAliasRef(Box<TypeAliasRefBinding>),
     /// An entry in a MatchMapping. The Key looks up the value being matched, the Expr is the key we're extracting.
-    PatternMatchMapping(Expr, Idx<Key>),
+    PatternMatchMapping(Box<Expr>, Idx<Key>),
     /// An entry in a MatchClass. The Key looks up the value being matched, the Expr is the class name.
     /// Positional patterns index into __match_args__, and keyword patterns match an attribute name.
     PatternMatchClassPositional(Box<Expr>, usize, Idx<Key>, TextRange),
-    PatternMatchClassKeyword(Box<Expr>, Identifier, Idx<Key>),
+    PatternMatchClassKeyword(Box<(Box<Expr>, Identifier, Idx<Key>)>),
     /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean flag is true) clause
     ExceptionHandler(Box<Expr>, bool),
     /// Binding for a lambda parameter.
     LambdaParameter(Var),
     /// Binding for a function parameter. We either have an annotation, or we will determine the
     /// parameter type when solving the function type.
-    FunctionParameter(FunctionParameter),
+    FunctionParameter(Box<FunctionParameter>),
     /// The result of a `super()` call.
-    SuperInstance(SuperStyle, TextRange),
+    SuperInstance(Box<(SuperStyle, TextRange)>),
     /// The result of assigning to an attribute. This operation cannot change the *type* of the
     /// name to which we are assigning, but it *can* change the live attribute narrows.
-    AssignToAttribute {
-        attr: ExprAttribute,
-        value: Box<ExprOrBinding>,
-        /// `Final` fields may be assigned inside `__init__`
-        allow_assign_to_final: bool,
-    },
+    AssignToAttribute(Box<AssignToAttribute>),
     /// The result of assigning to a subscript, used for narrowing.
-    AssignToSubscript(ExprSubscript, Box<ExprOrBinding>),
+    AssignToSubscript(Box<(ExprSubscript, Box<ExprOrBinding>)>),
     /// A placeholder binding, used to force the solving of some other `K::Value` (for
     /// example, forcing a `BindingExpect` to be solved) in the context of first-usage-based
     /// inference of partial types.
@@ -2073,24 +2128,16 @@ pub enum Binding {
     /// `x` before expanding types) and result in `tuple[list[@_], Any]`.
     PartialTypeWithUpstreamsCompleted(Idx<Key>, Box<[Idx<Key>]>),
     /// `del` statement
-    Delete(Expr),
+    Delete(Box<Expr>),
     /// A name in the class body that wasn't found in the static scope
     /// It could either be an unbound name or a reference to an inherited attribute
     /// We'll find out which when we solve the class
-    ClassBodyUnknownName(Idx<KeyClass>, Identifier, Option<Name>),
+    ClassBodyUnknownName(Box<(Idx<KeyClass>, Identifier, Option<Name>)>),
     /// A match statement or if/elif chain that may be type-exhaustive.
     /// Resolves to Never if exhaustive, None otherwise.
     /// When `exhaustiveness_info` is None, we couldn't determine narrowing info,
     /// so we conservatively assume the statement is not exhaustive.
-    Exhaustive {
-        kind: ExhaustivenessKind,
-        subject_idx: Idx<Key>,
-        subject_range: TextRange,
-        /// Narrowing information needed to check exhaustiveness. None if we couldn't
-        /// determine the narrowing subject (e.g., complex expressions) or couldn't
-        /// accumulate narrow ops for it.
-        exhaustiveness_info: Option<(NarrowingSubject, (Box<NarrowOp>, TextRange))>,
-    },
+    Exhaustive(Box<ExhaustiveBinding>),
 }
 
 impl DisplayWith<Bindings> for Binding {
@@ -2112,14 +2159,17 @@ impl DisplayWith<Bindings> for Binding {
                     m.display(range),
                 )
             }
-            Self::TypeVar(a, name, x) => {
-                write!(f, "TypeVar({}, {name}, {})", ann(a), m.display(x))
+            Self::TypeVar(x) => {
+                let (a, name, call) = x.as_ref();
+                write!(f, "TypeVar({}, {name}, {})", ann(a), m.display(call))
             }
-            Self::ParamSpec(a, name, x) => {
-                write!(f, "ParamSpec({}, {name}, {})", ann(a), m.display(x))
+            Self::ParamSpec(x) => {
+                let (a, name, call) = x.as_ref();
+                write!(f, "ParamSpec({}, {name}, {})", ann(a), m.display(call))
             }
-            Self::TypeVarTuple(a, name, x) => {
-                write!(f, "TypeVarTuple({}, {name}, {})", ann(a), m.display(x))
+            Self::TypeVarTuple(x) => {
+                let (a, name, call) = x.as_ref();
+                write!(f, "TypeVarTuple({}, {name}, {})", ann(a), m.display(call))
             }
             Self::ReturnExplicit(x) => {
                 write!(f, "ReturnExplicit({}, ", ann(&x.annot))?;
@@ -2166,10 +2216,19 @@ impl DisplayWith<Bindings> for Binding {
                 )
             }
             Self::Function(x, _pred, _class) => write!(f, "Function({})", ctx.display(*x)),
-            Self::Import(m, n, original_name) => write!(f, "Import({m}, {n}, {original_name:?})"),
-            Self::ImportViaGetattr(m, n) => write!(f, "ImportViaGetattr({m}, {n})"),
+            Self::Import(x) => {
+                let (m, n, original_name) = x.as_ref();
+                write!(f, "Import({m}, {n}, {original_name:?})")
+            }
+            Self::ImportViaGetattr(x) => {
+                let (m, n) = x.as_ref();
+                write!(f, "ImportViaGetattr({m}, {n})")
+            }
             Self::ClassDef(x, _) => write!(f, "ClassDef({})", ctx.display(*x)),
             Self::Forward(k) => write!(f, "Forward({})", ctx.display(*k)),
+            Self::ForwardToFirstUse(k) => {
+                write!(f, "ForwardToFirstUse({})", ctx.display(*k))
+            }
             Self::AugAssign(a, s) => write!(f, "AugAssign({}, {})", ann(a), m.display(s)),
             Self::None => write!(f, "None"),
             Self::Any(style) => write!(f, "Any({style:?})"),
@@ -2188,7 +2247,8 @@ impl DisplayWith<Bindings> for Binding {
                     k2.display_with(ctx)
                 )
             }
-            Self::Module(m, path, key) => {
+            Self::Module(x) => {
+                let (m, path, key) = x.as_ref();
                 write!(
                     f,
                     "Module({m}, {}, {})",
@@ -2224,28 +2284,21 @@ impl DisplayWith<Bindings> for Binding {
                     op.display_with(ctx.module())
                 )
             }
-            Self::NameAssign {
-                name,
-                annotation: None,
-                expr,
-                ..
-            } => {
-                write!(f, "NameAssign({name}, None, {})", m.display(expr))
+            Self::NameAssign(x) if x.annotation.is_none() => {
+                write!(f, "NameAssign({}, None, {})", x.name, m.display(&x.expr))
             }
-            Self::NameAssign {
-                name,
-                annotation: Some((style, annot)),
-                expr,
-                ..
-            } => {
+            Self::NameAssign(x) => {
+                let (style, annot) = x.annotation.as_ref().unwrap();
                 write!(
                     f,
-                    "NameAssign({name}, {style:?}, {}, {})",
+                    "NameAssign({}, {style:?}, {}, {})",
+                    x.name,
                     ctx.display(*annot),
-                    m.display(expr)
+                    m.display(&x.expr)
                 )
             }
-            Self::TypeAlias { name, .. } => write!(f, "TypeAlias({name})"),
+            Self::TypeAlias(x) => write!(f, "TypeAlias({})", x.name),
+            Self::TypeAliasRef(x) => write!(f, "TypeAliasRef({})", x.name),
             Self::PatternMatchMapping(mapping_key, binding_key) => {
                 write!(
                     f,
@@ -2263,7 +2316,8 @@ impl DisplayWith<Bindings> for Binding {
                     m.display(range),
                 )
             }
-            Self::PatternMatchClassKeyword(class, attr, key) => {
+            Self::PatternMatchClassKeyword(x) => {
+                let (class, attr, key) = x.as_ref();
                 write!(
                     f,
                     "PatternMatchClassKeyword({}, {attr}, {})",
@@ -2275,44 +2329,43 @@ impl DisplayWith<Bindings> for Binding {
             Self::FunctionParameter(x) => write!(
                 f,
                 "FunctionParameter({})",
-                match x {
+                match x.as_ref() {
                     FunctionParameter::Annotated(k) => ctx.display(*k).to_string(),
-                    FunctionParameter::Unannotated(x, k, _) => format!("{x}, {}", ctx.display(*k)),
+                    FunctionParameter::Unannotated(k, _, _) => ctx.display(*k).to_string(),
                 }
             ),
-            Self::SuperInstance(SuperStyle::ExplicitArgs(cls, obj), _range) => {
-                write!(
-                    f,
-                    "SuperInstance::Explicit({}, {})",
-                    ctx.display(*cls),
-                    ctx.display(*obj)
-                )
-            }
-            Self::SuperInstance(SuperStyle::ImplicitArgs(k, v), _range) => {
-                write!(f, "SuperInstance::Implicit({}, {v})", ctx.display(*k))
-            }
-            Self::SuperInstance(SuperStyle::Any, _range) => write!(f, "SuperInstance::Any"),
-            Self::AssignToAttribute {
-                attr,
-                value,
-                allow_assign_to_final,
-            } => {
+            Self::SuperInstance(x) => match &x.0 {
+                SuperStyle::ExplicitArgs(cls, obj) => {
+                    write!(
+                        f,
+                        "SuperInstance::Explicit({}, {})",
+                        ctx.display(*cls),
+                        ctx.display(*obj)
+                    )
+                }
+                SuperStyle::ImplicitArgs(k, v) => {
+                    write!(f, "SuperInstance::Implicit({}, {v})", ctx.display(*k))
+                }
+                SuperStyle::Any => write!(f, "SuperInstance::Any"),
+            },
+            Self::AssignToAttribute(x) => {
                 write!(
                     f,
                     "AssignToAttribute({}, {}, {}, allow_assign_to_final={})",
-                    m.display(&attr.value),
-                    attr.attr,
-                    value.display_with(ctx),
-                    allow_assign_to_final
+                    m.display(&x.attr.value),
+                    x.attr.attr,
+                    x.value.display_with(ctx),
+                    x.allow_assign_to_final
                 )
             }
-            Self::AssignToSubscript(subscript, x) => {
+            Self::AssignToSubscript(x) => {
+                let (subscript, val) = x.as_ref();
                 write!(
                     f,
                     "AssignToSubscript({}, {}, {})",
                     m.display(subscript.value.as_ref()),
                     m.display(subscript.slice.as_ref()),
-                    x.display_with(ctx)
+                    val.display_with(ctx)
                 )
             }
             Self::UsageLink(usage_key) => {
@@ -2350,7 +2403,8 @@ impl DisplayWith<Bindings> for Binding {
                 )
             }
             Self::Delete(x) => write!(f, "Delete({})", m.display(x)),
-            Self::ClassBodyUnknownName(class_key, name, suggestion) => {
+            Self::ClassBodyUnknownName(x) => {
+                let (class_key, name, suggestion) = x.as_ref();
                 write!(
                     f,
                     "ClassBodyUnknownName({}, {}",
@@ -2362,18 +2416,13 @@ impl DisplayWith<Bindings> for Binding {
                 }
                 write!(f, ")")
             }
-            Self::Exhaustive {
-                kind,
-                subject_idx,
-                subject_range,
-                ..
-            } => {
+            Self::Exhaustive(x) => {
                 write!(
                     f,
                     "Exhaustive({:?}, {}, {})",
-                    kind,
-                    ctx.display(*subject_idx),
-                    ctx.module().display(subject_range)
+                    x.kind,
+                    ctx.display(x.subject_idx),
+                    ctx.module().display(&x.subject_range)
                 )
             }
         }
@@ -2385,9 +2434,9 @@ impl Binding {
     /// a definition key of X.
     pub fn symbol_kind(&self) -> Option<SymbolKind> {
         match self {
-            Binding::TypeVar(_, _, _)
-            | Binding::ParamSpec(_, _, _)
-            | Binding::TypeVarTuple(_, _, _)
+            Binding::TypeVar(_)
+            | Binding::ParamSpec(_)
+            | Binding::TypeVarTuple(_)
             | Binding::TypeParameter(_)
             | Binding::PossibleLegacyTParam(_, _) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
@@ -2398,18 +2447,23 @@ impl Binding {
                     Some(SymbolKind::Function)
                 }
             }
-            Binding::Import(_, _, _) | Binding::ImportViaGetattr(_, _) => {
+            Binding::Import(_) | Binding::ImportViaGetattr(_) => {
                 // TODO: maybe we can resolve it to see its symbol kind
                 Some(SymbolKind::Variable)
             }
             Binding::ClassDef(_, _) => Some(SymbolKind::Class),
-            Binding::Module(_, _, _) => Some(SymbolKind::Module),
-            Binding::TypeAlias { .. } => Some(SymbolKind::TypeAlias),
-            Binding::NameAssign { name, .. } if name.as_str() == name.to_uppercase() => {
+            Binding::Module(_) => Some(SymbolKind::Module),
+            Binding::TypeAlias(_) => Some(SymbolKind::TypeAlias),
+            Binding::TypeAliasRef(_) => Some(SymbolKind::TypeAlias),
+            Binding::NameAssign(x) if x.name.as_str() == x.name.to_uppercase() => {
                 Some(SymbolKind::Constant)
             }
-            Binding::NameAssign { name, .. } => {
-                if name.as_str().chars().all(|c| c.is_uppercase() || c == '_') {
+            Binding::NameAssign(x) => {
+                if x.name
+                    .as_str()
+                    .chars()
+                    .all(|c| c.is_uppercase() || c == '_')
+                {
                     Some(SymbolKind::Constant)
                 } else {
                     Some(SymbolKind::Variable)
@@ -2432,23 +2486,24 @@ impl Binding {
             | Binding::None
             | Binding::Any(_)
             | Binding::Forward(_)
+            | Binding::ForwardToFirstUse(_)
             | Binding::Phi(_, _)
             | Binding::LoopPhi(_, _)
             | Binding::Narrow(_, _, _)
             | Binding::PatternMatchMapping(_, _)
             | Binding::PatternMatchClassPositional(_, _, _, _)
-            | Binding::PatternMatchClassKeyword(_, _, _)
+            | Binding::PatternMatchClassKeyword(_)
             | Binding::ExceptionHandler(_, _)
-            | Binding::SuperInstance(_, _)
-            | Binding::AssignToAttribute { .. }
+            | Binding::SuperInstance(_)
+            | Binding::AssignToAttribute(_)
             | Binding::UsageLink(_)
             | Binding::SelfTypeLiteral(..)
-            | Binding::AssignToSubscript(_, _)
+            | Binding::AssignToSubscript(_)
             | Binding::CompletedPartialType(..)
             | Binding::PartialTypeWithUpstreamsCompleted(..)
             | Binding::Delete(_)
-            | Binding::ClassBodyUnknownName(_, _, _)
-            | Binding::Exhaustive { .. } => None,
+            | Binding::ClassBodyUnknownName(_)
+            | Binding::Exhaustive(_) => None,
         }
     }
 }
@@ -2651,7 +2706,7 @@ pub enum ClassFieldDefinition {
     /// `alias_of` is set when the value is a simple name referring to another
     /// field in the same class (used for enum alias detection).
     AssignedInBody {
-        value: ExprOrBinding,
+        value: Box<ExprOrBinding>,
         annotation: Option<Idx<KeyAnnotation>>,
         alias_of: Option<Name>,
     },
@@ -2670,7 +2725,7 @@ pub enum ClassFieldDefinition {
     /// Implicitly defined in a method, without any explicit reference
     /// in the class body.
     DefinedInMethod {
-        value: ExprOrBinding,
+        value: Box<ExprOrBinding>,
         annotation: Option<Idx<KeyAnnotation>>,
         method: MethodThatSetsAttr,
     },

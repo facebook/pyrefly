@@ -46,7 +46,10 @@ use starlark_map::smallset;
 /// inside an open triple-quoted string from a previous line, or `None` otherwise.
 ///
 /// Returns `(comment_start, new_triple_quote_state)`.
-fn find_comment_start(line: &str, in_triple_quote: Option<char>) -> (Option<usize>, Option<char>) {
+pub fn find_comment_start(
+    line: &str,
+    in_triple_quote: Option<char>,
+) -> (Option<usize>, Option<char>) {
     let mut chars = line.char_indices().peekable();
     let mut triple_quote = in_triple_quote;
     let mut single_quote = None;

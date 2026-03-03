@@ -13,6 +13,7 @@ use itertools::EitherOrBoth;
 use itertools::Itertools;
 use itertools::izip;
 use pyrefly_python::dunder;
+use pyrefly_types::callable::Callable;
 use pyrefly_types::dimension::ShapeError;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::dimension::contains_var_in_type;
@@ -20,17 +21,27 @@ use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::read_only::ReadOnlyReason;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::tensor::TensorShape;
+use pyrefly_types::tensor::TensorType;
+use pyrefly_types::typed_dict::ANONYMOUS_TYPED_DICT;
+use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
+use pyrefly_types::types::Overload;
 use pyrefly_types::types::Union;
+use pyrefly_util::owner::Owner;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
+use crate::alt::callable::CallArg;
+use crate::alt::expr::TypeOrExpr;
 use crate::solver::solver::OpenTypedDictSubsetError;
 use crate::solver::solver::Subset;
+use crate::solver::solver::SubsetCacheEntry;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypedDictSubsetError;
 use crate::types::callable::Function;
@@ -67,6 +78,17 @@ fn ok_or(b: bool, e: SubsetError) -> Result<(), SubsetError> {
     b.then_some(()).ok_or(e)
 }
 
+/// Check if a param list has both `*args: Any` and `**kwargs: Any`
+fn has_any_args_and_kwargs(args: &[Param]) -> bool {
+    let has_vararg_any = args
+        .iter()
+        .any(|p| matches!(p, Param::VarArg(_, Type::Any(_))));
+    let has_kwargs_any = args
+        .iter()
+        .any(|p| matches!(p, Param::Kwargs(_, Type::Any(_))));
+    has_vararg_any && has_kwargs_any
+}
+
 fn all<T>(
     it: impl Iterator<Item = T>,
     mut check: impl FnMut(T) -> Result<(), SubsetError>,
@@ -95,6 +117,25 @@ fn any<T>(
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     /// Can a function with l_args be called as a function with u_args?
     fn is_subset_param_list(
+        &mut self,
+        l_args: &[Param],
+        u_args: &[Param],
+    ) -> Result<(), SubsetError> {
+        // Don't short-circuit because we may want to pin/solve variables
+        let result = self.is_subset_param_list_impl(l_args, u_args);
+        match result {
+            Err(_)
+                if !self.solver.strict_callable_subtyping
+                    && (has_any_args_and_kwargs(l_args) || has_any_args_and_kwargs(u_args)) =>
+            {
+                Ok(())
+            }
+            _ => result,
+        }
+    }
+
+    /// Can a function with l_args be called as a function with u_args?
+    fn is_subset_param_list_impl(
         &mut self,
         l_args: &[Param],
         u_args: &[Param],
@@ -949,6 +990,118 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         }
     }
 
+    /// Check an anonymous TypedDict (inferred from a dict literal) against a regular TypedDict.
+    fn is_subset_anonymous_typed_dict(
+        &mut self,
+        got: &AnonymousTypedDictInner,
+        want: &TypedDict,
+    ) -> Result<(), SubsetError> {
+        let got_fields = got.fields.clone().into_iter().collect::<SmallMap<_, _>>();
+        let want_fields = self.type_order.typed_dict_fields(want);
+        let want_extra_items = self.type_order.typed_dict_extra_items(want);
+        let want_extra_ty = match &want_extra_items {
+            ExtraItems::Extra(extra) => Some(&extra.ty),
+            _ => None,
+        };
+        // 1. Make sure all items in `got` are present in `want` with the right types.
+        all(got_fields.iter(), |(k, got_v)| {
+            let want_ty = want_fields.get(k).map(|field| &field.ty).or(want_extra_ty);
+            if let Some(want_ty) = want_ty {
+                self.is_subset_eq(&got_v.ty, want_ty)
+            } else {
+                // Note that we intentionally flip `got` and `want` in the error, because it is
+                // `want` that is missing the field.
+                Err(SubsetError::TypedDict(Box::new(
+                    TypedDictSubsetError::MissingField {
+                        got: want.name().clone(),
+                        want: ANONYMOUS_TYPED_DICT.clone(),
+                        field: k.clone(),
+                    },
+                )))
+            }
+        })?;
+        // (2) Make sure all required items in `want` are present in `got`.
+        all(want_fields.iter(), |(k, want_v)| {
+            if want_v.required && !got_fields.contains_key(k) {
+                Err(SubsetError::TypedDict(Box::new(
+                    TypedDictSubsetError::MissingField {
+                        got: ANONYMOUS_TYPED_DICT.clone(),
+                        want: want.name().clone(),
+                        field: k.clone(),
+                    },
+                )))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn is_subset_overload(&mut self, overload: &Overload, want: &Type) -> Result<(), SubsetError> {
+        if any(overload.signatures.iter(), |l| {
+            self.is_subset_eq(&l.as_type(), want)
+        })
+        .is_ok()
+        {
+            return Ok(());
+        }
+        if let Type::Callable(box Callable {
+            params: Params::List(params),
+            ret,
+        }) = want
+            && params
+                .items()
+                .iter()
+                .all(|param| matches!(param, Param::PosOnly(..)))
+        {
+            // Compare an overloaded function against a Callable annotation:
+            // Expand the parameter types in the Callable and see if we can match every expanded
+            // Callable. We create fake args in order to reuse the argument type expansion logic
+            // from overload call evaluation.
+            let mut requiredness = Vec::new();
+            let mut fake_args = Vec::new();
+            for param in params.items() {
+                match param {
+                    Param::PosOnly(_, ty, required) => {
+                        requiredness.push(required);
+                        fake_args.push(CallArg::Arg(TypeOrExpr::Type(ty, TextRange::default())));
+                    }
+                    // We already checked that all params are PosOnly.
+                    _ => unreachable!(),
+                }
+            }
+            let mut args_expander = self.type_order.args_expander(fake_args, Vec::new());
+            let errors = self.type_order.error_swallower();
+            let owner = Owner::new();
+            while let Some(arg_lists) = args_expander.expand(&errors, &owner) {
+                if all(arg_lists.iter(), |(args, _empty_kws)| {
+                    let ts = args
+                        .iter()
+                        .zip(requiredness.iter())
+                        .map(|(arg, required)| match arg {
+                            CallArg::Arg(TypeOrExpr::Type(t, _)) => {
+                                ((**t).clone(), (**required).clone())
+                            }
+                            // We manually constructed the callargs above, so we know their exact shape.
+                            _ => unreachable!(),
+                        })
+                        .collect();
+                    let callable = Type::Callable(Box::new(Callable::list(
+                        ParamList::new_types(ts),
+                        ret.clone(),
+                    )));
+                    any(overload.signatures.iter(), |l| {
+                        self.is_subset_eq(&l.as_type(), &callable)
+                    })
+                })
+                .is_ok()
+                {
+                    return Ok(());
+                }
+            }
+        }
+        Err(SubsetError::Other)
+    }
+
     fn can_be_recursive(&self, t1: &Type, t2: &Type) -> bool {
         match (t1, t2) {
             // We only care if the RHS is a protocol
@@ -959,21 +1112,53 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     /// Implementation of subset equality for Type, other than Var.
+    ///
+    /// For potentially-recursive checks (protocols and recursive type aliases),
+    /// this uses `subset_cache` to both detect cycles (coinductive reasoning) and
+    /// memoize results (preventing exponential blowup). On failure, entries added
+    /// during the failing computation are rolled back by popping the map back to
+    /// the saved size, invalidating intermediate results that may have relied on
+    /// a coinductive assumption that turned out to be false.
     pub fn is_subset_eq_impl(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
-        let recursive_check = if self.can_be_recursive(got, want) {
-            Some((got.clone(), want.clone()))
+        let cache_key = if self.can_be_recursive(got, want) {
+            let key = (got.clone(), want.clone());
+            if let Some(entry) = self.subset_cache.get(&key) {
+                return match entry {
+                    SubsetCacheEntry::InProgress | SubsetCacheEntry::Ok => Ok(()),
+                    SubsetCacheEntry::Err(err) => Err(err.clone()),
+                };
+            }
+            Some(key)
         } else {
             None
         };
-        if let Some(check) = &recursive_check
-            && !self.recursive_assumptions.insert(check.clone())
-        {
-            // Assume recursive checks are true
-            return Ok(());
-        }
+        let cache_size = if let Some(key) = &cache_key {
+            let size = self.subset_cache.len();
+            self.subset_cache
+                .insert(key.clone(), SubsetCacheEntry::InProgress);
+            Some(size)
+        } else {
+            None
+        };
         let res = self.is_subset_eq_no_recursive_check(got, want);
-        if let Some(check) = &recursive_check {
-            self.recursive_assumptions.shift_remove(check);
+        if let Some(key) = cache_key {
+            match &res {
+                Ok(()) => {
+                    self.subset_cache.insert(key, SubsetCacheEntry::Ok);
+                }
+                Err(err) => {
+                    // Roll back entries added during our computation. These entries
+                    // may have depended on a coinductive assumption (our InProgress
+                    // entry being treated as Ok) that this failure invalidates.
+                    // Entries from before our computation are preserved — they are
+                    // independent and not tainted by our failure.
+                    while self.subset_cache.len() > cache_size.unwrap() {
+                        self.subset_cache.pop();
+                    }
+                    self.subset_cache
+                        .insert(key, SubsetCacheEntry::Err(err.clone()));
+                }
+            }
         }
         res
     }
@@ -1165,15 +1350,40 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (l, Type::Intersect(u)) => all(u.0.iter(), |u| self.is_subset_eq(l, u)),
             (l, Type::Union(box Union { members: us, .. })) => {
                 // Check var and non-var elements separately, so that if we match a non-var, we
-                // don't pin the vars.
+                // don't pin the vars. Within var-containing members, try wrapped vars (e.g.
+                // `type[T]`) before bare vars (e.g. `T`), so that more specific patterns are
+                // tried first. This prevents cases like `T | type[T]` from incorrectly matching
+                // bare `T` when `type[T]` would produce a better (bound-satisfying) solution.
                 let (vars, nonvars): (Vec<_>, Vec<_>) =
                     us.iter().partition(|u| u.may_contain_quantified_var());
+                let (bare_vars, wrapped_vars): (Vec<_>, Vec<_>) =
+                    vars.into_iter().partition(|u| matches!(u, Type::Var(_)));
                 any(nonvars.iter(), |u| self.is_subset_eq(l, u))
-                    .or_else(|_| any(vars.iter(), |u| self.is_subset_eq(l, u)))
+                    .or_else(|_| any(wrapped_vars.iter(), |u| self.is_subset_eq(l, u)))
+                    .or_else(|_| any(bare_vars.iter(), |u| self.is_subset_eq(l, u)))
             }
-            (l, Type::Overload(overload)) => all(overload.signatures.iter(), |u| {
-                self.is_subset_eq(l, &u.as_type())
-            }),
+            (l, Type::Overload(overload)) => {
+                let has_any_args_kwargs = match l {
+                    Type::Callable(box signature)
+                    | Type::Function(box Function { signature, .. }) => {
+                        if let Params::List(params) = &signature.params {
+                            has_any_args_and_kwargs(params.items())
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                };
+                let result = all(overload.signatures.iter(), |u| {
+                    self.is_subset_eq(l, &u.as_type())
+                });
+                match result {
+                    Err(_) if !self.solver.strict_callable_subtyping && has_any_args_kwargs => {
+                        Ok(())
+                    }
+                    _ => result,
+                }
+            }
             (Type::Quantified(q), u) if !q.restriction().is_restricted() => self.is_subset_eq(
                 &self
                     .solver
@@ -1199,9 +1409,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             {
                 Ok(())
             }
-            (Type::Overload(overload), u) => any(overload.signatures.iter(), |l| {
-                self.is_subset_eq(&l.as_type(), u)
-            }),
+            (Type::Overload(overload), want) => self.is_subset_overload(overload, want),
             (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))
                 if let Some(l_no_self) =
                     self.type_order.bind_boundmethod(method, &mut |got, want| {
@@ -1229,6 +1437,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             {
                 self.is_subset_eq(&l_no_self, &u_no_self)
             }
+            (Type::BoundMethod(l), Type::BoundMethod(u)) => {
+                self.is_subset_eq(&l.func.clone().as_type(), &u.func.clone().as_type())
+            }
             (
                 Type::Callable(box l)
                 | Type::Function(box Function {
@@ -1243,6 +1454,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             ) => {
                 self.is_subset_params(&l.params, &u.params)?;
                 self.is_subset_eq(&l.ret, &u.ret)
+            }
+            (Type::TypedDict(TypedDict::Anonymous(got)), Type::TypedDict(want)) => {
+                self.is_subset_anonymous_typed_dict(got, want)
             }
             (Type::TypedDict(got), Type::TypedDict(want)) => self.is_subset_typed_dict(got, want),
             (Type::TypedDict(got), Type::PartialTypedDict(want)) => {
@@ -1297,6 +1511,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     )
                 }
             }
+            // Tensor type checking
+            (Type::Tensor(got_tensor), Type::Tensor(want_tensor)) => {
+                self.is_subset_tensor(got_tensor, want_tensor)
+            }
+            // Tensor is subtype of its base class
+            (Type::Tensor(tensor), Type::ClassType(cls)) => self.is_subset_eq(
+                &tensor.base_class.clone().to_type(),
+                &Type::ClassType(cls.clone()),
+            ),
             // Type::Dim is a subtype of int
             // This allows Dim[N] values to be passed where int parameters are expected
             (Type::Dim(_), Type::ClassType(cls)) if cls.is_builtin("int") => Ok(()),
@@ -1406,6 +1629,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.type_order.has_superclass(got, want),
                 SubsetError::Other,
             ),
+            // Annotated[T, ...] is not a class object; it cannot be assigned to type[T].
+            (Type::Annotated(_), Type::Type(_)) => Err(SubsetError::Other),
             // Although the object created by a NewType call behaves like a class for type-checking
             // purposes, it isn't one at runtime, so don't allow it to match `type`.
             (Type::ClassDef(got), Type::Type(_)) if self.type_order.is_new_type(got) => {
@@ -1515,6 +1740,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 ),
                 t,
             ),
+            // ========== Dim Subtyping Rules ==========
             // Handle Type::Dim(...) <: Type::Dim(...) by delegating to is_subset_eq for inner types
             // This relies on top-level rules for Size <: Size, Size <: Quantified, Quantified <: Size,
             // Size <: Var, Var <: Size, etc.
@@ -1542,7 +1768,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // ClassType(int) <: Dim[...]
             // Redirect: int <: Dim[...] becomes Dim[any_implicit] <: Dim[...]
             (Type::ClassType(cls), want @ Type::Dim(_)) if cls.is_builtin("int") => {
-                self.is_subset_eq_impl(&Type::Dim(Box::new(Type::any_implicit())), want)
+                self.is_subset_eq_impl(&self.solver.heap.mk_dim(Type::any_implicit()), want)
             }
             // ========== End Dim Subtyping Rules ==========
             (Type::Literal(l_lit), Type::Literal(u_lit)) => {
@@ -1680,6 +1906,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         let params = want_class.tparams();
         let got = got.as_slice();
         let want = want.as_slice();
+
         if !(got.len() == want.len() && want.len() == params.len()) {
             // This state should be impossible in static code, but during an
             // incremental update it's possible to get two `Class` values that are
@@ -1712,6 +1939,194 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn is_subset_tensor(&mut self, got: &TensorType, want: &TensorType) -> Result<(), SubsetError> {
+        // Check base class compatibility
+        self.is_subset_eq(
+            &got.base_class.clone().to_type(),
+            &want.base_class.clone().to_type(),
+        )?;
+
+        // Check shape compatibility
+        self.bind_tensor_dimensions(&got.shape, &want.shape)?;
+
+        Ok(())
+    }
+
+    /// Check tensor dimensions for compatibility and create Var bindings.
+    /// Delegates to is_subset_eq for each dimension pair.
+    fn bind_tensor_dimensions(
+        &mut self,
+        got_shape: &TensorShape,
+        want_shape: &TensorShape,
+    ) -> Result<(), SubsetError> {
+        match (got_shape, want_shape) {
+            // Both concrete: check rank equality and iterate through dimension pairs
+            (TensorShape::Concrete(got_dims), TensorShape::Concrete(want_dims)) => {
+                if got_dims.len() != want_dims.len() {
+                    return Err(SubsetError::TensorShape(ShapeError::rank_mismatch(
+                        got_dims.len(),
+                        want_dims.len(),
+                    )));
+                }
+                for (got_dim, want_dim) in got_dims.iter().zip(want_dims.iter()) {
+                    self.is_subset_eq(got_dim, want_dim)?;
+                }
+            }
+            // Concrete got, Unpacked want: bind the TypeVarTuple to the corresponding slice
+            (
+                TensorShape::Concrete(got_dims),
+                TensorShape::Unpacked(box (want_prefix, want_middle, want_suffix)),
+            ) => {
+                // Example: got = Tensor[2, 3, 5, 4], want = Tensor[2, *Ts, 4]
+                // Should bind Ts to (3, 5)
+
+                // Check bounds: got must have at least as many dims as prefix + suffix
+                let min_required = want_prefix.len() + want_suffix.len();
+                if got_dims.len() < min_required {
+                    return Err(SubsetError::TensorShape(ShapeError::rank_mismatch(
+                        got_dims.len(),
+                        min_required,
+                    )));
+                }
+
+                // Bind prefix dimensions
+                for (got_dim, want_dim) in got_dims.iter().zip(want_prefix.iter()) {
+                    self.is_subset_eq(got_dim, want_dim)?;
+                }
+
+                // Bind suffix dimensions
+                let suffix_start = got_dims.len().saturating_sub(want_suffix.len());
+                for (got_dim, want_dim) in got_dims[suffix_start..].iter().zip(want_suffix.iter()) {
+                    self.is_subset_eq(got_dim, want_dim)?;
+                }
+
+                // Bind the TypeVarTuple to the middle slice
+                let middle_start = want_prefix.len();
+                let middle_end = got_dims.len().saturating_sub(want_suffix.len());
+                if middle_start <= middle_end {
+                    let middle_slice = &got_dims[middle_start..middle_end];
+                    let tuple_ty = Type::concrete_tuple(middle_slice.to_vec());
+                    self.is_subset_eq(&tuple_ty, want_middle)?;
+                }
+            }
+            // Both Unpacked: symmetric matching of prefix and suffix dims.
+            // Match min(gp, wp) prefix dims and min(gs, ws) suffix dims pairwise,
+            // then fold the remaining extras into the middle on whichever side has them.
+            //
+            // Invariant: after stripping, all extras must be on the same side. That is,
+            // whichever side has the smaller prefix must also have the smaller suffix.
+            // We reject cross-structural cases (e.g., got has extra prefix but want has
+            // extra suffix) because we can't reason about the relationship between the
+            // two middles in that situation.
+            //
+            // Example: Tensor[A, B, *Cs, D, E] <: Tensor[A, *Qs, E]
+            //   matched_prefix = min(2, 1) = 1 → bind A <: A
+            //   matched_suffix = min(2, 1) = 1 → bind E <: E
+            //   got extras: prefix=[B], suffix=[D] → tuple[B, *Cs, D]
+            //   want extras: none → *Qs directly
+            //   check: tuple[B, *Cs, D] <: *Qs
+            (
+                TensorShape::Unpacked(box (got_prefix, got_middle, got_suffix)),
+                TensorShape::Unpacked(box (want_prefix, want_middle, want_suffix)),
+            ) => {
+                let matched_prefix = got_prefix.len().min(want_prefix.len());
+                let matched_suffix = got_suffix.len().min(want_suffix.len());
+
+                // Bind matched prefix dims pairwise
+                for i in 0..matched_prefix {
+                    self.is_subset_eq(&got_prefix[i], &want_prefix[i])?;
+                }
+
+                // Bind matched suffix dims pairwise (from the end)
+                for i in 0..matched_suffix {
+                    let gi = got_suffix.len() - matched_suffix + i;
+                    let wi = want_suffix.len() - matched_suffix + i;
+                    self.is_subset_eq(&got_suffix[gi], &want_suffix[wi])?;
+                }
+
+                // Compute each side's remaining structural dims after matching.
+                let got_extra_prefix = &got_prefix[matched_prefix..];
+                let got_extra_suffix = &got_suffix[..got_suffix.len() - matched_suffix];
+                let want_extra_prefix = &want_prefix[matched_prefix..];
+                let want_extra_suffix = &want_suffix[..want_suffix.len() - matched_suffix];
+
+                let has_got_extras = !got_extra_prefix.is_empty() || !got_extra_suffix.is_empty();
+                let has_want_extras =
+                    !want_extra_prefix.is_empty() || !want_extra_suffix.is_empty();
+
+                // Reject cross-structural cases: extras must all be on one side.
+                if has_got_extras && has_want_extras {
+                    return Err(SubsetError::TensorShape(ShapeError::StructuralMismatch {
+                        got: format!("{}", got_shape),
+                        got_canonical: format!("{}", got_shape),
+                        want: format!("{}", want_shape),
+                        want_canonical: format!("{}", want_shape),
+                    }));
+                }
+
+                // Fold extras into the middle on whichever side has them.
+                // When a side has no extras, use its middle directly.
+                let fold = |prefix: &[Type], middle: &Type, suffix: &[Type]| -> Type {
+                    if prefix.is_empty() && suffix.is_empty() {
+                        middle.clone()
+                    } else {
+                        Type::Tuple(Tuple::Unpacked(Box::new((
+                            prefix.to_vec(),
+                            middle.clone(),
+                            suffix.to_vec(),
+                        ))))
+                    }
+                };
+
+                let got_folded = fold(got_extra_prefix, got_middle, got_extra_suffix);
+                let want_folded = fold(want_extra_prefix, want_middle, want_extra_suffix);
+
+                self.is_subset_eq(&got_folded, &want_folded)?;
+            }
+            // Unpacked got, Concrete want: bind prefix, suffix, and middle TypeVarTuple
+            // Example: Tensor[A, B, *Ts, C, D] <: Tensor[1, 2, 3, 4, 5, 6]
+            //   - Bind prefix: A <: 1, B <: 2
+            //   - Bind suffix: C <: 5, D <: 6
+            //   - Bind middle: Ts := (3, 4)
+            (
+                TensorShape::Unpacked(box (got_prefix, got_middle, got_suffix)),
+                TensorShape::Concrete(want_dims),
+            ) => {
+                // Check bounds: want must have at least as many dims as prefix + suffix
+                let min_required = got_prefix.len() + got_suffix.len();
+                if want_dims.len() < min_required {
+                    return Err(SubsetError::TensorShape(ShapeError::rank_mismatch(
+                        min_required,
+                        want_dims.len(),
+                    )));
+                }
+
+                // Bind prefix dimensions
+                for (got_dim, want_dim) in got_prefix.iter().zip(want_dims.iter()) {
+                    self.is_subset_eq(got_dim, want_dim)?;
+                }
+
+                // Bind suffix dimensions
+                let suffix_start = want_dims.len() - got_suffix.len();
+                for (got_dim, want_dim) in got_suffix.iter().zip(want_dims[suffix_start..].iter()) {
+                    self.is_subset_eq(got_dim, want_dim)?;
+                }
+
+                // Bind middle TypeVarTuple to the remaining want dimensions
+                let middle_start = got_prefix.len();
+                let middle_end = want_dims.len() - got_suffix.len();
+
+                if middle_start <= middle_end {
+                    let middle_slice = &want_dims[middle_start..middle_end];
+                    let tuple_ty = Type::concrete_tuple(middle_slice.to_vec());
+                    self.is_subset_eq(got_middle, &tuple_ty)?;
+                }
+            }
+        }
+
         Ok(())
     }
 }

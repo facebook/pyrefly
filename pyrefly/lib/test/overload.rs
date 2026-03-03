@@ -329,6 +329,74 @@ f(b"")  # E: No matching overload found for function `f`
 );
 
 testcase!(
+    test_overload_assignable_to_callable_union,
+    r#"
+from typing import Callable, overload
+
+@overload
+def foo(x: int) -> str: ...
+@overload
+def foo(x: str) -> str: ...
+def foo(x: int | str) -> str:
+    return str(x)
+
+bar: Callable[[int | str], str] = foo
+baz: Callable[[int | str | bytes], str] = foo  # E: not assignable
+    "#,
+);
+
+testcase!(
+    test_overload_assignable_to_callable_union_multi_param,
+    r#"
+from typing import Callable, overload
+
+@overload
+def foo(x: int, y: bytes) -> int: ...
+@overload
+def foo(x: int, y: str) -> int: ...
+def foo(x: int, y: bytes | str) -> int:
+    return 0
+
+bar: Callable[[int, bytes | str], int] = foo
+    "#,
+);
+
+testcase!(
+    test_overload_assignable_to_callable_return_supertype,
+    r#"
+from typing import Callable, overload
+
+@overload
+def foo(x: int) -> bool: ...
+@overload
+def foo(x: str) -> bool: ...
+def foo(x: int | str) -> bool:
+    return False
+
+bar: Callable[[int | str], int] = foo
+baz: Callable[[int | str], str] = foo  # E: not assignable
+    "#,
+);
+
+testcase!(
+    test_overload_assignable_to_callable_return_union,
+    r#"
+from typing import Callable, overload
+
+@overload
+def foo(x: int) -> int: ...
+@overload
+def foo(x: str) -> str: ...
+def foo(x: int | str) -> int | str:
+    return x
+
+bar: Callable[[int | str], int | str] = foo
+baz: Callable[[int | str], int | str | bytes] = foo
+qux: Callable[[int | str], int] = foo  # E: not assignable
+    "#,
+);
+
+testcase!(
     test_final_decoration_on_top_level_function,
     r#"
 from typing import assert_type, final, overload
@@ -504,6 +572,25 @@ class C[T](Iterable[T]):
 
 def g(x: int):
     f(C(x))
+    "#,
+);
+
+testcase!(
+    test_overload_type_form_inference,
+    r#"
+from typing import assert_type, overload
+
+class C: ...
+
+@overload
+def foo[T](x: type[T]) -> T: ...  # E: Overloaded function must have an implementation
+@overload
+def foo(x: int) -> int: ...
+
+def bar[T](x: type[T]) -> T: ...
+
+assert_type(foo(C), C)
+assert_type(bar(C), C)
     "#,
 );
 

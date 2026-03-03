@@ -50,7 +50,7 @@ async fn run() -> anyhow::Result<ExitCode> {
     args.common.init(false);
     Ok(args
         .command
-        .run(crate_version!(), &NoTelemetry)
+        .run(crate_version!(), &NoTelemetry, None)
         .await?
         .to_exit_code())
 }

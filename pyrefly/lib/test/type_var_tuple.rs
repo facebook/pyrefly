@@ -43,6 +43,14 @@ y: tuple[Unpack[tuple[int, str]]] = (1, "2")  # OK
 );
 
 testcase!(
+    test_double_unpack,
+    r#"
+from typing import Unpack
+x: tuple[Unpack[*tuple[int, ...]]]  # E: `Unpack` cannot be applied to an unpacked argument
+"#,
+);
+
+testcase!(
     bug = "We should disallow star-unpacking in invalid contexts",
     test_invalid_star,
     r#"
@@ -100,6 +108,16 @@ def test(a1: A[int], a2: A[int, str], b: B[int, str, int]):
     assert_type(a1.x(), tuple[int])
     assert_type(a2.x(), tuple[int, str])
     assert_type(b.x(), tuple[str, int, int])
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_unpack_concrete_tuple,
+    r#"
+from typing import Unpack
+class Cls[T, *Ts]: ...
+v1: Cls[*tuple[int, str, int, str]]
+v2: Cls[Unpack[tuple[int, str, int, str]]]
 "#,
 );
 
@@ -326,7 +344,6 @@ func2((0,), (0.0,))  # E: Argument `tuple[float]` is not assignable to parameter
 );
 
 testcase!(
-    bug = "conformance: TypeVarTuple specialized with empty tuple should simplify correctly",
     test_typevartuple_specialization_empty,
     r#"
 from typing import TypeVarTuple, assert_type
@@ -336,12 +353,11 @@ Ts = TypeVarTuple("Ts")
 IntTuple = tuple[int, *Ts]
 
 def func4(a: IntTuple[()]):
-    assert_type(a, tuple[int])  # E: assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed
+    assert_type(a, tuple[int])
 "#,
 );
 
 testcase!(
-    bug = "conformance: TypeVarTuple generic alias with single type arg should simplify correctly",
     test_typevartuple_specialization_single_arg,
     r#"
 from typing import TypeVar, TypeVarTuple, assert_type
@@ -352,12 +368,11 @@ Ts = TypeVarTuple("Ts")
 VariadicTuple = tuple[T, *Ts]
 
 def func6(b: VariadicTuple[float]):
-    assert_type(b, tuple[float])  # E: assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed
+    assert_type(b, tuple[float])
 "#,
 );
 
 testcase!(
-    bug = "conformance: TypeVarTuple with unbounded tuple should work with type aliases",
     test_typevartuple_specialization_unbounded,
     r#"
 from typing import TypeVar, TypeVarTuple, assert_type
@@ -366,10 +381,64 @@ T1 = TypeVar("T1")
 Ts = TypeVarTuple("Ts")
 
 TA9 = tuple[*Ts, T1]
-TA10 = TA9[*tuple[int, ...]]  # E: Unpacked argument cannot be used for type parameter T1
+TA10 = TA9[*tuple[int, ...]]
 
 def func11(a: TA10, b: TA9[*tuple[int, ...], str]):
-    assert_type(a, tuple[*tuple[int, ...], int])  # E: assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed
+    assert_type(a, tuple[*tuple[int, ...], int])
     assert_type(b, tuple[*tuple[int, ...], str])
+"#,
+);
+
+testcase!(
+    test_typevartuple_specialization_unbounded_no_tvt,
+    r#"
+from typing import TypeVar
+T = TypeVar("T")
+IntTupleGeneric = tuple[int, T]
+x: IntTupleGeneric[*tuple[float, ...]]  # E: Unpacked argument cannot be used for type parameter T
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_wrong_specialization,
+    r#"
+from typing import TypeVar
+T = TypeVar("T")
+T2 = TypeVar("T2")
+IntTupleGeneric = tuple[int, T, T2]
+x: IntTupleGeneric[*tuple[float, ...]]  # E: Unpacked argument cannot be used for type parameter T # E: Expected 2 type arguments for `IntTupleGeneric`, got 1
+"#,
+);
+
+testcase!(
+    test_expand_concrete_tuple_varargs,
+    r#"
+from typing import TypeVarTuple, TypeVar, Callable, assert_type
+
+T = TypeVarTuple("T")
+R = TypeVar("R")
+
+def positional(fn: Callable[[*T], R]) -> Callable[[*T], R]:
+    return fn
+
+def test(name: str) -> str:
+    return name
+
+infer = positional(test)
+# When TypeVarTuple resolves to concrete types, callable params should expand
+# to positional params, not *args: Unpack[tuple[...]]
+assert_type(infer, Callable[[str], str])
+
+def test2(a: int, b: str) -> float:
+    return 1.0
+
+infer2 = positional(test2)
+assert_type(infer2, Callable[[int, str], float])
+
+def test3() -> None:
+    pass
+
+infer3 = positional(test3)
+assert_type(infer3, Callable[[], None])
 "#,
 );

@@ -269,6 +269,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         (self.heap.mk_class_type(ct), x.range())
                     })
                 }
+                BaseClass::TypeOf(inner_expr, _) => {
+                    let (ty, _) = self.base_class_expr_infer(inner_expr, &fake_error_collector);
+                    match self.untype_opt(ty.clone(), inner_expr.range(), &fake_error_collector) {
+                        Some(Type::ClassType(c)) => {
+                            // X is a class. type(X) = metaclass of X.
+                            let class_obj = c.class_object();
+                            let metadata = self.get_metadata_for_class(class_obj);
+                            let metaclass_ct = metadata.metaclass(self.stdlib);
+                            Some((self.heap.mk_class_type(metaclass_ct.clone()), x.range()))
+                        }
+                        None => {
+                            // X is an instance. type(X) = its class.
+                            match &ty {
+                                Type::ClassType(_) => Some((ty, x.range())),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    }
+                }
                 BaseClass::InvalidExpr(..) | BaseClass::TypedDict(..) | BaseClass::Generic(..) => {
                     None
                 }

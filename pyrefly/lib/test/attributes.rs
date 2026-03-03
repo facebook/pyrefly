@@ -2315,3 +2315,19 @@ class B(A[None]):
             pass
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/417
+testcase!(
+    test_classmethod_inherited_no_missing_attribute,
+    r#"
+class Base:
+    @classmethod
+    def from_pretrained(cls, name: str) -> "Base":
+        return cls()
+
+class Derived(Base):
+    pass
+
+Derived.from_pretrained("model")
+"#,
+);

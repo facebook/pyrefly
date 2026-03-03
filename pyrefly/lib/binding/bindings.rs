@@ -20,6 +20,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::FuncDefIndex;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::display::DisplayWithCtx;
@@ -63,10 +64,15 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
+use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
+use crate::binding::binding::KeyYield;
+use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::NarrowUseLocation;
+use crate::binding::binding::TypeAliasParams;
+use crate::binding::binding::TypeAliasRefBinding;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
@@ -181,6 +187,10 @@ struct BindingsInner {
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
     pytest_info: Option<PytestBindingInfo>,
+    /// Yield and yield-from indices for each lambda that contains yields,
+    /// keyed by the lambda's TextRange. Populated at binding time so the
+    /// solver can look up yield info without re-walking the AST.
+    lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
 }
 
 impl Display for Bindings {
@@ -225,6 +235,7 @@ pub struct BindingsBuilder<'a> {
     pub lookup: &'a dyn LookupExport,
     pub sys_info: &'a SysInfo,
     pub class_count: u32,
+    pub func_count: u32,
     type_alias_count: u32,
     await_context: AwaitContext,
     errors: &'a ErrorCollector,
@@ -242,6 +253,8 @@ pub struct BindingsBuilder<'a> {
     pytest_info: Option<crate::binding::pytest::PytestBindingInfo>,
     /// BoundName lookups deferred until after AST traversal
     deferred_bound_names: Vec<DeferredBoundName>,
+    /// Yield and yield-from indices for lambdas that contain yields.
+    lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -289,6 +302,7 @@ impl Bindings {
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
+            lambda_yield_keys: Vec::new(),
         }))
     }
 
@@ -317,6 +331,14 @@ impl Bindings {
 
     pub(crate) fn pytest_info(&self) -> Option<&PytestBindingInfo> {
         self.0.pytest_info.as_ref()
+    /// Returns the yield and yield-from indices for a lambda at the given range,
+    /// or empty slices if the lambda has no yields.
+    pub fn lambda_yield_keys(&self, range: TextRange) -> (&[Idx<KeyYield>], &[Idx<KeyYieldFrom>]) {
+        self.0
+            .lambda_yield_keys
+            .iter()
+            .find(|(r, _, _)| *r == range)
+            .map_or((&[], &[]), |(_, yields, yield_froms)| (yields, yield_froms))
     }
 
     pub fn available_definitions(&self, position: TextSize) -> SmallSet<Idx<Key>> {
@@ -416,7 +438,7 @@ impl Bindings {
     pub fn get_function_param(&self, name: &Identifier) -> &FunctionParameter {
         let b = self.get(self.key_to_idx(&Key::Definition(ShortIdentifier::new(name))));
         if let Binding::FunctionParameter(p) = b {
-            p
+            p.as_ref()
         } else {
             panic!(
                 "Internal error: unexpected binding for parameter `{}` @  {:?}: {}, module={}, path={}",
@@ -506,7 +528,7 @@ impl Bindings {
     pub fn new(
         x: ModModule,
         module_info: ModuleInfo,
-        exports: Exports,
+        exports: &Exports,
         solver: &Solver,
         lookup: &dyn LookupExport,
         sys_info: &SysInfo,
@@ -524,6 +546,7 @@ impl Bindings {
             solver,
             uniques,
             class_count: 0,
+            func_count: 0,
             type_alias_count: 0,
             await_context: AwaitContext::General,
             has_docstring: Ast::has_docstring(&x),
@@ -537,6 +560,7 @@ impl Bindings {
             semantic_syntax_errors: RefCell::new(Vec::new()),
             pytest_info,
             deferred_bound_names: Vec::new(),
+            lambda_yield_keys: Vec::new(),
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -557,6 +581,15 @@ impl Bindings {
                 range,
                 ErrorInfo::Kind(ErrorKind::BadDunderAll),
                 format!("Name `{name}` is listed in `__all__` but is not defined in the module"),
+            );
+        }
+
+        // Warn if __all__ could not be statically analyzed
+        if let Some(range) = exports.unresolvable_dunder_all_range() {
+            builder.error(
+                range,
+                ErrorInfo::Kind(ErrorKind::UnresolvableDunderAll),
+                "`__all__` could not be statically analyzed; falling back to module-level definitions for star imports".to_owned(),
             );
         }
 
@@ -608,6 +641,7 @@ impl Bindings {
             unused_imports: builder.unused_imports,
             unused_variables: builder.unused_variables,
             pytest_info: builder.pytest_info,
+            lambda_yield_keys: builder.lambda_yield_keys,
         }))
     }
 
@@ -689,17 +723,18 @@ impl BindingTable {
     /// will take the phi of all values bound at different points). If necessary, we
     /// insert the Anywhere.
     fn record_bind_in_anywhere(&mut self, name: Name, range: TextRange, idx: Idx<Key>) {
-        let phi_idx = self.types.0.insert(Key::Anywhere(name, range));
-        match self
-            .types
-            .1
-            .insert_if_missing(phi_idx, || Binding::Phi(JoinStyle::SimpleMerge, vec![]))
-        {
+        let phi_idx = self.types.0.insert(Key::Anywhere(Box::new((name, range))));
+        let new_branch = BranchInfo {
+            value_key: idx,
+            termination_key: None,
+        };
+        match self.types.1.insert_if_missing(phi_idx, || {
+            Binding::Phi(JoinStyle::SimpleMerge, Box::new([]))
+        }) {
             Binding::Phi(_, branches) => {
-                branches.push(BranchInfo {
-                    value_key: idx,
-                    termination_key: None,
-                });
+                let mut v = std::mem::take(branches).into_vec();
+                v.push(new_branch);
+                *branches = v.into_boxed_slice();
             }
             _ => unreachable!(),
         }
@@ -835,6 +870,17 @@ impl<'a> BindingsBuilder<'a> {
         self.unused_variables.extend(unused);
     }
 
+    /// Record the yield and yield-from binding indices for a lambda expression.
+    pub fn record_lambda_yield_keys(
+        &mut self,
+        range: TextRange,
+        yield_keys: Box<[Idx<KeyYield>]>,
+        yield_from_keys: Box<[Idx<KeyYieldFrom>]>,
+    ) {
+        self.lambda_yield_keys
+            .push((range, yield_keys, yield_from_keys));
+    }
+
     pub fn record_used_imports_from_dunder_all_names<T>(&mut self, dunder_all_names: T)
     where
         T: Iterator<Item = &'a Name>,
@@ -942,7 +988,7 @@ impl<'a> BindingsBuilder<'a> {
 
     fn inject_globals(&mut self) {
         for global in ImplicitGlobal::implicit_globals(self.has_docstring) {
-            let key = Key::ImplicitGlobal(global.name().clone());
+            let key = Key::ImplicitGlobal(Box::new(global.name().clone()));
             let idx = self.insert_binding(key, Binding::Global(global.clone()));
             self.bind_name(global.name(), idx, FlowStyle::Other);
         }
@@ -957,10 +1003,11 @@ impl<'a> BindingsBuilder<'a> {
             FindingOrError::Error(_) => (),
             FindingOrError::Finding(_) => {
                 for name in self.lookup.get_wildcard(builtins_module).unwrap().iter() {
-                    let key = Key::Import(name.clone(), TextRange::default());
-                    let idx = self
-                        .table
-                        .insert(key, Binding::Import(builtins_module, name.clone(), None));
+                    let key = Key::Import(Box::new((name.clone(), TextRange::default())));
+                    let idx = self.table.insert(
+                        key,
+                        Binding::Import(Box::new((builtins_module, name.clone(), None))),
+                    );
                     self.bind_name(name, idx, FlowStyle::Import(builtins_module, name.clone()));
                 }
             }
@@ -1046,11 +1093,33 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::PartialTypeWithUpstreamsCompleted(inner_idx, _) => {
                     idx = *inner_idx;
                 }
-                Binding::Forward(inner_idx) => {
+                Binding::Forward(inner_idx) | Binding::ForwardToFirstUse(inner_idx) => {
                     idx = *inner_idx;
                 }
-                Binding::NameAssign { expr: value, .. } => {
-                    return self.as_special_export_inner(value, visited_names, visited_keys);
+                Binding::NameAssign(x) => {
+                    return self.as_special_export_inner(&x.expr, visited_names, visited_keys);
+                }
+                Binding::Import(x) => {
+                    return self.lookup.is_special_export(x.0, &x.1);
+                }
+                Binding::Phi(_, branches) => {
+                    // Check all branches for a consistent special export (e.g. try/except
+                    // importing Literal from typing vs typing_extensions).
+                    let mut result = None;
+                    for branch in branches {
+                        let branch_result = self.special_export_from_binding_idx(
+                            branch.value_key,
+                            visited_names,
+                            visited_keys,
+                        );
+                        match (&result, &branch_result) {
+                            (None, _) => result = branch_result,
+                            (_, None) => {}
+                            (Some(a), Some(b)) if a == b => {}
+                            _ => return None,
+                        }
+                    }
+                    return result;
                 }
                 _ => return None,
             }
@@ -1204,6 +1273,26 @@ impl<'a> BindingsBuilder<'a> {
         def_to_upstreams: &SmallMap<Idx<Key>, Idx<Key>>,
         first_uses_to_add: &mut SmallMap<Idx<Key>, Vec<Idx<Key>>>,
     ) {
+        // For TypeAliasRhs usage, check if the name resolves to a type
+        // alias and produce a TypeAliasRef binding. This covers both
+        // self-references and cross-references to other aliases in the
+        // same module. The expansion step in wrap_type_alias inlines
+        // non-recursive Refs at solve time.
+        if matches!(deferred.usage, Usage::TypeAliasRhs)
+            && let Some((name, key_type_alias, tparams)) =
+                self.follow_to_type_alias(deferred.lookup_result_idx)
+        {
+            self.insert_binding_idx(
+                deferred.bound_name_idx,
+                Binding::TypeAliasRef(Box::new(TypeAliasRefBinding {
+                    name,
+                    key_type_alias,
+                    tparams,
+                })),
+            );
+            return;
+        }
+
         // Follow Forward chains to find any partial type
         let (default_idx, partial_type_info) =
             self.follow_to_partial_type(deferred.lookup_result_idx);
@@ -1211,9 +1300,15 @@ impl<'a> BindingsBuilder<'a> {
         if let Some((pinned_idx, unpinned_idx, first_use)) = partial_type_info {
             let is_narrowing = matches!(deferred.usage, Usage::Narrowing(_));
 
-            if matches!(deferred.usage, Usage::StaticTypeInformation) {
+            if matches!(
+                deferred.usage,
+                Usage::StaticTypeInformation | Usage::TypeAliasRhs
+            ) {
                 self.mark_does_not_pin_if_first_use(pinned_idx);
-                self.insert_binding_idx(deferred.bound_name_idx, Binding::Forward(pinned_idx));
+                self.insert_binding_idx(
+                    deferred.bound_name_idx,
+                    Binding::ForwardToFirstUse(pinned_idx),
+                );
                 return;
             }
 
@@ -1233,7 +1328,7 @@ impl<'a> BindingsBuilder<'a> {
                         }
                         self.insert_binding_idx(
                             deferred.bound_name_idx,
-                            Binding::Forward(unpinned_idx),
+                            Binding::ForwardToFirstUse(unpinned_idx),
                         );
                     }
                     FirstUse::UsedBy(other_idx) => {
@@ -1241,19 +1336,19 @@ impl<'a> BindingsBuilder<'a> {
                         if same_context {
                             self.insert_binding_idx(
                                 deferred.bound_name_idx,
-                                Binding::Forward(unpinned_idx),
+                                Binding::ForwardToFirstUse(unpinned_idx),
                             );
                         } else {
                             self.insert_binding_idx(
                                 deferred.bound_name_idx,
-                                Binding::Forward(pinned_idx),
+                                Binding::ForwardToFirstUse(pinned_idx),
                             );
                         }
                     }
                     FirstUse::DoesNotPin => {
                         self.insert_binding_idx(
                             deferred.bound_name_idx,
-                            Binding::Forward(pinned_idx),
+                            Binding::ForwardToFirstUse(pinned_idx),
                         );
                     }
                 }
@@ -1268,26 +1363,26 @@ impl<'a> BindingsBuilder<'a> {
                         self.mark_does_not_pin_if_first_use(pinned_idx);
                         self.insert_binding_idx(
                             deferred.bound_name_idx,
-                            Binding::Forward(pinned_idx),
+                            Binding::ForwardToFirstUse(pinned_idx),
                         );
                     }
                     FirstUse::UsedBy(other_idx) => {
                         if enclosing_idx == other_idx {
                             self.insert_binding_idx(
                                 deferred.bound_name_idx,
-                                Binding::Forward(unpinned_idx),
+                                Binding::ForwardToFirstUse(unpinned_idx),
                             );
                         } else {
                             self.insert_binding_idx(
                                 deferred.bound_name_idx,
-                                Binding::Forward(pinned_idx),
+                                Binding::ForwardToFirstUse(pinned_idx),
                             );
                         }
                     }
                     FirstUse::DoesNotPin => {
                         self.insert_binding_idx(
                             deferred.bound_name_idx,
-                            Binding::Forward(pinned_idx),
+                            Binding::ForwardToFirstUse(pinned_idx),
                         );
                     }
                 }
@@ -1296,7 +1391,10 @@ impl<'a> BindingsBuilder<'a> {
                 if matches!(first_use, FirstUse::Undetermined) {
                     self.mark_does_not_pin_if_first_use(pinned_idx);
                 }
-                self.insert_binding_idx(deferred.bound_name_idx, Binding::Forward(pinned_idx));
+                self.insert_binding_idx(
+                    deferred.bound_name_idx,
+                    Binding::ForwardToFirstUse(pinned_idx),
+                );
             }
         } else {
             // Default: forward to whatever we found (no partial type in chain)
@@ -1319,7 +1417,7 @@ impl<'a> BindingsBuilder<'a> {
             seen.insert(current);
 
             match self.idx_to_binding(current) {
-                Some(Binding::Forward(target)) => {
+                Some(Binding::Forward(target) | Binding::ForwardToFirstUse(target)) => {
                     current = *target;
                 }
                 Some(Binding::CompletedPartialType(unpinned_idx, first_use)) => {
@@ -1332,25 +1430,94 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    /// Mark a CompletedPartialType as used by a specific binding.
+    /// Follow Forward chains to find a TypeAlias binding.
+    /// Returns `Some((name, key_type_alias, tparams))` if the chain ends at
+    /// a `Binding::TypeAlias`, or `None` otherwise.
+    fn follow_to_type_alias(
+        &self,
+        start_idx: Idx<Key>,
+    ) -> Option<(Name, Idx<KeyTypeAlias>, TypeAliasParams)> {
+        let (_, orig_binding) = self.get_original_binding(start_idx)?;
+        match orig_binding? {
+            Binding::TypeAlias(x) => Some((x.name.clone(), x.key_type_alias, x.tparams.clone())),
+            // In legacy type alias RHS processing, all names go through
+            // intercept_lookup which wraps them in PossibleLegacyTParam.
+            // By finalize time we can follow through to the original
+            // binding to check whether it's actually a type alias.
+            Binding::PossibleLegacyTParam(tparam_idx, _)
+                if let Some(legacy_binding) = self.idx_to_binding(*tparam_idx) =>
+            {
+                self.follow_to_type_alias(legacy_binding.idx())
+            }
+            _ => None,
+        }
+    }
+
+    /// Mark a CompletedPartialType as used by a specific binding,
+    /// and mirror the first_use on the corresponding NameAssign.
     fn mark_first_use(&mut self, partial_type_idx: Idx<Key>, user_idx: Idx<Key>) {
+        // First, read the chain immutably to find the NameAssign def_idx.
+        let def_idx = if let Some(Binding::CompletedPartialType(unpinned_idx, _)) =
+            self.idx_to_binding(partial_type_idx)
+        {
+            if let Some(Binding::PartialTypeWithUpstreamsCompleted(def_idx, _)) =
+                self.idx_to_binding(*unpinned_idx)
+            {
+                Some(*def_idx)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        // Now mutate the CompletedPartialType.
         if let Some(Binding::CompletedPartialType(_, first_use)) =
             self.idx_to_binding_mut(partial_type_idx)
         {
             *first_use = FirstUse::UsedBy(user_idx);
         }
+        // Mirror onto the NameAssign.
+        if let Some(def_idx) = def_idx
+            && let Some(Binding::NameAssign(na)) = self.idx_to_binding_mut(def_idx)
+        {
+            na.first_use = FirstUse::UsedBy(user_idx);
+        }
     }
 
-    /// Mark a CompletedPartialType as DoesNotPin if it's the first use.
+    /// Mark a CompletedPartialType as DoesNotPin if it's the first use,
+    /// and mirror onto the corresponding NameAssign.
     ///
     /// This is used when looking up names in static type contexts or for narrowing,
     /// where we don't want to pin partial types. Should be called after `lookup_name`.
     pub fn mark_does_not_pin_if_first_use(&mut self, partial_type_idx: Idx<Key>) {
+        // First, read the chain immutably to find the NameAssign def_idx, but only
+        // if the CompletedPartialType is still Undetermined.
+        let def_idx = if let Some(Binding::CompletedPartialType(unpinned_idx, first_use)) =
+            self.idx_to_binding(partial_type_idx)
+            && matches!(first_use, FirstUse::Undetermined)
+        {
+            if let Some(Binding::PartialTypeWithUpstreamsCompleted(def_idx, _)) =
+                self.idx_to_binding(*unpinned_idx)
+            {
+                Some(*def_idx)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        // Mutate the CompletedPartialType.
         if let Some(Binding::CompletedPartialType(_, first_use)) =
             self.idx_to_binding_mut(partial_type_idx)
             && matches!(first_use, FirstUse::Undetermined)
         {
             *first_use = FirstUse::DoesNotPin;
+        }
+        // Mirror onto the NameAssign.
+        if let Some(def_idx) = def_idx
+            && let Some(Binding::NameAssign(na)) = self.idx_to_binding_mut(def_idx)
+        {
+            na.first_use = FirstUse::DoesNotPin;
         }
     }
 
@@ -1404,6 +1571,7 @@ impl<'a> BindingsBuilder<'a> {
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
         self.check_for_type_alias_redefinition(name, idx);
+        self.check_for_imported_final_reassignment(name, idx);
         let name = Hashed::new(name);
         let write_info = self
             .scopes
@@ -1426,20 +1594,37 @@ impl<'a> BindingsBuilder<'a> {
         if let Some(prev_idx) = prev_idx {
             if matches!(
                 self.idx_to_binding(prev_idx),
-                Some(Binding::TypeAlias { .. })
+                Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
             ) {
                 self.error(
                     self.idx_to_key(idx).range(),
                     ErrorInfo::Kind(ErrorKind::Redefinition),
                     format!("Cannot redefine existing type alias `{name}`",),
                 )
-            } else if matches!(self.idx_to_binding(idx), Some(Binding::TypeAlias { .. })) {
+            } else if matches!(
+                self.idx_to_binding(idx),
+                Some(Binding::TypeAlias(..) | Binding::TypeAliasRef(..))
+            ) {
                 self.error(
                     self.idx_to_key(idx).range(),
                     ErrorInfo::Kind(ErrorKind::Redefinition),
                     format!("Cannot redefine existing name `{name}` as a type alias",),
                 );
             }
+        }
+    }
+
+    fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
+        let prev_idx = self.scopes.current_flow_idx(name);
+        if let Some(prev_idx) = prev_idx
+            && let Some(Binding::Import(x)) = self.idx_to_binding(prev_idx)
+            && self.lookup.is_final(x.0, &x.1)
+        {
+            self.error(
+                self.idx_to_key(idx).range(),
+                ErrorInfo::Kind(ErrorKind::BadAssignment),
+                format!("Cannot assign to `{name}` because it is imported as final"),
+            );
         }
     }
 
@@ -1532,7 +1717,7 @@ impl<'a> BindingsBuilder<'a> {
             if let Some(initial_idx) = self.lookup_name(name, &mut narrowing_usage).found() {
                 self.mark_does_not_pin_if_first_use(initial_idx);
                 let narrowed_idx = self.insert_binding(
-                    Key::Narrow(name.into_key().clone(), *op_range, use_location),
+                    Key::Narrow(Box::new((name.into_key().clone(), *op_range, use_location))),
                     Binding::Narrow(initial_idx, Box::new(op.clone()), use_location),
                 );
                 self.scopes.narrow_in_current_flow(name, narrowed_idx);
@@ -1573,14 +1758,10 @@ impl<'a> BindingsBuilder<'a> {
         });
         let key = self.insert_binding(
             Key::Definition(ShortIdentifier::new(name)),
-            Binding::FunctionParameter(match annot {
+            Binding::FunctionParameter(Box::new(match annot {
                 Some(annot) => FunctionParameter::Annotated(annot),
-                None => FunctionParameter::Unannotated(
-                    self.solver.fresh_parameter(self.uniques),
-                    undecorated_idx,
-                    target,
-                ),
-            }),
+                None => FunctionParameter::Unannotated(undecorated_idx, target, name.id.clone()),
+            })),
         );
         self.scopes.add_parameter_to_current_static(name, annot);
         self.scopes.register_parameter(name, allow_unused);
@@ -1770,6 +1951,7 @@ impl<'a> BindingsBuilder<'a> {
         let mut gas = Gas::new(100);
         while let Some(
             Binding::Forward(fwd_idx)
+            | Binding::ForwardToFirstUse(fwd_idx)
             | Binding::CompletedPartialType(fwd_idx, _)
             | Binding::PartialTypeWithUpstreamsCompleted(fwd_idx, _)
             | Binding::Phi(JoinStyle::NarrowOf(fwd_idx), _),
@@ -1891,6 +2073,12 @@ impl<'a> BindingsBuilder<'a> {
     pub fn type_alias_index(&mut self) -> TypeAliasIndex {
         let res = TypeAliasIndex(self.type_alias_count);
         self.type_alias_count += 1;
+        res
+    }
+
+    pub fn func_def_index(&mut self) -> FuncDefIndex {
+        let res = FuncDefIndex(self.func_count);
+        self.func_count += 1;
         res
     }
 }
