@@ -380,7 +380,7 @@ fn test_completion_class_override_members() {
     interaction.client.did_open("foo.py");
     interaction.client.did_change(
         "foo.py",
-        "from typing import *\nfrom abc import ABC, abstractmethod\n\nclass A(ABC):\n    @property\n    @abstractmethod\n    def error_message(self):\n        \"\"\"\n        Child classes must provide a error message string.\n        \"\"\"\n        ...\n\nclass B(A):\n    erro = \"\"\n",
+        "from typing import *\nfrom abc import ABC, abstractmethod\n\nclass A(ABC):\n    @property\n    @abstractmethod\n    def error_message(self):\n        \"\"\"\n        Child classes must provide an error message string.\n        \"\"\"\n        ...\n\nclass B(A):\n    erro = \"\"\n",
     );
 
     interaction
