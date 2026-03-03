@@ -42,11 +42,13 @@ use crate::lsp::wasm::signature_help::CallInfo;
 use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
+use crate::state::lsp::CompletionResolveData;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::IdentifierContext;
 use crate::state::lsp::IdentifierWithContext;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::MIN_CHARACTERS_TYPED_AUTOIMPORT;
+use crate::state::lsp::completion_data_handle_path;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::types::Type;
@@ -453,6 +455,7 @@ impl Transaction<'_> {
             .import_handle(handle, ModuleName::builtins(), None)
             .finding()
         {
+            let builtin_path = completion_data_handle_path(&builtin_handle);
             let builtin_exports = self.get_exports(&builtin_handle);
             for (name, location) in builtin_exports.iter() {
                 if let Some(identifier) = identifier
@@ -463,19 +466,30 @@ impl Transaction<'_> {
                 {
                     continue;
                 }
-                let kind = match location {
+                let (kind, data) = match location {
                     ExportLocation::OtherModule(..) => continue,
-                    ExportLocation::ThisModule(export) => export
-                        .symbol_kind
-                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                            Some(k.to_lsp_completion_item_kind())
-                        }),
+                    ExportLocation::ThisModule(export) => {
+                        let data = CompletionResolveData::export_value(
+                            ModuleName::builtins(),
+                            name.as_str(),
+                            export.docstring_range.map(|_| builtin_path.clone()),
+                            export.docstring_range,
+                        );
+                        (
+                            export
+                                .symbol_kind
+                                .map_or(Some(CompletionItemKind::VARIABLE), |k| {
+                                    Some(k.to_lsp_completion_item_kind())
+                                }),
+                            Some(data),
+                        )
+                    }
                 };
                 completions.push(RankedCompletion::new(CompletionItem {
                     label: name.as_str().to_owned(),
                     detail: None,
                     kind,
-                    data: Some(serde_json::json!("builtin")),
+                    data,
                     ..Default::default()
                 }));
             }
@@ -679,7 +693,7 @@ impl Transaction<'_> {
                         &ast,
                         self.config_finder(),
                         handle.dupe(),
-                        handle_to_import_from,
+                        handle_to_import_from.dupe(),
                         &name,
                         import_format,
                     );
@@ -690,6 +704,13 @@ impl Transaction<'_> {
                     (insert_text, Some(vec![import_text_edit]), module_name)
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
+                let doc_range = export.docstring_range;
+                let data = CompletionResolveData::export_value(
+                    handle_to_import_from.module(),
+                    name.clone(),
+                    doc_range.map(|_| completion_data_handle_path(&handle_to_import_from)),
+                    doc_range,
+                );
 
                 completions.push(RankedCompletion {
                     item: CompletionItem {
@@ -712,6 +733,7 @@ impl Transaction<'_> {
                         } else {
                             None
                         },
+                        data: Some(data),
                         ..Default::default()
                     },
                     source: autoimport_source(&imported_module),

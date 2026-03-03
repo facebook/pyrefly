@@ -23,7 +23,7 @@ regex = "1.12.3"
 ruff_notebook = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
 ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
 ruff_python_parser = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
-ruff_text_size = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
+ruff_text_size = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511", features = ["serde"] }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 starlark_map = "0.13.0"
 static_interner = "0.1.1"

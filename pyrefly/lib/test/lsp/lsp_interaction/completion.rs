@@ -451,6 +451,79 @@ fn test_completion_with_autoimport() {
 }
 
 #[test]
+fn test_completion_item_resolve_autoimport_documentation() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("tests_requiring_config");
+
+    let mut interaction =
+        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    let file = root_path.join("foo.py");
+    interaction.client.did_open("foo.py");
+
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&file).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "text": "this_is_a_very_long_function_name_so_we_can".to_owned()
+            }],
+        }));
+
+    let target_item: RefCell<Option<CompletionItem>> = RefCell::new(None);
+    interaction
+        .client
+        .completion("foo.py", 0, 43)
+        .expect_response_with(|response| {
+            if let Some(CompletionResponse::List(list)) = response {
+                if let Some(item) = list.items.iter().find(|item| {
+                    item.label
+                        == "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search"
+                }) {
+                    *target_item.borrow_mut() = Some(item.clone());
+                    return true;
+                }
+            }
+            false
+        })
+        .unwrap();
+
+    let item = target_item
+        .into_inner()
+        .expect("expected autoimport completion item");
+    assert!(item.documentation.is_none());
+
+    interaction
+        .client
+        .completion_item_resolve(&item)
+        .expect_response_with(|resolved| {
+            resolved
+                .documentation
+                .as_ref()
+                .is_some_and(|doc| match doc {
+                    lsp_types::Documentation::MarkupContent(content) => content
+                        .value
+                        .contains("Autoimport docstring for completionItem/resolve tests."),
+                    lsp_types::Documentation::String(text) => {
+                        text.contains("Autoimport docstring for completionItem/resolve tests.")
+                    }
+                })
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_completion_with_autoimport_without_config() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
