@@ -29,18 +29,13 @@
   "callables_subtyping.py": [],
   "classes_classvar.py": [],
   "classes_override.py": [],
-  "constructors_call_init.py": [
-    "Line 61: Unexpected errors ['Implementation signature `(self: Self@Class5, value: Any) -> None` does not accept all arguments that overload signature `(self: Class5[list[int]], value: int) -> None` accepts']",
-    "Line 63: Unexpected errors ['Implementation signature `(self: Self@Class5, value: Any) -> None` does not accept all arguments that overload signature `(self: Class5[set[str]], value: str) -> None` accepts']"
-  ],
+  "constructors_call_init.py": [],
   "constructors_call_metaclass.py": [],
   "constructors_call_new.py": [],
   "constructors_call_type.py": [],
   "constructors_callable.py": [
     "Line 186: Expected 1 errors",
     "Line 197: Expected 1 errors",
-    "Line 155: Unexpected errors ['Implementation signature `(self: Self@Class7, x: int | str) -> None` does not accept all arguments that overload signature `(self: Class7[int], x: int) -> None` accepts']",
-    "Line 157: Unexpected errors ['Implementation signature `(self: Self@Class7, x: int | str) -> None` does not accept all arguments that overload signature `(self: Class7[str], x: str) -> None` accepts']",
     "Line 167: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
     "Line 185: Unexpected errors ['assert_type(Class8[Unknown], Class8[str]) failed']"
   ],
@@ -113,9 +108,7 @@
   "generics_self_basic.py": [],
   "generics_self_protocols.py": [],
   "generics_self_usage.py": [
-    "Line 82: Expected 1 errors",
-    "Line 15: Unexpected errors ['Returned type `ReturnsSelf` is not assignable to declared return type `Self@ReturnsSelf`']",
-    "Line 18: Unexpected errors ['Returned type `ReturnsSelf` is not assignable to declared return type `Self@ReturnsSelf`']"
+    "Line 82: Expected 1 errors"
   ],
   "generics_syntax_compatibility.py": [],
   "generics_syntax_declarations.py": [],
@@ -128,10 +121,7 @@
   ],
   "generics_typevartuple_callable.py": [],
   "generics_typevartuple_concat.py": [],
-  "generics_typevartuple_overloads.py": [
-    "Line 18: Unexpected errors ['Implementation signature `(self: Self@Array) -> Any` does not accept all arguments that overload signature `(self: Array[Axis1, Axis2]) -> Array[Axis2, Axis1]` accepts']",
-    "Line 22: Unexpected errors ['Implementation signature `(self: Self@Array) -> Any` does not accept all arguments that overload signature `(self: Array[Axis1, Axis2, Axis3]) -> Array[Axis3, Axis2, Axis1]` accepts']"
-  ],
+  "generics_typevartuple_overloads.py": [],
   "generics_typevartuple_specialization.py": [],
   "generics_typevartuple_unpack.py": [],
   "generics_upper_bound.py": [],

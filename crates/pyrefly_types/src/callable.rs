@@ -552,6 +552,18 @@ pub enum FunctionKind {
 }
 
 impl Callable {
+    /// Replace all `SelfType` occurrences with the corresponding `ClassType`.
+    pub fn self_type_to_class_type(mut self) -> Self {
+        self.visit_mut(&mut |ty: &mut Type| {
+            ty.transform_mut(&mut |ty| {
+                if let Type::SelfType(cls) = ty {
+                    *ty = Type::ClassType(cls.clone());
+                }
+            });
+        });
+        self
+    }
+
     pub fn fmt_with_type<O: TypeOutput>(
         &self,
         output: &mut O,

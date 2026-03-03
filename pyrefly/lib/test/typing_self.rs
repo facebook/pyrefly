@@ -310,3 +310,17 @@ class B(A[Y1 | Y2], Generic[Y1, Y2]):
     def __new__(cls, A: A[Y1], B: A[Y2]) -> Self: ...
     "#,
 );
+
+testcase!(
+    test_self_return_in_classmethod,
+    r#"
+from typing import Self
+class C:
+    @classmethod
+    def bar(cls) -> Self:
+        return cls(1)
+
+    def __new__(cls, value: int) -> Self:  # Accepted
+        return cls(1)
+"#,
+);
