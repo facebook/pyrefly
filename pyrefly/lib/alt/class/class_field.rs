@@ -2217,7 +2217,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Otherwise, analyze the value to determine the type
         let (inherited_ty, inherited_annotation) =
             self.get_inherited_type_and_annotation(class, name);
-        let is_inherited = if inherited_ty.is_none() {
+        let mut is_inherited = if inherited_ty.is_none() {
             IsInherited::No
         } else {
             IsInherited::Maybe
@@ -2246,15 +2246,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             &errors2,
                         );
                         if errors2.is_empty() {
-                            // The new type is compatible with the inherited one; use the inherited type to
-                            // avoid spurious errors about changing the type of a read-write attribute.
-                            // However, we need to clear the is_abstract_method flag since assigning
-                            // a concrete implementation makes this field non-abstract.
-                            let mut ty = inherited_ty;
-                            ty.transform_toplevel_func_metadata(|meta| {
-                                meta.flags.is_abstract_method = false;
-                            });
-                            ty
+                            // The new type is compatible with the inherited one; use the child's
+                            // inferred type to preserve type precision. Skip the override check
+                            // since we've already validated compatibility above.
+                            is_inherited = IsInherited::No;
+                            self.attribute_expr_infer(e, None, name, errors)
                         } else {
                             // The hint was no good; infer the type without it.
                             self.attribute_expr_infer(e, None, name, errors)

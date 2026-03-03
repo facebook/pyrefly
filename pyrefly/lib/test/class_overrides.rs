@@ -807,7 +807,7 @@ class Foo:
 class Bar(Foo):
     x = 1
 
-assert_type(Bar.x, Any | None)
+assert_type(Bar.x, int)
 assert_type(Foo.x, Any | None)
 def test(x: type[Foo]):
     assert_type(x.x, Any | None)
@@ -832,7 +832,7 @@ class Child2(Parent):
 testcase!(
     test_unannotated_empty_tuple_attribute_override,
     r#"
-from typing import Any, assert_type
+from typing import Any, Literal, assert_type
 
 class Foo:
     x = ()
@@ -841,7 +841,7 @@ class Bar(Foo):
     x = ("feature_x",)
 
 assert_type(Foo.x, tuple[Any, ...])
-assert_type(Bar.x, tuple[Any, ...])
+assert_type(Bar.x, tuple[Literal['feature_x']])
     "#,
 );
 
@@ -966,7 +966,7 @@ class A:
 class B(A):
     x = 1
 def f(b: B):
-    assert_type(b.x, int | None)
+    assert_type(b.x, int)
     "#,
 );
 
@@ -993,7 +993,31 @@ class D(C):
     x = [B()]
 
 def f(d: D):
-    assert_type(d.x, list[A])
+    assert_type(d.x, list[B])
+    "#,
+);
+
+testcase!(
+    test_class_variable_override_with_subclass,
+    r#"
+class Request:
+    @classmethod
+    def make(cls) -> "Request":
+        return cls()
+
+class FormRequest(Request):
+    @classmethod
+    def from_response(cls) -> "FormRequest":
+        return cls()
+
+class BaseTest:
+    request_class = Request
+
+class MyTest(BaseTest):
+    request_class = FormRequest
+
+    def test(self) -> None:
+        self.request_class.from_response()
     "#,
 );
 
