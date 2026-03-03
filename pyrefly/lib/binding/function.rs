@@ -310,6 +310,18 @@ impl<'a> BindingsBuilder<'a> {
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
         self.parameters(parameters, undecorated_idx, class_key, method_self_kind);
         self.init_static_scope(&body, false);
+        if let Some(class_key) = class_key
+            && !self.scopes.current_static_contains(&dunder::CLASS)
+        {
+            let implicit_range = TextRange::empty(range.start());
+            let identifier = Identifier::new(dunder::CLASS.clone(), implicit_range);
+            self.scopes.add_implicit_name_to_current_static(&identifier);
+            let idx = self.insert_binding(
+                Key::Definition(ShortIdentifier::new(&identifier)),
+                Binding::ClassDef(class_key, Box::new([])),
+            );
+            self.bind_name(&identifier.id, idx, FlowStyle::Other);
+        }
         self.stmts(
             body,
             &NestingContext::function(ShortIdentifier::new(func_name), parent.dupe()),

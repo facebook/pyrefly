@@ -21,6 +21,26 @@ class C:
 );
 
 testcase!(
+    test_method_can_access_dunder_class,
+    r#"
+class Base:
+    def show_class(self) -> type:
+        return __class__
+"#,
+);
+
+testcase!(
+    test_nested_function_can_access_dunder_class,
+    r#"
+class Base:
+    def show_class(self) -> type:
+        def inner() -> type:
+            return __class__
+        return inner()
+"#,
+);
+
+testcase!(
     test_unknown_name_suggests_similar,
     r#"
 long_variable_name = 1

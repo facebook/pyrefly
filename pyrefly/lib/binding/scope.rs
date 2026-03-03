@@ -1221,6 +1221,10 @@ impl Scopes {
             .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
     }
 
+    pub fn current_static_contains(&self, name: &Name) -> bool {
+        self.current().stat.0.contains_key(name)
+    }
+
     /// Enter a with block.
     pub fn enter_with(&mut self) {
         self.current_mut().with_depth += 1;
@@ -1954,6 +1958,18 @@ impl Scopes {
             name.range,
             StaticStyle::PossibleLegacyTParam,
         )
+    }
+
+    /// Add an implicit name to the current static scope.
+    ///
+    /// Callers must always define the name via a `Key::Definition` immediately
+    /// afterward or downstream lookups may panic.
+    pub fn add_implicit_name_to_current_static(&mut self, name: &Identifier) {
+        self.current_mut().stat.upsert(
+            Hashed::new(name.id.clone()),
+            name.range,
+            StaticStyle::SingleDef(None),
+        );
     }
 
     /// Add an adhoc name - if it does not already exist - to the current static
