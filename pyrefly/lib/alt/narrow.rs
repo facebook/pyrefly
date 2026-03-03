@@ -896,6 +896,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return self.intersect(ty, &self.unions(key_types));
                 }
 
+                // Check if the right operand is a mapping (e.g. dict[str, int]).
+                // If so, we can narrow the left operand to the mapping's key type.
+                if let Some((key_ty, _)) = self.unwrap_mapping(&right_ty) {
+                    return self.intersect(ty, &key_ty);
+                }
+
                 ty.clone()
             }
             AtomicNarrowOp::NotIn(v) => {

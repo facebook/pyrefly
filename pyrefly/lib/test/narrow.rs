@@ -1662,6 +1662,22 @@ class MyTest(TestCase):
 "#,
 );
 
+testcase!(
+    test_in_mapping_narrows_key,
+    r#"
+from typing import assert_type
+
+def parse_resource_id() -> tuple[str, str] | tuple[None, None]: ...
+
+def lookup_resource(registry: dict[str, str]) -> str | None:
+    kind, _obj_id = parse_resource_id()
+    if kind not in registry:
+        return None
+    assert_type(kind, str)
+    return registry[kind]
+"#,
+);
+
 // Make sure we catch illegal arguments to isinstance and issubclass even when we aren't narrowing.
 testcase!(
     test_validate_class_object_no_narrow,
