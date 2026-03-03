@@ -946,6 +946,15 @@
                     "key": {
                       "name": {
                         "id": 0,
+                        "key": "classes.typing.Generic"
+                      }
+                    }
+                  },
+                  {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
                         "key": "typing.Generic"
                       }
                     }
@@ -1648,6 +1657,10 @@
           "spans": [
             {
               "length": 1,
+              "start": 36
+            },
+            {
+              "length": 1,
               "start": 69
             }
           ],
@@ -1873,12 +1886,54 @@
           "spans": [
             {
               "length": 6,
+              "start": 20
+            },
+            {
+              "length": 6,
+              "start": 54
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "classes.typing"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "spans": [
+            {
+              "length": 6,
               "start": 218
             }
           ],
           "target": {
             "id": 0,
             "key": "classes.Animal"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "spans": [
+            {
+              "length": 7,
+              "start": 27
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "classes.typing.TypeVar"
           }
         }
       },
@@ -1916,6 +1971,25 @@
           ],
           "target": {
             "id": 0,
+            "key": "classes.typing.Generic"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "spans": [
+            {
+              "length": 7,
+              "start": 61
+            }
+          ],
+          "target": {
+            "id": 0,
             "key": "typing.Generic"
           }
         }
@@ -1933,6 +2007,16 @@
             "key": "classes.py"
           },
           "xrefs": [
+            {
+              "source": {
+                "length": 1,
+                "start": 36
+              },
+              "target": {
+                "id": 0,
+                "key": "classes.T"
+              }
+            },
             {
               "source": {
                 "length": 1,
@@ -2060,6 +2144,16 @@
               },
               "target": {
                 "id": 0,
+                "key": "classes.typing"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 20
+              },
+              "target": {
+                "id": 0,
                 "key": "typing"
               }
             },
@@ -2071,6 +2165,16 @@
               "target": {
                 "id": 0,
                 "key": "classes.Animal"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 54
+              },
+              "target": {
+                "id": 0,
+                "key": "classes.typing"
               }
             },
             {
@@ -2100,7 +2204,27 @@
               },
               "target": {
                 "id": 0,
+                "key": "classes.typing.TypeVar"
+              }
+            },
+            {
+              "source": {
+                "length": 7,
+                "start": 27
+              },
+              "target": {
+                "id": 0,
                 "key": "typing.TypeVar"
+              }
+            },
+            {
+              "source": {
+                "length": 7,
+                "start": 61
+              },
+              "target": {
+                "id": 0,
+                "key": "classes.typing.Generic"
               }
             },
             {
@@ -2776,6 +2900,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "b7943ae76a8e6adb45598859f7c7b073"
+    "schema_id": "835e529061f1429222e801fbfe85f209"
   }
 ]

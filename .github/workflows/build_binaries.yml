@@ -62,6 +62,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: ${{ matrix.platform.arch }}
+      - name: Set jemalloc page size for macOS ARM64
+        if: ${{ matrix.platform.target == 'aarch64' }}
+        run: echo "JEMALLOC_SYS_WITH_LG_PAGE=14" >> $GITHUB_ENV
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:

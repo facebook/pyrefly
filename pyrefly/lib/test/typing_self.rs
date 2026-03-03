@@ -88,7 +88,7 @@ class A:
 
     def f2(self):
         assert_type(self, Self)
-    
+
     def f3(self: Self) -> Self:
         assert_type(self, Self)
         return self
@@ -192,4 +192,122 @@ class C:
     def m(self):
         assert_type(self(), Self)
 "#,
+);
+
+testcase!(
+    bug = "conformance: Should error when returning concrete class instead of Self",
+    test_self_return_concrete_class,
+    r#"
+from typing import Self
+
+class Shape:
+    def method(self) -> Self:
+        return Shape()  # should error: returns Shape, not Self
+
+    @classmethod
+    def cls_method(cls) -> Self:
+        return Shape()  # should error: returns Shape, not Self
+"#,
+);
+
+testcase!(
+    test_self_in_class_body_expression,
+    r#"
+from typing import Self, assert_type
+
+class SomeClass:
+    # Self in inferred class variable type
+    cache = dict[int, Self]()
+
+    def get_instance(self) -> Self:
+        x = self.cache[0]
+        if x:
+            return x
+        raise RuntimeError()
+
+assert_type(SomeClass().cache, dict[int, SomeClass])
+assert_type(SomeClass().get_instance(), SomeClass)
+"#,
+);
+
+testcase!(
+    test_self_outside_class,
+    r#"
+from typing import Self
+
+def foo() -> Self: ... # E: `Self` must appear within a class
+x: Self # E: `Self` must appear within a class
+tupleSelf = tuple[Self] # E: `Self` must appear within a class
+    "#,
+);
+
+testcase!(
+    test_self_inside_class,
+    r#"
+from typing import Self
+
+class A[T]: pass
+class B(A[Self]): pass # E: `Self` must appear within a class
+class C:
+    @staticmethod
+    def foo() -> Self: ... # E: `Self` cannot be used in a static method
+
+    @staticmethod
+    def bar(x: Self) -> None: ... # E: `Self` cannot be used in a static method
+
+    @staticmethod
+    def baz() -> list[Self]: ... # E: `Self` cannot be used in a static method
+    "#,
+);
+
+testcase!(
+    test_self_inside_metaclass,
+    r#"
+from typing import Self
+
+class C(type):
+    x: Self  # E: `Self` cannot be used in a metaclass
+    def foo(cls) -> Self: ... # E: `Self` cannot be used in a metaclass
+    def __new__(cls, x: Self) -> Self: ... # E: `Self` cannot be used in a metaclass  # E: `Self` cannot be used in a metaclass
+    def __mul__(cls, count: int) -> list[Self]: ... # E: `Self` cannot be used in a metaclass
+    "#,
+);
+
+testcase!(
+    test_classmethod_cls_call_returns_self,
+    r#"
+from typing import Self
+
+class Base:
+    @classmethod
+    def create(cls):
+        return cls()
+
+    @classmethod
+    def create_annotated(cls) -> Self:
+        return cls()
+
+class Child(Base): pass
+
+child1: Child = Child.create()  # OK - cls() returns Self
+child2: Child = Child.create_annotated()  # OK with explicit Self annotation
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2526
+testcase!(
+    test_self_no_invalid_typevar,
+    r#"
+from typing import Generic, Self, TypeVar
+
+X = TypeVar("X")
+Y1 = TypeVar("Y1")
+Y2 = TypeVar("Y2", default=Y1) # default value is important here
+
+class A(Generic[X]):
+    pass
+
+class B(A[Y1 | Y2], Generic[Y1, Y2]):
+    def __new__(cls, A: A[Y1], B: A[Y2]) -> Self: ...
+    "#,
 );

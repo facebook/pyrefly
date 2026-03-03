@@ -9,6 +9,7 @@ use std::fmt::Debug;
 use std::mem;
 
 use dupe::Dupe;
+use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_util::lock::Mutex;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -136,6 +137,22 @@ impl ErrorCollector {
         }
         let err = Error::new(self.module_info.dupe(), range, msg, kind);
         self.errors.lock().push(err);
+    }
+
+    pub fn internal_error(&self, range: TextRange, mut msg: Vec1<String>) {
+        msg.push(
+            "Sorry, Pyrefly encountered an internal error, this is always a bug in Pyrefly itself"
+                .to_owned(),
+        );
+        if cfg!(fbcode_build) {
+            msg.push("Please report the bug at https://fb.workplace.com/groups/pyreqa".to_owned());
+        } else {
+            msg.push(
+                "Please report the bug at https://github.com/facebook/pyrefly/issues/new"
+                    .to_owned(),
+            );
+        }
+        self.add(range, ErrorInfo::Kind(ErrorKind::InternalError), msg);
     }
 
     pub fn module(&self) -> &ModuleInfo {

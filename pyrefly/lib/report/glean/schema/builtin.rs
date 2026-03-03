@@ -16,9 +16,10 @@ use serde_json::Value;
 use serde_repr::*;
 
 use crate::report::glean::schema::*;
+use crate::report::glean::facts::GleanPredicate;
 // Schema version
 pub const VERSION: i64 = 1;
-pub const SCHEMA_ID: &str = "b7943ae76a8e6adb45598859f7c7b073";
+pub const SCHEMA_ID: &str = "835e529061f1429222e801fbfe85f209";
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Unit {}

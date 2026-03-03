@@ -80,7 +80,7 @@
         "key": {
           "callee": {
             "id": 0,
-            "key": "os.path.exists"
+            "key": "genericpath.exists"
           },
           "caller": {
             "id": 0,
@@ -772,6 +772,16 @@
                           },
                           "target": {
                             "id": 0,
+                            "key": "imports.List"
+                          }
+                        },
+                        {
+                          "source": {
+                            "length": 4,
+                            "start": 0
+                          },
+                          "target": {
+                            "id": 0,
                             "key": "typing.List"
                           }
                         }
@@ -1001,6 +1011,16 @@
                       "target": {
                         "id": 0,
                         "key": "str"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 4,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "imports.List"
                       }
                     },
                     {
@@ -1248,6 +1268,25 @@
           },
           "spans": [
             {
+              "length": 11,
+              "start": 310
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "imports.hello_world"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "imports.py"
+          },
+          "spans": [
+            {
               "length": 13,
               "start": 333
             }
@@ -1282,6 +1321,25 @@
           "target": {
             "id": 0,
             "key": "os"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "imports.py"
+          },
+          "spans": [
+            {
+              "length": 2,
+              "start": 214
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "imports.os"
           }
         }
       },
@@ -1343,6 +1401,44 @@
           "target": {
             "id": 0,
             "key": "typing.List"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "imports.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 109
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "imports.List"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "imports.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 217
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "imports.os.path"
           }
         }
       },
@@ -1456,7 +1552,7 @@
           ],
           "target": {
             "id": 0,
-            "key": "os.path.exists"
+            "key": "genericpath.exists"
           }
         }
       },
@@ -1469,8 +1565,8 @@
           },
           "spans": [
             {
-              "length": 7,
-              "start": 39
+              "length": 6,
+              "start": 40
             }
           ],
           "target": {
@@ -1499,6 +1595,16 @@
               },
               "target": {
                 "id": 0,
+                "key": "imports.hello_world"
+              }
+            },
+            {
+              "source": {
+                "length": 11,
+                "start": 310
+              },
+              "target": {
+                "id": 0,
                 "key": "simple.hello_world"
               }
             },
@@ -1520,6 +1626,16 @@
               "target": {
                 "id": 0,
                 "key": "imports.process_files"
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 214
+              },
+              "target": {
+                "id": 0,
+                "key": "imports.os"
               }
             },
             {
@@ -1579,7 +1695,27 @@
               },
               "target": {
                 "id": 0,
+                "key": "imports.List"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 109
+              },
+              "target": {
+                "id": 0,
                 "key": "typing.List"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 217
+              },
+              "target": {
+                "id": 0,
+                "key": "imports.os.path"
               }
             },
             {
@@ -1649,13 +1785,13 @@
               },
               "target": {
                 "id": 0,
-                "key": "os.path.exists"
+                "key": "genericpath.exists"
               }
             },
             {
               "source": {
-                "length": 7,
-                "start": 39
+                "length": 6,
+                "start": 40
               },
               "target": {
                 "id": 0,
@@ -2035,6 +2171,22 @@
         "id": 0,
         "key": {
           "id": 0,
+          "key": "simple"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "simple"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
           "key": "simple.hello_world"
         },
         "value": {
@@ -2052,6 +2204,22 @@
                   "key": "simple"
                 }
               }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "typing"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "typing"
             }
           }
         }
@@ -2099,6 +2267,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "b7943ae76a8e6adb45598859f7c7b073"
+    "schema_id": "835e529061f1429222e801fbfe85f209"
   }
 ]

@@ -35,6 +35,7 @@ use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::BoundMethodType;
@@ -73,6 +74,7 @@ use starlark_map::small_set::SmallSet;
 use crate::alt::answers::Answers;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::binding::binding::ClassFieldDefinition;
+use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassSynthesizedFields;
@@ -87,6 +89,7 @@ use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
+use crate::types::display::LspDisplayMode;
 use crate::types::display::TypeDisplayContext;
 
 const REPR: Name = Name::new_static("__repr__");
@@ -279,6 +282,7 @@ fn type_to_string(ty: &Type) -> String {
     let mut ctx = TypeDisplayContext::new(&[ty]);
     ctx.always_display_module_name();
     ctx.always_display_expanded_unions();
+    ctx.set_lsp_display_mode(LspDisplayMode::Query);
     if is_static_method(ty) {
         format!("typing.StaticMethod[{}]", ctx.display(ty))
     } else if let Some(bound) = bound_of_type_var(ty) {
@@ -709,12 +713,14 @@ impl<'a> CalleesWithLocation<'a> {
         fallback_name: &str,
         callee_from_ancestor: F,
     ) -> Vec<Callee> {
-        let call_target = self.transaction.ad_hoc_solve(&self.handle, |solver| {
-            let mro = solver.get_mro_for_class(c);
-            iter::once(c)
-                .chain(mro.ancestors(solver.stdlib).map(|x| x.class_object()))
-                .find_map(|c| callee_from_ancestor(&solver, c))
-        });
+        let call_target = self
+            .transaction
+            .ad_hoc_solve(&self.handle, "query_mro", |solver| {
+                let mro = solver.get_mro_for_class(c);
+                iter::once(c)
+                    .chain(mro.ancestors(solver.stdlib).map(|x| x.class_object()))
+                    .find_map(|c| callee_from_ancestor(&solver, c))
+            });
         let class_name = Self::qname_to_string(c.qname());
         let target = if let Some(Some(t)) = call_target {
             t
@@ -895,9 +901,10 @@ impl<'a> CalleesWithLocation<'a> {
                     vec![self.callee_from_function(func, call_target, call_arguments)]
                 }
                 Forallable::Callable(_) => self.for_callable(callee_range),
-                Forallable::TypeAlias(t) => {
+                Forallable::TypeAlias(TypeAliasData::Value(t)) => {
                     self.callee_from_type(&t.as_type(), call_target, callee_range, call_arguments)
                 }
+                Forallable::TypeAlias(TypeAliasData::Ref(_)) => vec![],
             },
             Type::SelfType(c) | Type::ClassType(c) => {
                 self.callee_from_mro(c.class_object(), "__call__", |_solver, c| {
@@ -910,9 +917,10 @@ impl<'a> CalleesWithLocation<'a> {
             }
             Type::Any(_) => vec![],
             Type::Literal(_) => vec![],
-            Type::TypeAlias(t) => {
+            Type::TypeAlias(box TypeAliasData::Value(t)) => {
                 self.callee_from_type(&t.as_type(), call_target, callee_range, call_arguments)
             }
+            Type::TypeAlias(box TypeAliasData::Ref(_)) => vec![],
             _ => panic!(
                 "unexpected type at [{}]: {ty:?}",
                 self.module_info.display_range(callee_range)
@@ -1021,7 +1029,7 @@ impl Query {
                 Type::ClassType(c)
                     if c.name() == "classproperty" || c.name() == "cached_classproperty" =>
                 {
-                    let result_ty = c.targs().as_slice().get(1).unwrap();
+                    let result_ty = c.targs().as_slice().first().unwrap();
                     (Some(String::from("property")), result_ty)
                 }
                 _ => (None, ty),
@@ -1034,7 +1042,6 @@ impl Query {
             let res = cd
                 .fields()
                 .filter_map(|n| {
-                    let range = cd.field_decl_range(n)?;
                     let class_field_index = KeyClassField(cd.index(), n.clone());
                     let class_field_idx =
                         bindings.key_to_idx_hashed_opt(Hashed::new(&class_field_index))?;
@@ -1044,15 +1051,42 @@ impl Query {
                             Some(*annotation)
                         }
                         ClassFieldDefinition::AssignedInBody { annotation, .. } => *annotation,
-                        ClassFieldDefinition::DefinedInMethod { annotation, .. } => *annotation,
                         _ => None,
                     }
                     .and_then(|idx| answers.get_idx(idx))
                     .map(|f| f.annotation.is_final())
                     .unwrap_or(false);
 
-                    let field_ty = transaction.get_type_at(&handle, range.start())?;
+                    // Get field type efficiently (avoids expensive position-based lookup)
+                    // Priority: annotation type > expression type trace > ClassField.ty()
+                    let field_ty = match &class_field.definition {
+                        ClassFieldDefinition::AssignedInBody {
+                            value,
+                            annotation,
+                            alias_of: _,
+                        }
+                        | ClassFieldDefinition::DefinedInMethod {
+                            value, annotation, ..
+                        } => {
+                            annotation
+                                .and_then(|idx| answers.get_idx(idx))
+                                .and_then(|a| a.annotation.ty.clone())
+                                // Fall back to expression type trace
+                                .or_else(|| {
+                                    if let ExprOrBinding::Expr(expr) = value.as_ref() {
+                                        answers.get_type_trace(expr.range())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                // Final fallback: ClassField.ty()
+                                .or_else(|| answers.get_idx(class_field_idx).map(|cf| cf.ty()))
+                        }
+                        _ => answers.get_idx(class_field_idx).map(|cf| cf.ty()),
+                    };
+                    let field_ty = field_ty?;
                     let (kind, field_ty) = get_kind_and_field_type(&field_ty);
+
                     Some(Attribute {
                         name: n.to_string(),
                         kind,
@@ -1326,7 +1360,9 @@ impl Query {
                 let t = self.state.transaction();
                 let h = self.make_handle(name, ModulePath::filesystem(path));
                 let result = t
-                    .ad_hoc_solve(&h, |solver| solver.is_subset_eq(&sub_ty, &super_ty))
+                    .ad_hoc_solve(&h, "query_is_subset_eq", |solver| {
+                        solver.is_subset_eq(&sub_ty, &super_ty)
+                    })
                     .unwrap_or(false);
                 return Ok(result);
             }
@@ -1379,7 +1415,7 @@ impl Query {
         let result = if is_typed_dict_request {
             matches!(sub_ty, Type::TypedDict(_) | Type::PartialTypedDict(_))
         } else {
-            t.ad_hoc_solve(&h, |solver| {
+            t.ad_hoc_solve(&h, "query_is_subset_eq", |solver| {
                 solver.is_subset_eq(&sub_ty, &super_ty_opt.unwrap())
             })
             .unwrap_or(false)

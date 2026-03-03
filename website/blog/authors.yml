@@ -6,6 +6,10 @@ abbym:
   name: Abby Mitchell
   url: https://github.com/javabster
 
+yangdanny:
+  name: Danny Yang
+  url: https://github.com/yangdanny97
+
 kylei:
   name: Kyle Into
   url: https://www.kylei.dev/
@@ -21,6 +25,14 @@ zeinam:
 rebeccachen:
   name: Rebecca Chen
   url: https://github.com/rchen152
+
+johnvs:
+  name: John Van Schultz
+  url: https://github.com/jvansch1
+
+jiachen:
+  name: Jia Chen
+  url: https://github.com/grievejia
 
 pyreflyteam:
   name: Pyrefly Team

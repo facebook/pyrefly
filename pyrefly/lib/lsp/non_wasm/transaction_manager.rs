@@ -33,8 +33,7 @@ impl<'a> TransactionManager<'a> {
     ) -> Result<CommittingTransaction<'a>, Transaction<'a>> {
         // If there is no ongoing recheck due to on-disk changes, we should prefer to commit
         // the in-memory changes into the main state.
-        if let Some(transaction) = state.try_new_committable_transaction(Require::indexing(), None)
-        {
+        if let Some(transaction) = state.try_new_committable_transaction(Require::Exports, None) {
             // If we can commit in-memory changes, then there is no point of holding the
             // non-committable transaction with a possibly outdated view of the `ReadableState`
             // so we can destroy the saved state.
@@ -62,7 +61,11 @@ impl<'a> TransactionManager<'a> {
         self.saved_state
             .take()
             .and_then(|saved_state| saved_state.restore())
-            .unwrap_or_else(|| state.transaction())
+            .unwrap_or_else(|| {
+                let mut t = state.transaction();
+                t.set_fresh();
+                t
+            })
     }
 
     /// This function should be called once we finished using transaction for an LSP request.

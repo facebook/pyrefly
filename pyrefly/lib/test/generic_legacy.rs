@@ -205,7 +205,7 @@ class B(Generic[*Ts, *Ts]):  # E: Duplicated type parameter declaration
 class C(Generic[P, P]):  # E: Duplicated type parameter declaration
     pass
 
-class D(Protocol[T, T]):  # E: Duplicated type parameter declaration
+class D(Protocol[T, T]):  # E: Duplicated type parameter declaration  # E: Type variable `T` in class `D` is declared as invariant, but could be covariant based on its usage
     pass
 class E(Protocol[*Ts, *Ts]):  # E: Duplicated type parameter declaration
     pass
@@ -454,6 +454,84 @@ def f9(c1: C[int, str], c2: C[str]):
     "#,
 );
 
+// WYSIWYG display tests for issue #2461:
+// When generic type params have defaults, display should omit trailing
+// args that match their defaults.
+
+testcase!(
+    test_wysiwyg_bare_generic_all_defaults,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T', default=int)
+U = TypeVar('U', default=str)
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass) -> None:
+    reveal_type(x)  # E: revealed type: MyClass
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_partial_generic_one_default,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T')
+U = TypeVar('U', default=int)
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass[float]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass[float]
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_fully_specified_generic,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T', default=int)
+U = TypeVar('U', default=str)
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass[float, bool]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass[float, bool]
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_no_defaults_shows_all,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T')
+U = TypeVar('U')
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass[int, str]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass[int, str]
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_middle_default_not_stripped,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T')
+U = TypeVar('U', default=int)
+V = TypeVar('V')
+class MyClass(Generic[T, U, V]):  # E: Type parameter `V` without a default cannot follow type parameter `U` with a default
+    ...
+def f(x: MyClass[str, int, bool]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass[str, int, bool]
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_explicit_args_match_defaults,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T', default=int)
+U = TypeVar('U', default=str)
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass[int, str]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass
+    "#,
+);
+
 testcase!(
     test_bad_default_order,
     r#"
@@ -590,17 +668,16 @@ class C(typing.Generic[T]):
 );
 
 testcase!(
-    bug = "We should error on out-of-scope typevars",
     test_out_of_scope_old_typevar,
     r#"
 from typing import Any, Callable, TypeVar
 T = TypeVar('T')
 def f() -> Any: ...
 def g():
-    x: T = f()  # this should be an error
+    x: T = f()  # E: Type variable `T` is not in scope
 def h() -> Callable[[T], T]:
-    # This should be an error. Note that we treat `[T]() -> ((T) -> T)` as `() -> ([T](T) -> T)`,
-    # which makes `T` out-of-scope in the body.
+    # T appears in the return type, so LegacyTParamCollector treats it as
+    # a type parameter of h. This matches pyright's behavior.
     x: T = f()
     return lambda x: x
     "#,
@@ -657,12 +734,11 @@ x2: str = f("hello")
 );
 
 testcase!(
-    bug = "TODO: We should raise an error on list[T] because T is unbounded",
     test_unbounded_typevar,
     r#"
 from typing import TypeVar
 T = TypeVar("T")
-x: list[T]
+x: list[T]  # E: Type variable `T` is not in scope
     "#,
 );
 
@@ -802,7 +878,7 @@ import foo
 # lose track of the `foo.T` one. It probably doesn't matter very much since we at least
 # understand the signature correctly.
 def f(x: foo.T, y: foo.C) -> foo.T:
-    z: foo.T = x  # E: `T` is not assignable to `TypeVar[T]`
+    z: foo.T = x  # E: Type variable `T` is not in scope  # E: `T` is not assignable to `TypeVar[T]`
     return z  # E: Returned type `TypeVar[T]` is not assignable to declared return type `T
 assert_type(f(1, foo.C()), int)
 
@@ -810,7 +886,7 @@ assert_type(f(1, foo.C()), int)
 # about the type variable identity for the entire class body, so the signatures come out
 # wrong.
 class MyList(Generic[foo.T], list[tuple[foo.C, foo.T]]):
-    def my_append(self, c: foo.C, t: foo.T):
+    def my_append(self, c: foo.C, t: foo.T):  # E: Type variable `T` is not in scope
         self.append((c, t))  # E: Argument `tuple[C, TypeVar[T]]` is not assignable to parameter `object` with type `tuple[C, T]` in function `list.append`
 my_list: MyList[int] = MyList()
 my_list.my_append(foo.C(), 5)  # E: Argument `Literal[5]` is not assignable to parameter `t` with type `TypeVar[T]` in function `MyList.my_append`

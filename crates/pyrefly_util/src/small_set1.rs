@@ -66,6 +66,16 @@ impl<T> SmallSet1<T> {
             SmallSet1Inner::Set(set) => set.iter().next().unwrap(),
         }
     }
+    /// Check if the set contains the given element.
+    pub fn contains(&self, x: &T) -> bool
+    where
+        T: Hash + Eq,
+    {
+        match &self.0 {
+            SmallSet1Inner::One(item) => item == x,
+            SmallSet1Inner::Set(set) => set.contains(x),
+        }
+    }
 }
 
 impl<'a, T> IntoIterator for &'a SmallSet1<T> {

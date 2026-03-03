@@ -215,10 +215,11 @@ class Derived(Base):
 testcase!(
     test_override_parameter_kinds,
     r#"
-from typing import assert_type, override
+from typing import assert_type, override, Any
 
 class Base:
     def g(self, /, x: int, *args: str, y: bool, **kwargs: float) -> None: ...
+    def method(self, a: int, /, *args: Any, k: str, **kwargs: Any) -> None: ...
 
 class Derived(Base):
     @override
@@ -227,6 +228,76 @@ class Derived(Base):
         assert_type(args, tuple[str, ...])
         assert_type(y, bool)
         assert_type(kwargs, dict[str, float])
+    @override
+    def method(self, a: float, /, b: int, *, k: str, m: str) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_basic,
+    r#"
+from typing import override, Any
+
+class GradualBase:
+    def method1(self, a: int, /, *args: Any, k: int, **kwargs: Any) -> None: ...
+
+class Child(GradualBase):
+    @override
+    def method1(self) -> None: ...
+
+class Base:
+    def method1(self) -> None: ...
+
+class GradualChild(Base):
+    @override
+    def method1(self, a: int, /, *args: Any, k: int, **kwargs: Any) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_abstract,
+    r#"
+from abc import ABC, abstractmethod
+from typing import Any
+
+class Processor(ABC):
+    @abstractmethod
+    def process(self, *args: Any, **kwargs: Any) -> Any:
+        pass
+
+class ConcreteProcessor(Processor):
+    def process(self, data: str, count: int = 1) -> str:
+        return data * count
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_parent_overload,
+    r#"
+from argparse import ArgumentParser as BaseArgumentParser
+from typing import Any
+
+class ArgumentParser(BaseArgumentParser):
+    def add_subparsers(self, *args: Any, **kwargs: Any):
+        return super().add_subparsers(*args, **kwargs)
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_child_overload,
+    r#"
+from typing import overload, Any
+class Base:
+    def test(self, *args: Any, **kwargs: Any):
+        pass
+
+class Child(Base):
+    @overload
+    def test(self, x: int): pass
+    @overload
+    def test(self, x: str): pass
+    def test(self, x):
+        pass
     "#,
 );
 
@@ -720,7 +791,7 @@ class A:
     def f(self, x: TA1):
         pass
 class B(A):
-    def f(self, x: TA2):  # E: `B.f` has type `BoundMethod[B, (self: B, x: TA2) -> None]`, which is not assignable to `BoundMethod[B, (self: B, x: TA1) -> None]`, the type of `A.f`
+    def f(self, x: TA2):  # E: `B.f` has type `(self: B, x: TA2) -> None`, which is not assignable to `(self: B, x: TA1) -> None`, the type of `A.f`
         pass
     "#,
 );
@@ -736,7 +807,7 @@ class Foo:
 class Bar(Foo):
     x = 1
 
-assert_type(Bar.x, Any | None)
+assert_type(Bar.x, int)
 assert_type(Foo.x, Any | None)
 def test(x: type[Foo]):
     assert_type(x.x, Any | None)
@@ -755,6 +826,22 @@ class Child1(Parent):
 
 class Child2(Parent):
     y = "hello"
+    "#,
+);
+
+testcase!(
+    test_unannotated_empty_tuple_attribute_override,
+    r#"
+from typing import Any, Literal, assert_type
+
+class Foo:
+    x = ()
+
+class Bar(Foo):
+    x = ("feature_x",)
+
+assert_type(Foo.x, tuple[Any, ...])
+assert_type(Bar.x, tuple[Literal['feature_x']])
     "#,
 );
 
@@ -879,7 +966,7 @@ class A:
 class B(A):
     x = 1
 def f(b: B):
-    assert_type(b.x, int | None)
+    assert_type(b.x, int)
     "#,
 );
 
@@ -906,13 +993,37 @@ class D(C):
     x = [B()]
 
 def f(d: D):
-    assert_type(d.x, list[A])
+    assert_type(d.x, list[B])
+    "#,
+);
+
+testcase!(
+    test_class_variable_override_with_subclass,
+    r#"
+class Request:
+    @classmethod
+    def make(cls) -> "Request":
+        return cls()
+
+class FormRequest(Request):
+    @classmethod
+    def from_response(cls) -> "FormRequest":
+        return cls()
+
+class BaseTest:
+    request_class = Request
+
+class MyTest(BaseTest):
+    request_class = FormRequest
+
+    def test(self) -> None:
+        self.request_class.from_response()
     "#,
 );
 
 // Tests for MissingOverrideDecorator (strict override enforcement)
 testcase!(
-    test_missing_override_decorator,
+    test_missing_override_decorator_method,
     TestEnv::new().enable_missing_override_decorator_error(),
     r#"
 class Base:
@@ -1000,7 +1111,7 @@ class Base:
     x: int
 
 class Derived(Base):
-    x: int  # E: Class member `Derived.x` overrides a member in a parent class but is missing an `@override` decorator
+    x: int
     "#,
 );
 
@@ -1041,5 +1152,119 @@ class Base:
 
 class Derived(Base):
     def __str__(self) -> str: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_instance_attribute,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class A:
+    def __init__(self):
+        self.a = 1
+
+class B(A):
+    def __init__(self):
+        self.a = 2  # OK - instance attribute, not a method override
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_nested_class,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+# Nested classes cannot have the @override decorator applied to them.
+class A:
+    class C: pass
+
+class B(A):
+    class C(A.C): pass  # OK - nested class, @override cannot be applied
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_classvar,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import ClassVar
+
+# ClassVars cannot have the @override decorator applied to them.
+class A:
+    x: ClassVar[int]
+
+class B(A):
+    x: ClassVar[int]  # OK - ClassVar, @override cannot be applied
+    "#,
+);
+
+testcase!(
+    test_raise_not_implemented_infers_never_but_allows_override,
+    r#"
+from typing import Never, assert_type
+
+class A:
+    def foo(self):
+        raise NotImplementedError()
+
+assert_type(A().foo(), Never)
+
+class B(A):
+    def foo(self) -> int:
+        return 1
+"#,
+);
+
+testcase!(
+    test_explicit_never_annotation_allows_override,
+    r#"
+from typing import Never, assert_type
+
+class A:
+    def foo(self) -> Never:
+        raise NotImplementedError()
+
+assert_type(A().foo(), Never)
+
+class B(A):
+    def foo(self) -> int:
+        return 1
+    "#,
+);
+
+testcase!(
+    test_bad_parameter_override_with_never_return,
+    r#"
+class A:
+    def f(self, x: int):
+        raise NotImplementedError()
+class B(A):
+    def f(self, x: str):  # E: overrides parent class `A` in an inconsistent manner
+        return 1
+    "#,
+);
+
+testcase!(
+    test_callable_returning_never_checked_for_override_consistency,
+    r#"
+from typing import Any, Callable, Never, assert_type
+
+class A:
+    f: Callable[[Any], Never]
+
+class B(A):
+    f: Callable[[Any], int]  # E: overrides parent class `A` in an inconsistent manner
+    "#,
+);
+
+testcase!(
+    test_override_method_without_self,
+    r#"
+class A:
+    def foo() -> int:
+        return 42
+
+class B(A):
+    def foo() -> int:
+        return 100
     "#,
 );

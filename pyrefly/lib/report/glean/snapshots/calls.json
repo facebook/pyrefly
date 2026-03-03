@@ -501,6 +501,25 @@
             "key": "dataclasses.dataclass"
           }
         }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "calls.py"
+          },
+          "spans": [
+            {
+              "length": 9,
+              "start": 35
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "calls.dataclass"
+          }
+        }
       }
     ],
     "predicate": "python.XRefsViaNameByTarget.4"
@@ -563,6 +582,16 @@
               "target": {
                 "id": 0,
                 "key": "dataclasses.dataclass"
+              }
+            },
+            {
+              "source": {
+                "length": 9,
+                "start": 35
+              },
+              "target": {
+                "id": 0,
+                "key": "calls.dataclass"
               }
             },
             {
@@ -669,6 +698,22 @@
         "id": 0,
         "key": {
           "id": 0,
+          "key": "dataclasses"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "dataclasses"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
           "key": "dataclasses.dataclass"
         },
         "value": {
@@ -708,6 +753,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "b7943ae76a8e6adb45598859f7c7b073"
+    "schema_id": "835e529061f1429222e801fbfe85f209"
   }
 ]

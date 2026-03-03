@@ -216,6 +216,20 @@ def use2(mapping: dict[str, int | None]) -> None:
 );
 
 testcase!(
+    test_dict_contains_literal_key_get_narrow,
+    r#"
+from typing import assert_type
+
+def use(options: dict[str, str]) -> None:
+    if "contains" in options:
+        assert_type(options.get("contains"), str)
+        assert_type(options["contains"], str)
+    else:
+        assert_type(options.get("contains"), str | None)
+"#,
+);
+
+testcase!(
     test_typeddict_get_literal_key_narrow,
     TestEnv::new().enable_not_required_key_access_error(),
     r#"
@@ -399,5 +413,127 @@ def use2(mapping: NotDict) -> None:
     else:
         assert_type(mapping.get("foo"), int | None)
         assert_type(mapping["foo"], int | None)
+"#,
+);
+
+// This test verifies behavior related to MAX_FLOW_NARROW_DEPTH in scope.rs.
+// By assigning to the same key repeatedly, we increment the narrow depth.
+// After exceeding the depth limit (100), the narrow chain is broken and we
+// fall back to the base type to prevent stack overflow during solving.
+testcase!(
+    test_many_consecutive_subscript_assigns,
+    r#"
+from typing import assert_type
+
+def test() -> None:
+    d: dict[str, int] = {}
+    d["k"] = 0
+    d["k"] = 1
+    d["k"] = 2
+    d["k"] = 3
+    d["k"] = 4
+    d["k"] = 5
+    d["k"] = 6
+    d["k"] = 7
+    d["k"] = 8
+    d["k"] = 9
+    d["k"] = 10
+    d["k"] = 11
+    d["k"] = 12
+    d["k"] = 13
+    d["k"] = 14
+    d["k"] = 15
+    d["k"] = 16
+    d["k"] = 17
+    d["k"] = 18
+    d["k"] = 19
+    d["k"] = 20
+    d["k"] = 21
+    d["k"] = 22
+    d["k"] = 23
+    d["k"] = 24
+    d["k"] = 25
+    d["k"] = 26
+    d["k"] = 27
+    d["k"] = 28
+    d["k"] = 29
+    d["k"] = 30
+    d["k"] = 31
+    d["k"] = 32
+    d["k"] = 33
+    d["k"] = 34
+    d["k"] = 35
+    d["k"] = 36
+    d["k"] = 37
+    d["k"] = 38
+    d["k"] = 39
+    d["k"] = 40
+    d["k"] = 41
+    d["k"] = 42
+    d["k"] = 43
+    d["k"] = 44
+    d["k"] = 45
+    d["k"] = 46
+    d["k"] = 47
+    d["k"] = 48
+    d["k"] = 49
+    d["k"] = 50
+    d["k"] = 51
+    d["k"] = 52
+    d["k"] = 53
+    d["k"] = 54
+    d["k"] = 55
+    d["k"] = 56
+    d["k"] = 57
+    d["k"] = 58
+    d["k"] = 59
+    d["k"] = 60
+    d["k"] = 61
+    d["k"] = 62
+    d["k"] = 63
+    d["k"] = 64
+    d["k"] = 65
+    d["k"] = 66
+    d["k"] = 67
+    d["k"] = 68
+    d["k"] = 69
+    d["k"] = 70
+    d["k"] = 71
+    d["k"] = 72
+    d["k"] = 73
+    d["k"] = 74
+    d["k"] = 75
+    d["k"] = 76
+    d["k"] = 77
+    d["k"] = 78
+    d["k"] = 79
+    d["k"] = 80
+    d["k"] = 81
+    d["k"] = 82
+    d["k"] = 83
+    d["k"] = 84
+    d["k"] = 85
+    d["k"] = 86
+    d["k"] = 87
+    d["k"] = 88
+    d["k"] = 89
+    d["k"] = 90
+    d["k"] = 91
+    d["k"] = 92
+    d["k"] = 93
+    d["k"] = 94
+    d["k"] = 95
+    d["k"] = 96
+    d["k"] = 97
+    d["k"] = 98
+    d["k"] = 99
+    d["k"] = 100
+    d["k"] = 101
+    d["k"] = 102
+    d["k"] = 103
+    d["k"] = 104
+    # After 105 assignments, the narrow depth limit (100) is exceeded and we
+    # fall back to `int` instead of tracking the literal value.
+    assert_type(d["k"], int)
 "#,
 );

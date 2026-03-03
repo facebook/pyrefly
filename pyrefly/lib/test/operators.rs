@@ -227,6 +227,24 @@ def f(x: int, y: str | Literal[False]):
 "#,
 );
 
+// Regression test: generic function calls in `and` expressions should not
+// have the narrowed type from earlier branches used as a hint for type variable
+// inference. The narrowing of `bool` to `Literal[False]` is for the result of
+// the `and` expression, not for contextual typing of later generic calls.
+testcase!(
+    test_boolop_generic_call_hint,
+    r#"
+def f[U](u: U) -> U:
+    return u
+
+def caller(x: bool, y: bool) -> int:
+    if f(x) and f(y):
+        return 1
+    else:
+        return 0
+"#,
+);
+
 testcase!(
     test_unary_not_unknown,
     r#"
@@ -462,6 +480,21 @@ a += B()  # E: `B` is not assignable to parameter `other` with type `Never` in f
 );
 
 testcase!(
+    test_iadd_ignores_getattr,
+    r#"
+from typing import assert_type
+class A:
+    def __add__(self, other: str) -> "A":
+        return self
+    def __getattr__(self, name: str) -> str:
+        return "x"
+a = A()
+a += "hi"
+assert_type(a, A)
+    "#,
+);
+
+testcase!(
     test_custom_eq,
     r#"
 from typing import assert_type
@@ -476,7 +509,7 @@ testcase!(
     test_in_generator,
     r#"
 'x' in (x for x in ['y'])
-42 in (x for x in ['y'])  # E: `in` is not supported between `Literal[42]` and `Generator[str, None, None]`
+42 in (x for x in ['y'])  # E: `in` is not supported between `Literal[42]` and `Generator[str]`
     "#,
 );
 
@@ -733,4 +766,20 @@ def test(a: A, b: B, c: C) -> None:
     a < b < c  # Should be OK: (a < b) and (b < c)
     a < c      # E: `<` is not supported between `A` and `C`
     "#,
+);
+
+testcase!(
+    test_bitor_unknown_operands,
+    r#"
+from typing import assert_type, Any
+
+def f(x: int): ...
+
+def test(x, y):
+    z = x | y
+    # When operands are unknown, the result should be Any, not type[Any]
+    assert_type(z, Any)
+    # This should not produce an error since z is Any
+    f(z)
+"#,
 );

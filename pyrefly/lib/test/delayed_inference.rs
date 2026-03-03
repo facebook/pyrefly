@@ -81,6 +81,17 @@ assert_type(x, list[Literal[4]])
 "#,
 );
 
+testcase!(
+    test_empty_list_append_pow,
+    r#"
+from typing import assert_type
+def f(a: int, b: int, c: int) -> None:
+    x = []
+    x.append(pow(a, b, c))
+    assert_type(x, list[int])
+"#,
+);
+
 // NOTE(grievejia): There's also an argument to be made that `y` should be inferred as
 // `list[int] | list[Any]`, and `e` inferred as `int | Any`. The test case here is to ensure
 // that if we ever want to take the alternative behavior, an explicit acknowledgement (of
@@ -329,5 +340,57 @@ from chained_first_use_with_inconsistent_pins import z
 assert_type(z, None)
 from chained_first_use_with_inconsistent_pins import x
 assert_type(x, list[Any])
+"#,
+);
+
+// Tests for partial type inference in loops.
+// These tests verify that first-use detection works correctly through phi nodes
+// when BoundName bindings are deferred until after AST traversal.
+
+testcase!(
+    test_partial_type_first_use_in_for_loop,
+    r#"
+from typing import assert_type
+x = []
+for i in range(5):
+    x.append(i)
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    test_partial_type_first_use_in_while_loop,
+    r#"
+from typing import assert_type
+x = []
+i = 0
+while i < 5:
+    x.append(i)
+    i += 1
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    test_partial_type_first_use_in_nested_loops,
+    r#"
+from typing import assert_type
+x = []
+for i in range(5):
+    for j in range(3):
+        x.append(i + j)
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    test_partial_type_secondary_read_in_loop,
+    r#"
+from typing import assert_type
+x = []
+for i in range(5):
+    x.append(i)
+    y = len(x)  # secondary read of x, doesn't reassign
+assert_type(x, list[int])
 "#,
 );

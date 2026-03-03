@@ -246,6 +246,21 @@ def f(b: bool) -> int:
 );
 
 testcase!(
+    test_return_never_unreachable,
+    r#"
+from typing import NoReturn
+
+def stop() -> NoReturn:
+    raise RuntimeError("stop")
+
+def f(x: int) -> int:
+    if x > 0:
+        return x
+    stop()
+"#,
+);
+
+testcase!(
     test_return_never_error_return,
     r#"
 def f(x: int): pass
@@ -432,5 +447,193 @@ testcase!(
 def test():
     return 1
     yield from [2, 3] # E: This `yield from` expression is unreachable
+"#,
+);
+
+testcase!(
+    test_no_missing_return_for_stubs,
+    r#"
+from typing import Protocol, overload
+from abc import abstractmethod
+
+class P(Protocol):
+    def f1(self) -> int:
+        """a"""
+    def f2(self) -> int:
+        """a"""
+        ...
+    def f3(self) -> int:
+        """a"""
+        pass
+    def f4(self) -> int:
+        """a"""
+        return NotImplemented
+    def f5(self) -> int:
+        """a"""
+        raise NotImplementedError()
+    def f6(self) -> int:
+        ...
+    def f7(self) -> int:
+        pass
+    def f8(self) -> int:
+        return NotImplemented
+    def f9(self) -> int:
+        raise NotImplementedError()
+
+class C:
+    def f1(self) -> int:  # E:
+        """a"""
+    def f2(self) -> int:
+        """a"""
+        ...  # OK - other type checkers do not permit this outside of stub files
+    def f3(self) -> int:  # E:
+        """a"""
+        pass
+    def f4(self) -> int:
+        """a"""
+        return NotImplemented  # OK
+    def f5(self) -> int:
+        """a"""
+        raise NotImplementedError()  # OK
+    def f6(self) -> int:
+        ...  # OK - other type checkers do not permit this outside of stub files
+    def f7(self) -> int:  # E:
+        pass
+    def f8(self) -> int:
+        return NotImplemented  # OK
+    def f9(self) -> int:
+        raise NotImplementedError()  # OK
+
+class AbstractC:
+    @abstractmethod
+    def f1(self) -> int:
+        """a"""
+    @abstractmethod
+    def f2(self) -> int:
+        """a"""
+        ...
+    @abstractmethod
+    def f3(self) -> int:
+        """a"""
+        pass
+    @abstractmethod
+    def f4(self) -> int:
+        """a"""
+        return NotImplemented
+    @abstractmethod
+    def f5(self) -> int:
+        """a"""
+        raise NotImplementedError()
+    @abstractmethod
+    def f6(self) -> int:
+        ...
+    @abstractmethod
+    def f7(self) -> int:
+        pass
+    @abstractmethod
+    def f8(self) -> int:
+        return NotImplemented
+    @abstractmethod
+    def f9(self) -> int:
+        raise NotImplementedError()
+
+class OverloadC:
+    @overload
+    def f(self) -> int:
+        """a"""
+    @overload
+    def f(self) -> int:
+        """a"""
+        ...
+    @overload
+    def f(self) -> int:
+        """a"""
+        pass
+    @overload
+    def f(self) -> int:
+        """a"""
+        return NotImplemented
+    @overload
+    def f(self) -> int:
+        """a"""
+        raise NotImplementedError()
+    @overload
+    def f(self) -> int:
+        ...
+    @overload
+    def f(self) -> int:
+        pass
+    @overload
+    def f(self) -> int:
+        return NotImplemented
+    @overload
+    def f(self) -> int:
+        raise NotImplementedError()
+    def f(self) -> int:
+        return 0
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2141
+// List concatenation with contextual return type hint should work
+testcase!(
+    test_return_list_concat_contextual_hint,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self, x: int) -> None: ...
+
+class A(Base):
+    def foo(self, x: int) -> None:
+        print(x)
+
+class B(Base):
+    def foo(self, x: int) -> None:
+        pass
+
+# This should type-check without error: the return type hint list[Base]
+# provides context for inferring [A()] + [B()] as list[Base].
+def return_object(name: str) -> list[Base]:
+    return [A()] + [B()]
+
+# Non-list-returning variant still works (for comparison)
+def return_object_non_list(name: str) -> Base:
+    o = None
+    if name == "a":
+        o = A()
+    else:
+        o = B()
+    return o
+"#,
+);
+
+testcase!(
+    test_infer_none_for_pruned_if_last_statement,
+    r#"
+from typing import assert_type
+
+def foo():
+    print(42)
+    if False:
+        print(1)
+
+assert_type(foo(), None)
+"#,
+);
+
+testcase!(
+    test_pruned_if_last_statement_no_bad_override,
+    r#"
+class A:
+    def foo(self):
+        print(42)
+        if False:
+            print(1)
+
+class B(A):
+    def foo(self):
+        print(3)
 "#,
 );

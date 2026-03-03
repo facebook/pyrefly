@@ -100,7 +100,7 @@ fn get_super_class_member(
 
     let super_class_member = context
         .transaction
-        .ad_hoc_solve(&context.handle, |solver| {
+        .ad_hoc_solve(&context.handle, "override_super_class_member", |solver| {
             solver.get_super_class_member(class, None, field_name)
         })
         .flatten()?;

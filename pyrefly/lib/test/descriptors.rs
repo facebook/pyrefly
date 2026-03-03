@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -53,8 +54,8 @@ class C:
     def foo(cls) -> int:
         return 42
 def f(c: C):
-    reveal_type(C.foo)  # E: revealed type: BoundMethod[type[C], (cls: type[C]) -> int]
-    reveal_type(c.foo)  # E: revealed type: BoundMethod[type[C], (cls: type[C]) -> int]
+    reveal_type(C.foo)  # E: revealed type: (cls: type[C]) -> int
+    reveal_type(c.foo)  # E: revealed type: (cls: type[C]) -> int
     "#,
 );
 
@@ -176,6 +177,23 @@ def f(c: C) -> None:
     "#,
 );
 
+testcase!(
+    bug = "cached_property's __name__ should not exist and attrname should be a str",
+    test_cached_property_attrname,
+    r#"
+from functools import cached_property
+from typing import reveal_type
+
+class C:
+    @cached_property
+    def foo(self) -> int:
+        return 42
+
+reveal_type(C.foo.__name__)  # E: revealed type: str
+reveal_type(C.foo.attrname)  # E: revealed type: Any
+    "#,
+);
+
 // Make sure we don't crash.
 testcase!(
     test_staticmethod_class,
@@ -198,6 +216,41 @@ assert_type(C.d, int)
 assert_type(C().d, int)
 C.d = 42  # E: `Literal[42]` is not assignable to attribute `d` with type `D`
 C().d = 42  # E:  Attribute `d` of class `C` is a read-only descriptor with no `__set__` and cannot be set
+    "#,
+);
+
+testcase!(
+    test_descriptor_dunder_call,
+    r#"
+from typing import assert_type
+class SomeCallable:
+    def __call__(self, x: int) -> str:
+        return "a"
+class Descriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> SomeCallable:
+        return SomeCallable()
+class B:
+    __call__: Descriptor = Descriptor()
+b_instance = B()
+assert_type(b_instance(1), str)
+    "#,
+);
+
+// Test that a descriptor-based __call__ returning the same class doesn't cause
+// infinite recursion when called through a type variable bound. The circular
+// __call__ resolution is a type error because it would cause infinite recursion at runtime.
+testcase!(
+    test_descriptor_dunder_call_self_referencing_via_typevar,
+    r#"
+from typing import TypeVar
+class SelfDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> "SelfCallable":
+        return SelfCallable()
+class SelfCallable:
+    __call__: SelfDescriptor = SelfDescriptor()
+T = TypeVar("T", bound=SelfCallable)
+def f(x: T) -> None:
+    x()  # E: `__call__` on `T` resolves back to the same type, creating infinite recursion at runtime
     "#,
 );
 
@@ -549,5 +602,47 @@ class A:
         self.a = MyDescriptor()
 
 assert_type(A().a, MyDescriptor)
+    "#,
+);
+
+fn sqlalchemy_mapped_env() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add(
+        "sqlalchemy.orm.base",
+        r#"
+class Mapped[T]:
+    def __get__(self, instance, owner) -> T: ...
+    def __set__(self, instance, value: T) -> None: ...
+    def __delete__(self, instance) -> None: ...
+    "#,
+    );
+    env.add_with_path(
+        "sqlalchemy.orm.decl_api",
+        "sqlalchemy/orm/decl_api.py",
+        "class DeclarativeBase: ...",
+    );
+    env.add_with_path(
+        "sqlalchemy.orm",
+        "sqlalchemy/orm/__init__.py",
+        r#"
+from .base import Mapped as Mapped
+from .decl_api import DeclarativeBase as DeclarativeBase
+    "#,
+    );
+    env.add_with_path("sqlalchemy", "sqlalchemy/__init__.py", "");
+    env
+}
+
+testcase!(
+    test_sqlalchemy_mapped_is_always_descriptor,
+    sqlalchemy_mapped_env(),
+    r#"
+from sqlalchemy.orm import DeclarativeBase, Mapped
+class Base(DeclarativeBase):
+    pass
+class User(Base):
+    name: Mapped[str]
+    def __init__(self, name: str):
+        self.name = name
     "#,
 );
