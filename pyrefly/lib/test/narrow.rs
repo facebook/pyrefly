@@ -1233,6 +1233,19 @@ def f(x:  A | B | C, y: A | C):
 );
 
 testcase!(
+    test_assertion_function_narrows_argument,
+    r#"
+from typing import assert_type
+def assert_int(x: object):
+    assert isinstance(x, int)
+
+def f(x: object):
+    assert_int(x)
+    assert_type(x, int)
+    "#,
+);
+
+testcase!(
     test_narrow_and,
     r#"
 from typing import assert_type

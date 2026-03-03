@@ -32,6 +32,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
@@ -61,6 +62,9 @@ use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
+use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::NarrowOp;
+use crate::binding::narrow::NarrowOps;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
@@ -522,6 +526,52 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    fn assertion_narrows_for_body(
+        &self,
+        parameters: &Parameters,
+        body_no_docstring: &[Stmt],
+    ) -> Option<NarrowOps> {
+        let [Stmt::Assert(assert_stmt)] = body_no_docstring else {
+            return None;
+        };
+        let narrow_ops = NarrowOps::from_expr(self, Some(&assert_stmt.test));
+        if narrow_ops.0.is_empty() {
+            return None;
+        }
+        let mut param_names = SmallSet::new();
+        for param in parameters.posonlyargs.iter() {
+            param_names.insert(param.name().id.clone());
+        }
+        for param in parameters.args.iter() {
+            param_names.insert(param.name().id.clone());
+        }
+        for param in parameters.kwonlyargs.iter() {
+            param_names.insert(param.name().id.clone());
+        }
+        if let Some(vararg) = &parameters.vararg {
+            param_names.insert(vararg.name.id.clone());
+        }
+        if let Some(kwarg) = &parameters.kwarg {
+            param_names.insert(kwarg.name.id.clone());
+        }
+        for (name, (op, _)) in narrow_ops.0.iter() {
+            if !param_names.contains(name) {
+                return None;
+            }
+            if !Self::assertion_narrow_op_supported(op) {
+                return None;
+            }
+        }
+        Some(narrow_ops)
+    }
+
+    fn assertion_narrow_op_supported(op: &NarrowOp) -> bool {
+        match op {
+            NarrowOp::Atomic(None, AtomicNarrowOp::Call(..)) => true,
+            NarrowOp::Atomic(_, _) | NarrowOp::And(_) | NarrowOp::Or(_) => false,
+        }
+    }
+
     fn function_body(
         &mut self,
         parameters: &mut Box<Parameters>,
@@ -534,7 +584,11 @@ impl<'a> BindingsBuilder<'a> {
         parent: &NestingContext,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
-    ) -> (FunctionStubOrImpl, Option<SelfAssignments>) {
+    ) -> (
+        FunctionStubOrImpl,
+        Option<SelfAssignments>,
+        Option<NarrowOps>,
+    ) {
         // If the first statement in the body is a docstring, remove it
         let body_no_docstring = if let Some(s) = body.first()
             && is_docstring(s)
@@ -582,6 +636,14 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             FunctionStubOrImpl::Impl
         };
+        let skip_body_checks = decorators.has_no_type_check
+            || (self.untyped_def_behavior == UntypedDefBehavior::SkipAndInferReturnAny
+                && !is_annotated(&return_ann_with_range, parameters));
+        let assertion_narrows = if stub_or_impl == FunctionStubOrImpl::Impl && !skip_body_checks {
+            self.assertion_narrows_for_body(parameters, body_no_docstring)
+        } else {
+            None
+        };
         let should_report_unused_parameters = stub_or_impl == FunctionStubOrImpl::Impl
             && !body_is_trivial
             && !body_is_not_implemented
@@ -598,10 +660,7 @@ impl<'a> BindingsBuilder<'a> {
             MethodSelfKind::Instance
         };
 
-        let self_assignments = if decorators.has_no_type_check
-            || (self.untyped_def_behavior == UntypedDefBehavior::SkipAndInferReturnAny
-                && !is_annotated(&return_ann_with_range, parameters))
-        {
+        let self_assignments = if skip_body_checks {
             self.mark_as_returns_any(func_name);
             self.unchecked_function_body_scope(
                 parameters,
@@ -704,7 +763,7 @@ impl<'a> BindingsBuilder<'a> {
             }
         };
 
-        (stub_or_impl, self_assignments)
+        (stub_or_impl, self_assignments, assertion_narrows)
     }
 
     pub fn function_def(&mut self, mut x: StmtFunctionDef, parent: &NestingContext) {
@@ -738,7 +797,7 @@ impl<'a> BindingsBuilder<'a> {
         let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
-        let (stub_or_impl, self_assignments) = self.function_body(
+        let (stub_or_impl, self_assignments, assertion_narrows) = self.function_body(
             &mut x.parameters,
             mem::take(&mut x.body),
             &decorators,
@@ -750,6 +809,9 @@ impl<'a> BindingsBuilder<'a> {
             undecorated_idx,
             class_key,
         );
+        if let Some(assertion_narrows) = assertion_narrows {
+            self.register_assertion_narrows(undecorated_idx, assertion_narrows);
+        }
 
         // Pop the annotation scope to get back to the parent scope, and handle this
         // case where we need to track assignments to `self` from methods.

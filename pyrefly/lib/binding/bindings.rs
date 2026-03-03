@@ -31,6 +31,7 @@ use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Parameter;
+use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::TypeParam;
 use ruff_python_ast::TypeParams;
@@ -248,6 +249,8 @@ pub struct BindingsBuilder<'a> {
     deferred_bound_names: Vec<DeferredBoundName>,
     /// Yield and yield-from indices for lambdas that contain yields.
     lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
+    /// Narrow ops extracted from assertion-only helper functions.
+    assertion_narrows: SmallMap<Idx<KeyUndecoratedFunction>, NarrowOps>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -495,6 +498,7 @@ impl Bindings {
             semantic_syntax_errors: RefCell::new(Vec::new()),
             deferred_bound_names: Vec::new(),
             lambda_yield_keys: Vec::new(),
+            assertion_narrows: SmallMap::new(),
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -1121,6 +1125,36 @@ impl<'a> BindingsBuilder<'a> {
             }
             NameReadInfo::NotFound => NameLookupResult::NotFound,
         }
+    }
+
+    pub(crate) fn register_assertion_narrows(
+        &mut self,
+        undecorated_idx: Idx<KeyUndecoratedFunction>,
+        narrows: NarrowOps,
+    ) {
+        self.assertion_narrows.insert(undecorated_idx, narrows);
+    }
+
+    pub(crate) fn assertion_narrows_for_call(
+        &mut self,
+        func: &Expr,
+    ) -> Option<(&NarrowOps, &Parameters)> {
+        let Expr::Name(name) = func else {
+            return None;
+        };
+        let mut usage = Usage::Narrowing(None);
+        let idx = self
+            .lookup_name(Hashed::new(&name.id), &mut usage)
+            .found()?;
+        let (_, binding) = self.get_original_binding(idx)?;
+        let Binding::Function(decorated_idx, ..) = binding? else {
+            return None;
+        };
+        let decorated = self.idx_to_binding(*decorated_idx)?;
+        let undecorated_idx = decorated.undecorated_idx;
+        let narrows = self.assertion_narrows.get(&undecorated_idx)?;
+        let undecorated = self.idx_to_binding(undecorated_idx)?;
+        Some((narrows, &undecorated.def.parameters))
     }
 
     /// Defer creation of a BoundName binding until after AST traversal.

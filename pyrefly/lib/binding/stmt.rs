@@ -55,9 +55,12 @@ use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::bindings::NameLookupResult;
 use crate::binding::expr::Usage;
+use crate::binding::narrow::FacetOrigin;
+use crate::binding::narrow::FacetSubject;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::narrow::NarrowingSubject;
+use crate::binding::narrow::identifier_and_chain_for_expr;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
 use crate::binding::scope::Scope;
@@ -118,6 +121,20 @@ fn is_definitely_nonempty_iterable(iter: &Expr) -> bool {
     }
 }
 
+fn narrowing_subject_for_argument(arg: &Expr) -> Option<NarrowingSubject> {
+    if let Expr::Name(name) = arg {
+        return Some(NarrowingSubject::Name(name.id.clone()));
+    }
+    let (identifier, chain) = identifier_and_chain_for_expr(arg)?;
+    Some(NarrowingSubject::Facets(
+        identifier.id,
+        FacetSubject {
+            chain,
+            origin: FacetOrigin::Direct,
+        },
+    ))
+}
+
 impl<'a> BindingsBuilder<'a> {
     fn assert(&mut self, assert_range: TextRange, mut test: Expr, msg: Option<Expr>) {
         let test_range = test.range();
@@ -151,6 +168,55 @@ impl<'a> BindingsBuilder<'a> {
         );
         if let Some(false) = static_test {
             self.scopes.mark_flow_termination(true);
+        }
+    }
+
+    fn apply_assertion_narrows_from_call(
+        &mut self,
+        call_range: TextRange,
+        func: &Expr,
+        arguments: &Arguments,
+    ) {
+        let Some((assertion_narrows, parameters)) = self.assertion_narrows_for_call(func) else {
+            return;
+        };
+        if parameters.vararg.is_some() || parameters.kwarg.is_some() {
+            return;
+        }
+        if !arguments.keywords.is_empty() {
+            return;
+        }
+        let mut positional_params = Vec::new();
+        positional_params.extend(parameters.posonlyargs.iter().map(|p| p.name()));
+        positional_params.extend(parameters.args.iter().map(|p| p.name()));
+        if arguments.args.len() > positional_params.len() {
+            return;
+        }
+        let mut call_narrows = NarrowOps::new();
+        for (param_name, (op, _)) in assertion_narrows.0.iter() {
+            let param_index = match positional_params
+                .iter()
+                .position(|param| param.id == *param_name)
+            {
+                Some(index) => index,
+                None => return,
+            };
+            let arg = match arguments.args.get(param_index) {
+                Some(arg) => arg,
+                None => return,
+            };
+            let subject = match narrowing_subject_for_argument(arg) {
+                Some(subject) => subject,
+                None => return,
+            };
+            call_narrows.and_for_subject(&subject, op.for_subject(&subject), call_range);
+        }
+        if !call_narrows.0.is_empty() {
+            self.bind_narrow_ops(
+                &call_narrows,
+                NarrowUseLocation::Span(call_range),
+                &Usage::Narrowing(None),
+            );
         }
     }
 
@@ -1300,6 +1366,15 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Expr(mut x) => {
                 let mut current = self.declare_current_idx(Key::StmtExpr(x.value.range()));
                 self.ensure_expr(&mut x.value, current.usage());
+                if let Expr::Call(ExprCall {
+                    range: call_range,
+                    func,
+                    arguments,
+                    ..
+                }) = &*x.value
+                {
+                    self.apply_assertion_narrows_from_call(*call_range, func, arguments);
+                }
                 let special_export = if let Expr::Call(ExprCall { func, .. }) = &*x.value {
                     self.as_special_export(func)
                 } else {
