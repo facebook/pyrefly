@@ -30,6 +30,7 @@ pub enum SpecialExport {
     CollectionsNamedTuple,
     TypingNamedTuple,
     AssertType,
+    RevealType,
     NewType,
     Union,
     Optional,
@@ -92,6 +93,7 @@ impl SpecialExport {
             "NamedTuple" => Some(Self::TypingNamedTuple),
             "Self" => Some(Self::SelfType),
             "assert_type" => Some(Self::AssertType),
+            "reveal_type" => Some(Self::RevealType),
             "NewType" => Some(Self::NewType),
             "Union" => Some(Self::Union),
             "Optional" => Some(Self::Optional),
@@ -151,6 +153,7 @@ impl SpecialExport {
             | Self::Union
             | Self::Optional
             | Self::AssertType
+            | Self::RevealType
             | Self::TypeAliasType
             | Self::NoTypeCheck
             | Self::Overload

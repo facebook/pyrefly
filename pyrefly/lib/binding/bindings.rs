@@ -1245,6 +1245,17 @@ impl<'a> BindingsBuilder<'a> {
                 return;
             }
 
+            if matches!(deferred.usage, Usage::NonPinningRead(_)) {
+                let raw_idx = match self.idx_to_binding(unpinned_idx) {
+                    Some(Binding::PartialTypeWithUpstreamsCompleted(raw_idx, _)) => *raw_idx,
+                    _ => unreachable!(
+                        "NonPinningRead expects PartialTypeWithUpstreamsCompleted binding"
+                    ),
+                };
+                self.insert_binding_idx(deferred.bound_name_idx, Binding::Forward(raw_idx));
+                return;
+            }
+
             if !is_narrowing {
                 // Normal reads might pin partial types from upstream
                 match first_use {

@@ -11,6 +11,7 @@
  * file contains the implementations of a few special calls that need to be hard-coded.
  */
 
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::types::Union;
 use pyrefly_util::visit::Visit;
@@ -20,6 +21,7 @@ use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
@@ -29,6 +31,9 @@ use crate::alt::callable::CallKeyword;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::unwrap::HintRef;
+use crate::binding::binding::Binding;
+use crate::binding::binding::FirstUse;
+use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
@@ -39,7 +44,10 @@ use crate::types::callable::unexpected_keyword;
 use crate::types::class::Class;
 use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
+use crate::types::type_info::JoinStyle;
+use crate::types::types::AnyStyle;
 use crate::types::types::Type;
+use crate::types::types::Var;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn call_assert_type(
@@ -131,10 +139,105 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let ret = if args.len() == 1 {
+            let (reveal_partial, reveal_override) = match &args[0] {
+                Expr::Name(name) => {
+                    let key = Key::BoundName(ShortIdentifier::expr_name(name));
+                    if let Some(mut idx) = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))
+                    {
+                        let mut remaining = 100usize;
+                        let def_ident = loop {
+                            if remaining == 0 {
+                                break None;
+                            }
+                            remaining -= 1;
+                            match self.bindings().get(idx) {
+                                Binding::Forward(fwd)
+                                | Binding::CompletedPartialType(fwd, _)
+                                | Binding::PartialTypeWithUpstreamsCompleted(fwd, _)
+                                | Binding::Phi(JoinStyle::NarrowOf(fwd), _) => {
+                                    idx = *fwd;
+                                }
+                                _ => {
+                                    let key = self.bindings().idx_to_key(idx);
+                                    break match key {
+                                        Key::Definition(def) => Some(*def),
+                                        _ => None,
+                                    };
+                                }
+                            }
+                        };
+                        if let Some(def_ident) = def_ident {
+                            if let Some(pinned_idx) = self.bindings().key_to_idx_hashed_opt(
+                                Hashed::new(&Key::CompletedPartialType(def_ident)),
+                            ) {
+                                let Binding::CompletedPartialType(_, first_use) =
+                                    self.bindings().get(pinned_idx)
+                                else {
+                                    unreachable!(
+                                        "CompletedPartialType key must map to CompletedPartialType"
+                                    )
+                                };
+                                let reveal_partial = match first_use {
+                                    FirstUse::Undetermined | FirstUse::DoesNotPin => true,
+                                    FirstUse::UsedBy(first_use_idx) => {
+                                        let first_use_key =
+                                            self.bindings().idx_to_key(*first_use_idx);
+                                        first_use_key.range().start() > name.range.start()
+                                    }
+                                };
+                                let override_ty = if reveal_partial {
+                                    let def_key = Key::Definition(def_ident);
+                                    let def_idx = self.bindings().key_to_idx(&def_key);
+                                    match self.bindings().get(def_idx) {
+                                        Binding::NameAssign(assign) => match &*assign.expr {
+                                            Expr::List(x) if x.elts.is_empty() => {
+                                                let elem = Type::Any(AnyStyle::Implicit);
+                                                Some(
+                                                    self.heap.mk_class_type(self.stdlib.list(elem)),
+                                                )
+                                            }
+                                            Expr::Dict(x) if x.items.is_empty() => {
+                                                let key_ty = Type::Any(AnyStyle::Implicit);
+                                                let value_ty = Type::Any(AnyStyle::Implicit);
+                                                Some(self.heap.mk_class_type(
+                                                    self.stdlib.dict(key_ty, value_ty),
+                                                ))
+                                            }
+                                            _ => None,
+                                        },
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                };
+                                (reveal_partial, override_ty)
+                            } else {
+                                (false, None)
+                            }
+                        } else {
+                            (false, None)
+                        }
+                    } else {
+                        (false, None)
+                    }
+                }
+                _ => (false, None),
+            };
             let mut type_info = self.expr_infer_type_info_with_hint(&args[0], hint, errors);
+            if let Some(override_ty) = reveal_override {
+                type_info = type_info.with_ty(override_ty);
+            }
             let ret = type_info.ty().clone();
             type_info.visit_mut(&mut |ty| {
-                *ty = self.for_display(ty.clone());
+                let mut display_ty = self.for_display(ty.clone());
+                if reveal_partial {
+                    display_ty.transform_mut(&mut |t| {
+                        if matches!(t, Type::Any(AnyStyle::Implicit)) {
+                            *t = Var::ZERO.to_type(self.heap);
+                        }
+                    });
+                }
+                *ty = display_ty;
             });
             self.error(
                 errors,

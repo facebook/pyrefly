@@ -1127,6 +1127,19 @@ Pyrefly uses this diagnostic to communicate the output of the [`reveal_type`](ht
 
 The default severity of this diagnostic is `info`.
 
+You may see `@_` in a revealed type (and in hovers). This is a placeholder for a synthetic type
+variable that has not been pinned yet, usually because the type comes from an empty container
+literal like `[]` or `{}` and hasn't been constrained by a later use.
+
+```python
+from typing import reveal_type
+
+x = []
+reveal_type(x)  # revealed type: list[@_]
+x.append(1)
+reveal_type(x)  # revealed type: list[int]
+```
+
 ## unannotated-attribute
 
 This error is raised when a class attribute is missing a type annotation and is initialized with the `None` literal. Without an explicit annotation, Pyrefly infers the type as `Any | None`, which reduces type safety. To fix it, add an explicit type annotation to the attribute.
