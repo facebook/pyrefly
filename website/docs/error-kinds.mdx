@@ -515,6 +515,22 @@ def f(x: int) -> int | str:
     return x
 ```
 
+## inconsistent-overload-default
+
+In an overloaded function, the type of a parameter in an overload signature is inconsistent with
+its default value in the implementation.
+
+Example:
+```python
+from typing import Literal, overload
+@overload
+def f(x: Literal[True] = ...) -> None: ...  # error, `x` has default `False`, which is inconsistent with type `Literal[True]`
+@overload
+def f(x: Literal[False]) -> int: ...
+def f(x: bool = False) -> int | None:
+    return 0 if x else None
+```
+
 ## internal-error
 
 Ideally you'll never see this one. If you do, please consider [filing a bug](https://github.com/facebook/pyrefly/issues).

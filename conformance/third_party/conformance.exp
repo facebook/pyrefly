@@ -4264,6 +4264,17 @@
   "dataclasses_transform_field.py": [
     {
       "code": -2,
+      "column": 5,
+      "concise_description": "Default `Literal[True]` from implementation is not assignable to overload parameter `init` with type `Literal[False]`",
+      "description": "Default `Literal[True]` from implementation is not assignable to overload parameter `init` with type `Literal[False]`",
+      "line": 16,
+      "name": "inconsistent-overload-default",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 16
+    },
+    {
+      "code": -2,
       "column": 16,
       "concise_description": "Unexpected keyword argument `id` in function `CustomerModel1.__init__`",
       "description": "Unexpected keyword argument `id` in function `CustomerModel1.__init__`",

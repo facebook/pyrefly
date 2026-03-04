@@ -153,6 +153,70 @@ assert_type(f(h(0)), str) # E: Argument `Literal[0]` is not assignable to parame
 );
 
 testcase!(
+    test_overload_default_incompatible,
+    r#"
+from typing import Literal, overload
+
+@overload
+def foo(a: Literal[True] = ...) -> None: ...  # E: Default `Literal[False]` from implementation is not assignable to overload parameter `a` with type `Literal[True]`
+@overload
+def foo(a: Literal[False]) -> int: ...
+def foo(a: bool = False) -> None | int:
+    return 1 if not a else None
+"#,
+);
+
+testcase!(
+    test_overload_default_matches_one_signature,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int = ..., y: None = ...) -> None: ...
+
+# In this situation, we're forced to write `y: int = ...` to avoid a
+# "parameter without a default follows parameter with a default" syntax error,
+# even though any call that omits `y` will match the first overload above.
+# So we should not error here even though `y`'s `None` default is not an `int`.
+@overload
+def f(x: int = ..., y: int = ...) -> int: ...
+
+def f(x: int = 0, y: int | None = None):
+    if y is None:
+        return None
+    return x + y
+
+# Make sure using a `None` default instead of `...` in the overload works as well.
+@overload
+def g(x: int = ..., y: None = None) -> None: ...
+@overload
+def g(x: int = ..., y: int = ...) -> int: ...
+def g(x: int = 0, y: int | None = None):
+    if y is None:
+        return None
+    return x + y
+"#,
+);
+
+testcase!(
+    test_overload_default_does_not_match_second_signature,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int, y: None = ...) -> str: ...
+
+# False negative: an `f()` call (no args) matches this overload, but `y`'s default of `None` is
+# inconsistent with its type of `int` in the signature. We allow this in order to avoid a false
+# positive in test_overload_default_matches_one_signature.
+@overload
+def f(x: int = ..., y: int = ...) -> int: ...
+
+def f(x: int = 0, y: int | None = None) -> str | int: ...
+"#,
+);
+
+testcase!(
     test_overload_missing_implementation,
     r#"
 from typing import overload, assert_type

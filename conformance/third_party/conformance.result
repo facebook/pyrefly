@@ -67,7 +67,9 @@
   ],
   "dataclasses_transform_class.py": [],
   "dataclasses_transform_converter.py": [],
-  "dataclasses_transform_field.py": [],
+  "dataclasses_transform_field.py": [
+    "Line 16: Unexpected errors ['Default `Literal[True]` from implementation is not assignable to overload parameter `init` with type `Literal[False]`']"
+  ],
   "dataclasses_transform_func.py": [],
   "dataclasses_transform_meta.py": [],
   "dataclasses_usage.py": [],

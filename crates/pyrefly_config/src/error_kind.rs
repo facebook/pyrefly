@@ -155,6 +155,9 @@ pub enum ErrorKind {
     InconsistentInheritance,
     /// An inconsistency between the signature of a function overload and the implementation.
     InconsistentOverload,
+    /// An inconsistency between a function parameter's type in an overload signature and its
+    /// default value in the implementation.
+    InconsistentOverloadDefault,
     /// Internal Pyrefly error.
     InternalError,
     /// Attempting to write an annotation that is invalid for some reason.
