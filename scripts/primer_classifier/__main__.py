@@ -91,10 +91,7 @@ def main() -> int:
     # Parse
     projects = parse_primer_diff(diff_text)
     if not projects:
-        if args.output_format == "json":
-            print('{"summary": {"total_projects": 0}, "classifications": []}')
-        else:
-            print("No diffs to classify.")
+        print("No diffs to classify.", file=sys.stderr)
         return 0
 
     print(
