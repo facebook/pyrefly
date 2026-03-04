@@ -1225,7 +1225,6 @@ def f(x: LoggerLike | None = None): ...  # E: Expected a type form, got instance
 );
 
 testcase!(
-    bug = "Annotated types should be treated as transparent in type aliases",
     test_annotated_type_alias,
     r#"
 from typing import Annotated
@@ -1238,7 +1237,6 @@ class C:
 class D:
     x: X
     def __init__(self, c: C):
-        self.x = c.y # E: `Annotated[int]` is not assignable to attribute `x` with type `int`
-
+        self.x = c.y
 "#,
 );

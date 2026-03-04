@@ -1502,8 +1502,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // place for those — the error is already reported elsewhere.
                 let mut body = match ta.as_type() {
                     Type::Type(inner) => *inner,
-                    // If the body was an Annotated type, return it as-is without removing the wrapper
-                    ann @ Type::Annotated(_) => ann,
+                    // If the body was an Annotated type, return it without the wrapper
+                    Type::Annotated(inner) => *inner,
                     _ => return,
                 };
                 // Apply type arguments if the reference was parameterized.
