@@ -34,6 +34,8 @@ Want type error squiggles to show up in your editor by default? Try setting `pyt
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
 
 The following configuration options are IDE-specific and exposed as VSCode settings:
+- Diagnostic mode
+  - `python.pyrefly.diagnosticMode` [enum: openFilesOnly, workspace]: Controls the scope of Pyrefly's diagnostic analysis. When set to `'openFilesOnly'` (default), diagnostics are only computed for files currently open in the editor. When set to `'workspace'`, Pyrefly publishes diagnostics for all files in a project once any file from that project is opened. Projects are identified through pyrefly config files (`pyrefly.toml` or `pyproject.toml` with `[tool.pyrefly]`) discovered by the normal upward config search. Files not covered by any explicit pyrefly config are not included.
 - Disable all language services
   - `python.pyrefly.disableLanguageServices` [boolean: false]: By default, Pyrefly will provide both type errors and other language features like go-to definition, intellisense, hover, etc. Set `disableLanguageServices` to `true` to keep type errors from Pyrefly unchanged but use VSCode's Python extension for everything else.
 - Disable certain language services

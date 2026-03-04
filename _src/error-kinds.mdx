@@ -1208,6 +1208,15 @@ def takes_kwonly(*, x: int) -> int:
 takes_kwonly(1)  # should be `takes_kwonly(x=1)`!
 ```
 
+## unimported-directive
+
+Using a [type checker directive](https://typing.python.org/en/latest/spec/directives.html#type-checker-directives) without importing it from `typing` first will result in a runtime error.
+
+```python
+reveal_type(1)  # error
+assert_type(1, int)  # error
+```
+
 ## unknown-name
 
 `unknown-name` occurs when attempting to load a name from another scope, but the name cannot be found.
