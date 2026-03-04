@@ -2017,24 +2017,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
-        let is_initialized_on_class_body = matches!(
-            field_definition,
-            ClassFieldDefinition::AssignedInBody { .. }
-                | ClassFieldDefinition::MethodLike { .. }
-                | ClassFieldDefinition::DefinedWithoutAssign { .. }
-        );
-        // Extract alias_of from field_definition for enum alias detection
-        let alias_of = match field_definition {
-            ClassFieldDefinition::AssignedInBody { alias_of, .. } => alias_of.as_ref(),
-            _ => None,
-        };
         self.get_enum_class_field_type(
             class,
             name,
             direct_annotation,
             ty,
-            alias_of,
-            is_initialized_on_class_body,
+            field_definition,
             is_descriptor,
             range,
             errors,
