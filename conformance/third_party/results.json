@@ -3,7 +3,7 @@
   "pass": 122,
   "fail": 16,
   "pass_rate": 0.88,
-  "differences": 43,
+  "differences": 42,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -137,7 +137,7 @@
     "dataclasses_descriptors.py": 6,
     "dataclasses_slots.py": 2,
     "exceptions_context_managers.py": 2,
-    "generics_basic.py": 3,
+    "generics_basic.py": 2,
     "generics_paramspec_components.py": 1,
     "generics_scoping.py": 4,
     "generics_self_basic.py": 2,
