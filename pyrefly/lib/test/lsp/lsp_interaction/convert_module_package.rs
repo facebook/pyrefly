@@ -61,7 +61,10 @@ fn test_convert_module_to_package_code_action() {
                 "start": { "line": 0, "character": 0 },
                 "end": { "line": 0, "character": 0 }
             },
-            "context": { "diagnostics": [] }
+            "context": {
+                "diagnostics": [],
+                "triggerKind": 1
+            }
         }))
         .expect_response_with(|response| {
             let Some(actions) = response else {
@@ -120,7 +123,10 @@ fn test_convert_package_to_module_code_action() {
                 "start": { "line": 0, "character": 0 },
                 "end": { "line": 0, "character": 0 }
             },
-            "context": { "diagnostics": [] }
+            "context": {
+                "diagnostics": [],
+                "triggerKind": 1
+            }
         }))
         .expect_response_with(|response| {
             let Some(actions) = response else {
