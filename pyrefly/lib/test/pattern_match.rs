@@ -118,6 +118,50 @@ def my_method(str_or_int: str | int) -> str:
 );
 
 testcase!(
+    test_match_exhaustive_user_classes_assert_never,
+    r#"
+from typing import assert_never, assert_type
+
+class A: ...
+
+class B: ...
+
+def f0(x: A | B):
+    match x:
+        case A():
+            assert_type(x, A)
+        case B():
+            assert_type(x, B)
+        case _:
+            assert_never(x)
+"#,
+);
+
+testcase!(
+    test_match_exhaustive_enum_assign,
+    r#"
+from enum import IntEnum
+
+class Rating(IntEnum):
+    Again = 1
+    Hard = 2
+    Good = 3
+    Easy = 4
+
+def foo() -> Rating: ...
+
+def f0():
+    x = foo()
+    match x:
+        case Rating.Again:
+            y = 1
+        case Rating.Easy | Rating.Good | Rating.Hard:
+            y = 2
+    print(y)
+"#,
+);
+
+testcase!(
     test_class_match_with_args_not_exhaustive,
     r#"
 from typing import assert_type

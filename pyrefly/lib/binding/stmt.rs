@@ -1044,7 +1044,7 @@ impl<'a> BindingsBuilder<'a> {
                 if exhaustive {
                     self.finish_exhaustive_fork();
                 } else {
-                    self.finish_non_exhaustive_fork(&negated_prev_ops);
+                    self.finish_non_exhaustive_fork(&negated_prev_ops, None);
                 }
                 // If we have a statically evaluated test like `sys.version_info`, we should set `is_definitely_unreachable` to false
                 // to reduce false positive unreachable errors, since some code paths can still be hit at runtime

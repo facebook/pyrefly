@@ -3320,6 +3320,7 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         negated_prev_ops_if_nonexhaustive: Option<&NarrowOps>,
         is_bool_op: bool,
+        base_termination_key: Option<Idx<Key>>,
     ) {
         let fork = self.scopes.current_mut().forks.pop().unwrap();
         assert!(
@@ -3335,6 +3336,9 @@ impl<'a> BindingsBuilder<'a> {
                 NarrowUseLocation::End(fork.range),
                 &Usage::Narrowing(None),
             );
+            if let Some(key) = base_termination_key {
+                self.scopes.current_mut().flow.last_stmt_expr = Some(key);
+            }
             self.merge_flow(fork.base, branches, fork.range, MergeStyle::Inclusive);
         } else {
             self.merge_flow(
@@ -3356,7 +3360,7 @@ impl<'a> BindingsBuilder<'a> {
     /// Panics if called when no fork is active, or if a branch is started (which
     /// means the caller forgot to call `finish_branch` and is always a bug).
     pub fn finish_exhaustive_fork(&mut self) {
-        self.finish_fork_impl(None, false)
+        self.finish_fork_impl(None, false, None)
     }
 
     /// Finish a non-exhaustive fork in which the base flow is part of the merge. It negates
@@ -3366,14 +3370,18 @@ impl<'a> BindingsBuilder<'a> {
     ///
     /// Panics if called when no fork is active, or if a branch is started (which
     /// means the caller forgot to call `finish_branch` and is always a bug).
-    pub fn finish_non_exhaustive_fork(&mut self, negated_prev_ops: &NarrowOps) {
-        self.finish_fork_impl(Some(negated_prev_ops), false)
+    pub fn finish_non_exhaustive_fork(
+        &mut self,
+        negated_prev_ops: &NarrowOps,
+        base_termination_key: Option<Idx<Key>>,
+    ) {
+        self.finish_fork_impl(Some(negated_prev_ops), false, base_termination_key)
     }
 
     /// Finish the fork for a boolean operation. This requires lax handling of
     /// possibly-uninitialized locals, see the inline comment in `FlowStyle::merge`.
     pub fn finish_bool_op_fork(&mut self) {
-        self.finish_fork_impl(None, true)
+        self.finish_fork_impl(None, true, None)
     }
 
     /// Finish a `MatchOr`, which behaves like an exhaustive fork except that we know
