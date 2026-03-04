@@ -260,12 +260,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if is_descriptor {
             return None;
         }
-        let is_initialized_on_class_body = matches!(
-            field_definition,
+        let is_initialized_on_class_body = match field_definition {
             ClassFieldDefinition::AssignedInBody { .. }
-                | ClassFieldDefinition::MethodLike { .. }
-                | ClassFieldDefinition::DefinedWithoutAssign { .. }
-        );
+            | ClassFieldDefinition::DefinedWithoutAssign { .. } => true,
+            ClassFieldDefinition::MethodLike { definition, .. } => {
+                self.get_idx(*definition).ty().has_enum_member_decoration()
+            }
+            _ => false,
+        };
         // Extract alias_of from field_definition for enum alias detection
         let alias_of = match field_definition {
             ClassFieldDefinition::AssignedInBody { alias_of, .. } => alias_of.as_ref(),
