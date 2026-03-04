@@ -789,6 +789,6 @@ class Foo(str, Enum):
         if default is None:
             default = cls.A
         return cls(default)
-Foo.from_dict({})  # FP: Literal[Foo.from_dict] not callable
+Foo.from_dict({})
     "#,
 );
