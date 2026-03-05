@@ -645,9 +645,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // We want to use our hint to contextually type the arguments, but errors resulting
         // from the hint should not influence overload selection. If there are call errors, we
         // try again without a hint in case we can still match this overload.
+        //
+        // Additionally, if the hint-based call succeeds but the hint may have caused the
+        // return type to be artificially broadened (e.g. pinning a type variable to the
+        // full hint type rather than the arg-constrained type), we also try without the
+        // hint. If the no-hint call also succeeds, we prefer the no-hint result as it
+        // reflects the actual argument types more precisely.
         let (call_errors, res) = try_call(hint);
-        let (call_errors, res) = if tparams.is_some() && hint.is_some() && !call_errors.is_empty() {
-            try_call(None)
+        let (call_errors, res) = if tparams.is_some() && hint.is_some() {
+            if !call_errors.is_empty() {
+                // Hint caused errors; retry without hint.
+                try_call(None)
+            } else {
+                // Hint succeeded. Also try without hint to get a more precise type.
+                // If the no-hint call succeeds with a different (potentially more specific)
+                // result, prefer it over the hint-influenced result.
+                let (no_hint_errors, no_hint_res) = try_call(None);
+                if no_hint_errors.is_empty() && no_hint_res != res {
+                    (no_hint_errors, no_hint_res)
+                } else {
+                    (call_errors, res)
+                }
+            }
         } else {
             (call_errors, res)
         };
