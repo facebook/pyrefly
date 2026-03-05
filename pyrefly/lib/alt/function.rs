@@ -1278,6 +1278,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Forall(forall) => (Some(forall.tparams.clone()), forall.body.clone().as_type()),
             _ => (None, decoratee.clone()),
         };
+        // Convert SelfType to ClassType so that e.g. `(self: Self@C) -> int` is compatible
+        // with a decorator parameter like `Callable[[C], int]`.
+        let decoratee_arg = decoratee_arg.self_type_to_class_type();
         let arg = CallArg::ty(&decoratee_arg, range);
         // Compute the raw return type - this may need tweaks to handle Forall well.
         let inferred_ty =
