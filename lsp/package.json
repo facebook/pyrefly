@@ -64,6 +64,11 @@
                 "title": "Unfold All Docstrings",
                 "category": "pyrefly",
                 "command": "pyrefly.unfoldAllDocstrings"
+            },
+            {
+                "title": "Find File Usages",
+                "category": "pyrefly",
+                "command": "pyrefly.findFileUsages"
             }
         ],
         "semanticTokenScopes": [
