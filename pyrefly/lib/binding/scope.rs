@@ -2101,7 +2101,6 @@ impl Scopes {
     pub fn swap_current_flow_with(&mut self, flow: &mut Flow) {
         mem::swap(&mut self.current_mut().flow, flow);
     }
-
     pub fn mark_flow_termination(&mut self, from_static_test: bool) {
         self.current_mut().flow.has_terminated = true;
         if self.current_mut().with_depth == 0 && !from_static_test {
@@ -2116,6 +2115,14 @@ impl Scopes {
     /// Check if the current flow has definitely terminated (e.g., after a return, raise, break, or continue)
     pub fn is_definitely_unreachable(&self) -> bool {
         self.current().flow.is_definitely_unreachable
+    }
+
+    /// Check if the current flow is unreachable due to a statically-evaluated test
+    /// (e.g., `if sys.platform != "darwin": return 0` on linux). In this state,
+    /// `has_terminated` is true but `is_definitely_unreachable` is false because the
+    /// code may be reachable in other environments.
+    pub fn is_unreachable_from_static_test(&self) -> bool {
+        self.current().flow.has_terminated && !self.current().flow.is_definitely_unreachable
     }
 
     /// Set or clear the last statement expression key for the current flow.

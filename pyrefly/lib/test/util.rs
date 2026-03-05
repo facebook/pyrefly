@@ -101,6 +101,7 @@ fn default_path(module: ModuleName) -> PathBuf {
 pub struct TestEnv {
     modules: Vec<(ModuleName, ModulePath, Option<Arc<FileContents>>)>,
     version: PythonVersion,
+    platform: PythonPlatform,
     untyped_def_behavior: UntypedDefBehavior,
     infer_with_first_use: bool,
     site_package_path: Vec<PathBuf>,
@@ -123,6 +124,7 @@ impl TestEnv {
         TestEnv {
             modules: Vec::new(),
             version: PythonVersion::default(),
+            platform: PythonPlatform::default(),
             untyped_def_behavior: UntypedDefBehavior::default(),
             infer_with_first_use: true,
             site_package_path: Vec::new(),
@@ -148,6 +150,12 @@ impl TestEnv {
     pub fn new_with_version(version: PythonVersion) -> Self {
         let mut res = Self::new();
         res.version = version;
+        res
+    }
+
+    pub fn new_with_platform(platform: PythonPlatform) -> Self {
+        let mut res = Self::new();
+        res.platform = platform;
         res
     }
 
@@ -259,7 +267,7 @@ impl TestEnv {
     }
 
     pub fn sys_info(&self) -> SysInfo {
-        SysInfo::new(self.version, PythonPlatform::linux())
+        SysInfo::new(self.version, self.platform.clone())
     }
 
     pub fn get_memory(&self) -> Vec<(PathBuf, Option<Arc<FileContents>>)> {
@@ -275,7 +283,7 @@ impl TestEnv {
     pub fn config(&self) -> ArcId<ConfigFile> {
         let mut config = ConfigFile::default();
         config.python_environment.python_version = Some(self.version);
-        config.python_environment.python_platform = Some(PythonPlatform::linux());
+        config.python_environment.python_platform = Some(self.platform.clone());
         config.python_environment.site_package_path = Some(self.site_package_path.clone());
         config.root.untyped_def_behavior = Some(self.untyped_def_behavior);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);

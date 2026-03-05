@@ -1365,11 +1365,13 @@ impl<'a> BindingsBuilder<'a> {
                     let val = if self.lookup.export_exists(m, &name) {
                         Binding::Import(Box::new((m, name.into_key().clone(), None)))
                     } else {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
-                            format!("Could not import `{name}` from `{m}`"),
-                        );
+                        if !self.scopes.is_unreachable_from_static_test() {
+                            self.error(
+                                x.range,
+                                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
+                                format!("Could not import `{name}` from `{m}`"),
+                            );
+                        }
                         Binding::Any(AnyStyle::Error)
                     };
                     let key = self.insert_binding(key, val);
@@ -1431,11 +1433,13 @@ impl<'a> BindingsBuilder<'a> {
                         // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
                         Binding::ImportViaGetattr(Box::new((m, x.name.id.clone())))
                     } else if is_not_found {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
-                            format!("Could not import `{}` from `{m}`", x.name.id),
-                        );
+                        if !self.scopes.is_unreachable_from_static_test() {
+                            self.error(
+                                x.range,
+                                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
+                                format!("Could not import `{}` from `{m}`", x.name.id),
+                            );
+                        }
                         Binding::Any(AnyStyle::Error)
                     } else {
                         Binding::Any(AnyStyle::Explicit)
