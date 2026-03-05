@@ -1195,7 +1195,6 @@ def foo[T: (A, B)](a: T, b: T) -> None:
 );
 
 testcase!(
-    bug = "Method calls go through call_method_or_error, not covered by constrained-env branching yet",
     test_constrained_typevar_correlated_method_must_pass,
     r#"
 class A:
@@ -1204,7 +1203,7 @@ class B:
     def combine(self, other: "B") -> "B": ...
 
 def foo[T: (A, B)](x: T, y: T) -> None:
-    x.combine(y)  # E: `T` is not assignable to parameter `other` with type `A`  # E: `T` is not assignable to parameter `other` with type `B`
+    x.combine(y)
 "#,
 );
 

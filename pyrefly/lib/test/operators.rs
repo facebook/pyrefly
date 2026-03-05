@@ -793,11 +793,10 @@ def foo[T: (int, float)](a: T, b: T) -> bool:
 );
 
 testcase!(
-    bug = "Direct dunder method calls go through the method call path, not the operator dispatch path, so env-branching doesn't apply yet",
     test_constrained_typevar_dunder_comparison,
     r#"
 def foo[T: (int, float)](a: T, b: T) -> bool:
-    return a.__lt__(b)  # E: Argument `T` is not assignable to parameter `value` with type `int` in function `int.__lt__`
+    return a.__lt__(b)
 "#,
 );
 

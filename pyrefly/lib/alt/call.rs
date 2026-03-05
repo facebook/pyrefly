@@ -17,6 +17,7 @@ use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::Union;
+use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::Arguments;
@@ -30,10 +31,14 @@ use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::call_env::ConstrainedEnvResult;
+use crate::alt::call_env::EnvTrialResult;
+use crate::alt::call_env::run_with_constrained_envs;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
 use crate::alt::class::class_field::DescriptorBase;
+use crate::alt::expr::TypeOrExpr;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
@@ -1503,6 +1508,107 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
+        // Check if any pre-inferred arg types contain constrained quantifieds.
+        // When args come from an expression call on a union callee, they have
+        // already been pre-inferred to TypeOrExpr::Type by expr_call_infer.
+        // When the callee is not a union, args remain as TypeOrExpr::Expr and
+        // this check finds nothing — avoiding incorrect pre-solving of the
+        // callee's own TypeVar parameters.
+        let mut arg_types: Vec<&Type> = Vec::new();
+        for arg in args {
+            match arg {
+                CallArg::Arg(TypeOrExpr::Type(t, _)) | CallArg::Star(TypeOrExpr::Type(t, _), _) => {
+                    arg_types.push(t);
+                }
+                _ => {}
+            }
+        }
+        for kw in kws {
+            if let TypeOrExpr::Type(t, _) = &kw.value {
+                arg_types.push(t);
+            }
+        }
+
+        if !arg_types.is_empty() {
+            // Include callee type in seed_types so it gets substituted too,
+            // but constrained quantifieds are only collected from arg types
+            // (the callee is typically a concrete method type here, not a
+            // quantified type, so collect_constrained_quantifieds won't
+            // find anything extra in it).
+            let mut seed_types: Vec<&Type> = vec![&ty];
+            seed_types.extend(&arg_types);
+
+            if let Some(ConstrainedEnvResult::Success(returns)) =
+                run_with_constrained_envs(&seed_types, &mut |substituted| {
+                    let trial_errors = self.error_collector();
+                    let owner = Owner::new();
+
+                    let subst_callee = &substituted[0];
+                    // Rebuild args with substituted types.
+                    let mut subst_idx = 1;
+                    let subst_args: Vec<CallArg> = args
+                        .iter()
+                        .map(|arg| match arg {
+                            CallArg::Arg(TypeOrExpr::Type(_, r)) => {
+                                let t = owner.push(substituted[subst_idx].clone());
+                                subst_idx += 1;
+                                CallArg::Arg(TypeOrExpr::Type(t, *r))
+                            }
+                            CallArg::Star(TypeOrExpr::Type(_, r), sr) => {
+                                let t = owner.push(substituted[subst_idx].clone());
+                                subst_idx += 1;
+                                CallArg::Star(TypeOrExpr::Type(t, *r), *sr)
+                            }
+                            other => other.clone(),
+                        })
+                        .collect();
+                    let subst_kws: Vec<CallKeyword> = kws
+                        .iter()
+                        .map(|kw| match &kw.value {
+                            TypeOrExpr::Type(_, r) => {
+                                let t = owner.push(substituted[subst_idx].clone());
+                                subst_idx += 1;
+                                CallKeyword {
+                                    range: kw.range,
+                                    arg: kw.arg,
+                                    value: TypeOrExpr::Type(t, *r),
+                                }
+                            }
+                            _ => kw.clone(),
+                        })
+                        .collect();
+
+                    let callable = self.as_call_target_or_error(
+                        subst_callee.clone(),
+                        CallStyle::FreeForm,
+                        callee_range,
+                        &trial_errors,
+                        None,
+                    );
+                    let ret = self.call_infer_with_callee_range(
+                        callable,
+                        &subst_args,
+                        &subst_kws,
+                        arg_range,
+                        Some(callee_range),
+                        &trial_errors,
+                        None,
+                        hint,
+                        None,
+                    );
+                    EnvTrialResult {
+                        ret,
+                        has_errors: !trial_errors.is_empty(),
+                        error_count: trial_errors.len(),
+                    }
+                })
+            {
+                return self.unions(returns);
+            }
+        }
+
+        // Fallback: no pre-inferred args with constrained quantifieds,
+        // cap exceeded, or all envs failed.
         let callable =
             self.as_call_target_or_error(ty, CallStyle::FreeForm, callee_range, errors, None);
         self.call_infer_with_callee_range(
