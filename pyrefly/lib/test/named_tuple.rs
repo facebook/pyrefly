@@ -373,7 +373,6 @@ class B(A):
 );
 
 testcase!(
-    bug = "The asserted type is wrong",
     test_custom_iter,
     r#"
 from typing import assert_type, Iterator, NamedTuple
@@ -382,7 +381,7 @@ class NT(NamedTuple):
     def __iter__(self) -> Iterator[str]: ...
 nt = NT(0)
 for x in nt:
-    assert_type(x, str)  # E: assert_type(int, str)
+    assert_type(x, str)
     "#,
 );
 

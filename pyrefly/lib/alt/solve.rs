@@ -731,6 +731,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn has_named_tuple_iter_override(&self, cls: &ClassType) -> bool {
+        if self
+            .get_metadata_for_class(cls.class_object())
+            .named_tuple_metadata()
+            .is_none()
+        {
+            return false;
+        }
+        let Some(iter_method) = self
+            .get_non_synthesized_class_member_and_defining_class(cls.class_object(), &dunder::ITER)
+        else {
+            return false;
+        };
+        !iter_method
+            .defining_class
+            .has_toplevel_qname("builtins", "tuple")
+            && !iter_method
+                .defining_class
+                .has_toplevel_qname("type_checker_internals", "NamedTupleFallback")
+    }
+
     /// Given an `iterable` type, determine the iteration type; this is the type
     /// of `x` if we were to loop using `for x in iterable`.
     ///
@@ -752,6 +773,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )
         };
         match iterable {
+            Type::ClassType(cls) if self.has_named_tuple_iter_override(cls) => {
+                let ty = self
+                    .call_magic_dunder_method(
+                        iterable,
+                        &dunder::ITER,
+                        range,
+                        &[],
+                        &[],
+                        errors,
+                        Some(&context),
+                    )
+                    .and_then(|iter_ty| self.unwrap_iterable(&iter_ty))
+                    .unwrap_or_else(|| {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::NotIterable),
+                            context().format(),
+                        )
+                    });
+                vec![Iterable::OfType(ty)]
+            }
             Type::ClassType(cls) if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) => {
                 vec![Iterable::FixedLen(elts.clone())]
             }
