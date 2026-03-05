@@ -2475,6 +2475,15 @@ impl<'a> LookupExport for TransactionHandle<'a> {
             }
         }
     }
+
+    fn has_explicit_dunder_all(&self, module: ModuleName) -> bool {
+        self.with_exports(
+            module,
+            |exports, _lookup| exports.has_explicit_dunder_all(),
+            ModuleDep::Wildcard,
+        )
+        .unwrap_or(false)
+    }
 }
 
 impl<'a> LookupAnswer for TransactionHandle<'a> {

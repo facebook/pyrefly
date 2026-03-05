@@ -1372,12 +1372,17 @@ impl<'a> BindingsBuilder<'a> {
             if &x.name == "*"
                 && let Some(wildcards) = self.lookup.get_wildcard(m)
             {
+                let has_explicit_dunder_all = self.lookup.has_explicit_dunder_all(m);
                 for name in wildcards.iter_hashed() {
                     let key = Key::Import(Box::new((name.into_key().clone(), x.range)));
                     let val = if self.lookup.export_exists(m, &name) {
                         Binding::Import(Box::new((m, name.into_key().clone(), None)))
                     } else {
-                        if !self.scopes.is_unreachable_from_static_test() {
+                        // If __all__ was explicitly specified, missing names are already
+                        // reported as bad-dunder-all in the defining module.
+                        if !has_explicit_dunder_all
+                            && !self.scopes.is_unreachable_from_static_test()
+                        {
                             self.error(
                                 x.range,
                                 ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
