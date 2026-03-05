@@ -6363,28 +6363,6 @@
   "generics_self_usage.py": [
     {
       "code": -2,
-      "column": 16,
-      "concise_description": "Returned type `ReturnsSelf` is not assignable to declared return type `Self@ReturnsSelf`",
-      "description": "Returned type `ReturnsSelf` is not assignable to declared return type `Self@ReturnsSelf`",
-      "line": 15,
-      "name": "bad-return",
-      "severity": "error",
-      "stop_column": 22,
-      "stop_line": 15
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "Returned type `ReturnsSelf` is not assignable to declared return type `Self@ReturnsSelf`",
-      "description": "Returned type `ReturnsSelf` is not assignable to declared return type `Self@ReturnsSelf`",
-      "line": 18,
-      "name": "bad-return",
-      "severity": "error",
-      "stop_column": 22,
-      "stop_line": 18
-    },
-    {
-      "code": -2,
       "column": 14,
       "concise_description": "`Self` must appear within a class",
       "description": "`Self` must appear within a class",

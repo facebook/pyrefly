@@ -796,7 +796,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if let Some(mut ret) = dunder_new_ret {
             ret.subst_mut(&cls.targs().substitution_map());
-            ret
+            if constructor_kind == ConstructorKind::TypeOfSelf
+                && let Type::ClassType(ret_cls) = &ret
+            {
+                self.heap.mk_self_type(ret_cls.clone())
+            } else {
+                ret
+            }
         } else if constructor_kind == ConstructorKind::TypeOfSelf {
             self.heap.mk_self_type(cls)
         } else {
