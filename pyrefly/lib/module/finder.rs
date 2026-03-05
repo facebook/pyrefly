@@ -2477,7 +2477,7 @@ mod tests {
         );
     }
 
-    // ==================== Phantom Paths Tests ====================
+    // -------------- Phantom Paths Tests --------------------
 
     fn get_config_with_search_path(search_path: Vec<PathBuf>) -> ConfigFile {
         let mut interpreters = Interpreters::default();

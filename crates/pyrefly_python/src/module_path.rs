@@ -192,6 +192,10 @@ impl ModulePath {
         self.style() == ModuleStyle::Interface
     }
 
+    pub fn is_memory(&self) -> bool {
+        matches!(self.0, ModulePathDetails::Memory(_))
+    }
+
     pub fn is_notebook(&self) -> bool {
         self.as_path().extension() == Some("ipynb".as_ref())
     }

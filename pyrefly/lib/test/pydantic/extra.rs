@@ -143,7 +143,7 @@ pydantic_testcase!(
 from pydantic import BaseModel, ConfigDict
 
 class ModelForbid(BaseModel):
-    model_config = ConfigDict(extra=False) # E: No matching overload found for function `pydantic.config.ConfigDict.__init__`
+    model_config = ConfigDict(extra=False) # E: `Literal[False]` is not assignable to parameter `extra`
     x: int
 
 ModelForbid(x=1, y=2)
@@ -156,7 +156,7 @@ pydantic_testcase!(
 from pydantic import BaseModel, ConfigDict
 
 class ModelForbid(BaseModel):
-    model_config = ConfigDict(extra="123") # E: No matching overload found for function `pydantic.config.ConfigDict.__init__`
+    model_config = ConfigDict(extra="123") # E: `Literal['123']` is not assignable to parameter `extra`
     x: int
 
 ModelForbid(x=1, y=2)

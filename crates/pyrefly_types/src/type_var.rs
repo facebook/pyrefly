@@ -97,7 +97,6 @@ pub enum Variance {
     Covariant,
     Contravariant,
     Invariant,
-    #[allow(dead_code)]
     Bivariant,
 }
 

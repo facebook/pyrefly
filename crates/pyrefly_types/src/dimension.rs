@@ -131,120 +131,6 @@ impl Display for SizeExpr {
 }
 
 // ============================================================================
-// Simplification
-// ============================================================================
-
-/// Simplify a dimension expression to canonical form.
-///
-/// This applies algebraic simplifications:
-/// - Constant folding: 2 + 3 → 5
-/// - Identity elimination: N + 0 → N, N * 1 → N
-/// - Zero propagation: N * 0 → 0
-/// - Any propagation: expressions containing Any become Any
-///
-/// Any subexpression with only literal leaves is evaluated.
-pub fn simplify(ty: Type) -> Type {
-    match ty {
-        Type::Size(dim) => {
-            if contains_any_in_sizeexpr(&dim) {
-                return Type::Any(AnyStyle::Explicit);
-            }
-            simplify_sizeexpr(dim)
-        }
-        // Quantified, Var, Any, Dim are already canonical
-        other => other,
-    }
-}
-
-/// Inner simplification that skips the Any check.
-/// Called after the top-level `simplify` has already verified no Any is present.
-fn simplify_inner(ty: Type) -> Type {
-    match ty {
-        Type::Size(dim) => simplify_sizeexpr(dim),
-        other => other,
-    }
-}
-
-fn simplify_sizeexpr(dim: SizeExpr) -> Type {
-    match dim {
-        // Addition: N + M
-        SizeExpr::Add(left, right) => {
-            let left = simplify_inner(*left);
-            let right = simplify_inner(*right);
-
-            match (left.as_shape_literal(), right.as_shape_literal()) {
-                // Both literal - evaluate
-                (Some(a), Some(b)) => Type::Size(SizeExpr::Literal(a + b)),
-                // N + 0 = N
-                (_, Some(0)) => left,
-                // 0 + N = N
-                (Some(0), _) => right,
-                // Can't simplify further
-                _ => Type::Size(SizeExpr::Add(Box::new(left), Box::new(right))),
-            }
-        }
-
-        // Subtraction: N - M
-        SizeExpr::Sub(left, right) => {
-            let left = simplify_inner(*left);
-            let right = simplify_inner(*right);
-
-            match (left.as_shape_literal(), right.as_shape_literal()) {
-                // Both literal (only simplify if result is non-negative)
-                (Some(a), Some(b)) if a >= b => Type::Size(SizeExpr::Literal(a - b)),
-                // N - 0 = N
-                (_, Some(0)) => left,
-                // Can't simplify further
-                _ => Type::Size(SizeExpr::Sub(Box::new(left), Box::new(right))),
-            }
-        }
-
-        // Multiplication: N * M
-        SizeExpr::Mul(left, right) => {
-            let left = simplify_inner(*left);
-            let right = simplify_inner(*right);
-            let left_lit = left.as_shape_literal();
-            let right_lit = right.as_shape_literal();
-
-            match (left_lit, right_lit) {
-                // Both literal - evaluate
-                (Some(a), Some(b)) => Type::Size(SizeExpr::Literal(a * b)),
-                // N * 0 = 0 or 0 * N = 0
-                (Some(0), _) | (_, Some(0)) => Type::Size(SizeExpr::Literal(0)),
-                // N * 1 = N
-                (_, Some(1)) => left,
-                // 1 * N = N
-                (Some(1), _) => right,
-                // Can't simplify further
-                _ => Type::Size(SizeExpr::Mul(Box::new(left), Box::new(right))),
-            }
-        }
-
-        // Floor Division: N // M
-        SizeExpr::FloorDiv(left, right) => {
-            let left = simplify_inner(*left);
-            let right = simplify_inner(*right);
-            let left_lit = left.as_shape_literal();
-            let right_lit = right.as_shape_literal();
-
-            match (left_lit, right_lit) {
-                // Both literal (avoid division by zero)
-                (Some(a), Some(b)) if b != 0 => Type::Size(SizeExpr::Literal(a / b)),
-                // N / 1 = N
-                (_, Some(1)) => left,
-                // 0 / N = 0
-                (Some(0), _) => Type::Size(SizeExpr::Literal(0)),
-                // Can't simplify further
-                _ => Type::Size(SizeExpr::FloorDiv(Box::new(left), Box::new(right))),
-            }
-        }
-
-        // Literal - already canonical
-        SizeExpr::Literal(_) => Type::Size(dim),
-    }
-}
-
-// ============================================================================
 // Canonicalization
 // ============================================================================
 
@@ -264,7 +150,7 @@ pub fn canonicalize(ty: Type) -> Type {
         Type::Size(dim) => {
             // Check for Any - if present anywhere, entire expression becomes Any
             if contains_any_in_sizeexpr(&dim) {
-                return Type::Any(AnyStyle::Implicit);
+                return Type::Any(AnyStyle::Explicit);
             }
             canonicalize_sizeexpr(dim)
         }
@@ -333,7 +219,7 @@ fn canonicalize_sum(left: Type, right: Type) -> Type {
     let mut term_map: HashMap<Type, i64> = HashMap::new();
 
     for term in terms {
-        let (coeff, non_literal_part) = extract_coefficient(term.clone());
+        let (coeff, non_literal_part) = extract_coefficient(term);
         *term_map.entry(non_literal_part).or_insert(0) += coeff;
     }
 
@@ -478,19 +364,45 @@ fn canonicalize_product(left: Type, right: Type) -> Type {
     }
 
     // Step 4: Separate literals from non-literals
-    let (literal_product, mut non_literal_factors) = separate_literal_factors(factors);
+    let (literal_product, non_literal_factors) = separate_literal_factors(factors);
 
-    // Step 5: Sort factors by canonical order
+    // Step 5: Distributive law — c * (a + b) → c*a + c*b
+    // When we have a literal coefficient and exactly one non-literal factor that is
+    // a sum, distribute the coefficient across the sum terms. This enables like-term
+    // cancellation at the caller's sum level.
+    if literal_product != 1
+        && non_literal_factors.len() == 1
+        && matches!(&non_literal_factors[0], Type::Size(SizeExpr::Add(_, _)))
+    {
+        let sum = non_literal_factors.into_iter().next().unwrap();
+        let mut terms = Vec::new();
+        collect_terms(sum, &mut terms);
+        // Multiply each term by the literal coefficient and re-canonicalize
+        let distributed_terms: Vec<Type> = terms
+            .into_iter()
+            .map(|term| {
+                let product = Type::Size(SizeExpr::Mul(
+                    Box::new(Type::Size(SizeExpr::Literal(literal_product))),
+                    Box::new(term),
+                ));
+                canonicalize_inner(product)
+            })
+            .collect();
+        return rebuild_sum(distributed_terms);
+    }
+
+    // Step 6: Sort factors by canonical order
+    let mut non_literal_factors = non_literal_factors;
     non_literal_factors.sort_by(compare_type);
 
-    // Step 6: Add literal coefficient if not 1
+    // Step 7: Add literal coefficient if not 1
     let mut all_factors = Vec::new();
     if literal_product != 1 {
         all_factors.push(Type::Size(SizeExpr::Literal(literal_product)));
     }
     all_factors.extend(non_literal_factors);
 
-    // Step 7: Build result
+    // Step 8: Build result
     if all_factors.is_empty() {
         Type::Size(SizeExpr::Literal(1))
     } else {
@@ -542,6 +454,55 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
         // Both literals: compute
         (Type::Size(SizeExpr::Literal(n)), Type::Size(SizeExpr::Literal(d))) if *d != 0 => {
             Type::Size(SizeExpr::Literal(n / d))
+        }
+
+        // Literal term extraction from sum numerator:
+        // (a + k*d + b) // d  →  k + (a + b) // d
+        // Sound because (k*d + r) // d = k + r // d for all integers k, d, r (d ≠ 0).
+        // Enables: (H - 2) // 2 + 1  →  -1 + H // 2 + 1  →  H // 2
+        (Type::Size(SizeExpr::Add(_, _)), Type::Size(SizeExpr::Literal(d))) if *d != 0 => {
+            let d = *d;
+            let mut terms = Vec::new();
+            collect_terms(canonical_num, &mut terms);
+            let original_count = terms.len();
+
+            // Partition into extractable (literal multiples of d) and remaining
+            let mut extracted_sum: i64 = 0;
+            let mut remaining = Vec::new();
+            for term in terms {
+                if let Type::Size(SizeExpr::Literal(n)) = &term
+                    && n % d == 0
+                {
+                    extracted_sum += n / d;
+                    continue;
+                }
+                remaining.push(term);
+            }
+
+            if extracted_sum == 0 && remaining.len() == original_count {
+                // Nothing extracted — fall through to cancellation
+                let (new_num, new_den) =
+                    try_cancel_common_factors(rebuild_sum(remaining), canonical_den);
+                if matches!(new_den, Type::Size(SizeExpr::Literal(1))) {
+                    new_num
+                } else {
+                    Type::Size(SizeExpr::FloorDiv(Box::new(new_num), Box::new(new_den)))
+                }
+            } else if remaining.is_empty() {
+                // All terms extracted — result is just the extracted literal
+                Type::Size(SizeExpr::Literal(extracted_sum))
+            } else {
+                // Some terms extracted: extracted_sum + remaining // d
+                let remainder_div = Type::Size(SizeExpr::FloorDiv(
+                    Box::new(rebuild_sum(remaining)),
+                    Box::new(Type::Size(SizeExpr::Literal(d))),
+                ));
+                if extracted_sum == 0 {
+                    remainder_div
+                } else {
+                    canonicalize_sum(Type::Size(SizeExpr::Literal(extracted_sum)), remainder_div)
+                }
+            }
         }
 
         // Try cancellation
@@ -613,20 +574,25 @@ fn gcd(mut a: i64, mut b: i64) -> i64 {
 }
 
 /// Compare types for canonical ordering.
-/// Ordering: Literal < Quantified < SizeExpr(FloorDiv) < SizeExpr(Mul) < SizeExpr(Add) < SizeExpr(Sub)
+/// Ordering: Literal < Quantified < Var < SizeExpr(FloorDiv) < SizeExpr(Mul) < SizeExpr(Add) < SizeExpr(Sub)
 fn compare_type(a: &Type, b: &Type) -> Ordering {
     match (a, b) {
         // Literals: compare numerically
         (Type::Size(SizeExpr::Literal(n1)), Type::Size(SizeExpr::Literal(n2))) => n1.cmp(n2),
 
-        // Type ordering
+        // Literals come first
         (Type::Size(SizeExpr::Literal(_)), _) => Ordering::Less,
         (_, Type::Size(SizeExpr::Literal(_))) => Ordering::Greater,
 
-        // Quantified
+        // Quantified (type parameters)
         (Type::Quantified(q1), Type::Quantified(q2)) => q1.cmp(q2),
-        (Type::Quantified(_), Type::Size(_)) => Ordering::Less,
-        (Type::Size(_), Type::Quantified(_)) => Ordering::Greater,
+        (Type::Quantified(_), _) => Ordering::Less,
+        (_, Type::Quantified(_)) => Ordering::Greater,
+
+        // Var (solver variables, created during generic instantiation)
+        (Type::Var(v1), Type::Var(v2)) => v1.cmp(v2),
+        (Type::Var(_), _) => Ordering::Less,
+        (_, Type::Var(_)) => Ordering::Greater,
 
         // SizeExpr variants
         (Type::Size(d1), Type::Size(d2)) => compare_sizeexpr(d1, d2),
@@ -711,8 +677,13 @@ pub enum ShapeError {
     /// Tensor ranks don't match
     RankMismatch { got: usize, want: usize },
 
-    /// Invalid dimension value (e.g., negative or zero)
+    /// Invalid dimension value (e.g., negative or zero).
+    /// `value` is the offending dimension index; `reason` explains why it's invalid.
     InvalidDimension { value: i64, reason: String },
+
+    /// General shape computation error from a meta-shape function or broadcasting.
+    /// The message is self-contained (no "Invalid dimension value N:" prefix).
+    ShapeComputation { message: String },
 
     /// Structural mismatch between dimension types
     StructuralMismatch {
@@ -732,6 +703,10 @@ pub enum ShapeError {
 
     /// Too many indices for tensor rank
     TooManyIndices { got: usize, max: usize },
+
+    /// Operation not supported on variadic shapes.
+    /// Triggers fixture fallback instead of a user-visible error.
+    Unsupported { message: String },
 }
 
 impl Display for ShapeError {
@@ -746,6 +721,9 @@ impl Display for ShapeError {
             }
             Self::InvalidDimension { value, reason } => {
                 write!(f, "Invalid dimension value {}: {}", value, reason)
+            }
+            Self::ShapeComputation { message } => {
+                write!(f, "{}", message)
             }
             Self::StructuralMismatch {
                 got: _,
@@ -771,6 +749,9 @@ impl Display for ShapeError {
                     "Too many indices for tensor: got {}, expected at most {}",
                     got, max
                 )
+            }
+            Self::Unsupported { message } => {
+                write!(f, "Unsupported: {}", message)
             }
         }
     }

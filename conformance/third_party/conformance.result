@@ -11,22 +11,18 @@
   "aliases_newtype.py": [],
   "aliases_recursive.py": [],
   "aliases_type_statement.py": [],
-  "aliases_typealiastype.py": [
-    "Line 48: Expected 1 errors",
-    "Line 66: Expected 1 errors"
-  ],
+  "aliases_typealiastype.py": [],
   "aliases_variance.py": [],
   "annotations_coroutines.py": [],
   "annotations_forward_refs.py": [
     "Line 87: Unexpected errors ['Expected a type form, got instance of `(self: Self@ClassD) -> None`']",
-    "Line 96: Unexpected errors ['assert_type(Any, int) failed']"
+    "Line 96: Unexpected errors ['assert_type(Unknown, int) failed']"
   ],
   "annotations_generators.py": [],
   "annotations_methods.py": [],
   "annotations_typeexpr.py": [],
   "callables_annotation.py": [
-    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`\\n  `Proto4[Ellipsis].__call__` has type `(Proto4[Ellipsis], int, ...) -> None`, which is not assignable to `(self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None`, the type of `Proto3.__call__`']",
-    "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`\\n  `Proto7.__call__` has type `(self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None`, which is not assignable to `(self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None`, the type of `Proto6.__call__`']"
+    "Line 159: Expected 1 errors"
   ],
   "callables_kwargs.py": [],
   "callables_protocol.py": [],
@@ -38,10 +34,10 @@
   "constructors_call_new.py": [],
   "constructors_call_type.py": [],
   "constructors_callable.py": [
-    "Line 184: Expected 1 errors",
-    "Line 195: Expected 1 errors",
-    "Line 165: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
-    "Line 183: Unexpected errors ['assert_type(Class8[Any], Class8[str]) failed']"
+    "Line 186: Expected 1 errors",
+    "Line 197: Expected 1 errors",
+    "Line 167: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
+    "Line 185: Unexpected errors ['assert_type(Class8[Unknown], Class8[str]) failed']"
   ],
   "constructors_consistency.py": [],
   "dataclasses_descriptors.py": [
@@ -60,10 +56,7 @@
   "dataclasses_match_args.py": [],
   "dataclasses_order.py": [],
   "dataclasses_postinit.py": [],
-  "dataclasses_slots.py": [
-    "Line 25: Expected 1 errors",
-    "Line 38: Expected 1 errors"
-  ],
+  "dataclasses_slots.py": [],
   "dataclasses_transform_class.py": [],
   "dataclasses_transform_converter.py": [],
   "dataclasses_transform_field.py": [],
@@ -92,13 +85,9 @@
   ],
   "generics_base_class.py": [],
   "generics_basic.py": [
-    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\\n  Protocol `Buffer` requires attribute `__buffer__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__` called with arguments: (AnyStr)\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]']",
-    "Line 67: Unexpected errors ['assert_type(MyStr, str) failed']",
-    "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
+    "Line 44: Unexpected errors ['Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`']"
   ],
-  "generics_defaults.py": [
-    "Line 170: Unexpected errors ['assert_type([DefaultIntT = int](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']"
-  ],
+  "generics_defaults.py": [],
   "generics_defaults_referential.py": [],
   "generics_defaults_specialization.py": [],
   "generics_paramspec_basic.py": [],
@@ -108,14 +97,10 @@
   "generics_paramspec_semantics.py": [],
   "generics_paramspec_specialization.py": [],
   "generics_scoping.py": [
-    "Line 50: Expected 1 errors",
-    "Line 54: Expected 1 errors",
-    "Line 75: Expected 1 errors",
-    "Line 78: Expected 1 errors",
-    "Line 87: Expected 1 errors",
-    "Line 94: Expected 1 errors",
-    "Line 95: Expected 1 errors",
-    "Line 96: Expected 1 errors"
+    "Line 86: Expected 1 errors",
+    "Line 89: Expected 1 errors",
+    "Line 98: Expected 1 errors",
+    "Line 107: Expected 1 errors"
   ],
   "generics_self_advanced.py": [],
   "generics_self_attributes.py": [],
@@ -126,7 +111,7 @@
   "generics_self_protocols.py": [],
   "generics_self_usage.py": [
     "Line 82: Expected 1 errors",
-    "Line 86: Expected 1 errors"
+    "Line 87: Expected 1 errors"
   ],
   "generics_syntax_compatibility.py": [],
   "generics_syntax_declarations.py": [],
@@ -140,12 +125,7 @@
   "generics_typevartuple_callable.py": [],
   "generics_typevartuple_concat.py": [],
   "generics_typevartuple_overloads.py": [],
-  "generics_typevartuple_specialization.py": [
-    "Line 51: Unexpected errors ['assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed']",
-    "Line 94: Unexpected errors ['assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed']",
-    "Line 153: Unexpected errors ['Unpacked argument cannot be used for type parameter T1']",
-    "Line 157: Unexpected errors ['assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed']"
-  ],
+  "generics_typevartuple_specialization.py": [],
   "generics_typevartuple_unpack.py": [],
   "generics_upper_bound.py": [],
   "generics_variance.py": [],
@@ -177,30 +157,16 @@
   "protocols_runtime_checkable.py": [],
   "protocols_self.py": [],
   "protocols_subtyping.py": [],
-  "protocols_variance.py": [
-    "Line 61: Expected 1 errors",
-    "Line 71: Expected 1 errors"
-  ],
-  "qualifiers_annotated.py": [
-    "Line 71: Expected 1 errors",
-    "Line 72: Expected 1 errors",
-    "Line 79: Expected 1 errors",
-    "Line 80: Expected 1 errors",
-    "Line 87: Expected 1 errors",
-    "Line 88: Expected 1 errors"
-  ],
+  "protocols_variance.py": [],
+  "qualifiers_annotated.py": [],
   "qualifiers_final_annotation.py": [
-    "Line 34: Expected 1 errors",
-    "Line 38: Expected 1 errors",
     "Line 107: Expected 1 errors",
     "Line 131: Unexpected errors ['Expected first item to be a string literal', 'Expected first item to be a string literal']",
     "Line 133: Unexpected errors ['Unexpected keyword argument `x` in function `N.__new__`', 'Unexpected keyword argument `y` in function `N.__new__`']"
   ],
   "qualifiers_final_decorator.py": [],
   "specialtypes_any.py": [],
-  "specialtypes_never.py": [
-    "Line 32: Unexpected errors [\"Returned type `Literal['whatever works']` is not assignable to declared return type `int`\"]"
-  ],
+  "specialtypes_never.py": [],
   "specialtypes_none.py": [],
   "specialtypes_promotions.py": [],
   "specialtypes_type.py": [],
@@ -220,5 +186,34 @@
   "typeddicts_readonly_update.py": [],
   "typeddicts_required.py": [],
   "typeddicts_type_consistency.py": [],
-  "typeddicts_usage.py": []
+  "typeddicts_usage.py": [],
+  "typeforms_typeform.py": [
+    "Line 59: Expected 1 errors",
+    "Line 15: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 16: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 17: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 18: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 19: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 20: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 21: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 29: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 30: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 31: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 32: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 40: Unexpected errors ['Expected a type form, got instance of `_SpecialForm`']",
+    "Line 41: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 46: Unexpected errors ['`type[str | None]` is not assignable to `UnionType`']",
+    "Line 47: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 49: Unexpected errors ['`type[list[int]]` is not assignable to `GenericAlias`', 'Expected `v2_actual` to be a type alias, got `GenericAlias`']",
+    "Line 50: Unexpected errors ['Expected a type form, got instance of `_SpecialForm`']",
+    "Line 52: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 53: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 80: Unexpected errors ['Expected a callable, got `_SpecialForm`']",
+    "Line 81: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 83: Unexpected errors ['Expected a callable, got `_SpecialForm`']",
+    "Line 84: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 93: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 97: Unexpected errors ['Expected a type form, got instance of `object`']",
+    "Line 107: Unexpected errors ['Expected a type form, got instance of `object`']"
+  ]
 }

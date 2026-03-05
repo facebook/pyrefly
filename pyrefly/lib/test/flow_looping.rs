@@ -9,15 +9,25 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
-    bug = "The results include over-eager pinning of vars in generic solving, see https://github.com/facebook/pyrefly/issues/105",
     test_loop_with_generic_pin,
     r#"
+from typing import assert_type, Sequence
+
 def condition() -> bool: ...
+
 def f[T](x: T, y: list[T]) -> T: ...
 x = 5
 y: list[str] = []
 while condition():
-    x = f(x, y)  # E: Argument `list[str]` is not assignable to parameter `y` with type `list[int]` in function `f`
+    x = f(x, y)  # E: Argument `list[str]` is not assignable to parameter `y` with type `list[int | str]` in function `f`
+assert_type(x, int | str)
+
+def g[T](x: T, y: Sequence[T]) -> T: ...
+z = 5
+w: list[str] = []
+while condition():
+    z = g(z, w)
+assert_type(z, int | str)
 "#,
 );
 
@@ -83,20 +93,13 @@ def main():
 );
 
 testcase!(
-    bug = "A recursive redefinition in a loop produces a hard-to-follow error message + location",
     test_while_creates_recursive_type,
     r#"
 from typing import assert_type, Any, Literal
 def f(condition) -> None:
     x = 1
-    # It's fine to error here, but ideally we would error at the assignment
-    # rather than the `while`, and ideally we would note that the type is recursive
-    # in a way we don't support.
-    while condition():  # E: `Literal[1] | list[int]` is not assignable to `int`
-        assert_type(x, Literal[1] | list[int])
+    while condition():  # E: Fixpoint iteration did not converge. Inferred type `Literal[1] | list[int | list[int | list[int | list[int]]]]`. Adding annotations may help
         x = [x]
-        assert_type(x, list[int])
-    assert_type(x, Literal[1] | list[int])
     "#,
 );
 
@@ -602,7 +605,6 @@ def f():
 );
 
 testcase!(
-    bug = "Single-shot analysis cannot handle this - see https://github.com/facebook/pyrefly/issues/1234",
     test_assign_result_of_call_back_to_argument,
     r#"
 class Cursor:
@@ -615,7 +617,7 @@ class Query:
 
 def test(q: Query) -> None:
     cursor = None
-    while not cursor or not cursor.finished():  # E: Pyrefly detected conflicting types while breaking a dependency cycle: `Cursor | None` is not assignable to `None`.
+    while not cursor or not cursor.finished():
         cursor = q.send(cursor)
 "#,
 );
@@ -672,9 +674,9 @@ while condition():
 assert_type(good, list[int])
 
 bad = [1]
-while condition():  # E: Pyrefly detected conflicting types while breaking a dependency cycle: `list[int] | list[str]` is not assignable to `list[int]`.
+while condition():
     if condition():
-        bad = [f(bad)]
+        bad = [f(bad)]  # E: Argument `list[int | str] | list[int] | list[str]` is not assignable to parameter `x` with type `list[int | str]` in function `f`
     else:
         bad = [""]
 "#,
@@ -879,8 +881,40 @@ def foo(cond: bool):
         if cond:
             if x is not None:  # E: `x` is uninitialized
                 pass
-    print(x)  # (Note there's no error here, but that's probably ok since we error above)
+    print(x)  # E: `x` may be uninitialized
     x: int | None = None
     assert_type(x, int | None)
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/714
+testcase!(
+    test_loop_variable_type_with_cross_branch_reassignment,
+    r#"
+lineStart: int | None = None
+lineno: int = 0
+
+def needsInt(i: int) -> None:
+    ...
+
+for part in ['a', 'b', 'c', 'd']:
+    if part == 'a':
+        ...
+    elif part == 'b':
+        lineno = lineStart if lineStart is not None else 0
+    elif part == 'c':
+        needsInt(lineno)
+    elif part == 'd':
+        lineStart = lineno
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/1561
+testcase!(
+    test_divmod_loop_inference,
+    r#"
+def process(value: int | float):
+    for i in range(2):
+        (v, value) = divmod(value, 7)
+"#,
 );

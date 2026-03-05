@@ -202,6 +202,7 @@ def get_pyrefly_command(executable: Path | None) -> list[str]:
         "--threads=1",
         "--python-version",
         "3.13.0",
+        "--min-severity=warn",
     ]
 
 

@@ -181,3 +181,21 @@ class A:
         self.x = None  # E: implicitly inferred to be `Any | None`
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1774
+testcase!(
+    test_nested_list_set_item,
+    r#"
+from typing import Any
+rows: list[str] = []
+x = []
+for i, row in enumerate(rows):
+    x.append([])
+    for j, item in enumerate(row):
+        x[-1].append(item)
+
+entries: list[Any] = []
+for i, j in entries:
+    x[i][j] = "x"
+"#,
+);

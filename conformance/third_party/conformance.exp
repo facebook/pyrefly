@@ -15,8 +15,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "`TypeAlias[GoodTypeAlias3, type[list[GoodTypeAlias2]]]` is not subscriptable",
-      "description": "`TypeAlias[GoodTypeAlias3, type[list[GoodTypeAlias2]]]` is not subscriptable",
+      "concise_description": "`TypeAlias[GoodTypeAlias3, type[list[int | None]]]` is not subscriptable",
+      "description": "`TypeAlias[GoodTypeAlias3, type[list[int | None]]]` is not subscriptable",
       "line": 68,
       "name": "unsupported-operation",
       "severity": "error",
@@ -721,6 +721,17 @@
       "severity": "error",
       "stop_column": 61,
       "stop_line": 75
+    },
+    {
+      "code": -2,
+      "column": 93,
+      "concise_description": "Found cyclic self-reference in `MutualReference2`",
+      "description": "Found cyclic self-reference in `MutualReference2`",
+      "line": 75,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 123,
+      "stop_line": 75
     }
   ],
   "aliases_type_statement.py": [
@@ -1035,6 +1046,17 @@
     {
       "code": -2,
       "column": 28,
+      "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias6`",
+      "description": "Found cyclic self-reference in `RecursiveTypeAlias6`",
+      "line": 88,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 47,
+      "stop_line": 88
+    },
+    {
+      "code": -2,
+      "column": 28,
       "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias7`",
       "description": "Found cyclic self-reference in `RecursiveTypeAlias7`",
       "line": 89,
@@ -1102,35 +1124,46 @@
     },
     {
       "code": -2,
-      "column": 41,
+      "column": 13,
       "concise_description": "Found cyclic self-reference in `BadAlias4`",
       "description": "Found cyclic self-reference in `BadAlias4`",
       "line": 46,
       "name": "invalid-type-alias",
       "severity": "error",
-      "stop_column": 50,
+      "stop_column": 52,
       "stop_line": 46
     },
     {
       "code": -2,
-      "column": 40,
+      "column": 13,
       "concise_description": "Found cyclic self-reference in `BadAlias5`",
       "description": "Found cyclic self-reference in `BadAlias5`",
       "line": 47,
       "name": "invalid-type-alias",
       "severity": "error",
-      "stop_column": 60,
+      "stop_column": 79,
       "stop_line": 47
     },
     {
       "code": -2,
-      "column": 40,
+      "column": 13,
+      "concise_description": "Found cyclic self-reference in `BadAlias6`",
+      "description": "Found cyclic self-reference in `BadAlias6`",
+      "line": 48,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 52,
+      "stop_line": 48
+    },
+    {
+      "code": -2,
+      "column": 13,
       "concise_description": "Found cyclic self-reference in `BadAlias7`",
       "description": "Found cyclic self-reference in `BadAlias7`",
       "line": 49,
       "name": "invalid-type-alias",
       "severity": "error",
-      "stop_column": 49,
+      "stop_column": 50,
       "stop_line": 49
     },
     {
@@ -1297,6 +1330,17 @@
       "severity": "error",
       "stop_column": 52,
       "stop_line": 64
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Found cyclic self-reference in `BadAlias21`",
+      "description": "Found cyclic self-reference in `BadAlias21`",
+      "line": 66,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 59,
+      "stop_line": 66
     }
   ],
   "aliases_variance.py": [
@@ -1570,8 +1614,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type(Any, int) failed",
-      "description": "assert_type(Any, int) failed",
+      "concise_description": "assert_type(Unknown, int) failed",
+      "description": "assert_type(Unknown, int) failed",
       "line": 96,
       "name": "assert-type",
       "severity": "error",
@@ -1671,8 +1715,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot yield from `Generator[A, None, None]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
-      "description": "Cannot yield from `Generator[A, None, None]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
+      "concise_description": "Cannot yield from `Generator[A]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
+      "description": "Cannot yield from `Generator[A]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
       "line": 118,
       "name": "invalid-yield",
       "severity": "error",
@@ -1682,8 +1726,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot yield from `Generator[int, None, None]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
-      "description": "Cannot yield from `Generator[int, None, None]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
+      "concise_description": "Cannot yield from `Generator[int]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
+      "description": "Cannot yield from `Generator[int]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
       "line": 119,
       "name": "invalid-yield",
       "severity": "error",
@@ -1693,8 +1737,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot yield from `Generator[None, int, None]`, which is not assignable to declared return type `Generator[None, str, Unknown]`",
-      "description": "Cannot yield from `Generator[None, int, None]`, which is not assignable to declared return type `Generator[None, str, Unknown]`",
+      "concise_description": "Cannot yield from `Generator[None, int]`, which is not assignable to declared return type `Generator[None, str, Unknown]`",
+      "description": "Cannot yield from `Generator[None, int]`, which is not assignable to declared return type `Generator[None, str, Unknown]`",
       "line": 135,
       "name": "invalid-yield",
       "severity": "error",
@@ -2036,39 +2080,6 @@
       "severity": "error",
       "stop_column": 15,
       "stop_line": 93
-    },
-    {
-      "code": -2,
-      "column": 20,
-      "concise_description": "`Proto4[Ellipsis]` is not assignable to `Proto3`",
-      "description": "`Proto4[Ellipsis]` is not assignable to `Proto3`\n  `Proto4[Ellipsis].__call__` has type `(Proto4[Ellipsis], int, ...) -> None`, which is not assignable to `(self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None`, the type of `Proto3.__call__`",
-      "line": 156,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 22,
-      "stop_line": 156
-    },
-    {
-      "code": -2,
-      "column": 20,
-      "concise_description": "`Proto7` is not assignable to `Proto6`",
-      "description": "`Proto7` is not assignable to `Proto6`\n  `Proto7.__call__` has type `(self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None`, which is not assignable to `(self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None`, the type of `Proto6.__call__`",
-      "line": 157,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 22,
-      "stop_line": 157
-    },
-    {
-      "code": -2,
-      "column": 25,
-      "concise_description": "`Proto8` is not assignable to `Proto5[Any]`",
-      "description": "`Proto8` is not assignable to `Proto5[Any]`\n  `Proto8.__call__` has type `(self: Proto8) -> None`, which is not assignable to `(self: Proto8, *args: Any, **kwargs: Any) -> None`, the type of `Proto5.__call__`",
-      "line": 159,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 27,
-      "stop_line": 159
     },
     {
       "code": -2,
@@ -3224,11 +3235,11 @@
       "column": 13,
       "concise_description": "Argument `type[Class11[str]]` is not assignable to parameter `cls` with type `type[Class11[int]]` in function `Class11.__new__`",
       "description": "Argument `type[Class11[str]]` is not assignable to parameter `cls` with type `type[Class11[int]]` in function `Class11.__new__`",
-      "line": 145,
+      "line": 148,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 15,
-      "stop_line": 145
+      "stop_line": 148
     }
   ],
   "constructors_call_type.py": [
@@ -3437,22 +3448,11 @@
       "column": 12,
       "concise_description": "revealed type: (x: int) -> Class3",
       "description": "revealed type: (x: int) -> Class3",
-      "line": 63,
+      "line": 64,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 16,
-      "stop_line": 63
-    },
-    {
-      "code": -2,
-      "column": 3,
-      "concise_description": "Missing argument `x`",
-      "description": "Missing argument `x`",
-      "line": 65,
-      "name": "missing-argument",
-      "severity": "error",
-      "stop_column": 5,
-      "stop_line": 65
+      "stop_line": 64
     },
     {
       "code": -2,
@@ -3462,51 +3462,51 @@
       "line": 66,
       "name": "missing-argument",
       "severity": "error",
-      "stop_column": 8,
-      "stop_line": 66
-    },
-    {
-      "code": -2,
-      "column": 4,
-      "concise_description": "Unexpected keyword argument `y`",
-      "description": "Unexpected keyword argument `y`",
-      "line": 66,
-      "name": "unexpected-keyword",
-      "severity": "error",
       "stop_column": 5,
       "stop_line": 66
     },
     {
       "code": -2,
-      "column": 7,
-      "concise_description": "Expected 1 positional argument, got 2",
-      "description": "Expected 1 positional argument, got 2",
+      "column": 3,
+      "concise_description": "Missing argument `x`",
+      "description": "Missing argument `x`",
       "line": 67,
-      "name": "bad-argument-count",
+      "name": "missing-argument",
       "severity": "error",
       "stop_column": 8,
       "stop_line": 67
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "revealed type: (x: int) -> int",
-      "description": "revealed type: (x: int) -> int",
-      "line": 77,
-      "name": "reveal-type",
-      "severity": "info",
-      "stop_column": 16,
-      "stop_line": 77
+      "column": 4,
+      "concise_description": "Unexpected keyword argument `y`",
+      "description": "Unexpected keyword argument `y`",
+      "line": 67,
+      "name": "unexpected-keyword",
+      "severity": "error",
+      "stop_column": 5,
+      "stop_line": 67
     },
     {
       "code": -2,
-      "column": 3,
-      "concise_description": "Missing argument `x`",
-      "description": "Missing argument `x`",
-      "line": 79,
-      "name": "missing-argument",
+      "column": 7,
+      "concise_description": "Expected 1 positional argument, got 2",
+      "description": "Expected 1 positional argument, got 2",
+      "line": 68,
+      "name": "bad-argument-count",
       "severity": "error",
-      "stop_column": 5,
+      "stop_column": 8,
+      "stop_line": 68
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "revealed type: (x: int) -> int",
+      "description": "revealed type: (x: int) -> int",
+      "line": 79,
+      "name": "reveal-type",
+      "severity": "info",
+      "stop_column": 16,
       "stop_line": 79
     },
     {
@@ -3514,143 +3514,154 @@
       "column": 3,
       "concise_description": "Missing argument `x`",
       "description": "Missing argument `x`",
-      "line": 80,
+      "line": 81,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 5,
+      "stop_line": 81
+    },
+    {
+      "code": -2,
+      "column": 3,
+      "concise_description": "Missing argument `x`",
+      "description": "Missing argument `x`",
+      "line": 82,
       "name": "missing-argument",
       "severity": "error",
       "stop_column": 8,
-      "stop_line": 80
+      "stop_line": 82
     },
     {
       "code": -2,
       "column": 4,
       "concise_description": "Unexpected keyword argument `y`",
       "description": "Unexpected keyword argument `y`",
-      "line": 80,
+      "line": 82,
       "name": "unexpected-keyword",
       "severity": "error",
       "stop_column": 5,
-      "stop_line": 80
+      "stop_line": 82
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "revealed type: (*args: Any, **kwargs: Any) -> NoReturn",
       "description": "revealed type: (*args: Any, **kwargs: Any) -> NoReturn",
-      "line": 97,
+      "line": 99,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 16,
-      "stop_line": 97
+      "stop_line": 99
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "revealed type: () -> Class6Proxy",
       "description": "revealed type: () -> Class6Proxy",
-      "line": 125,
+      "line": 127,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 16,
-      "stop_line": 125
+      "stop_line": 127
     },
     {
       "code": -2,
       "column": 4,
       "concise_description": "Expected 0 positional arguments, got 1",
       "description": "Expected 0 positional arguments, got 1",
-      "line": 127,
+      "line": 129,
       "name": "bad-argument-count",
       "severity": "error",
       "stop_column": 5,
-      "stop_line": 127
+      "stop_line": 129
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "revealed type: () -> Any",
       "description": "revealed type: () -> Any",
-      "line": 142,
+      "line": 144,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 20,
-      "stop_line": 142
+      "stop_line": 144
     },
     {
       "code": -2,
       "column": 8,
       "concise_description": "Expected 0 positional arguments, got 1",
       "description": "Expected 0 positional arguments, got 1",
-      "line": 144,
+      "line": 146,
       "name": "bad-argument-count",
       "severity": "error",
       "stop_column": 9,
-      "stop_line": 144
+      "stop_line": 146
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "revealed type: (x: int) -> Class7[int]",
       "description": "revealed type: (x: int) -> Class7[int]",
-      "line": 161,
+      "line": 163,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 2,
-      "stop_line": 163
+      "stop_line": 165
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "assert_type(Class7[int], Class7[str]) failed",
       "description": "assert_type(Class7[int], Class7[str]) failed",
-      "line": 165,
+      "line": 167,
       "name": "assert-type",
       "severity": "error",
       "stop_column": 33,
-      "stop_line": 165
+      "stop_line": 167
     },
     {
       "code": -2,
       "column": 16,
       "concise_description": "Argument `Literal['']` is not assignable to parameter `x` with type `int`",
       "description": "Argument `Literal['']` is not assignable to parameter `x` with type `int`",
-      "line": 165,
+      "line": 167,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 18,
-      "stop_line": 165
+      "stop_line": 167
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Class8[Unknown]",
       "description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Class8[Unknown]",
-      "line": 182,
+      "line": 184,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 16,
-      "stop_line": 182
+      "stop_line": 184
     },
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type(Class8[Any], Class8[str]) failed",
-      "description": "assert_type(Class8[Any], Class8[str]) failed",
-      "line": 183,
+      "concise_description": "assert_type(Class8[Unknown], Class8[str]) failed",
+      "description": "assert_type(Class8[Unknown], Class8[str]) failed",
+      "line": 185,
       "name": "assert-type",
       "severity": "error",
       "stop_column": 41,
-      "stop_line": 183
+      "stop_line": 185
     },
     {
       "code": -2,
       "column": 12,
-      "concise_description": "revealed type: (x: list[@_], y: list[@_]) -> Class9",
-      "description": "revealed type: (x: list[@_], y: list[@_]) -> Class9",
-      "line": 193,
+      "concise_description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Class9",
+      "description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Class9",
+      "line": 195,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 16,
-      "stop_line": 193
+      "stop_line": 195
     }
   ],
   "constructors_consistency.py": [],
@@ -3828,25 +3839,47 @@
   "dataclasses_hash.py": [
     {
       "code": -2,
+      "column": 1,
+      "concise_description": "Expected a callable, got `None`",
+      "description": "Expected a callable, got `None`",
+      "line": 17,
+      "name": "not-callable",
+      "severity": "error",
+      "stop_column": 16,
+      "stop_line": 17
+    },
+    {
+      "code": -2,
       "column": 16,
       "concise_description": "`DC1` is not assignable to `Hashable`",
       "description": "`DC1` is not assignable to `Hashable`\n  `DC1.__hash__` has type `None`, which is not consistent with `(self: DC1) -> int` in `Hashable.__hash__` (the type of read-write attributes cannot be changed)",
-      "line": 15,
+      "line": 18,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 22,
-      "stop_line": 15
+      "stop_line": 18
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Expected a callable, got `None`",
+      "description": "Expected a callable, got `None`",
+      "line": 39,
+      "name": "not-callable",
+      "severity": "error",
+      "stop_column": 16,
+      "stop_line": 39
     },
     {
       "code": -2,
       "column": 16,
       "concise_description": "`DC3` is not assignable to `Hashable`",
       "description": "`DC3` is not assignable to `Hashable`\n  `DC3.__hash__` has type `None`, which is not consistent with `(self: DC3) -> int` in `Hashable.__hash__` (the type of read-write attributes cannot be changed)",
-      "line": 32,
+      "line": 40,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 22,
-      "stop_line": 32
+      "stop_line": 40
     }
   ],
   "dataclasses_inheritance.py": [
@@ -3994,6 +4027,28 @@
     },
     {
       "code": -2,
+      "column": 14,
+      "concise_description": "Object of class `DC2` has no attribute `y` (not declared in `__slots__`)",
+      "description": "Object of class `DC2` has no attribute `y` (not declared in `__slots__`)",
+      "line": 25,
+      "name": "missing-attribute",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 25
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Object of class `DC3` has no attribute `y` (not declared in `__slots__`)",
+      "description": "Object of class `DC3` has no attribute `y` (not declared in `__slots__`)",
+      "line": 38,
+      "name": "missing-attribute",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 38
+    },
+    {
+      "code": -2,
       "column": 1,
       "concise_description": "Class `DC6` has no class attribute `__slots__`",
       "description": "Class `DC6` has no class attribute `__slots__`",
@@ -4109,8 +4164,8 @@
     {
       "code": -2,
       "column": 41,
-      "concise_description": "Argument `() -> int` is not assignable to parameter `converter` with type `(@_) -> int` in function `model_field`",
-      "description": "Argument `() -> int` is not assignable to parameter `converter` with type `(@_) -> int` in function `model_field`",
+      "concise_description": "Argument `() -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
+      "description": "Argument `() -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
       "line": 48,
       "name": "bad-argument-type",
       "severity": "error",
@@ -4120,8 +4175,8 @@
     {
       "code": -2,
       "column": 41,
-      "concise_description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> int` in function `model_field`",
-      "description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> int` in function `model_field`",
+      "concise_description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
+      "description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
       "line": 49,
       "name": "bad-argument-type",
       "severity": "error",
@@ -4537,8 +4592,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "assert_type(Any, int) failed",
-      "description": "assert_type(Any, int) failed",
+      "concise_description": "assert_type(int | str, Any) failed",
+      "description": "assert_type(int | str, Any) failed",
       "line": 28,
       "name": "assert-type",
       "severity": "error",
@@ -4548,8 +4603,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "assert_type(Literal[4], int) failed",
-      "description": "assert_type(Literal[4], int) failed",
+      "concise_description": "assert_type(Any, int) failed",
+      "description": "assert_type(Any, int) failed",
       "line": 29,
       "name": "assert-type",
       "severity": "error",
@@ -4559,35 +4614,46 @@
     {
       "code": -2,
       "column": 16,
+      "concise_description": "assert_type(Literal[4], int) failed",
+      "description": "assert_type(Literal[4], int) failed",
+      "line": 30,
+      "name": "assert-type",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 30
+    },
+    {
+      "code": -2,
+      "column": 16,
       "concise_description": "assert_type needs 2 positional arguments, got 0",
       "description": "assert_type needs 2 positional arguments, got 0",
-      "line": 31,
+      "line": 32,
       "name": "bad-argument-count",
       "severity": "error",
       "stop_column": 18,
-      "stop_line": 31
+      "stop_line": 32
     },
     {
       "code": -2,
       "column": 16,
       "concise_description": "assert_type(Literal[''], int) failed",
       "description": "assert_type(Literal[''], int) failed",
-      "line": 32,
+      "line": 33,
       "name": "assert-type",
       "severity": "error",
       "stop_column": 25,
-      "stop_line": 32
+      "stop_line": 33
     },
     {
       "code": -2,
       "column": 16,
       "concise_description": "assert_type needs 2 positional arguments, got 3",
       "description": "assert_type needs 2 positional arguments, got 3",
-      "line": 33,
+      "line": 34,
       "name": "bad-argument-count",
       "severity": "error",
       "stop_column": 33,
-      "stop_line": 33
+      "stop_line": 34
     }
   ],
   "directives_cast.py": [
@@ -4914,25 +4980,58 @@
   "directives_version_platform.py": [
     {
       "code": -2,
-      "column": 17,
-      "concise_description": "`Literal['']` is not assignable to `int`",
-      "description": "`Literal['']` is not assignable to `int`",
-      "line": 40,
-      "name": "bad-assignment",
+      "column": 19,
+      "concise_description": "Could not find name `val3`",
+      "description": "Could not find name `val3`\n  Did you mean `val1`?",
+      "line": 33,
+      "name": "unknown-name",
       "severity": "error",
-      "stop_column": 19,
-      "stop_line": 40
+      "stop_column": 23,
+      "stop_line": 33
     },
     {
       "code": -2,
-      "column": 17,
-      "concise_description": "`Literal['']` is not assignable to `int`",
-      "description": "`Literal['']` is not assignable to `int`",
-      "line": 45,
-      "name": "bad-assignment",
+      "column": 19,
+      "concise_description": "Could not find name `val6`",
+      "description": "Could not find name `val6`\n  Did you mean `val1`?",
+      "line": 50,
+      "name": "unknown-name",
       "severity": "error",
-      "stop_column": 19,
-      "stop_line": 45
+      "stop_column": 23,
+      "stop_line": 50
+    },
+    {
+      "code": -2,
+      "column": 19,
+      "concise_description": "Could not find name `val9`",
+      "description": "Could not find name `val9`\n  Did you mean `val1`?",
+      "line": 59,
+      "name": "unknown-name",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 59
+    },
+    {
+      "code": -2,
+      "column": 19,
+      "concise_description": "Could not find name `val10`",
+      "description": "Could not find name `val10`\n  Did you mean `val1`?",
+      "line": 66,
+      "name": "unknown-name",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 66
+    },
+    {
+      "code": -2,
+      "column": 19,
+      "concise_description": "Could not find name `val13`",
+      "description": "Could not find name `val13`\n  Did you mean `val1`?",
+      "line": 75,
+      "name": "unknown-name",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 75
     }
   ],
   "enums_behaviors.py": [
@@ -5101,97 +5200,53 @@
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "assert_type((x: Any) -> str, Any) failed",
-      "description": "assert_type((x: Any) -> str, Any) failed",
-      "line": 82,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 53,
-      "stop_line": 82
-    },
-    {
-      "code": -2,
-      "column": 37,
+      "column": 20,
       "concise_description": "`Pet4.converter` is not a valid enum member",
       "description": "`Pet4.converter` is not a valid enum member",
       "line": 82,
       "name": "invalid-literal",
       "severity": "error",
-      "stop_column": 51,
+      "stop_column": 34,
       "stop_line": 82
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "assert_type((x: int) -> int, Any) failed",
-      "description": "assert_type((x: int) -> int, Any) failed",
-      "line": 83,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 53,
-      "stop_line": 83
-    },
-    {
-      "code": -2,
-      "column": 37,
+      "column": 20,
       "concise_description": "`Pet4.transform` is not a valid enum member",
       "description": "`Pet4.transform` is not a valid enum member",
       "line": 83,
       "name": "invalid-literal",
       "severity": "error",
-      "stop_column": 51,
+      "stop_column": 34,
       "stop_line": 83
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "assert_type((self: Pet4) -> str, Any) failed",
-      "description": "assert_type((self: Pet4) -> str, Any) failed",
-      "line": 84,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 49,
-      "stop_line": 84
-    },
-    {
-      "code": -2,
-      "column": 35,
+      "column": 18,
       "concise_description": "`Pet4.species` is not a valid enum member",
       "description": "`Pet4.species` is not a valid enum member",
       "line": 84,
       "name": "invalid-literal",
       "severity": "error",
-      "stop_column": 47,
+      "stop_column": 30,
       "stop_line": 84
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "assert_type((self: Pet4) -> None, Any) failed",
-      "description": "assert_type((self: Pet4) -> None, Any) failed",
-      "line": 85,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 45,
-      "stop_line": 85
-    },
-    {
-      "code": -2,
-      "column": 33,
+      "column": 16,
       "concise_description": "`Pet4.speak` is not a valid enum member",
       "description": "`Pet4.speak` is not a valid enum member",
       "line": 85,
       "name": "invalid-literal",
       "severity": "error",
-      "stop_column": 43,
+      "stop_column": 26,
       "stop_line": 85
     },
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type(int, Any) failed",
-      "description": "assert_type(int, Any) failed",
+      "concise_description": "assert_type(int, Unknown) failed",
+      "description": "assert_type(int, Unknown) failed",
       "line": 116,
       "name": "assert-type",
       "severity": "error",
@@ -5223,8 +5278,8 @@
     {
       "code": -2,
       "column": 20,
-      "concise_description": "assert_type(int, Any) failed",
-      "description": "assert_type(int, Any) failed",
+      "concise_description": "assert_type(int, Unknown) failed",
+      "description": "assert_type(int, Unknown) failed",
       "line": 129,
       "name": "assert-type",
       "severity": "error",
@@ -5371,28 +5426,6 @@
   "generics_basic.py": [
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "`+` is not supported between `AnyStr` and `AnyStr`",
-      "description": "`+` is not supported between `AnyStr` and `AnyStr`\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\n  Protocol `Buffer` requires attribute `__buffer__`",
-      "line": 34,
-      "name": "unsupported-operation",
-      "severity": "error",
-      "stop_column": 17,
-      "stop_line": 34
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "`+` is not supported between `AnyStr` and `AnyStr`",
-      "description": "`+` is not supported between `AnyStr` and `AnyStr`\n  No matching overload found for function `str.__add__` called with arguments: (AnyStr)\n  Possible overloads:\n  (value: LiteralString, /) -> LiteralString\n  (value: str, /) -> str [closest match]",
-      "line": 34,
-      "name": "unsupported-operation",
-      "severity": "error",
-      "stop_column": 17,
-      "stop_line": 34
-    },
-    {
-      "code": -2,
       "column": 15,
       "concise_description": "Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`",
       "description": "Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`",
@@ -5412,6 +5445,17 @@
       "severity": "error",
       "stop_column": 16,
       "stop_line": 41
+    },
+    {
+      "code": -2,
+      "column": 15,
+      "concise_description": "Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`",
+      "description": "Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`",
+      "line": 44,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 16,
+      "stop_line": 44
     },
     {
       "code": -2,
@@ -5437,42 +5481,9 @@
     },
     {
       "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(MyStr, str) failed",
-      "description": "assert_type(MyStr, str) failed",
-      "line": 67,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 35,
-      "stop_line": 67
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(MyStr, str) failed",
-      "description": "assert_type(MyStr, str) failed",
-      "line": 68,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 35,
-      "stop_line": 68
-    },
-    {
-      "code": -2,
-      "column": 27,
-      "concise_description": "Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`",
-      "description": "Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`",
-      "line": 68,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 28,
-      "stop_line": 68
-    },
-    {
-      "code": -2,
       "column": 15,
-      "concise_description": "Argument `bytes` is not assignable to parameter `y` with type `MyStr` in function `concat`",
-      "description": "Argument `bytes` is not assignable to parameter `y` with type `MyStr` in function `concat`",
+      "concise_description": "Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`",
+      "description": "Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`",
       "line": 69,
       "name": "bad-argument-type",
       "severity": "error",
@@ -5582,148 +5593,137 @@
     },
     {
       "code": -2,
-      "column": 1,
+      "column": 8,
       "concise_description": "Expected 5 type arguments for `AllTheDefaults`, got 1",
       "description": "Expected 5 type arguments for `AllTheDefaults`, got 1",
-      "line": 50,
+      "line": 66,
       "name": "bad-specialization",
       "severity": "error",
-      "stop_column": 20,
-      "stop_line": 50
+      "stop_column": 27,
+      "stop_line": 66
     },
     {
       "code": -2,
       "column": 51,
       "concise_description": "Expected default `int` of `Invalid1` to be assignable to the upper bound of `str`",
       "description": "Expected default `int` of `Invalid1` to be assignable to the upper bound of `str`",
-      "line": 107,
+      "line": 152,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 54,
-      "stop_line": 107
+      "stop_line": 152
     },
     {
       "code": -2,
       "column": 52,
       "concise_description": "Expected default `int` of `Invalid2` to be one of the following constraints: `float`, `str`",
       "description": "Expected default `int` of `Invalid2` to be one of the following constraints: `float`, `str`",
-      "line": 114,
+      "line": 159,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 55,
-      "stop_line": 114
+      "stop_line": 159
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "assert_type(int, Any) failed",
       "description": "assert_type(int, Any) failed",
-      "line": 131,
+      "line": 177,
       "name": "assert-type",
       "severity": "error",
       "stop_column": 27,
-      "stop_line": 131
+      "stop_line": 177
     },
     {
       "code": -2,
       "column": 7,
       "concise_description": "TypeVar `T5` with a default cannot follow TypeVarTuple `Ts`",
       "description": "TypeVar `T5` with a default cannot follow TypeVarTuple `Ts`",
-      "line": 142,
+      "line": 188,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 11,
-      "stop_line": 142
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type([DefaultIntT = int](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed",
-      "description": "assert_type([DefaultIntT = int](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed",
-      "line": 170,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 57,
-      "stop_line": 170
+      "stop_line": 188
     }
   ],
   "generics_defaults_referential.py": [
     {
       "code": -2,
-      "column": 13,
-      "concise_description": "Argument `Literal['']` is not assignable to parameter `b` with type `int` in function `Foo.__init__`",
-      "description": "Argument `Literal['']` is not assignable to parameter `b` with type `int` in function `Foo.__init__`",
-      "line": 36,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 15,
-      "stop_line": 36
-    },
-    {
-      "code": -2,
-      "column": 10,
-      "concise_description": "Argument `Literal['']` is not assignable to parameter `a` with type `int` in function `Foo.__init__`",
-      "description": "Argument `Literal['']` is not assignable to parameter `a` with type `int` in function `Foo.__init__`",
+      "column": 17,
+      "concise_description": "Argument `str` is not assignable to parameter `b` with type `int` in function `Foo.__init__`",
+      "description": "Argument `str` is not assignable to parameter `b` with type `int` in function `Foo.__init__`",
       "line": 37,
       "name": "bad-argument-type",
       "severity": "error",
-      "stop_column": 12,
+      "stop_column": 18,
       "stop_line": 37
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Argument `str` is not assignable to parameter `a` with type `int` in function `Foo.__init__`",
+      "description": "Argument `str` is not assignable to parameter `a` with type `int` in function `Foo.__init__`",
+      "line": 38,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 38
     },
     {
       "code": -2,
       "column": 7,
       "concise_description": "Default of type parameter `Start2T` refers to out-of-scope type parameter `StopT`",
       "description": "Default of type parameter `Start2T` refers to out-of-scope type parameter `StopT`",
-      "line": 53,
+      "line": 54,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 13,
-      "stop_line": 53
+      "stop_line": 54
     },
     {
       "code": -2,
       "column": 11,
       "concise_description": "Default of type parameter `S2` refers to out-of-scope type parameter `S1`",
       "description": "Default of type parameter `S2` refers to out-of-scope type parameter `S1`",
-      "line": 60,
+      "line": 61,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 15,
-      "stop_line": 60
+      "stop_line": 61
     },
     {
       "code": -2,
       "column": 40,
       "concise_description": "Expected default `TypeVar[X1]` of `Invalid1` to be assignable to the upper bound of `str`",
       "description": "Expected default `TypeVar[X1]` of `Invalid1` to be assignable to the upper bound of `str`",
-      "line": 68,
+      "line": 69,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 42,
-      "stop_line": 68
+      "stop_line": 69
     },
     {
       "code": -2,
       "column": 52,
       "concise_description": "Expected default `TypeVar[Y1]` of `Invalid2` to be one of the following constraints: `float`, `str`",
       "description": "Expected default `TypeVar[Y1]` of `Invalid2` to be one of the following constraints: `float`, `str`",
-      "line": 74,
+      "line": 75,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 54,
-      "stop_line": 74
+      "stop_line": 75
     },
     {
       "code": -2,
       "column": 63,
       "concise_description": "Expected default `TypeVar[Y2]` of `AlsoInvalid2` to be one of the following constraints: `bool`, `complex`",
       "description": "Expected default `TypeVar[Y2]` of `AlsoInvalid2` to be one of the following constraints: `bool`, `complex`",
-      "line": 78,
+      "line": 79,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 65,
-      "stop_line": 78
+      "stop_line": 79
     }
   ],
   "generics_defaults_specialization.py": [
@@ -6245,25 +6245,113 @@
   "generics_scoping.py": [
     {
       "code": -2,
+      "column": 12,
+      "concise_description": "assert_type(int, Literal[1]) failed",
+      "description": "assert_type(int, Literal[1]) failed",
+      "line": 16,
+      "name": "assert-type",
+      "severity": "error",
+      "stop_column": 34,
+      "stop_line": 16
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "assert_type(str, Literal['a']) failed",
+      "description": "assert_type(str, Literal['a']) failed",
+      "line": 20,
+      "name": "assert-type",
+      "severity": "error",
+      "stop_column": 38,
+      "stop_line": 20
+    },
+    {
+      "code": -2,
       "column": 10,
       "concise_description": "Argument `Literal['a']` is not assignable to parameter `x` with type `int` in function `MyClass.meth_2`",
       "description": "Argument `Literal['a']` is not assignable to parameter `x` with type `int` in function `MyClass.meth_2`",
-      "line": 29,
+      "line": 34,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 13,
-      "stop_line": 29
+      "stop_line": 34
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "assert_type(str, Literal['abc']) failed",
+      "description": "assert_type(str, Literal['abc']) failed",
+      "line": 50,
+      "name": "assert-type",
+      "severity": "error",
+      "stop_column": 48,
+      "stop_line": 50
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "assert_type(bytes, Literal[b'abc']) failed",
+      "description": "assert_type(bytes, Literal[b'abc']) failed",
+      "line": 54,
+      "name": "assert-type",
+      "severity": "error",
+      "stop_column": 50,
+      "stop_line": 54
+    },
+    {
+      "code": -2,
+      "column": 8,
+      "concise_description": "Type variable `S` is not in scope",
+      "description": "Type variable `S` is not in scope",
+      "line": 61,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 61
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Type variable `S` is not in scope",
+      "description": "Type variable `S` is not in scope",
+      "line": 65,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 65
     },
     {
       "code": -2,
       "column": 11,
       "concise_description": "Redundant type parameter declaration",
       "description": "Redundant type parameter declaration",
-      "line": 65,
+      "line": 76,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 20,
-      "stop_line": 65
+      "stop_line": 76
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Type variable `T` is not in scope",
+      "description": "Type variable `T` is not in scope",
+      "line": 105,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 105
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Type variable `T` is not in scope",
+      "description": "Type variable `T` is not in scope",
+      "line": 106,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 106
     }
   ],
   "generics_self_advanced.py": [],
@@ -6297,11 +6385,11 @@
       "column": 26,
       "concise_description": "`type[Self@Container]` is not subscriptable",
       "description": "`type[Self@Container]` is not subscriptable",
-      "line": 67,
+      "line": 68,
       "name": "unsupported-operation",
       "severity": "error",
       "stop_column": 35,
-      "stop_line": 67
+      "stop_line": 68
     }
   ],
   "generics_self_protocols.py": [
@@ -6367,88 +6455,88 @@
       "column": 15,
       "concise_description": "`Self` must appear within a class",
       "description": "`Self` must appear within a class",
-      "line": 101,
+      "line": 103,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 19,
-      "stop_line": 101
+      "stop_line": 103
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "`Self` must appear within a class",
       "description": "`Self` must appear within a class",
-      "line": 103,
+      "line": 105,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 16,
-      "stop_line": 103
+      "stop_line": 105
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "Invalid base class: `Self`",
       "description": "Invalid base class: `Self`",
-      "line": 103,
+      "line": 105,
       "name": "invalid-inheritance",
       "severity": "error",
       "stop_column": 16,
-      "stop_line": 103
+      "stop_line": 105
     },
     {
       "code": -2,
       "column": 30,
       "concise_description": "`Self` must appear within a class",
       "description": "`Self` must appear within a class",
-      "line": 106,
+      "line": 108,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 34,
-      "stop_line": 106
+      "stop_line": 108
     },
     {
       "code": -2,
       "column": 9,
       "concise_description": "`Self` cannot be used in a static method",
       "description": "`Self` cannot be used in a static method",
-      "line": 111,
+      "line": 113,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 13,
-      "stop_line": 111
+      "stop_line": 113
     },
     {
       "code": -2,
       "column": 9,
       "concise_description": "`Self` cannot be used in a static method",
       "description": "`Self` cannot be used in a static method",
-      "line": 116,
+      "line": 118,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 25,
-      "stop_line": 116
+      "stop_line": 118
     },
     {
       "code": -2,
       "column": 37,
       "concise_description": "`Self` cannot be used in a metaclass",
       "description": "`Self` cannot be used in a metaclass",
-      "line": 121,
+      "line": 123,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 41,
-      "stop_line": 121
+      "stop_line": 123
     },
     {
       "code": -2,
       "column": 42,
       "concise_description": "`Self` cannot be used in a metaclass",
       "description": "`Self` cannot be used in a metaclass",
-      "line": 125,
+      "line": 127,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 46,
-      "stop_line": 125
+      "stop_line": 127
     }
   ],
   "generics_syntax_compatibility.py": [
@@ -6835,17 +6923,6 @@
     {
       "code": -2,
       "column": 17,
-      "concise_description": "`T` is uninitialized",
-      "description": "`T` is uninitialized",
-      "line": 44,
-      "name": "unbound-name",
-      "severity": "error",
-      "stop_column": 18,
-      "stop_line": 44
-    },
-    {
-      "code": -2,
-      "column": 17,
       "concise_description": "Expected a type form, got instance of `int`",
       "description": "Expected a type form, got instance of `int`",
       "line": 44,
@@ -6970,24 +7047,24 @@
   "generics_typevartuple_args.py": [
     {
       "code": -2,
-      "column": 8,
+      "column": 12,
       "concise_description": "Unpacked argument `tuple[Literal[0], Literal['']]` is not assignable to parameter `*args` with type `tuple[*@_, Env]` in function `exec_le`",
       "description": "Unpacked argument `tuple[Literal[0], Literal['']]` is not assignable to parameter `*args` with type `tuple[*@_, Env]` in function `exec_le`",
       "line": 33,
       "name": "bad-argument-type",
       "severity": "error",
-      "stop_column": 19,
+      "stop_column": 23,
       "stop_line": 33
     },
     {
       "code": -2,
-      "column": 8,
+      "column": 12,
       "concise_description": "Unpacked argument `tuple[Literal[0], Literal['']]` is not assignable to parameter `*args` with type `tuple[*@_, Env]` in function `exec_le`",
       "description": "Unpacked argument `tuple[Literal[0], Literal['']]` is not assignable to parameter `*args` with type `tuple[*@_, Env]` in function `exec_le`",
       "line": 34,
       "name": "bad-argument-type",
       "severity": "error",
-      "stop_column": 30,
+      "stop_column": 34,
       "stop_line": 34
     },
     {
@@ -7037,10 +7114,10 @@
     {
       "code": -2,
       "column": 6,
-      "concise_description": "Unpacked argument `tuple[Literal[1]]` is not assignable to parameter `*args` with type `tuple[int, str]` in function `func3`",
-      "description": "Unpacked argument `tuple[Literal[1]]` is not assignable to parameter `*args` with type `tuple[int, str]` in function `func3`",
+      "concise_description": "Expected 1 more positional argument in function `func3`",
+      "description": "Expected 1 more positional argument in function `func3`",
       "line": 67,
-      "name": "bad-argument-type",
+      "name": "bad-argument-count",
       "severity": "error",
       "stop_column": 9,
       "stop_line": 67
@@ -7264,28 +7341,6 @@
   "generics_typevartuple_specialization.py": [
     {
       "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed",
-      "description": "assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed",
-      "line": 51,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 31,
-      "stop_line": 51
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed",
-      "description": "assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed",
-      "line": 94,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 33,
-      "stop_line": 94
-    },
-    {
-      "code": -2,
       "column": 1,
       "concise_description": "Unpacked argument cannot be used for type parameter T",
       "description": "Unpacked argument cannot be used for type parameter T",
@@ -7342,28 +7397,6 @@
     {
       "code": -2,
       "column": 8,
-      "concise_description": "Unpacked argument cannot be used for type parameter T1",
-      "description": "Unpacked argument cannot be used for type parameter T1",
-      "line": 153,
-      "name": "bad-unpacking",
-      "severity": "error",
-      "stop_column": 29,
-      "stop_line": 153
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed",
-      "description": "assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed",
-      "line": 157,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 49,
-      "stop_line": 157
-    },
-    {
-      "code": -2,
-      "column": 8,
       "concise_description": "Unpacked argument cannot be used for type parameter T",
       "description": "Unpacked argument cannot be used for type parameter T",
       "line": 163,
@@ -7400,47 +7433,36 @@
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(list[int], list[int] | set[int]) failed",
-      "description": "assert_type(list[int], list[int] | set[int]) failed",
-      "line": 43,
+      "column": 16,
+      "concise_description": "assert_type(list[int] | set[int], Collection[int]) failed",
+      "description": "assert_type(list[int] | set[int], Collection[int]) failed",
+      "line": 44,
       "name": "assert-type",
       "severity": "error",
-      "stop_column": 55,
-      "stop_line": 43
-    },
-    {
-      "code": -2,
-      "column": 25,
-      "concise_description": "Argument `set[int]` is not assignable to parameter `y` with type `list[int]` in function `longer`",
-      "description": "Argument `set[int]` is not assignable to parameter `y` with type `list[int]` in function `longer`",
-      "line": 43,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 31,
-      "stop_line": 43
+      "stop_column": 54,
+      "stop_line": 44
     },
     {
       "code": -2,
       "column": 7,
       "concise_description": "`int` is not assignable to upper bound `Sized` of type variable `ST`",
       "description": "`int` is not assignable to upper bound `Sized` of type variable `ST`",
-      "line": 51,
+      "line": 52,
       "name": "bad-specialization",
       "severity": "error",
       "stop_column": 13,
-      "stop_line": 51
+      "stop_line": 52
     },
     {
       "code": -2,
       "column": 38,
       "concise_description": "TypeVar cannot have both constraints and bound",
       "description": "TypeVar cannot have both constraints and bound",
-      "line": 56,
+      "line": 57,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 49,
-      "stop_line": 56
+      "stop_line": 57
     }
   ],
   "generics_variance.py": [
@@ -7871,22 +7893,22 @@
       "column": 26,
       "concise_description": "Positional-only parameter `__y` cannot appear after keyword parameters",
       "description": "Positional-only parameter `__y` cannot appear after keyword parameters",
-      "line": 38,
+      "line": 54,
       "name": "bad-function-definition",
       "severity": "error",
       "stop_column": 29,
-      "stop_line": 38
+      "stop_line": 54
     },
     {
       "code": -2,
       "column": 6,
       "concise_description": "Expected argument `__x` to be positional in function `A.m1`",
       "description": "Expected argument `__x` to be positional in function `A.m1`",
-      "line": 43,
+      "line": 59,
       "name": "unexpected-keyword",
       "severity": "error",
       "stop_column": 9,
-      "stop_line": 43
+      "stop_line": 59
     }
   ],
   "literals_interactions.py": [
@@ -7895,6 +7917,17 @@
       "column": 7,
       "concise_description": "Index 5 out of range for tuple with 3 elements",
       "description": "Index 5 out of range for tuple with 3 elements",
+      "line": 14,
+      "name": "bad-index",
+      "severity": "error",
+      "stop_column": 8,
+      "stop_line": 14
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Index -5 out of range for tuple with 3 elements",
+      "description": "Index -5 out of range for tuple with 3 elements",
       "line": 15,
       "name": "bad-index",
       "severity": "error",
@@ -7904,8 +7937,8 @@
     {
       "code": -2,
       "column": 7,
-      "concise_description": "Index -5 out of range for tuple with 3 elements",
-      "description": "Index -5 out of range for tuple with 3 elements",
+      "concise_description": "Index 4 out of range for tuple with 3 elements",
+      "description": "Index 4 out of range for tuple with 3 elements",
       "line": 16,
       "name": "bad-index",
       "severity": "error",
@@ -7915,24 +7948,13 @@
     {
       "code": -2,
       "column": 7,
-      "concise_description": "Index 4 out of range for tuple with 3 elements",
-      "description": "Index 4 out of range for tuple with 3 elements",
+      "concise_description": "Index -4 out of range for tuple with 3 elements",
+      "description": "Index -4 out of range for tuple with 3 elements",
       "line": 17,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 8,
-      "stop_line": 17
-    },
-    {
-      "code": -2,
-      "column": 7,
-      "concise_description": "Index -4 out of range for tuple with 3 elements",
-      "description": "Index -4 out of range for tuple with 3 elements",
-      "line": 18,
-      "name": "bad-index",
-      "severity": "error",
       "stop_column": 9,
-      "stop_line": 18
+      "stop_line": 17
     }
   ],
   "literals_literalstring.py": [
@@ -7974,66 +7996,66 @@
       "column": 25,
       "concise_description": "`str` is not assignable to `LiteralString`",
       "description": "`str` is not assignable to `LiteralString`",
-      "line": 66,
+      "line": 65,
       "name": "bad-assignment",
       "severity": "error",
-      "stop_column": 47,
-      "stop_line": 66
+      "stop_column": 45,
+      "stop_line": 65
     },
     {
       "code": -2,
       "column": 25,
       "concise_description": "`Literal[3]` is not assignable to `LiteralString`",
       "description": "`Literal[3]` is not assignable to `LiteralString`",
-      "line": 74,
+      "line": 73,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 26,
-      "stop_line": 74
+      "stop_line": 73
     },
     {
       "code": -2,
       "column": 25,
       "concise_description": "`Literal[b'test']` is not assignable to `LiteralString`",
       "description": "`Literal[b'test']` is not assignable to `LiteralString`",
-      "line": 75,
+      "line": 74,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 32,
-      "stop_line": 75
+      "stop_line": 74
     },
     {
       "code": -2,
       "column": 21,
       "concise_description": "`str` is not assignable to upper bound `LiteralString` of type variable `TLiteral`",
       "description": "`str` is not assignable to upper bound `LiteralString` of type variable `TLiteral`",
-      "line": 120,
+      "line": 119,
       "name": "bad-specialization",
       "severity": "error",
       "stop_column": 24,
-      "stop_line": 120
+      "stop_line": 119
     },
     {
       "code": -2,
       "column": 51,
       "concise_description": "Argument `str` is not assignable to parameter `value` with type `LiteralString` in function `Container.__init__`",
       "description": "Argument `str` is not assignable to parameter `value` with type `LiteralString` in function `Container.__init__`",
-      "line": 134,
+      "line": 133,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 52,
-      "stop_line": 134
+      "stop_line": 133
     },
     {
       "code": -2,
       "column": 21,
       "concise_description": "`list[LiteralString]` is not assignable to `list[str]`",
       "description": "`list[LiteralString]` is not assignable to `list[str]`",
-      "line": 171,
+      "line": 170,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 24,
-      "stop_line": 171
+      "stop_line": 170
     }
   ],
   "literals_parameterizations.py": [
@@ -8362,47 +8384,69 @@
     },
     {
       "code": -2,
+      "column": 20,
+      "concise_description": "Expected 2 positional arguments, got 3 in function `Point2.__new__`",
+      "description": "Expected 2 positional arguments, got 3 in function `Point2.__new__`",
+      "line": 69,
+      "name": "bad-argument-count",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 69
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "NamedTuple field name may not start with an underscore: `_y`",
+      "description": "NamedTuple field name may not start with an underscore: `_y`",
+      "line": 76,
+      "name": "bad-class-definition",
+      "severity": "error",
+      "stop_column": 7,
+      "stop_line": 76
+    },
+    {
+      "code": -2,
       "column": 5,
       "concise_description": "NamedTuple field 'latitude' without a default may not follow NamedTuple field with a default",
       "description": "NamedTuple field 'latitude' without a default may not follow NamedTuple field with a default",
-      "line": 59,
+      "line": 86,
       "name": "bad-class-definition",
       "severity": "error",
       "stop_column": 13,
-      "stop_line": 59
+      "stop_line": 86
     },
     {
       "code": -2,
       "column": 5,
       "concise_description": "Cannot override named tuple element `x`",
       "description": "Cannot override named tuple element `x`",
-      "line": 79,
+      "line": 106,
       "name": "bad-override",
       "severity": "error",
       "stop_column": 6,
-      "stop_line": 79
+      "stop_line": 106
     },
     {
       "code": -2,
       "column": 19,
       "concise_description": "Argument `float` is not assignable to parameter `value` with type `str` in function `Property.__new__`",
       "description": "Argument `float` is not assignable to parameter `value` with type `str` in function `Property.__new__`",
-      "line": 98,
+      "line": 125,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 22,
-      "stop_line": 98
+      "stop_line": 125
     },
     {
       "code": -2,
       "column": 7,
       "concise_description": "Named tuples do not support multiple inheritance",
       "description": "Named tuples do not support multiple inheritance",
-      "line": 105,
+      "line": 132,
       "name": "invalid-inheritance",
       "severity": "error",
       "stop_column": 11,
-      "stop_line": 105
+      "stop_line": 132
     }
   ],
   "namedtuples_define_functional.py": [
@@ -8551,14 +8595,25 @@
     },
     {
       "code": -2,
+      "column": 33,
+      "concise_description": "NamedTuple field name may not start with an underscore: `_d`",
+      "description": "NamedTuple field name may not start with an underscore: `_d`",
+      "line": 55,
+      "name": "bad-class-definition",
+      "severity": "error",
+      "stop_column": 37,
+      "stop_line": 55
+    },
+    {
+      "code": -2,
       "column": 4,
-      "concise_description": "Missing argument `a` in function `NT5.__new__`",
-      "description": "Missing argument `a` in function `NT5.__new__`",
-      "line": 66,
+      "concise_description": "Missing argument `a` in function `NT7.__new__`",
+      "description": "Missing argument `a` in function `NT7.__new__`",
+      "line": 69,
       "name": "missing-argument",
       "severity": "error",
       "stop_column": 6,
-      "stop_line": 66
+      "stop_line": 69
     }
   ],
   "namedtuples_type_compat.py": [
@@ -8931,77 +8986,77 @@
       "column": 9,
       "concise_description": "`@final` should only be applied to the implementation of an overloaded function.",
       "description": "`@final` should only be applied to the implementation of an overloaded function.",
-      "line": 123,
+      "line": 124,
       "name": "invalid-overload",
       "severity": "error",
       "stop_column": 22,
-      "stop_line": 123
+      "stop_line": 124
     },
     {
       "code": -2,
       "column": 9,
       "concise_description": "`@final` should only be applied to the implementation of an overloaded function.",
       "description": "`@final` should only be applied to the implementation of an overloaded function.",
-      "line": 137,
+      "line": 139,
       "name": "invalid-overload",
       "severity": "error",
       "stop_column": 24,
-      "stop_line": 137
+      "stop_line": 139
     },
     {
       "code": -2,
       "column": 9,
       "concise_description": "`@final` should only be applied to the implementation of an overloaded function.",
       "description": "`@final` should only be applied to the implementation of an overloaded function.",
-      "line": 142,
+      "line": 144,
       "name": "invalid-overload",
       "severity": "error",
       "stop_column": 24,
-      "stop_line": 142
+      "stop_line": 144
     },
     {
       "code": -2,
       "column": 9,
       "concise_description": "`final_method` is declared as final in parent class `Base`",
       "description": "`final_method` is declared as final in parent class `Base`",
-      "line": 176,
+      "line": 181,
       "name": "bad-override",
       "severity": "error",
       "stop_column": 21,
-      "stop_line": 176
+      "stop_line": 181
     },
     {
       "code": -2,
       "column": 9,
       "concise_description": "Class member `Child.bad_override` is marked as an override, but no parent class has a matching attribute",
       "description": "Class member `Child.bad_override` is marked as an override, but no parent class has a matching attribute",
-      "line": 191,
+      "line": 196,
       "name": "bad-override",
       "severity": "error",
       "stop_column": 21,
-      "stop_line": 191
+      "stop_line": 196
     },
     {
       "code": -2,
       "column": 9,
       "concise_description": "`@override` should only be applied to the implementation of an overloaded function.",
       "description": "`@override` should only be applied to the implementation of an overloaded function.",
-      "line": 222,
+      "line": 228,
       "name": "invalid-overload",
       "severity": "error",
       "stop_column": 20,
-      "stop_line": 222
+      "stop_line": 228
     },
     {
       "code": -2,
       "column": 9,
       "concise_description": "`@override` should only be applied to the implementation of an overloaded function.",
       "description": "`@override` should only be applied to the implementation of an overloaded function.",
-      "line": 226,
+      "line": 232,
       "name": "invalid-overload",
       "severity": "error",
       "stop_column": 20,
-      "stop_line": 226
+      "stop_line": 232
     }
   ],
   "overloads_evaluation.py": [
@@ -9018,24 +9073,24 @@
     },
     {
       "code": -2,
-      "column": 11,
-      "concise_description": "No matching overload found for function `example1_1` called with arguments: (Literal[1], Literal[1])",
-      "description": "No matching overload found for function `example1_1` called with arguments: (Literal[1], Literal[1])\n  Possible overloads:\n  (x: int, y: str) -> int [closest match]\n  (x: str) -> str",
+      "column": 15,
+      "concise_description": "Argument `Literal[1]` is not assignable to parameter `y` with type `str` in function `example1_1`",
+      "description": "Argument `Literal[1]` is not assignable to parameter `y` with type `str` in function `example1_1`",
       "line": 46,
-      "name": "no-matching-overload",
+      "name": "bad-argument-type",
       "severity": "error",
-      "stop_column": 17,
+      "stop_column": 16,
       "stop_line": 46
     },
     {
       "code": -2,
-      "column": 11,
-      "concise_description": "No matching overload found for function `example1_1` called with arguments: (Literal[1])",
-      "description": "No matching overload found for function `example1_1` called with arguments: (Literal[1])\n  Possible overloads:\n  (x: int, y: str) -> int [closest match]\n  (x: str) -> str",
+      "column": 12,
+      "concise_description": "Argument `Literal[1]` is not assignable to parameter `x` with type `str` in function `example1_1`",
+      "description": "Argument `Literal[1]` is not assignable to parameter `x` with type `str` in function `example1_1`",
       "line": 51,
-      "name": "no-matching-overload",
+      "name": "bad-argument-type",
       "severity": "error",
-      "stop_column": 14,
+      "stop_column": 13,
       "stop_line": 51
     },
     {
@@ -9043,11 +9098,11 @@
       "column": 13,
       "concise_description": "No matching overload found for function `example2` called with arguments: (int | str, int | str, Literal[1])",
       "description": "No matching overload found for function `example2` called with arguments: (int | str, int | str, Literal[1])\n  Possible overloads:\n  (x: int, y: str, z: int) -> str [closest match]\n  (x: int, y: int, z: int) -> int",
-      "line": 115,
+      "line": 116,
       "name": "no-matching-overload",
       "severity": "error",
       "stop_column": 22,
-      "stop_line": 115
+      "stop_line": 116
     }
   ],
   "protocols_class_objects.py": [
@@ -10074,6 +10129,50 @@
     },
     {
       "code": -2,
+      "column": 24,
+      "concise_description": "`Annotated[int]` is not assignable to `type[Any]`",
+      "description": "`Annotated[int]` is not assignable to `type[Any]`",
+      "line": 71,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 42,
+      "stop_line": 71
+    },
+    {
+      "code": -2,
+      "column": 24,
+      "concise_description": "`TypeAlias[SmallInt, Annotated[int]]` is not assignable to `type[Any]`",
+      "description": "`TypeAlias[SmallInt, Annotated[int]]` is not assignable to `type[Any]`",
+      "line": 72,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 32,
+      "stop_line": 72
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Argument `Annotated[str]` is not assignable to parameter `x` with type `type[@_]` in function `func4`",
+      "description": "Argument `Annotated[str]` is not assignable to parameter `x` with type `type[@_]` in function `func4`",
+      "line": 79,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 25,
+      "stop_line": 79
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Argument `TypeAlias[SmallInt, Annotated[int]]` is not assignable to parameter `x` with type `type[@_]` in function `func4`",
+      "description": "Argument `TypeAlias[SmallInt, Annotated[int]]` is not assignable to parameter `x` with type `type[@_]` in function `func4`",
+      "line": 80,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 80
+    },
+    {
+      "code": -2,
       "column": 1,
       "concise_description": "Expected a callable, got `type[Annotated]`",
       "description": "Expected a callable, got `type[Annotated]`",
@@ -10082,6 +10181,28 @@
       "severity": "error",
       "stop_column": 10,
       "stop_line": 86
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Expected a callable, got `Annotated[int]`",
+      "description": "Expected a callable, got `Annotated[int]`",
+      "line": 87,
+      "name": "not-callable",
+      "severity": "error",
+      "stop_column": 19,
+      "stop_line": 87
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Expected a callable, got `TypeAlias[SmallInt, Annotated[int]]`",
+      "description": "Expected a callable, got `TypeAlias[SmallInt, Annotated[int]]`",
+      "line": 88,
+      "name": "not-callable",
+      "severity": "error",
+      "stop_column": 9,
+      "stop_line": 88
     }
   ],
   "qualifiers_final_annotation.py": [
@@ -10106,6 +10227,28 @@
       "severity": "error",
       "stop_column": 22,
       "stop_line": 18
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Final attribute declared in class body must be initialized with a value or in `__init__`",
+      "description": "Final attribute declared in class body must be initialized with a value or in `__init__`",
+      "line": 34,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 8,
+      "stop_line": 34
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Final attribute declared in class body must be initialized with a value or in `__init__`",
+      "description": "Final attribute declared in class body must be initialized with a value or in `__init__`",
+      "line": 38,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 8,
+      "stop_line": 38
     },
     {
       "code": -2,
@@ -10532,36 +10675,25 @@
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "Returned type `Literal['whatever works']` is not assignable to declared return type `int`",
-      "description": "Returned type `Literal['whatever works']` is not assignable to declared return type `int`",
-      "line": 32,
-      "name": "bad-return",
-      "severity": "error",
-      "stop_column": 28,
-      "stop_line": 32
-    },
-    {
-      "code": -2,
       "column": 21,
       "concise_description": "`list[Never]` is not assignable to `list[int]`",
       "description": "`list[Never]` is not assignable to `list[int]`",
-      "line": 86,
+      "line": 85,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 22,
-      "stop_line": 86
+      "stop_line": 85
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "Returned type `ClassC[Never]` is not assignable to declared return type `ClassC[U]`",
       "description": "Returned type `ClassC[Never]` is not assignable to declared return type `ClassC[U]`",
-      "line": 105,
+      "line": 104,
       "name": "bad-return",
       "severity": "error",
       "stop_column": 27,
-      "stop_line": 105
+      "stop_line": 104
     }
   ],
   "specialtypes_none.py": [
@@ -11606,13 +11738,13 @@
     },
     {
       "code": -2,
-      "column": 11,
-      "concise_description": "No matching overload found for function `ExtraMovie.__init__` called with arguments: (name=Literal['No Country for Old Men'], language=Literal['English'])",
-      "description": "No matching overload found for function `ExtraMovie.__init__` called with arguments: (name=Literal['No Country for Old Men'], language=Literal['English'])\n  Possible overloads:\n  (*, name: str, **int) -> None [closest match]\n  (__map: ExtraMovie, /, *, name: str = ..., **int) -> None",
+      "column": 52,
+      "concise_description": "Keyword argument `language` with type `Literal['English']` is not assignable to kwargs type `int` in function `ExtraMovie.__init__`",
+      "description": "Keyword argument `language` with type `Literal['English']` is not assignable to kwargs type `int` in function `ExtraMovie.__init__`",
       "line": 285,
-      "name": "no-matching-overload",
+      "name": "bad-argument-type",
       "severity": "error",
-      "stop_column": 62,
+      "stop_column": 61,
       "stop_line": 285
     },
     {
@@ -12339,6 +12471,503 @@
       "severity": "error",
       "stop_column": 33,
       "stop_line": 40
+    }
+  ],
+  "typeforms_typeform.py": [
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 15,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 15
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 16,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 16
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 17,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 17
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 18,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 18
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 19,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 19
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 20,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 20
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 21,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 21
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 23,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 27,
+      "stop_line": 23
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 24,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 27,
+      "stop_line": 24
+    },
+    {
+      "code": -2,
+      "column": 8,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 29,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 29
+    },
+    {
+      "code": -2,
+      "column": 8,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 30,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 30
+    },
+    {
+      "code": -2,
+      "column": 20,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 31,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 33,
+      "stop_line": 31
+    },
+    {
+      "code": -2,
+      "column": 20,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 32,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 33,
+      "stop_line": 32
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
+      "line": 40,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 40
+    },
+    {
+      "code": -2,
+      "column": 20,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 41,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 33,
+      "stop_line": 41
+    },
+    {
+      "code": -2,
+      "column": 30,
+      "concise_description": "`type[str | None]` is not assignable to `UnionType`",
+      "description": "`type[str | None]` is not assignable to `UnionType`",
+      "line": 46,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 40,
+      "stop_line": 46
+    },
+    {
+      "code": -2,
+      "column": 15,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 47,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 35,
+      "stop_line": 47
+    },
+    {
+      "code": -2,
+      "column": 33,
+      "concise_description": "`type[list[int]]` is not assignable to `GenericAlias`",
+      "description": "`type[list[int]]` is not assignable to `GenericAlias`",
+      "line": 49,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 42,
+      "stop_line": 49
+    },
+    {
+      "code": -2,
+      "column": 33,
+      "concise_description": "Expected `v2_actual` to be a type alias, got `GenericAlias`",
+      "description": "Expected `v2_actual` to be a type alias, got `GenericAlias`",
+      "line": 49,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 42,
+      "stop_line": 49
+    },
+    {
+      "code": -2,
+      "column": 15,
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
+      "line": 50,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 50
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 52,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 52
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 53,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 53
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
+      "line": 67,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 67
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
+      "line": 68,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 68
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
+      "line": 69,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 69
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
+      "line": 70,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 70
+    },
+    {
+      "code": -2,
+      "column": 18,
+      "concise_description": "`Self` must appear within a class",
+      "description": "`Self` must appear within a class",
+      "line": 70,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 70
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
+      "line": 71,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 71
+    },
+    {
+      "code": -2,
+      "column": 18,
+      "concise_description": "`ClassVar` is not allowed in this context",
+      "description": "`ClassVar` is not allowed in this context",
+      "line": 71,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 31,
+      "stop_line": 71
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
+      "line": 72,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 72
+    },
+    {
+      "code": -2,
+      "column": 18,
+      "concise_description": "`Final` is not allowed in this context",
+      "description": "`Final` is not allowed in this context",
+      "line": 72,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 28,
+      "stop_line": 72
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
+      "line": 73,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 73
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
+      "line": 74,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 74
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Expected a type form, got instance of `_SpecialForm`",
+      "description": "Expected a type form, got instance of `_SpecialForm`",
+      "line": 75,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 75
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Expected a callable, got `_SpecialForm`",
+      "description": "Expected a callable, got `_SpecialForm`",
+      "line": 80,
+      "name": "not-callable",
+      "severity": "error",
+      "stop_column": 14,
+      "stop_line": 80
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 81,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 37,
+      "stop_line": 81
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Expected a callable, got `_SpecialForm`",
+      "description": "Expected a callable, got `_SpecialForm`",
+      "line": 83,
+      "name": "not-callable",
+      "severity": "error",
+      "stop_column": 14,
+      "stop_line": 83
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 84,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 36,
+      "stop_line": 84
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Expected a callable, got `_SpecialForm`",
+      "description": "Expected a callable, got `_SpecialForm`",
+      "line": 86,
+      "name": "not-callable",
+      "severity": "error",
+      "stop_column": 14,
+      "stop_line": 86
+    },
+    {
+      "code": -2,
+      "column": 6,
+      "concise_description": "Expected a callable, got `_SpecialForm`",
+      "description": "Expected a callable, got `_SpecialForm`",
+      "line": 88,
+      "name": "not-callable",
+      "severity": "error",
+      "stop_column": 14,
+      "stop_line": 88
+    },
+    {
+      "code": -2,
+      "column": 24,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 93,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 37,
+      "stop_line": 93
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 97,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 97
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 98,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 98
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 107,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 107
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Expected a type form, got instance of `object`",
+      "description": "Expected a type form, got instance of `object`",
+      "line": 108,
+      "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 108
     }
   ]
 }

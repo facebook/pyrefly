@@ -105,12 +105,11 @@ assert_type(classmethod[Any], type[classmethod[Any, ..., Any]])  # E: Expected 3
 # No error if it's a TypeVarTuple w/ nothing after, because a TypeVarTuple can be empty
 class C2[T, *Ts]: pass
 C2_Alias = C2[int]
-assert_type(C2[int], type[C2[int, *tuple[Any, ...]]])
+assert_type(C2[int], type[C2[int, *tuple[()]]])
 "#,
 );
 
 testcase!(
-    bug = "T is pinned prematurely due to https://github.com/facebook/pyrefly/issues/105",
     test_generics,
     r#"
 from typing import Literal
@@ -118,9 +117,28 @@ class C[T]: ...
 def append[T](x: C[T], y: T):
     pass
 v: C[int] = C()
-append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
+append(v, "test")
 "#,
 );
+testcase!(
+    test_call_hint_does_not_override_arg,
+    r#"
+from typing import Any, reveal_type
+
+class Map[K, V]:
+    def set(self, key: K, value: V) -> None: ...
+    def get[T](self, key: Any, default: T, /) -> V | T: ...
+
+d_any: Map[str, Any] = Map()
+
+reveal_type(d_any.get("key", None))  # E: revealed type: Any | None
+result: str = reveal_type(d_any.get("key", None))  # E: revealed type: Any | None  # E: `Any | None` is not assignable to `str`
+
+def get[V, T](x: Map[str, V], key: Any, default: T, /) -> V | T: ...
+result2: str = reveal_type(get(d_any, "key", None))  # E: revealed type: Any | None  # E: `Any | None` is not assignable to `str`
+"#,
+);
+
 testcase!(
     test_generic_default,
     r#"
@@ -310,7 +328,6 @@ class F(Generic[_b]):
 );
 
 testcase!(
-    bug = "conformance: Constrained TypeVar with subtype should resolve to constraint, not subtype",
     test_constrained_typevar_subtype_resolves_to_constraint,
     r#"
 from typing import TypeVar, assert_type
@@ -318,23 +335,22 @@ from typing import TypeVar, assert_type
 AnyStr = TypeVar("AnyStr", str, bytes)
 
 def concat(x: AnyStr, y: AnyStr) -> AnyStr:
-    return x + y  # E: `+` is not supported  # E: `+` is not supported
+    return x + y
 
 class MyStr(str): ...
 
 def test(m: MyStr, s: str):
-    assert_type(concat(m, m), str)  # E: assert_type(MyStr, str) failed
-    assert_type(concat(m, s), str)  # E: assert_type(MyStr, str) failed  # E: Argument `str` is not assignable to parameter `y` with type `MyStr`
+    assert_type(concat(m, m), str)
+    assert_type(concat(m, s), str)
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/245
 testcase!(
-    bug = "Update should know about string arguments",
     test_dict_update,
     r#"
-# From https://github.com/facebook/pyrefly/issues/245
+# update w/ kwargs should pin dict key to str
 from typing import assert_type, Any
-
 def f():
     x = {}
     x.update(a = 1)
@@ -342,7 +358,7 @@ def f():
 
 def g():
     x: dict[int, int] = {}
-    x.update(a = 1) # E: No matching overload
+    x.update(a=1) # E: `dict[int, int]` is not assignable to parameter `self` with type `SupportsGetItem[str, int]`
 "#,
 );
 
@@ -627,6 +643,26 @@ class I(G, H): ...  # E: Class `I` has inconsistent type arguments for base clas
 );
 
 testcase!(
+    test_typevar_union_with_type_of_typevar,
+    r#"
+from typing import TypeVar, assert_type
+
+class Base: ...
+class Sub(Base): ...
+
+T = TypeVar("T", bound=Base)
+
+# type[T] alone works
+def good(x: type[T]) -> T: ...
+assert_type(good(Sub), Sub)
+
+# T | type[T] should also work — pyrefly should check the type[T] branch
+def bad(x: T | type[T]) -> T: ...
+assert_type(bad(Sub), Sub)
+"#,
+);
+
+testcase!(
     test_generic_alias_fields,
     r#"
 from typing import assert_type
@@ -643,4 +679,75 @@ list[int].__add__
 # No error for comparing two `GenericAlias`
 list[int] == list[str]
 "#,
+);
+
+testcase!(
+    test_recursively_constrained_typevar,
+    r#"
+from typing import TypeVar, Generic, Any
+
+class Foo:
+    pass
+
+_L = TypeVar("_L", bound="Foo | Bar[Any]")
+class Bar(Generic[_L]):
+    pass
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1137
+testcase!(
+    test_unresolved_typevar_in_union_resolves_to_never,
+    r#"
+from __future__ import annotations
+from typing import assert_type
+
+class A[T]:
+    def __init__(self, value: T) -> None:
+        self.t: T = value
+    def f[Expected](self) -> A[Expected | T]:
+        ...
+
+_: A[object] = A(1).f()
+
+b = A(1).f()
+assert_type(b, A[int])
+"#,
+);
+
+testcase!(
+    test_typevar_type,
+    r#"
+from typing import TypeVar
+T = TypeVar("T")
+def f(x: TypeVar):
+    pass
+f(T)
+    "#,
+);
+
+testcase!(
+    test_list_or_sequence_of_typevar,
+    r#"
+from typing import assert_type, Sequence
+
+def f[T](x: T, y: list[T]) -> T: ...
+def g[T](x: T, y: Sequence[T]) -> T: ...
+
+assert_type(f(0, [""]), int | str)  # E: Argument `list[str]` is not assignable to parameter `y` with type `list[int | str]`
+assert_type(g(0, [""]), int | str)
+    "#,
+);
+
+testcase!(
+    test_any_absorption,
+    r#"
+from typing import Any, assert_type
+
+def f[T](x: T, y: T) -> T: ...
+
+def g(x: Any):
+    # `list[Any]` absorbs `list[int]`
+    assert_type(f([x], [1]), list[Any])
+    "#,
 );

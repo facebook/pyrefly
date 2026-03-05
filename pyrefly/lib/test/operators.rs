@@ -28,6 +28,102 @@ def compare[T: int](x: T, y: T) -> bool:
 );
 
 testcase!(
+    test_constrained_type_var_comparison,
+    r#"
+from typing import Generic, TypeVar, assert_type
+
+N = TypeVar("N", int, str)
+
+class A(Generic[N]):
+    a: N
+
+    def foo(self, b: N) -> None:
+        assert_type(self.a < b, bool)
+"#,
+);
+
+testcase!(
+    test_bound_typevar_comparison,
+    r#"
+def f1[T: int | float](x: T, y: T) -> bool:
+    # Ok because you can compare an int and a float
+    return x < y
+def f2[T: int | str](x: T, y: T) -> bool:
+    return x < y  # E: not supported between `int` and `str`  # E: not supported between `str` and `int`
+    "#,
+);
+
+testcase!(
+    test_cannot_compare_unrestricted_typevar,
+    r#"
+def f1[T](x: T) -> bool:
+    return x < 0  # E: not supported between `T` and `Literal[0]`
+def f2[T](x: T) -> bool:
+    return 0 < x  # E: not supported between `Literal[0]` and `T`
+    "#,
+);
+
+testcase!(
+    test_preserve_typevar_through_comparison_and_binop,
+    r#"
+from typing import Any, Protocol, Self, TypeVar
+
+class NativeExpr:
+    def __ge__(self, value: Any, /) -> Self: ...
+    def __add__(self, value: Any, /) -> Self: ...
+
+NativeExprT = TypeVar("NativeExprT", bound=NativeExpr)
+
+class SQLExpr(Protocol[NativeExprT]):
+    def _window(self) -> NativeExprT: ...
+    def _when(self, condition: NativeExprT) -> NativeExprT: ...
+
+    def do_stuff(self) -> None:
+        x = self._window()
+        y_ge = x >= 1
+        z_add = x + 1
+        self._when(y_ge)
+        self._when(z_add)
+    "#,
+);
+
+testcase!(
+    test_compare_typevars,
+    r#"
+from typing import Generic, Protocol, TypeVar
+
+Weight = TypeVar("Weight", bound="ImplementationWeight")
+SelfWeight = TypeVar("SelfWeight", bound="ImplementationWeight")
+
+class ImplementationWeight(Protocol):
+    def __lt__(self: SelfWeight, other: SelfWeight) -> bool: ...
+
+class CandidateWeight(Generic[Weight]):
+    weight: Weight
+    def __lt__(self, other: CandidateWeight[Weight]) -> bool:
+        return self.weight < other.weight
+    "#,
+);
+
+testcase!(
+    test_add_typevars,
+    r#"
+from typing import Generic, Protocol, TypeVar
+
+Weight = TypeVar("Weight", bound="ImplementationWeight")
+SelfWeight = TypeVar("SelfWeight", bound="ImplementationWeight")
+
+class ImplementationWeight(Protocol):
+    def __add__(self: SelfWeight, other: SelfWeight) -> SelfWeight: ...
+
+class CandidateWeight(Generic[Weight]):
+    weight: Weight
+    def __add__(self, other: CandidateWeight[Weight]) -> Weight:
+        return self.weight + other.weight
+    "#,
+);
+
+testcase!(
     test_negative_literals,
     r#"
 from typing import Literal
@@ -200,7 +296,6 @@ assert_type(x, Literal[""])
 );
 
 testcase!(
-    bug = "Should narrow",
     test_boolean_operator_narrow,
     r#"
 from typing import assert_type, Literal
@@ -283,6 +378,25 @@ assert_type(y5, Literal[False])
 x6 = ""
 y6 = not x6
 assert_type(y6, Literal[True])
+    "#,
+);
+
+testcase!(
+    test_unary_bool_literals,
+    r#"
+from typing import Literal, assert_type
+
+def invert_literal_false(x: Literal[False]) -> None:
+    assert_type(~x, Literal[-1])
+
+def invert_literal_true(x: Literal[True]) -> None:
+    assert_type(~x, Literal[-2])
+
+def negate_literal_false(x: Literal[False]) -> None:
+    assert_type(-x, Literal[0])
+
+def negate_literal_true(x: Literal[True]) -> None:
+    assert_type(-x, Literal[-1])
     "#,
 );
 
@@ -416,6 +530,29 @@ def f2(x: int | Any):
 );
 
 testcase!(
+    test_compare_on_any,
+    r#"
+from typing import Any, assert_type
+
+def test1(x: Any) -> None:
+    assert_type(x == 1, Any)
+    assert_type(1 == x, Any)
+    assert_type(x != 1, Any)
+    assert_type(x is None, Any)
+    assert_type(x is not None, Any)
+    assert_type(x in [1, 2], Any)
+    assert_type(1 in x, Any)
+
+def test2(x: float, y: Any) -> None:
+    any( x == y )
+    assert_type(x==y, Any)
+    assert_type(y==x, Any)
+    assert_type(x!=y, Any)
+    assert_type(y!=x, Any)
+    "#,
+);
+
+testcase!(
     test_binop_type_var,
     r#"
 from typing import TypeVar, reveal_type
@@ -509,7 +646,7 @@ testcase!(
     test_in_generator,
     r#"
 'x' in (x for x in ['y'])
-42 in (x for x in ['y'])  # E: `in` is not supported between `Literal[42]` and `Generator[str, None, None]`
+42 in (x for x in ['y'])  # E: `in` is not supported between `Literal[42]` and `Generator[str]`
     "#,
 );
 
@@ -766,4 +903,45 @@ def test(a: A, b: B, c: C) -> None:
     a < b < c  # Should be OK: (a < b) and (b < c)
     a < c      # E: `<` is not supported between `A` and `C`
     "#,
+);
+
+testcase!(
+    test_bitor_unknown_operands,
+    r#"
+from typing import assert_type, Any
+
+def f(x: int): ...
+
+def test(x, y):
+    z = x | y
+    # When operands are unknown, the result should be Any, not type[Any]
+    assert_type(z, Any)
+    # This should not produce an error since z is Any
+    f(z)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/972
+testcase!(
+    test_int_pow_inference,
+    r#"
+from typing import assert_type, Any
+
+# Typeshed covers __pow__ for Literal[1..25] (-> int) and
+# Literal[-1..-25] (-> float).
+assert_type(2 ** 25, int)
+assert_type(2 ** -25, float)
+
+# For exponents outside the typeshed range, we special-case int ** int:
+# positive exponent -> int, negative exponent -> float.
+assert_type(2 ** 26, int)
+assert_type(2 ** 100, int)
+assert_type((-2) ** 26, int)
+assert_type(2 ** -26, float)
+assert_type(2 ** -100, float)
+
+# When the exponent sign is unknown, fall back to Any like typeshed.
+def f(x: int, y: int) -> None:
+    assert_type(x ** y, Any)
+"#,
 );

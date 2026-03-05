@@ -11,7 +11,6 @@
 
 use std::iter;
 
-use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
 
 use super::heap::TypeHeap;
@@ -64,15 +63,6 @@ impl ImplicitGlobal {
             .iter()
             .cloned()
             .chain(iter::once(Self::doc(has_docstring)))
-    }
-
-    #[allow(dead_code)]
-    pub fn from_name(name: &Name) -> Option<ImplicitGlobal> {
-        if is_dunder(name.as_str()) {
-            IMPLICIT_GLOBALS.iter().find(|x| &x.name == name).cloned()
-        } else {
-            None
-        }
     }
 
     pub fn name(&self) -> &Name {

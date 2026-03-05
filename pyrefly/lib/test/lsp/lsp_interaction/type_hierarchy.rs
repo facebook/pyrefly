@@ -12,13 +12,13 @@ use lsp_types::request::Request as _;
 use lsp_types::request::TypeHierarchyPrepare;
 use lsp_types::request::TypeHierarchySubtypes;
 use lsp_types::request::TypeHierarchySupertypes;
+use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly::lsp::non_wasm::protocol::Request;
 use serde_json::json;
 
-use crate::lsp::non_wasm::protocol::Message;
-use crate::lsp::non_wasm::protocol::Request;
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_type_hierarchy_basic() {

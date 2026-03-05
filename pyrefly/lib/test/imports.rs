@@ -557,7 +557,7 @@ fn test_import_fail_to_load() {
         .transaction()
         .get_errors([&handle("foo")])
         .collect_errors()
-        .shown;
+        .ordinary;
     assert_eq!(errs.len(), 1);
     let err = &errs[0];
     assert!(err.msg().contains("Failed to load"));
@@ -808,7 +808,7 @@ fn test_interface_disagree() {
         .transaction()
         .get_errors([&h_py])
         .collect_errors()
-        .shown;
+        .ordinary;
     assert_eq!(errs.len(), 0);
 }
 
@@ -1163,5 +1163,259 @@ testcase!(
 from foo import X as x, Y as y
 x = 10  # E: Cannot assign to `x` because it is imported as final
 y = 10  # E: Cannot assign to `y` because it is imported as final
+"#,
+);
+
+testcase!(
+    test_duplicate_import_of_final_value,
+    env_final_value(),
+    r#"
+from foo import X
+from foo import X
+"#,
+);
+
+testcase!(
+    test_duplicate_import_of_final_value_as,
+    env_final_value(),
+    r#"
+from foo import X as Y
+from foo import X as Y
+"#,
+);
+
+fn env_all_binop_add() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "base",
+        r#"
+__all__ = ["x", "y"]
+x: int = 1
+y: str = "hello"
+"#,
+    );
+    t.add(
+        "combined",
+        r#"
+import base
+from base import *
+a: float = 3.14
+__all__ = ["a"] + base.__all__
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_star_all_binop_add,
+    env_all_binop_add(),
+    r#"
+from typing import assert_type
+from combined import *
+assert_type(a, float)
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);
+
+fn env_all_starred() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "base",
+        r#"
+__all__ = ["x", "y"]
+x: int = 1
+y: str = "hello"
+"#,
+    );
+    t.add(
+        "combined",
+        r#"
+import base
+from base import *
+a: float = 3.14
+__all__ = [*base.__all__, "a"]
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_star_all_starred,
+    env_all_starred(),
+    r#"
+from typing import assert_type
+from combined import *
+assert_type(a, float)
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);
+
+fn env_all_unresolvable() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+def generate_all():
+    return ["x"]
+
+x: int = 1
+y: str = "hello"
+_private: float = 3.14
+__all__ = generate_all()  # E: `__all__` could not be statically analyzed
+"#,
+    )
+}
+
+testcase!(
+    test_import_star_all_unresolvable,
+    env_all_unresolvable(),
+    r#"
+from typing import assert_type
+from foo import *
+# Since __all__ is unresolvable, falls back to all public names
+assert_type(x, int)
+assert_type(y, str)
+_private  # E: Could not find name `_private`
+"#,
+);
+
+testcase!(
+    test_import_named_all_unresolvable,
+    env_all_unresolvable(),
+    r#"
+from typing import assert_type
+from foo import x, y
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);
+
+fn env_all_augassign_unresolvable() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "pkg",
+        "pkg/__init__.py",
+        r#"
+from .sub import *
+"#,
+    );
+    t.add_with_path(
+        "pkg.sub",
+        "pkg/sub/__init__.py",
+        r#"
+from ._impl import *
+
+_extra_names = ["x"]
+__all__ = ["Base"]
+__all__ += _extra_names  # E: `__all__` could not be statically analyzed
+"#,
+    );
+    t.add_with_path(
+        "pkg.sub._impl",
+        "pkg/sub/_impl.py",
+        r#"
+class Base: ...
+x: int = 1
+y: str = "hello"
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_all_augassign_unresolvable,
+    env_all_augassign_unresolvable(),
+    r#"
+from typing import assert_type
+import pkg
+# Since __all__ += variable is unresolvable, falls back to all public names,
+# which includes names from `from ._impl import *`.
+assert_type(pkg.x, int)
+assert_type(pkg.y, str)
+"#,
+);
+
+fn env_all_append_unresolvable() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+x: int = 1
+y: str = "hello"
+_name = "x"
+__all__ = ["y"]
+__all__.append(_name)  # E: `__all__` could not be statically analyzed
+"#,
+    )
+}
+
+testcase!(
+    test_all_append_unresolvable,
+    env_all_append_unresolvable(),
+    r#"
+from typing import assert_type
+from foo import *
+# Since __all__.append(variable) is unresolvable, falls back to all public names.
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);
+
+fn env_all_relative_module_ref() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "pkg",
+        "pkg/__init__.py",
+        r#"
+from .sub import *
+"#,
+    );
+    t.add_with_path(
+        "pkg.sub",
+        "pkg/sub/__init__.py",
+        r#"
+from . import _api
+from ._api import *
+__all__ = _api.__all__
+"#,
+    );
+    t.add_with_path(
+        "pkg.sub._api",
+        "pkg/sub/_api.py",
+        r#"
+__all__ = ["convolve", "medfilt"]
+def convolve(x: list[float]) -> list[float]: return x
+def medfilt(x: list[float]) -> list[float]: return x
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_all_relative_module_ref,
+    env_all_relative_module_ref(),
+    r#"
+from typing import assert_type
+import pkg
+# __all__ = _api.__all__ should resolve _api to pkg.sub._api
+assert_type(pkg.convolve([1.0]), list[float])
+assert_type(pkg.medfilt([1.0]), list[float])
+"#,
+);
+
+fn env_relative_import_in_subdirectory() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path("test.foo", "test/foo.py", "from .foo2 import bar");
+    t.add_with_path("test.foo2", "test/foo2.py", "bar: int = 100");
+    t
+}
+
+testcase!(
+    test_relative_import_in_subdirectory,
+    env_relative_import_in_subdirectory(),
+    r#"
+from typing import assert_type
+from test.foo import bar
+assert_type(bar, int)
 "#,
 );

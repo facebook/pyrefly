@@ -26,9 +26,6 @@
 //! We are permissive with whitespace, allowing `#type:ignore[code]` and
 //! `#  type:  ignore  [  code  ]`, but do not allow a space before the colon.
 
-use std::iter::Peekable;
-use std::str::CharIndices;
-
 use clap::ValueEnum;
 use dupe::Dupe;
 use enum_iterator::Sequence;
@@ -42,36 +39,30 @@ use starlark_map::smallset;
 /// Finds the byte offset of the first '#' character that starts a comment, tracking
 /// whether we're inside a multi-line triple-quoted string.
 ///
+/// All interesting characters (`#`, `'`, `"`, `\`) are ASCII, so we operate
+/// on bytes directly — UTF-8 guarantees these never appear inside multi-byte
+/// sequences.
+///
 /// `in_triple_quote` should be `Some('"')` or `Some('\'')` if the line begins
 /// inside an open triple-quoted string from a previous line, or `None` otherwise.
 ///
 /// Returns `(comment_start, new_triple_quote_state)`.
-fn find_comment_start(line: &str, in_triple_quote: Option<char>) -> (Option<usize>, Option<char>) {
-    let mut chars = line.char_indices().peekable();
-    let mut triple_quote = in_triple_quote;
-    let mut single_quote = None;
+pub fn find_comment_start(
+    line: &str,
+    in_triple_quote: Option<char>,
+) -> (Option<usize>, Option<char>) {
+    let mut bytes = line.bytes().enumerate().peekable();
+    let mut triple_quote: Option<u8> = in_triple_quote.map(|c| c as u8);
+    let mut single_quote: Option<u8> = None;
 
-    let advance_if_matches = |chars: &mut Peekable<CharIndices>, q| {
-        if chars.peek().is_some_and(|(_, next)| *next == q) {
-            chars.next();
-            true
-        } else {
-            false
-        }
-    };
-
-    while let Some((idx, ch)) = chars.next() {
+    while let Some((idx, b)) = bytes.next() {
         if let Some(q) = triple_quote {
-            // Inside triple-quoted string
-            if ch == '\\' {
-                // Skip next char if escaped
-                chars.next();
-            } else if ch == q
-                // This check consumes zero, one, or two additional chars:
-                // - zero or one: this is a single quote or a pair of quotes, not interesting
-                // - two: this is the end of a triple-quoted string
-                && advance_if_matches(&mut chars, q)
-                && advance_if_matches(&mut chars, q)
+            // Inside triple-quoted string.
+            if b == b'\\' {
+                bytes.next(); // Skip escaped character.
+            } else if b == q
+                && bytes.next_if(|&(_, next)| next == q).is_some()
+                && bytes.next_if(|&(_, next)| next == q).is_some()
             {
                 triple_quote = None;
             }
@@ -79,34 +70,32 @@ fn find_comment_start(line: &str, in_triple_quote: Option<char>) -> (Option<usiz
         }
 
         if let Some(q) = single_quote {
-            // Inside regular string
-            if ch == '\\' {
-                // Skip next char if escaped
-                chars.next();
-            } else if ch == q {
+            // Inside regular string.
+            if b == b'\\' {
+                bytes.next(); // Skip escaped character.
+            } else if b == q {
                 single_quote = None;
             }
             continue;
         }
 
         // Normal code.
-        match ch {
-            '"' | '\'' => {
-                if advance_if_matches(&mut chars, ch) {
-                    if advance_if_matches(&mut chars, ch) {
-                        triple_quote = Some(ch);
-                    } else {
-                        // We've advanced past the opening and closing quotes of an empty string
+        match b {
+            b'"' | b'\'' => {
+                if bytes.next_if(|&(_, next)| next == b).is_some() {
+                    if bytes.next_if(|&(_, next)| next == b).is_some() {
+                        triple_quote = Some(b);
                     }
+                    // else: empty string ("" or ''), both quotes already consumed.
                 } else {
-                    single_quote = Some(ch);
+                    single_quote = Some(b);
                 }
             }
-            '#' => return (Some(idx), None),
+            b'#' => return (Some(idx), None),
             _ => {}
         }
     }
-    (None, triple_quote)
+    (None, triple_quote.map(|b| b as char))
 }
 
 /// Finds the byte offset of the first '#' character that starts a comment.

@@ -11,17 +11,18 @@ use lsp_server::RequestId;
 use lsp_types::GotoDefinitionResponse;
 use lsp_types::Location;
 use lsp_types::Url;
+use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly::lsp::non_wasm::protocol::Request;
 use serde_json::json;
 use tempfile::TempDir;
 
-use crate::lsp::non_wasm::protocol::Message;
-use crate::lsp::non_wasm::protocol::Request;
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::bundled_typeshed_path;
-use crate::test::lsp::lsp_interaction::util::expect_definition_points_to_symbol;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
-use crate::test::lsp::lsp_interaction::util::line_at_location;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::bundled_typeshed_path;
+use crate::util::expect_definition_points_to_symbol;
+use crate::util::get_test_files_root;
+use crate::util::line_at_location;
 
 fn test_go_to_def(
     root: PathBuf,
@@ -488,7 +489,7 @@ fn goto_type_def_on_list_of_primitives_shows_selector() {
 
 #[test]
 fn test_go_to_def_constructor_calls() {
-    // Note: go-to-definition currently goes to the class definition, not __init__.
+    // go-to-definition on constructor calls should go to __init__
     let root = get_test_files_root();
     let constructor_root = root.path().join("constructor_references");
     test_go_to_def(
@@ -496,10 +497,10 @@ fn test_go_to_def_constructor_calls() {
         None,
         "usage.py",
         vec![
-            // Person("Alice", 30) - goes to class Person definition
-            (7, 7, "person.py", 6, 6, 6, 12),
-            // Person("Bob", 25) - goes to class Person definition
-            (8, 7, "person.py", 6, 6, 6, 12),
+            // Person("Alice", 30) - goes to Person.__init__ definition
+            (7, 7, "person.py", 7, 8, 7, 16),
+            // Person("Bob", 25) - goes to Person.__init__ definition
+            (8, 7, "person.py", 7, 8, 7, 16),
         ],
     );
 }
@@ -650,5 +651,135 @@ fn test_goto_def_dunder_all_submodule() {
         .definition("pkg/__init__.py", 5, 12)
         .expect_definition_response_from_root("pkg/sub.py", 0, 0, 0, 0)
         .unwrap();
+    interaction.shutdown().unwrap();
+}
+
+/// Go-to-definition on the module name part of a relative import
+/// (e.g., clicking on `bar` in `from .bar import value`) should resolve
+/// to the target module file.
+#[test]
+fn definition_relative_import_with_nested_config() {
+    let root = get_test_files_root();
+    let root_path = root
+        .path()
+        .join("nested_config_relative_import/src")
+        .to_path_buf();
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+    interaction.client.did_open("main.py");
+    interaction.client.did_open("pkg/foo.py");
+    // Go-to-definition on `bar` module in `from .bar import value` (line 5, char 6)
+    interaction
+        .client
+        .definition("pkg/foo.py", 5, 6)
+        .expect_definition_response_from_root("pkg/bar.py", 0, 0, 0, 0)
+        .unwrap();
+    interaction.shutdown().unwrap();
+}
+
+/// Documents current behavior: go-to-definition on a symbol imported from a
+/// thrift-generated Python stub navigates to the .pyi stub file.
+/// Once thrift go-to-def is implemented, this should navigate to the .thrift file instead.
+#[test]
+fn thrift_go_to_def_currently_goes_to_stub() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("thrift_go_to_def");
+    test_go_to_def(
+        root_path,
+        None,
+        "main.py",
+        vec![
+            // `from my_thrift.ttypes import MyStruct` — cursor on MyStruct (col 29)
+            // Currently navigates to the .pyi stub, not the .thrift source
+            (5, 29, "my_thrift/ttypes.pyi", 5, 6, 5, 14),
+            // `x: MyStruct` — cursor on MyStruct (col 3)
+            // Currently navigates to the .pyi stub, not the .thrift source
+            (7, 3, "my_thrift/ttypes.pyi", 5, 6, 5, 14),
+        ],
+    );
+}
+
+/// Same as above but with workspace root above src/.
+#[test]
+fn definition_relative_import_with_nested_config_workspace_at_root() {
+    let root = get_test_files_root();
+    let root_path = root
+        .path()
+        .join("nested_config_relative_import")
+        .to_path_buf();
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+    interaction.client.did_open("src/main.py");
+    interaction.client.did_open("src/pkg/foo.py");
+    // Go-to-definition on `bar` module in `from .bar import value` (line 5, char 6)
+    interaction
+        .client
+        .definition("src/pkg/foo.py", 5, 6)
+        .expect_definition_response_from_root("src/pkg/bar.py", 0, 0, 0, 0)
+        .unwrap();
+    interaction.shutdown().unwrap();
+}
+
+/// Relative imports in files not under any configured search path should
+/// resolve correctly for both go-to-definition and type resolution.
+///
+/// Files in site-packages get a fallback module name (`__unknown__`) because
+/// site-package paths are not included when computing module names from file
+/// paths. The site-packages directory is under the project root (as `.venv`
+/// typically is), so the project root search path matches first and produces a
+/// wrong module name like `site_packages.mypkg` instead of `mypkg`. This causes
+/// relative imports to resolve against the wrong base, breaking go-to-definition
+/// and hover.
+#[test]
+fn definition_relative_import_outside_search_path() {
+    let root = get_test_files_root();
+    let root_path = root
+        .path()
+        .join("relative_import_outside_search_path")
+        .to_path_buf();
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let init_file = "site_packages/mypkg/__init__.py";
+    interaction.client.did_open(init_file);
+
+    // Go-to-definition on `helpers` in `from .helpers import MyClass` (line 0, char 6).
+    interaction
+        .client
+        .definition(init_file, 0, 6)
+        .expect_definition_response_from_root("site_packages/mypkg/helpers.py", 0, 0, 0, 0)
+        .unwrap();
+
+    // Hover on `MyClass` in `from .helpers import MyClass` (line 0, char 21).
+    // Verify the type is resolved (not Unknown).
+    interaction
+        .client
+        .hover(init_file, 0, 21)
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| text.contains("(class) MyClass: type[MyClass]"))
+        })
+        .unwrap();
+
     interaction.shutdown().unwrap();
 }

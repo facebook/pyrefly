@@ -9,6 +9,7 @@ use std::thread;
 use std::thread::ThreadId;
 
 use dupe::Dupe;
+use pyrefly_util::lock::Condvar;
 use pyrefly_util::lock::Mutex;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallset;
@@ -36,6 +37,15 @@ enum Status<T> {
     Calculated(T),
 }
 
+/// Interior state protected by the mutex.
+#[derive(Clone, Debug)]
+struct CalcInner<T> {
+    status: Status<T>,
+    /// True when an SCC batch commit has locked this cell for writing.
+    /// `record_value` blocks while this is set; reads are unaffected.
+    write_locked: bool,
+}
+
 /// The result of proposing a calculation in the current thread. See
 /// `propose_calculation` for more details on how it is used.
 #[derive(Clone, Debug)]
@@ -50,7 +60,10 @@ pub enum ProposalResult<T> {
 
 /// A cached calculation where recursive calculation returns None.
 #[derive(Debug)]
-pub struct Calculation<T>(Mutex<Status<T>>);
+pub struct Calculation<T> {
+    inner: Mutex<CalcInner<T>>,
+    condvar: Condvar,
+}
 
 impl<T> Default for Calculation<T> {
     fn default() -> Self {
@@ -60,16 +73,22 @@ impl<T> Default for Calculation<T> {
 
 impl<T> Calculation<T> {
     pub fn new() -> Self {
-        Self(Mutex::new(Status::NotCalculated))
+        Self {
+            inner: Mutex::new(CalcInner {
+                status: Status::NotCalculated,
+                write_locked: false,
+            }),
+            condvar: Condvar::new(),
+        }
     }
 }
 
 impl<T: Dupe> Calculation<T> {
     /// Get the value if it has been calculated, otherwise `None`.
-    /// Does not block.
+    /// Does not block on write locks — reads are unaffected.
     pub fn get(&self) -> Option<T> {
-        let lock = self.0.lock();
-        match &*lock {
+        let lock = self.inner.lock();
+        match &lock.status {
             Status::Calculated(v) => Some(v.dupe()),
             _ => None,
         }
@@ -83,11 +102,13 @@ impl<T: Dupe> Calculation<T> {
     ///   mark the current thread as active and return `Calculatable`.
     /// - If the current thread encountered a cycle, return `CycleDetected`.
     /// - If the calculation has already been completed, return `Calculated(value)`.
+    ///
+    /// Does not block on write locks — proposal is unaffected.
     pub fn propose_calculation(&self) -> ProposalResult<T> {
-        let mut lock = self.0.lock();
-        match &mut *lock {
+        let mut lock = self.inner.lock();
+        match &mut lock.status {
             Status::NotCalculated => {
-                *lock = Status::Calculating(Box::new(smallset! {thread::current().id()}));
+                lock.status = Status::Calculating(Box::new(smallset! {thread::current().id()}));
                 ProposalResult::Calculatable
             }
             Status::Calculating(threads) => {
@@ -103,25 +124,73 @@ impl<T: Dupe> Calculation<T> {
 
     /// Attempt to record a calculated value.
     ///
+    /// Blocks while the cell is write-locked by an SCC batch commit.
+    ///
     /// Returns `(final_value, did_write)` where:
     /// - `final_value` is the value that was recorded (which may be different from
     ///   the value passed in if another thread finished the calculation first)
     /// - `did_write` is `true` if this call was the one that wrote the value,
     ///   `false` if another thread had already written it
     pub fn record_value(&self, value: T) -> (T, bool) {
-        let mut lock = self.0.lock();
-        match &mut *lock {
+        let mut lock = self.inner.lock();
+        lock = self.condvar.wait_while(lock, |inner| inner.write_locked);
+        match &mut lock.status {
             Status::NotCalculated => {
                 unreachable!("Should not record a result before calculating")
             }
             Status::Calculating(_) => {
-                *lock = Status::Calculated(value.dupe());
+                lock.status = Status::Calculated(value.dupe());
                 (value, true)
             }
             Status::Calculated(v) => {
                 // The first thread to write a value wins
                 (v.dupe(), false)
             }
+        }
+    }
+
+    /// Lock this cell for an SCC batch commit. Blocks if another SCC commit
+    /// already holds the lock. Returns false (no lock acquired) if the cell
+    /// is already `Calculated`, since `record_value` would be a no-op anyway.
+    pub fn write_lock(&self) -> bool {
+        let mut lock = self.inner.lock();
+        lock = self.condvar.wait_while(lock, |inner| inner.write_locked);
+        match lock.status {
+            Status::Calculated(_) => false,
+            _ => {
+                lock.write_locked = true;
+                true
+            }
+        }
+    }
+
+    /// Write a value to a write-locked cell and release the lock.
+    /// Panics if the cell is not write-locked.
+    pub fn write_unlock(&self, value: T) -> (T, bool) {
+        let mut lock = self.inner.lock();
+        assert!(lock.write_locked, "write_unlock called on non-locked cell");
+        lock.write_locked = false;
+        let result = match &mut lock.status {
+            Status::NotCalculated => {
+                unreachable!("write_unlock called before calculating")
+            }
+            Status::Calculating(_) => {
+                lock.status = Status::Calculated(value.dupe());
+                (value, true)
+            }
+            Status::Calculated(v) => (v.dupe(), false),
+        };
+        self.condvar.notify_all();
+        result
+    }
+
+    /// Release the write lock without writing a value.
+    /// Used by the RAII guard for panic cleanup.
+    pub fn write_unlock_empty(&self) {
+        let mut lock = self.inner.lock();
+        if lock.write_locked {
+            lock.write_locked = false;
+            self.condvar.notify_all();
         }
     }
 

@@ -148,6 +148,18 @@ impl MutableCaptureError {
     }
 }
 
+/// Value and narrow information for a captured variable from an outer scope.
+/// Returned by `Scopes::outer_capture_info`.
+#[derive(Default)]
+pub struct OuterCaptureInfo {
+    /// The flow value idx from the nearest enclosing local scope, if the
+    /// variable is not reassigned after the function definition.
+    pub value_idx: Option<Idx<Key>>,
+    /// The narrow idx, if the outer scope has an active type-guard narrow
+    /// and the variable is not reassigned after the function definition.
+    pub narrow_idx: Option<Idx<Key>>,
+}
+
 /// A name defined in a module, which needs to be convertible to an export.
 #[derive(Debug)]
 pub enum Exportable {
@@ -172,6 +184,9 @@ struct Static(SmallMap<Name, StaticInfo>);
 struct StaticInfo {
     range: TextRange,
     style: StaticStyle,
+    /// The range of the textually last assignment to this name. Used to check
+    /// whether a captured variable is reassigned after a nested function definition.
+    last_range: TextRange,
 }
 
 #[derive(Clone, Debug)]
@@ -297,11 +312,11 @@ impl StaticInfo {
             })
         };
         match self.style {
-            StaticStyle::Anywhere(..) => Key::Anywhere(name.clone(), self.range),
+            StaticStyle::Anywhere(..) => Key::Anywhere(Box::new((name.clone(), self.range))),
             StaticStyle::Delete => Key::Delete(self.range),
             StaticStyle::MutableCapture(..) => Key::MutableCapture(short_identifier()),
-            StaticStyle::MergeableImport => Key::Import(name.clone(), self.range),
-            StaticStyle::ImplicitGlobal => Key::ImplicitGlobal(name.clone()),
+            StaticStyle::MergeableImport => Key::Import(Box::new((name.clone(), self.range))),
+            StaticStyle::ImplicitGlobal => Key::ImplicitGlobal(Box::new(name.clone())),
             StaticStyle::SingleDef(..) => Key::Definition(short_identifier()),
             StaticStyle::PossibleLegacyTParam => Key::PossibleLegacyTParam(self.range),
         }
@@ -320,13 +335,27 @@ impl StaticInfo {
 }
 
 impl Static {
-    fn upsert(&mut self, name: Hashed<Name>, range: TextRange, style: StaticStyle) {
+    fn upsert(
+        &mut self,
+        name: Hashed<Name>,
+        range: TextRange,
+        style: StaticStyle,
+        last_range: TextRange,
+    ) {
         match self.0.entry_hashed(name) {
             Entry::Vacant(e) => {
-                e.insert(StaticInfo { range, style });
+                e.insert(StaticInfo {
+                    range,
+                    style,
+                    last_range,
+                });
             }
             Entry::Occupied(mut e) => {
                 let found = e.get_mut();
+                // Track the textually last assignment site.
+                if last_range.start() > found.last_range.start() {
+                    found.last_range = last_range;
+                }
                 if matches!(style, StaticStyle::PossibleLegacyTParam) {
                     // This case is reachable when the same module has multiple attributes accessed
                     // on it, each of which produces a separate possible-legacy-tparam binding that
@@ -364,16 +393,18 @@ impl Static {
         }
     }
 
+    /// Populate static definitions from a list of statements.
+    /// Returns the set of implicit captures (names read but not locally defined).
     fn stmts(
         &mut self,
         x: &[Stmt],
         module_info: &ModuleInfo,
         top_level: bool,
         lookup: &dyn LookupExport,
-        sys_info: &SysInfo,
+        sys_info: SysInfo,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
         scopes: Option<&Scopes>,
-    ) {
+    ) -> SmallSet<Name> {
         let mut d = Definitions::new(
             x,
             module_info.name(),
@@ -387,32 +418,42 @@ impl Static {
             d.inject_implicit_globals();
         }
 
+        let implicit_captures = d.implicit_captures();
+
         let mut all_wildcards = Vec::with_capacity(d.import_all.len());
         for (m, range) in d.import_all {
             if let Some(wildcards) = lookup.get_wildcard(m) {
-                all_wildcards.push((range, wildcards))
+                all_wildcards.push((m, range, wildcards))
             }
         }
 
         // Try and avoid rehashing while we insert, with a little bit of spare space
         let capacity_guess =
-            d.definitions.len() + all_wildcards.iter().map(|x| x.1.len()).sum::<usize>();
+            d.definitions.len() + all_wildcards.iter().map(|x| x.2.len()).sum::<usize>();
         self.0.reserve(((capacity_guess * 5) / 4) + 25);
 
         for (name, definition) in d.definitions.into_iter_hashed() {
             // Note that this really is an upsert: there might already be a parameter of the
             // same name in this scope.
             let range = definition.range;
+            let last_range = definition.last_range;
             let style =
                 StaticStyle::of_definition(name.as_ref(), definition, scopes, get_annotation_idx);
-            self.upsert(name, range, style);
+            self.upsert(name, range, style, last_range);
         }
-        for (range, wildcard) in all_wildcards {
+        for (module, range, wildcard) in all_wildcards {
+            // Builtins are a fallback, so they should never shadow an existing definition.
+            let skip_existing =
+                module == ModuleName::builtins() || module == ModuleName::extra_builtins();
             for name in wildcard.iter_hashed() {
                 // TODO: semantics of import * and global var with same name
-                self.upsert(name.cloned(), range, StaticStyle::MergeableImport)
+                if skip_existing && self.0.get_hashed(name).is_some() {
+                    continue;
+                }
+                self.upsert(name.cloned(), range, StaticStyle::MergeableImport, range)
             }
         }
+        implicit_captures
     }
 
     fn expr_lvalue(&mut self, x: &Expr) {
@@ -421,6 +462,7 @@ impl Static {
                 Hashed::new(name.id.clone()),
                 name.range,
                 StaticStyle::SingleDef(None),
+                name.range,
             )
         };
         Ast::expr_lvalue(x, &mut add);
@@ -647,24 +689,44 @@ impl FlowStyle {
     ) -> FlowStyle {
         let mut merged = styles.next().unwrap_or(FlowStyle::Other);
         for x in styles {
-            match (&merged, x) {
+            match (&mut merged, x) {
                 // If they're identical, keep it
-                (l, r) if l == &r => {}
+                (l, ref r) if *l == *r => {}
                 // Uninitialized-like branches merge into PossiblyUninitialized.
-                // MaybeInitialized is treated like PossiblyUninitialized for merge purposes.
-                (
-                    FlowStyle::Uninitialized
-                    | FlowStyle::PossiblyUninitialized
-                    | FlowStyle::MaybeInitialized(_),
-                    _,
-                )
-                | (
-                    _,
-                    FlowStyle::Uninitialized
-                    | FlowStyle::PossiblyUninitialized
-                    | FlowStyle::MaybeInitialized(_),
-                ) => {
-                    return FlowStyle::PossiblyUninitialized;
+                // Must come before MaybeInitialized catch-all to avoid masking
+                // valid uninitialized paths.
+                //
+                // Do not early-return here for BoolOp merges. When a variable
+                // is PossiblyUninitialized in the base flow and a walrus in one
+                // BoolOp branch redefines it, the short-circuit branch inherits
+                // PossiblyUninitialized while the evaluated branch has Other. An
+                // early return would produce a false positive inside `if` bodies
+                // where all `and` operands succeeded (so the walrus definitely ran).
+                //
+                // Treating it as Other reduces false positives at the expense of
+                // some false negatives.
+                (FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized, _)
+                | (_, FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized) => {
+                    match merge_style {
+                        MergeStyle::BoolOp => {
+                            merged = FlowStyle::Other;
+                        }
+                        _ => return FlowStyle::PossiblyUninitialized,
+                    }
+                }
+                // Two MaybeInitialized: combine termination keys from both branches.
+                // Each branch independently needs its keys to be Never for that path
+                // to be initialized, so we collect all keys.
+                (FlowStyle::MaybeInitialized(keys), FlowStyle::MaybeInitialized(other_keys)) => {
+                    keys.extend(other_keys);
+                }
+                // MaybeInitialized + a fully initialized style: keep the MaybeInitialized
+                // keys since those paths still need verification at solve time.
+                (FlowStyle::MaybeInitialized(keys), _) => {
+                    merged = FlowStyle::MaybeInitialized(keys.clone());
+                }
+                (_, FlowStyle::MaybeInitialized(keys)) => {
+                    merged = FlowStyle::MaybeInitialized(keys);
                 }
                 // Unclear how to merge, default to None
                 _ => {
@@ -700,6 +762,24 @@ impl FlowStyle {
             }
         }
     }
+
+    // Transform uninitialized flow styles to FlowStyle::Other
+    // This lets us assume captured variables exist in nested scopes
+    pub fn assume_initialized(self) -> Self {
+        match self {
+            FlowStyle::Import(..)
+            | FlowStyle::ImportAs(_)
+            | FlowStyle::MergeableImport(_)
+            | FlowStyle::FunctionDef { .. }
+            | FlowStyle::ClassDef
+            | FlowStyle::ClassField { .. }
+            | FlowStyle::LoopRecursion
+            | FlowStyle::Other => self,
+            FlowStyle::Uninitialized
+            | FlowStyle::PossiblyUninitialized
+            | FlowStyle::MaybeInitialized { .. } => FlowStyle::Other,
+        }
+    }
 }
 
 /// Because of complications related both to recursion in the binding graph and to
@@ -715,6 +795,7 @@ impl FlowStyle {
 pub struct ClassIndices {
     pub def_index: ClassDefIndex,
     pub class_idx: Idx<KeyClass>,
+    pub class_object_idx: Idx<Key>,
     pub base_type_idx: Idx<KeyClassBaseType>,
     pub metadata_idx: Idx<KeyClassMetadata>,
     pub mro_idx: Idx<KeyClassMro>,
@@ -817,13 +898,19 @@ fn is_test_setup_method(method_name: &Name) -> bool {
     }
 }
 
-/// Things we collect from inside a function
+/// Things we collect from inside a function.
 /// The boolean flag is set when we know for sure the statement is definitely unreachable.
 #[derive(Default, Clone, Debug)]
 pub struct YieldsAndReturns {
     pub returns: Vec<(Idx<Key>, StmtReturn, bool)>,
     pub yields: Vec<(Idx<KeyYield>, ExprYield, bool)>,
     pub yield_froms: Vec<(Idx<KeyYieldFrom>, ExprYieldFrom, bool)>,
+    /// Whether this function syntactically contains `yield` or `yield from`.
+    /// Python determines generator status at compile time regardless of
+    /// reachability, so this is set even for yields inside dead code like
+    /// `if False:`. The `yields`/`yield_froms` vectors may be empty when this
+    /// is true, because dead-code branches are not traversed during binding.
+    pub is_generator: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1025,6 +1112,10 @@ pub struct Scope {
     finally_depth: usize,
     /// Depth of with blocks we're in. Resets in new function scopes.
     with_depth: usize,
+    /// Names that are read but not locally defined in this scope — implicit captures
+    /// from enclosing scopes. Populated during `init_current_static` from the
+    /// `Definitions` phase. Used to seed flow entries for captured variables.
+    implicit_captures: SmallSet<Name>,
 }
 
 impl Scope {
@@ -1042,6 +1133,7 @@ impl Scope {
             variables: SmallMap::new(),
             finally_depth: 0,
             with_depth: 0,
+            implicit_captures: SmallSet::new(),
         }
     }
 
@@ -1115,6 +1207,13 @@ impl Scope {
                 class_scope.indices.class_idx,
                 class_scope.indices.metadata_idx,
             )),
+            _ => None,
+        }
+    }
+
+    fn class_object_idx(&self) -> Option<Idx<Key>> {
+        match &self.kind {
+            ScopeKind::Class(class_scope) => Some(class_scope.indices.class_object_idx),
             _ => None,
         }
     }
@@ -1204,6 +1303,83 @@ impl Scopes {
         self.current().flow.clone()
     }
 
+    /// Returns names that are implicit captures in the current scope:
+    /// read in the body but not locally defined (not in static definitions).
+    /// Parameters are excluded because they are in static definitions.
+    pub fn implicit_capture_names(&self) -> SmallSet<Name> {
+        let scope = self.current();
+        scope
+            .implicit_captures
+            .iter()
+            .filter(|name| scope.stat.0.get_hashed(Hashed::new(*name)).is_none())
+            .cloned()
+            .collect()
+    }
+
+    /// The range of the current (innermost) scope.
+    pub fn current_scope_range(&self) -> TextRange {
+        self.current().range
+    }
+
+    fn outer_capture_not_reassigned_after(
+        scope: &Scope,
+        name: Hashed<&Name>,
+        inner_fn_range: TextRange,
+    ) -> bool {
+        scope
+            .stat
+            .0
+            .get_hashed(name)
+            .map(|s| s.last_range.start() < inner_fn_range.start())
+            .unwrap_or(true)
+    }
+
+    /// Gather the outer scope's value and narrow idx for a captured variable.
+    ///
+    /// Walks outer scopes (skipping current and class scopes) to find the
+    /// nearest scope with a flow entry for `name`. When the variable is
+    /// not reassigned after `inner_fn_range`:
+    /// - `value_idx`: the flow's current value binding (preserves rebindings
+    ///   like `x = x.clone()` that happen before the nested definition).
+    ///   Only propagated from local (non-module) scopes so that conditional
+    ///   top-level shadowing keeps its existing behavior (the caller falls
+    ///   back to the static binding via `idx_for_promise`).
+    /// - `narrow_idx`: the narrow's idx, if the outer scope has an active
+    ///   type-guard narrow (isinstance, is not None, etc.). Propagated from
+    ///   any scope, including module scope, so that module-level guards like
+    ///   `if x is None: raise` are visible inside nested functions.
+    pub fn outer_capture_info(
+        &self,
+        name: Hashed<&Name>,
+        inner_fn_range: TextRange,
+    ) -> OuterCaptureInfo {
+        for scope in self.iter_rev().skip(1) {
+            if matches!(scope.kind, ScopeKind::Class(_)) {
+                continue;
+            }
+            let is_module = matches!(scope.kind, ScopeKind::Module);
+            if let Some(flow_info) = scope.flow.get_info_hashed(name) {
+                if Self::outer_capture_not_reassigned_after(scope, name, inner_fn_range) {
+                    return OuterCaptureInfo {
+                        // Don't propagate value bindings from module scope.
+                        value_idx: if is_module {
+                            None
+                        } else {
+                            flow_info.value().map(|value| value.idx)
+                        },
+                        narrow_idx: flow_info.narrow.as_ref().map(|_| flow_info.idx()),
+                    };
+                }
+                return OuterCaptureInfo::default();
+            }
+            // Name is in stat but not flow — possibly uninitialized, don't propagate.
+            if scope.stat.0.get_hashed(name).is_some() {
+                return OuterCaptureInfo::default();
+            }
+        }
+        OuterCaptureInfo::default()
+    }
+
     pub fn in_class_body(&self) -> bool {
         match self.current().kind {
             ScopeKind::Class(_) => true,
@@ -1214,6 +1390,10 @@ impl Scopes {
     pub fn in_function_scope(&self) -> bool {
         self.iter_rev()
             .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
+    }
+
+    pub fn current_static_contains(&self, name: &Name) -> bool {
+        self.current().stat.0.contains_key(name)
     }
 
     /// Enter a with block.
@@ -1269,6 +1449,17 @@ impl Scopes {
         for scope in self.iter_rev() {
             if let Some(class_and_metadata) = scope.class_and_metadata_keys() {
                 return Some(class_and_metadata);
+            }
+        }
+        None
+    }
+
+    /// Are we anywhere inside a class? If so, return the class object idx.
+    /// This function looks at enclosing scopes.
+    pub fn enclosing_class_object_idx(&self) -> Option<Idx<Key>> {
+        for scope in self.iter_rev() {
+            if let Some(class_object_idx) = scope.class_object_idx() {
+                return Some(class_object_idx);
             }
         }
         None
@@ -1363,11 +1554,11 @@ impl Scopes {
         module_info: &ModuleInfo,
         top_level: bool,
         lookup: &dyn LookupExport,
-        sys_info: &SysInfo,
+        sys_info: SysInfo,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
     ) {
         let mut initialize = |scope: &mut Scope, myself: Option<&Self>| {
-            scope.stat.stmts(
+            let implicit_captures = scope.stat.stmts(
                 x,
                 module_info,
                 top_level,
@@ -1376,6 +1567,7 @@ impl Scopes {
                 get_annotation_idx,
                 myself,
             );
+            scope.implicit_captures = implicit_captures;
             // Presize the flow, as its likely to need as much space as static
             scope.flow.info.reserve(scope.stat.0.capacity());
         };
@@ -1720,6 +1912,36 @@ impl Scopes {
         Some(static_info.as_name_write_info())
     }
 
+    pub fn get_current_flow_idx(&self, name: &Name) -> Option<Idx<Key>> {
+        self.current().flow.get_value(name).map(|v| v.idx)
+    }
+
+    /// PEP 572: walrus operators inside comprehensions bind to the enclosing
+    /// non-comprehension scope. This method updates the flow of the nearest
+    /// enclosing non-comprehension scope with the given name and binding idx.
+    pub fn define_in_enclosing_non_comprehension_scope(
+        &mut self,
+        name: Hashed<&Name>,
+        idx: Idx<Key>,
+        style: FlowStyle,
+    ) {
+        let len = self.scopes.len();
+        for i in (0..len - 1).rev() {
+            if !matches!(self.scopes[i].scope.kind, ScopeKind::Comprehension { .. }) {
+                let in_loop = !self.scopes[i].scope.loops.is_empty();
+                match self.scopes[i].scope.flow.info.entry_hashed(name.cloned()) {
+                    Entry::Vacant(e) => {
+                        e.insert(FlowInfo::new_value(idx, style));
+                    }
+                    Entry::Occupied(mut e) => {
+                        *e.get_mut() = e.get().updated_value(idx, style, in_loop);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
     /// Handle a delete operation by marking a name as uninitialized in this flow.
     ///
     /// Don't change the type if one is present - downstream we'll emit
@@ -1740,6 +1962,22 @@ impl Scopes {
         None
     }
 
+    /// Check if `name` was imported from a module with the given name.
+    /// Traverses all enclosing scopes to find the import.
+    pub fn is_imported_from_module(&self, name: &Name, module_name: &str) -> bool {
+        if let Some(flow_info) = self.get_flow_info(name)
+            && let Some(value) = flow_info.value()
+        {
+            return match &value.style {
+                FlowStyle::Import(m, _)
+                | FlowStyle::ImportAs(m)
+                | FlowStyle::MergeableImport(m) => m.as_str() == module_name,
+                _ => false,
+            };
+        }
+        false
+    }
+
     /// Get the flow style for `name` in the current scope.
     ///
     /// Returns `None` if there is no current flow (which may mean the
@@ -1756,12 +1994,33 @@ impl Scopes {
         Some(self.current().flow.get_info(name)?.value()?.idx)
     }
 
+    /// Get the flow idx for `name` in the current fork's **base** flow (the flow captured
+    /// at `start_fork` time, before any branches were started).
+    ///
+    /// This is used to look up names for exhaustiveness bindings, where the current flow
+    /// is empty (reset by `finish_branch`) but we need the correctly-narrowed type from
+    /// the enclosing context in which the if/elif statement appears.
+    ///
+    /// Returns `None` if there is no active fork or the name is not in the base flow.
+    pub fn current_fork_base_idx(&self, name: &Name) -> Option<Idx<Key>> {
+        Some(self.current().forks.last()?.base.get_info(name)?.idx())
+    }
+
     /// Return the current binding index and flow style for `name`, if it exists
     /// in any enclosing scope.
     pub fn binding_idx_for_name(&self, name: &Name) -> Option<(Idx<Key>, FlowStyle)> {
         let info = self.get_flow_info(name)?;
         let value = info.value()?;
         Some((value.idx, value.style.clone()))
+    }
+
+    /// Look up the FlowStyle for `name`, skipping class body scopes
+    pub fn flow_style_for_name(&self, name: &Name) -> Option<FlowStyle> {
+        let hashed = Hashed::new(name);
+        self.visit_scopes(|_, scope, _| {
+            let value = scope.flow.get_info_hashed(hashed)?.value()?;
+            Some(value.style.clone())
+        })
     }
 
     /// Look up either `name` or `base_name.name` in the current scope, assuming we are
@@ -1778,9 +2037,15 @@ impl Scopes {
             // is a special export.
             let value = self.get_flow_info(base_name)?.value()?;
             match &value.style {
-                FlowStyle::MergeableImport(m) | FlowStyle::ImportAs(m) => {
-                    lookup.is_special_export(*m, name)
+                FlowStyle::MergeableImport(m) => {
+                    // For dotted imports like `import collections.abc`, the base module `collections`
+                    // is also implicitly imported, so we should check that too.
+                    let base_module = ModuleName::from_name(base_name);
+                    lookup
+                        .is_special_export(*m, name)
+                        .or_else(|| lookup.is_special_export(base_module, name))
                 }
+                FlowStyle::ImportAs(m) => lookup.is_special_export(*m, name),
                 FlowStyle::Import(m, upstream_name) => lookup.is_special_export(*m, upstream_name),
                 _ => None,
             }
@@ -1818,6 +2083,7 @@ impl Scopes {
             Hashed::new(name.id.clone()),
             name.range,
             StaticStyle::SingleDef(ann),
+            name.range,
         )
     }
 
@@ -1843,6 +2109,25 @@ impl Scopes {
                 break;
             }
         }
+    }
+
+    fn is_parameter_used(&self, name: &Name) -> bool {
+        match &self.current().kind {
+            ScopeKind::Function(scope) => {
+                scope.parameters.get(name).is_some_and(|usage| usage.used)
+            }
+            ScopeKind::Method(scope) => scope.parameters.get(name).is_some_and(|usage| usage.used),
+            _ => false,
+        }
+    }
+
+    /// Check if a name is declared as `global` or `nonlocal` in the current scope.
+    fn is_mutable_capture(&self, name: &Name) -> bool {
+        self.current()
+            .stat
+            .0
+            .get(name)
+            .is_some_and(|info| matches!(info.style, StaticStyle::MutableCapture(_)))
     }
 
     pub fn register_import(&mut self, name: &Identifier) {
@@ -1905,21 +2190,27 @@ impl Scopes {
     }
 
     pub fn register_variable(&mut self, name: &Identifier) {
-        // Track variables in Module, Function, and Method scopes
+        // Track variables in Module, Function, and Method scopes.
         // Module-level variables won't be reported as unused since they can be imported
-        // by other modules, but function/method-level variables will be reported
+        // by other modules, but function/method-level variables will be reported.
         if matches!(
             self.current().kind,
             ScopeKind::Module | ScopeKind::Function(_) | ScopeKind::Method(_)
         ) {
-            // Preserve the `used` flag if the variable was already marked as used
+            // Don't track variables declared as `global` or `nonlocal` — they are
+            // visible to other scopes and can't be considered locally unused.
+            if self.is_mutable_capture(&name.id) {
+                return;
+            }
+            // Preserve the `used` flag if the variable was already marked as used.
             // This handles cases like `foo = foo + 1` in loops where the variable
             // is read before being reassigned
             let was_used = self
                 .current()
                 .variables
                 .get(&name.id)
-                .is_some_and(|usage| usage.used);
+                .is_some_and(|usage| usage.used)
+                || self.is_parameter_used(&name.id);
             self.current_mut().variables.insert(
                 name.id.clone(),
                 VariableUsage {
@@ -1948,7 +2239,21 @@ impl Scopes {
             Hashed::new(name.id.clone()),
             name.range,
             StaticStyle::PossibleLegacyTParam,
+            name.range,
         )
+    }
+
+    /// Add a name to the current static scope.
+    ///
+    /// Callers must always define the name via a `Key::Definition` immediately
+    /// afterward or downstream lookups may panic.
+    pub fn add_name_to_current_static(&mut self, name: &Identifier) {
+        self.current_mut().stat.upsert(
+            Hashed::new(name.id.clone()),
+            name.range,
+            StaticStyle::SingleDef(None),
+            name.range,
+        );
     }
 
     /// Add an adhoc name - if it does not already exist - to the current static
@@ -1988,7 +2293,6 @@ impl Scopes {
     pub fn swap_current_flow_with(&mut self, flow: &mut Flow) {
         mem::swap(&mut self.current_mut().flow, flow);
     }
-
     pub fn mark_flow_termination(&mut self, from_static_test: bool) {
         self.current_mut().flow.has_terminated = true;
         if self.current_mut().with_depth == 0 && !from_static_test {
@@ -2003,6 +2307,14 @@ impl Scopes {
     /// Check if the current flow has definitely terminated (e.g., after a return, raise, break, or continue)
     pub fn is_definitely_unreachable(&self) -> bool {
         self.current().flow.is_definitely_unreachable
+    }
+
+    /// Check if the current flow is unreachable due to a statically-evaluated test
+    /// (e.g., `if sys.platform != "darwin": return 0` on linux). In this state,
+    /// `has_terminated` is true but `is_definitely_unreachable` is false because the
+    /// code may be reachable in other environments.
+    pub fn is_unreachable_from_static_test(&self) -> bool {
+        self.current().flow.has_terminated && !self.current().flow.is_definitely_unreachable
     }
 
     /// Set or clear the last statement expression key for the current flow.
@@ -2092,6 +2404,7 @@ impl Scopes {
     ) -> Result<(), ExprYield> {
         match self.current_yields_and_returns_mut() {
             Some(yields_and_returns) => {
+                yields_and_returns.is_generator = true;
                 yields_and_returns.yields.push((idx, x, is_unreachable));
                 Ok(())
             }
@@ -2110,12 +2423,21 @@ impl Scopes {
     ) -> Result<(), ExprYieldFrom> {
         match self.current_yields_and_returns_mut() {
             Some(yields_and_returns) => {
+                yields_and_returns.is_generator = true;
                 yields_and_returns
                     .yield_froms
                     .push((idx, x, is_unreachable));
                 Ok(())
             }
             None => Err(x),
+        }
+    }
+
+    /// Mark that the enclosing function contains `yield` or `yield from` in a
+    /// statically-dead branch that was not traversed during binding.
+    pub fn mark_has_yield_in_dead_code(&mut self) {
+        if let Some(yields_and_returns) = self.current_yields_and_returns_mut() {
+            yields_and_returns.is_generator = true;
         }
     }
 
@@ -2140,6 +2462,25 @@ impl Scopes {
             }
         };
         self.pop(); // Also pop the annotation scope that wrapped the class body.
+
+        // Collect method-defined attributes up front so we can compute which class-body fields
+        // are initialized in a recognized instance method (e.g. `__init__`) before building
+        // field definitions — a Final field is legally uninitialized in the class body if it
+        // appears in such a method.
+        let method_attrs: Vec<_> = class_scope.method_defined_attributes().collect();
+        let recognized_instance_attrs: SmallSet<Name> = method_attrs
+            .iter()
+            .filter_map(|(name, method, _)| {
+                if method.recognized_attribute_defining_method
+                    && matches!(method.instance_or_class, MethodSelfKind::Instance)
+                {
+                    Some(name.key().clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         class_body.stat.0.iter_hashed().for_each(
             |(name, static_info)| {
             if matches!(static_info.style, StaticStyle::MutableCapture(..)) {
@@ -2174,7 +2515,7 @@ impl Scopes {
                             }
                         }
                         ClassFieldDefinition::AssignedInBody {
-                            value: ExprOrBinding::Expr(e.clone()),
+                            value: Box::new(ExprOrBinding::Expr(e.clone())),
                             annotation: static_info.annotation(),
                             alias_of,
                         }
@@ -2185,6 +2526,8 @@ impl Scopes {
                         annotation: static_info.annotation().unwrap_or_else(
                             || panic!("A class field known in the body but uninitialized always has an annotation.")
                         ),
+                        initialized_in_recognized_method: recognized_instance_attrs
+                            .contains(name.key().as_str()),
                     },
                     _ => ClassFieldDefinition::DefinedWithoutAssign {
                         definition: value.idx,
@@ -2193,14 +2536,14 @@ impl Scopes {
                 field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
             }
         });
-        class_scope.method_defined_attributes().for_each(
+        method_attrs.into_iter().for_each(
             |(name, method, InstanceAttribute(value, annotation, range, _))| {
                 if !field_definitions.contains_key_hashed(name.as_ref()) {
                     field_definitions.insert_hashed(
                         name,
                         (
                             ClassFieldDefinition::DefinedInMethod {
-                                value,
+                                value: Box::new(value),
                                 annotation,
                                 method,
                             },
@@ -2369,7 +2712,7 @@ impl Scopes {
     /// - For other usages: Normal lookup behavior.
     pub fn look_up_name_for_read(&self, name: Hashed<&Name>, usage: &Usage) -> NameReadInfo {
         let skip_class_overload_function_definitions =
-            matches!(usage, Usage::StaticTypeInformation);
+            matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs);
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
 
@@ -2702,7 +3045,10 @@ impl<'a> BindingsBuilder<'a> {
             self.insert_binding_idx(phi_idx, Binding::LoopPhi(loop_prior, branch_idxs));
             phi_idx
         } else {
-            self.insert_binding_idx(phi_idx, Binding::Phi(join_style, branch_infos));
+            self.insert_binding_idx(
+                phi_idx,
+                Binding::Phi(join_style, branch_infos.into_boxed_slice()),
+            );
             phi_idx
         }
     }
@@ -3032,7 +3378,7 @@ impl<'a> BindingsBuilder<'a> {
         // For each name and merge item, produce the merged FlowInfo for our new Flow
         let mut merged_flow_infos = SmallMap::with_capacity(merge_items.len());
         for (name, merge_item) in merge_items.into_iter_hashed() {
-            let phi_idx = self.idx_for_promise(Key::Phi(name.key().clone(), range));
+            let phi_idx = self.idx_for_promise(Key::Phi(Box::new((name.key().clone(), range))));
             merged_flow_infos.insert_hashed(
                 name,
                 self.merged_flow_info(
@@ -3067,7 +3413,7 @@ impl<'a> BindingsBuilder<'a> {
                 continue;
             }
             // We are promising to insert a binding for this key when we merge the flow
-            let phi_idx = self.idx_for_promise(Key::Phi(name.clone(), range));
+            let phi_idx = self.idx_for_promise(Key::Phi(Box::new((name.clone(), range))));
             match &mut info.value {
                 Some(value) => {
                     value.idx = phi_idx;
@@ -3234,6 +3580,7 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         negated_prev_ops_if_nonexhaustive: Option<&NarrowOps>,
         is_bool_op: bool,
+        base_termination_key: Option<Idx<Key>>,
     ) {
         let fork = self.scopes.current_mut().forks.pop().unwrap();
         assert!(
@@ -3249,6 +3596,9 @@ impl<'a> BindingsBuilder<'a> {
                 NarrowUseLocation::End(fork.range),
                 &Usage::Narrowing(None),
             );
+            if let Some(key) = base_termination_key {
+                self.scopes.current_mut().flow.last_stmt_expr = Some(key);
+            }
             self.merge_flow(fork.base, branches, fork.range, MergeStyle::Inclusive);
         } else {
             self.merge_flow(
@@ -3270,7 +3620,7 @@ impl<'a> BindingsBuilder<'a> {
     /// Panics if called when no fork is active, or if a branch is started (which
     /// means the caller forgot to call `finish_branch` and is always a bug).
     pub fn finish_exhaustive_fork(&mut self) {
-        self.finish_fork_impl(None, false)
+        self.finish_fork_impl(None, false, None)
     }
 
     /// Finish a non-exhaustive fork in which the base flow is part of the merge. It negates
@@ -3280,14 +3630,18 @@ impl<'a> BindingsBuilder<'a> {
     ///
     /// Panics if called when no fork is active, or if a branch is started (which
     /// means the caller forgot to call `finish_branch` and is always a bug).
-    pub fn finish_non_exhaustive_fork(&mut self, negated_prev_ops: &NarrowOps) {
-        self.finish_fork_impl(Some(negated_prev_ops), false)
+    pub fn finish_non_exhaustive_fork(
+        &mut self,
+        negated_prev_ops: &NarrowOps,
+        base_termination_key: Option<Idx<Key>>,
+    ) {
+        self.finish_fork_impl(Some(negated_prev_ops), false, base_termination_key)
     }
 
     /// Finish the fork for a boolean operation. This requires lax handling of
     /// possibly-uninitialized locals, see the inline comment in `FlowStyle::merge`.
     pub fn finish_bool_op_fork(&mut self) {
-        self.finish_fork_impl(None, true)
+        self.finish_fork_impl(None, true, None)
     }
 
     /// Finish a `MatchOr`, which behaves like an exhaustive fork except that we know

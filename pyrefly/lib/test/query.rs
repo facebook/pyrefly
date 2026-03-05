@@ -17,6 +17,7 @@ use tempfile::TempDir;
 
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
+use crate::query::PythonASTRange;
 use crate::query::Query;
 use crate::test::util::init_test;
 
@@ -32,7 +33,7 @@ fn create_query() -> Query {
 
 /// Convert the result of get_types_in_file to a pretty-printed JSON string.
 /// This format makes test failures easy to patch by copy-pasting the actual output.
-fn types_to_json_string(types: Vec<(crate::query::PythonASTRange, String)>) -> String {
+fn types_to_json_string(types: Vec<(PythonASTRange, String)>) -> String {
     let entries: Vec<serde_json::Value> = types
         .into_iter()
         .map(|(range, type_str)| {
@@ -399,4 +400,84 @@ def f(foos: list[Foo]) -> int:
 ]"#;
 
     assert_eq!(expected, actual);
+}
+
+#[test]
+fn test_lambda_param_var_leak_regression() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    // Minimal reproducer from mypy-primer: a lambda used as an argument can
+    // leave a Binding::LambdaParameter Var that is not present in the solving
+    // thread's Variables map.
+    let code = r#"
+from typing import Callable
+
+def find_self_type(t: object, f: Callable[[str], object]) -> bool:
+    return True
+
+class A:
+    def m(self, t: object) -> None:
+        if find_self_type(t, lambda name: name):
+            pass
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    // This currently panics with:
+    // "Internal error: a variable has leaked across thread boundaries."
+    // Keep as a regression to ensure lambda-parameter Vars cannot leak.
+    let _ = query.get_types_in_file(module_name, path).unwrap();
+}
+
+#[test]
+fn test_callees_annotated_type() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    // A type alias whose body is Annotated[Foo, ...] stores Type::Annotated
+    // internally. Calling the alias as a value makes callee_from_type recurse
+    // into the TypeAlias body, reaching Type::Annotated.
+    let code = r#"
+from typing import Annotated, TypeAlias
+
+class Foo:
+    def bar(self) -> int:
+        return 42
+
+MyType: TypeAlias = Annotated[Foo, "metadata"]
+
+def f() -> None:
+    MyType()
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(
+        !errors.is_empty(),
+        "Annotated[Foo, ...] is not callable, expected errors"
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("not-callable")),
+        "Expected a not-callable error, got: {errors:?}",
+    );
+
+    // get_callees_with_location triggers callee_from_type which must handle
+    // Type::Annotated rather than panicking. Annotated is not callable, so
+    // MyType() should produce no callees.
+    let callees = query
+        .get_callees_with_location(module_name, path, None)
+        .unwrap();
+    assert!(
+        callees.is_empty(),
+        "Annotated is not callable, expected no callees"
+    );
 }

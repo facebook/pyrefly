@@ -38,7 +38,7 @@ fn assert_no_errors(handle: &Handle, state: &State) {
             .transaction()
             .get_errors([handle])
             .collect_errors()
-            .shown
+            .ordinary
             .len(),
         0,
         "Expected no errors"
@@ -50,7 +50,7 @@ fn assert_has_error(handle: &Handle, state: &State, error_msg: &str, assertion_m
         .transaction()
         .get_errors([handle])
         .collect_errors()
-        .shown
+        .ordinary
         .iter()
         .find(|e| e.msg().contains(error_msg))
         .unwrap_or_else(|| panic!("{assertion_msg}"));

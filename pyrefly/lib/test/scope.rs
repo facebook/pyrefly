@@ -21,6 +21,44 @@ class C:
 );
 
 testcase!(
+    test_method_can_access_dunder_class,
+    r#"
+from typing import assert_type
+class Base:
+    x: int
+    def test(self):
+        return __class__
+
+    def test_nested(self):
+        def inner():
+            return __class__
+        return inner()
+
+assert_type(Base().test(), type[Base])
+assert_type(Base().test_nested(), type[Base])
+assert_type(Base().test().x, int)
+
+class Child(Base):
+    def test2(self):
+        return __class__
+
+assert_type(Child().test(), type[Base])
+assert_type(Child().test2(), type[Child])
+"#,
+);
+
+testcase!(
+    test_nested_function_can_access_dunder_class,
+    r#"
+class Base:
+    def show_class(self) -> type:
+        def inner() -> type:
+            return __class__
+        return inner()
+"#,
+);
+
+testcase!(
     test_unknown_name_suggests_similar,
     r#"
 long_variable_name = 1
@@ -441,7 +479,7 @@ x = 42
 def f():
     # We should really be producing an error more like the compiler's, which says you can't use `x` before the declaration
     print(x)  # E: `x` is uninitialized
-    global x
+    global x  # E: `x` was assigned in the current scope before the global declaration
 "#,
 );
 
@@ -542,6 +580,43 @@ def test(cond: bool):
 );
 
 testcase!(
+    test_initialize_on_usage,
+    r#"
+def test1(cond: bool) -> None:
+    if cond:
+        x: int
+    else:
+        x = 1
+    print(x)  # E: `x` may be uninitialized
+    print(x)
+
+def test2(cond: bool) -> None:
+    x: int
+    if cond:
+        print(x)  # E: `x` is uninitialized
+    else:
+        print(x)  # E: `x` is uninitialized
+    print(x)
+
+def test3(cond: bool) -> None:
+    if cond:
+        x: int
+        print(x)  # E: `x` is uninitialized
+    else:
+        x = 1
+    print(x)
+
+def test4(cond: bool) -> None:
+    x: int
+    if cond:
+        print(x)  # E: `x` is uninitialized
+    else:
+        x = 1
+    print(x)
+"#,
+);
+
+testcase!(
     test_local_defined_by_mutation_no_shadowing,
     r#"
 def f() -> None:
@@ -580,10 +655,33 @@ def f(arg: int) -> None:
     x = (y := arg)
     assert_type(y, int)
     w = [z for x in [arg, arg] if (z := x) > 1]
-    z  # E: Could not find name `z`
+    assert_type(z, int)
     assert_type(w, list[int])
-    lambd = lambda x: (z := x) + 1
-    z  # E: Could not find name `z`
+    lambd = lambda x: (z2 := x) + 1
+    z2  # E: Could not find name `z2`
+"#,
+);
+
+testcase!(
+    test_walrus_in_comprehension_outer_scope,
+    r#"
+from typing import assert_type
+
+def f() -> None:
+    var = 33
+    my_list = [var := str("some_str") for _ in [123]]
+    assert_type(var, str)
+    assert_type(my_list, list[str])
+
+def g(xs: list[str]) -> None:
+    last = ""
+    results = [last := x for x in xs]
+    assert_type(last, str)
+    assert_type(results, list[str])
+
+def h(matrix: list[list[int]]) -> None:
+    result = [[y := x for x in row] for row in matrix]
+    assert_type(y, int)
 "#,
 );
 
@@ -633,7 +731,7 @@ def try_except_finally():
     finally:
         e2 # E: `e2` is uninitialized
 
-    e2 # E: `e2` is uninitialized
+    e2
 
 def try_except_twice():
     try:
@@ -643,7 +741,7 @@ def try_except_twice():
     except Exception:
         e3 # E: `e3` is uninitialized
 
-    e3 # E: `e3` is uninitialized
+    e3 # E: `e3` may be uninitialized
 
 def try_except_multiple_finally():
     try:
@@ -658,8 +756,8 @@ def try_except_multiple_finally():
         e4 # E: `e4` is uninitialized
         e5 # E: `e5` is uninitialized
 
-    e4 # E: `e4` is uninitialized
-    e5 # E: `e5` is uninitialized
+    e4
+    e5
 
 def try_except_else():
     try:
@@ -671,7 +769,7 @@ def try_except_else():
     else:
         e6 # E: `e6` is uninitialized
 
-    e6 # E: `e6` is uninitialized
+    e6 # E: `e6` may be uninitialized
 
 def try_except_else_finally():
     try:
@@ -683,9 +781,9 @@ def try_except_else_finally():
     else:
         e7 # E: `e7` is uninitialized
     finally:
-        e7 # E: `e7` is uninitialized
+        e7 # E: `e7` may be uninitialized
 
-    e7 # E: `e7` is uninitialized
+    e7
 "#,
 );
 
@@ -716,7 +814,7 @@ testcase!(
 from typing import assert_type, Any
 def f():
     assert_type(x, Any)  # E: `x` is uninitialized
-    x += 5  # E: `x` is uninitialized
+    x += 5
     assert_type(x, Any)
 "#,
 );
@@ -729,8 +827,8 @@ x = 5
 def f():
     assert_type(y, Any)  # E: `y` is uninitialized
     assert_type(x, Any)  # E: `x` is uninitialized
-    del y  # E: `y` is uninitialized
-    del x  # E: `x` is uninitialized
+    del y
+    del x
 f()
 "#,
 );
@@ -835,7 +933,6 @@ class C:
 );
 
 testcase!(
-    bug = "We don't yet handle all class body members correctly",
     test_class_scope_edge_cases,
     r#"
 from typing import assert_type, Any
@@ -896,4 +993,352 @@ def f():
     assert_type(x, Literal[42])
     x = "foo"
     "#,
+);
+
+testcase!(
+    test_captured_var_in_nested_function_with_flow_merge,
+    r#"
+def test_annotated():
+    x: dict[int, int]
+    x = {}
+    def nested(a: int, bs: list[int]):
+        if not x[0]:
+            return None
+        for b in bs:
+            break
+        return x
+def test_unannotated():
+    x = {}
+    def nested(a: int, bs: list[int]):
+        if not x[0]:
+            return None
+        for b in bs:
+            break
+        return x
+def test_walrus():
+    x = {}
+    def nested(a: int, bs: list[int]):
+        if not (y := x)[0]:
+            return None
+        for b in bs:
+            break
+        return (z := x)
+"#,
+);
+
+testcase!(
+    test_captured_var_pins_outer,
+    r#"
+from typing import assert_type, Any
+
+def test():
+    x = []
+    def nested():
+        x.append(1)
+    x.append("")  # E: Argument `Literal['']` is not assignable to parameter `object` with type `int` in function `list.append`
+
+def test2():
+    x = []
+    def nested():
+        x.append(1)
+    assert_type(x[0], int)
+"#,
+);
+
+testcase!(
+    test_captured_var_narrow,
+    r#"
+from typing import assert_type
+def test():
+    x: int | None = 1
+    def nested() -> int:
+        if x is not None:
+            assert_type(x, int)
+            return x
+        else:
+            assert_type(x, None)
+            return 0
+"#,
+);
+
+testcase!(
+    test_no_capture_class_var,
+    r#"
+# We should not capture variables from the class body
+from typing import assert_type
+x: int
+class C:
+    x: str
+    def test(self):
+        assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_captured_var_no_uninitialized_error,
+    r#"
+# If a variable is captured from outside, we should not give an error that it's uninitialized, even if it is not
+def test():
+    x: int
+    def nested() -> int:
+        return x
+"#,
+);
+
+testcase!(
+    test_capture_var_preserves_import_flow_style,
+    r#"
+from typing import assert_type
+x: object = 1
+def test(y: object):
+    while True:
+        z: object = 1
+        if hasattr(x, "foo"):
+            x.foo
+        if hasattr(y, "foo"):
+            y.foo
+        if hasattr(z, "foo"):
+            z.foo
+"#,
+);
+
+testcase!(
+    // #1804: is not None guard, not reassigned
+    test_narrow_capture_is_not_none,
+    r#"
+from typing_extensions import assert_type
+def f(x: int | None) -> None:
+    if x is not None:
+        assert_type(x, int)
+        def g() -> int:
+            assert_type(x, int)
+            return x + 1
+        g()
+"#,
+);
+
+testcase!(
+    // #1804: x is reassigned so the narrow does NOT propagate
+    test_narrow_capture_reassigned_after,
+    r#"
+def f_reassigned(x: int | None) -> None:
+    if x is not None:
+        def g() -> int:
+            return x + 1  # E: `+` is not supported between `None` and `Literal[1]`
+        x = None
+        g()
+"#,
+);
+
+testcase!(
+    // #2394: Callable | None narrowing in nested scope
+    test_narrow_capture_callable,
+    r#"
+from typing import Callable
+from typing_extensions import assert_type
+def process(key: Callable[[str], str] | None) -> None:
+    if key is not None:
+        assert_type(key, Callable[[str], str])
+        def inner() -> str:
+            assert_type(key, Callable[[str], str])
+            return key("value")
+        inner()
+"#,
+);
+
+testcase!(
+    // #2513: Early-return guard
+    test_narrow_capture_early_return,
+    r#"
+from typing_extensions import assert_type
+def process_name(name: str) -> None: ...
+def handle_request(name: str | None, use_callback: bool) -> None:
+    if name is None:
+        return
+    assert_type(name, str)
+    def callback() -> None:
+        assert_type(name, str)
+        process_name(name)
+    if use_callback:
+        callback()
+"#,
+);
+
+testcase!(
+    // #919: isinstance narrowing in nested function
+    test_narrow_capture_isinstance,
+    r#"
+from typing_extensions import assert_type
+class A:
+    def foo(self) -> None: pass
+def get_a() -> object:
+    return A()
+def bar() -> None:
+    a: object = get_a()
+    assert isinstance(a, A)
+    assert_type(a, A)
+    a.foo()
+    def foobar() -> None:
+        assert_type(a, A)
+        a.foo()
+"#,
+);
+
+testcase!(
+    // #768: assert is not None after loop (needs last_range check)
+    test_narrow_capture_assert_after_loop,
+    r#"
+from typing_extensions import assert_type
+def f(rows: list[int]) -> int:
+    table_start: int | None = None
+    for r in rows:
+        if table_start is None:
+            table_start = r
+    assert table_start is not None
+    assert_type(table_start, int)
+    def inner() -> int:
+        assert_type(table_start, int)
+        return table_start - 1
+    return inner()
+"#,
+);
+
+testcase!(
+    // #2739: reassignment before nested function definition should preserve the reassigned type
+    test_narrow_capture_reassigned_before_nested_def,
+    r#"
+from typing import Callable
+from typing_extensions import assert_type
+
+class Connection:
+    def __init__(self, host: str) -> None:
+        self.host = host
+
+    def clone(self) -> "Connection":
+        return Connection(self.host)
+
+def get_connection() -> Connection | None:
+    return Connection("localhost")
+
+def make_query_func() -> Callable[[], str]:
+    conn = get_connection()
+    assert conn is not None
+    conn = conn.clone()
+    assert_type(conn, Connection)
+
+    def query() -> str:
+        assert_type(conn, Connection)
+        return conn.host
+
+    return query
+"#,
+);
+
+testcase!(
+    // #2408: isinstance narrowing with derived variable
+    test_narrow_capture_isinstance_derived,
+    r#"
+import copy
+from typing_extensions import assert_type
+def run(code: str | bytes) -> None:
+    if isinstance(code, str):
+        string = copy.copy(code)
+        assert_type(code, str)
+        assert_type(string, str)
+        def run_code1() -> None:
+            assert_type(code, str)
+            exec(code)
+        def run_code2() -> None:
+            assert_type(string, str)
+            exec(string)
+"#,
+);
+
+testcase!(
+    // #765: Lambda captures already see outer narrows
+    test_narrow_capture_lambda,
+    r#"
+from typing import Callable
+from typing_extensions import assert_type
+def foo(obj: str | None) -> Callable[[], str]:
+    if obj is None:
+        return lambda: "default"
+    assert_type(obj, str)
+    return lambda: obj + "bar"
+"#,
+);
+
+testcase!(
+    // #1800: Final variable narrowing at module level
+    test_narrow_capture_final_module_level,
+    r#"
+from typing import Final
+from typing_extensions import assert_type
+param: Final[str | None] = ""
+if param is None:
+    raise ValueError()
+assert_type(param, str)
+def foo() -> None:
+    assert_type(param, str)
+"#,
+);
+
+testcase!(
+    // #40: Walrus operator narrowing in nested function
+    test_narrow_capture_walrus,
+    r#"
+from typing import Callable
+from typing_extensions import assert_type
+class Foo:
+    _window_function: Callable[[str], int] | None
+    def foo(self) -> None:
+        if (window_function := self._window_function):
+            assert_type(window_function, Callable[[str], int])
+            def bar() -> None:
+                assert_type(window_function, Callable[[str], int])
+                window_function("foo")
+            bar()
+"#,
+);
+
+// Adapted from https://github.com/pypa/pip/blob/main/src/pip/_vendor/pygments/console.py
+testcase!(
+    test_narrow_capture_regression_1,
+    r#"
+esc = "\x1b["
+codes = {}
+codes[""] = ""
+codes["bold"] = esc + "01m"
+codes["white"] = codes["bold"]
+
+def ansiformat(attr, text):
+    result = []
+    if attr[:1] == attr[-1:] == '*':
+        result.append(codes['bold'])
+        attr = attr[1:-1]
+    result.append(codes[attr])
+    result.append(text) # false positive: str not assignable to LiteralString
+    result.append(codes['reset'])
+    return ''.join(result)
+"#,
+);
+
+// Adapted from https://github.com/home-assistant/core/blob/dev/homeassistant/components/plex/server.py
+testcase!(
+    test_narrow_capture_control_flow_narrow,
+    r#"
+from typing import Literal, assert_type
+def test_1(cond: bool, x: int):
+    active_session = x if cond else None
+    if not active_session:
+        return
+    def update_with_new_media():
+        assert_type(active_session, int)
+def test_2(cond: bool):
+    active_session: int | None = 1 if cond else None
+    if not active_session:
+        return
+    def update_with_new_media():
+        assert_type(active_session, int)
+"#,
 );

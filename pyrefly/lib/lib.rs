@@ -30,17 +30,23 @@
 pub mod alt;
 mod binding;
 #[cfg(not(target_arch = "wasm32"))]
-mod commands;
+#[doc(hidden)]
+pub mod commands;
 mod compat;
 mod error;
 mod export;
-mod lsp;
-mod module;
+#[doc(hidden)]
+pub mod lsp;
+#[doc(hidden)]
+pub mod module;
 pub mod playground;
 pub mod query;
 mod report;
 mod solver;
-mod state;
+#[doc(hidden)]
+pub mod state;
+#[cfg(not(target_arch = "wasm32"))]
+mod stubgen;
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tsp;
@@ -60,11 +66,18 @@ pub mod library {
             pub mod library {
                 pub use crate::commands::all::Command;
                 pub use crate::commands::check::CheckArgs;
+                pub use crate::commands::check::CheckResult;
                 pub use crate::commands::check::FullCheckArgs;
+                pub use crate::commands::config_finder::ConfigConfigurer;
+                pub use crate::commands::config_finder::ConfigConfigurerWrapper;
                 pub use crate::commands::config_finder::default_config_finder;
                 pub use crate::commands::config_finder::default_config_finder_with_overrides;
                 pub use crate::commands::util;
+                pub use crate::error::legacy::LegacyError;
+                pub use crate::lsp::non_wasm::external_provider::ExternalProvider;
+                pub use crate::lsp::non_wasm::external_provider::NoExternalProvider;
                 pub use crate::lsp::non_wasm::module_helpers::PathRemapper;
+                pub use crate::lsp::non_wasm::module_helpers::ThriftRemapper;
             }
         }
     }

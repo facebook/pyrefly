@@ -37,7 +37,6 @@ use crate::error::context::TypeCheckKind;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::unexpected_keyword;
 use crate::types::class::Class;
-use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
@@ -53,33 +52,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ret = if args.len() == 2 {
             let expr_a = &args[0];
             let expr_b = &args[1];
-            let a = self.expr_infer_with_hint(expr_a, hint, errors);
-            let b = self.expr_untype(expr_b, TypeFormContext::FunctionArgument, errors);
-            let self_form = self.heap.mk_special_form(SpecialForm::SelfType);
-            let normalize_type = |ty: Type, expr: &Expr| {
-                let mut ty = self
-                    .canonicalize_all_class_types(
-                        self.solver().deep_force(ty),
-                        expr.range(),
-                        errors,
-                    )
-                    .promote_typevar_values(self.stdlib)
-                    .explicit_any()
-                    .explicit_literals()
-                    .noreturn_to_never()
-                    .anon_callables()
-                    .anon_typed_dicts(self.stdlib)
-                    .distribute_type_over_union(self.heap)
-                    .simplify_intersections();
-                // Make assert_type(Self@SomeClass, typing.Self) work.
-                ty.subst_self_type_mut(&self_form);
-                // Re-sort unions & drop any display names.
-                // Make sure to keep this as the final step before comparison.
-                ty.sort_unions_and_drop_names()
-            };
-            let a = normalize_type(a, expr_a);
-            let b = normalize_type(b, expr_b);
-            if a != b {
+            let a = self
+                .solver()
+                .deep_force(self.expr_infer_with_hint(expr_a, hint, errors));
+            let b = self.solver().deep_force(self.expr_untype(
+                expr_b,
+                TypeFormContext::FunctionArgument,
+                errors,
+            ));
+            if !self.is_equivalent(&a, &b) {
                 self.error(
                     errors,
                     range,

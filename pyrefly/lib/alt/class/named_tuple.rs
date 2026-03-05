@@ -31,20 +31,22 @@ use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_named_tuple_elements(&self, cls: &Class, errors: &ErrorCollector) -> SmallSet<Name> {
-        let fields_count = cls.fields().len();
-        let mut elements = Vec::with_capacity(fields_count);
-        for name in cls.fields() {
-            if !cls.is_field_annotated(name) {
+        let Some(class_fields) = self.get_class_fields(cls) else {
+            return SmallSet::new();
+        };
+        let mut elements = Vec::with_capacity(class_fields.len());
+        for name in class_fields.names() {
+            if !class_fields.is_field_annotated(name) {
                 continue;
             }
-            if let Some(range) = cls.field_decl_range(name) {
+            if let Some(range) = class_fields.field_decl_range(name) {
                 elements.push((name.clone(), range));
             }
         }
         elements.sort_by_key(|e: &(Name, ruff_text_size::TextRange)| e.1.start());
         let mut has_seen_default: bool = false;
         for (name, range) in &elements {
-            let has_default = cls.is_field_initialized_on_class(name);
+            let has_default = class_fields.is_field_initialized_on_class(name);
             if !has_default && has_seen_default {
                 self.error(
                     errors,
@@ -65,6 +67,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub(crate) fn named_tuple_element_types(&self, cls: &ClassType) -> Option<Vec<Type>> {
         let class_metadata = self.get_metadata_for_class(cls.class_object());
         let named_tuple_metadata = class_metadata.named_tuple_metadata()?;
+        // If the namedtuple has dynamic fields, we can't know the element types statically.
+        // Return None so that tuple indexing falls back to regular tuple behavior.
+        if named_tuple_metadata.has_dynamic_fields {
+            return None;
+        }
         Some(
             named_tuple_metadata
                 .elements
@@ -90,20 +97,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect()
     }
 
-    fn get_named_tuple_new(&self, cls: &Class, elements: &SmallSet<Name>) -> ClassSynthesizedField {
+    /// Synthesize `__new__` for a namedtuple. When `has_dynamic_fields` is true,
+    /// the field list couldn't be fully resolved statically (e.g. starred
+    /// unpacking), so we use `*args, **kwargs` instead of specific field params.
+    /// We can't know the positions of the known fields relative to the dynamic
+    /// ones, so requiring them as leading positional params would be incorrect.
+    fn get_named_tuple_new(
+        &self,
+        cls: &Class,
+        elements: &SmallSet<Name>,
+        has_dynamic_fields: bool,
+    ) -> ClassSynthesizedField {
         let mut params = vec![Param::Pos(
             Name::new_static("cls"),
             self.heap
                 .mk_type_form(self.heap.mk_self_type(self.as_class_type_unchecked(cls))),
             Required::Required,
         )];
-        params.extend(self.get_named_tuple_field_params(cls, elements));
+        if has_dynamic_fields {
+            // The known fields are interleaved with dynamically-resolved fields
+            // at unknown positions, so we can't synthesize accurate positional
+            // params. Accept everything and rely on runtime behavior.
+            params.push(Param::VarArg(None, self.heap.mk_any_implicit()));
+            params.push(Param::Kwargs(None, self.heap.mk_any_implicit()));
+        } else {
+            params.extend(self.get_named_tuple_field_params(cls, elements));
+        }
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(
                 ParamList::new(params),
                 self.heap.mk_self_type(self.as_class_type_unchecked(cls)),
             ),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::NEW),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::NEW, None),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -117,7 +142,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ];
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT, None),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -143,7 +168,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap
                     .mk_class_type(self.stdlib.iterable(self.unions(element_types))),
             ),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::ITER),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::ITER, None),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -165,7 +190,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metadata = self.get_metadata_for_class(cls);
         let named_tuple = metadata.named_tuple_metadata()?;
         Some(ClassSynthesizedFields::new(smallmap! {
-            dunder::NEW => self.get_named_tuple_new(cls, &named_tuple.elements),
+            dunder::NEW => self.get_named_tuple_new(cls, &named_tuple.elements, named_tuple.has_dynamic_fields),
             dunder::INIT => self.get_named_tuple_init(cls),
             dunder::MATCH_ARGS => self.get_named_tuple_match_args(&named_tuple.elements),
             dunder::ITER => self.get_named_tuple_iter(cls, &named_tuple.elements)

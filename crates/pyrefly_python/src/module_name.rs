@@ -250,7 +250,6 @@ impl ModuleName {
         Self::from_str("pydantic.main")
     }
 
-    #[allow(dead_code)]
     pub fn pydantic_settings() -> Self {
         Self::from_str("pydantic_settings.main")
     }
@@ -259,7 +258,6 @@ impl ModuleName {
         Self::from_str("pydantic.root_model")
     }
 
-    #[allow(dead_code)]
     pub fn pydantic_dataclasses() -> Self {
         Self::from_str("pydantic.dataclasses")
     }

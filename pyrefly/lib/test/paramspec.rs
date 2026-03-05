@@ -7,6 +7,7 @@
 
 //! Many of these tests come from <https://typing.readthedocs.io/en/latest/spec/generics.html#paramspec>.
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -88,7 +89,7 @@ def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
 def foo[T](x: T, y: T) -> T:
     return x
 foo2 = identity(foo)
-reveal_type(foo2)  # E: revealed type: (x: @_, y: @_) -> @_
+reveal_type(foo2)  # E: revealed type: (x: Unknown, y: Unknown) -> Unknown
 "#,
 );
 
@@ -526,6 +527,65 @@ from typing import Callable
 def test[**P](v: Callable[P, None]):
     a: Callable[..., None] = v
     b: Callable[P, None] = a
+"#,
+);
+
+testcase!(
+    test_functools_partial_reassignment_paramspec,
+    r#"
+import functools
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar, assert_type
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+def run_sync(func: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    func = functools.partial(func, *args, **kwargs)
+    return func()
+
+def greet(name: str, greeting: str) -> int:
+    return 0
+
+assert_type(run_sync(greet, "Alice", greeting="Hi"), int)
+"#,
+);
+
+testcase!(
+    test_functools_partial_reassignment_paramspec_concatenate,
+    r#"
+import functools
+from collections.abc import Callable
+from typing import Concatenate, ParamSpec, TypeVar, assert_type
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+def run_sync(func: Callable[Concatenate[int, P], T], x: int, *args: P.args, **kwargs: P.kwargs) -> T:
+    func = functools.partial(func, x, *args, **kwargs)
+    return func()
+
+def greet(x: int, name: str) -> str:
+    return ""
+
+assert_type(run_sync(greet, 1, "Alice"), str)
+"#,
+);
+
+testcase!(
+    test_functools_partial_reassignment_paramspec_strict,
+    TestEnv::new().enable_strict_callable_subtyping(),
+    r#"
+import functools
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+def run_sync(func: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    func = functools.partial(func, *args, **kwargs)  # E: `partial[T]` is not assignable to variable `func` with type `(ParamSpec(P)) -> T`
+    return func()  # E: Expected *-unpacked P.args and **-unpacked P.kwargs
 "#,
 );
 

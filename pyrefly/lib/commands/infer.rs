@@ -5,28 +5,28 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use clap::Parser;
-use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
+use pyrefly_config::base::InferReturnTypes;
 use pyrefly_config::finder::ConfigFinder;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::qname::QName;
 use pyrefly_types::types::Union;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
+use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextSize;
-use tracing::error;
 
-use crate::commands::check;
 use crate::commands::check::Handles;
+use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
-use crate::commands::files::get_project_config_for_current_dir;
 use crate::commands::util::CommandExitStatus;
-use crate::config::error_kind::ErrorKind;
 use crate::lsp::wasm::inlay_hints::ParameterAnnotation;
-use crate::state::ide::insert_import_edit_with_forced_import_format;
 use crate::state::lsp::AnnotationKind;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -139,15 +139,55 @@ fn is_container(hint: &Type) -> bool {
     }
 }
 
+/// Returns the name to import for a given QName. For top-level names, this is
+/// the name itself. For nested classes (e.g., `Outer.Inner`), this walks up
+/// the parent chain to find the outermost class that should be imported.
+fn importable_name_for_qname(qname: &QName) -> String {
+    let mut nesting = qname.parent();
+    if nesting.is_toplevel() {
+        return qname.id().to_string();
+    }
+    // Walk up the parent chain to find the outermost non-toplevel context
+    while let Some(parent) = nesting.parent() {
+        if parent.is_toplevel() {
+            let short_id = nesting
+                .identifier()
+                .expect("non-toplevel NestingContext must have an identifier");
+            return qname.module().code_at(short_id.range()).to_owned();
+        }
+        nesting = parent;
+    }
+    unreachable!("NestingContext chain should always end with Toplevel")
+}
+
+/// Formats inlay hints as annotation strings and collects the set of imports
+/// needed for the types that pass filtering. Returns the formatted annotations
+/// and a set of `(source_module, importable_name)` pairs to import.
 fn format_hints(
     inlay_hints: Vec<(ruff_text_size::TextSize, Type, AnnotationKind)>,
     stdlib: &Stdlib,
     enum_members: &dyn Fn(&Class) -> Option<usize>,
     heap: &TypeHeap,
-) -> Vec<(ruff_text_size::TextSize, String)> {
+    current_module_name: ModuleName,
+) -> (
+    Vec<(ruff_text_size::TextSize, String)>,
+    HashSet<(ModuleName, String)>,
+) {
     let mut qualified_hints = Vec::new();
+    let mut needed_imports = HashSet::new();
     for (position, hint, kind) in inlay_hints {
         let is_container = is_container(&hint);
+        // Collect QNames before hint_to_string consumes the type. Each QName
+        // carries the defining module, so we know exactly where to import from.
+        let mut hint_imports = Vec::new();
+        hint.universe(&mut |sub_type| {
+            if let Some(qname) = sub_type.qname() {
+                let module_name = qname.module_name();
+                if module_name != ModuleName::builtins() && module_name != current_module_name {
+                    hint_imports.push((module_name, importable_name_for_qname(qname)));
+                }
+            }
+        });
         let formatted_hint = hint_to_string(hint, stdlib, enum_members, heap);
         // TODO: Put these behind a flag
         if formatted_hint.contains("Any") {
@@ -168,6 +208,8 @@ fn format_hints(
         if !is_container && kind == AnnotationKind::Variable {
             continue;
         }
+        // Only record imports for types that pass all filters above
+        needed_imports.extend(hint_imports);
         match kind {
             AnnotationKind::Parameter => {
                 qualified_hints.push((position, format!(": {formatted_hint}")));
@@ -180,7 +222,7 @@ fn format_hints(
             }
         }
     }
-    qualified_hints
+    (qualified_hints, needed_imports)
 }
 
 // Sort the hints by reverse order so we don't have to recalculate positions
@@ -210,9 +252,19 @@ fn hint_to_string(
 }
 
 impl InferArgs {
-    pub fn run(self) -> anyhow::Result<CommandExitStatus> {
+    pub fn run(
+        mut self,
+        wrapper: Option<ConfigConfigurerWrapper>,
+    ) -> anyhow::Result<CommandExitStatus> {
         self.config_override.validate()?;
-        let (files_to_check, config_finder) = self.files.resolve(self.config_override)?;
+        // The infer command must analyze function bodies to produce meaningful
+        // return type annotations. Ensure both settings are enabled unless
+        // the user explicitly set them via CLI.
+        self.config_override
+            .set_check_unannotated_defs_if_unset(true);
+        self.config_override
+            .set_infer_return_types_if_unset(InferReturnTypes::Checked);
+        let (files_to_check, config_finder) = self.files.resolve(self.config_override, wrapper)?;
         Self::run_inner(files_to_check, config_finder, self.flags)
     }
 
@@ -225,8 +277,10 @@ impl InferArgs {
         let state = State::new(config_finder);
         let holder = Forgetter::new(state, false);
         let handles = Handles::new(expanded_file_list);
+        // Use Exports as the default require level for dependency modules —
+        // only the files being inferred need Everything.
         let mut forgetter = Forgetter::new(
-            holder.as_ref().new_transaction(Require::Everything, None),
+            holder.as_ref().new_transaction(Require::Exports, None),
             true,
         );
 
@@ -240,8 +294,10 @@ impl InferArgs {
             }
             return Err(anyhow::anyhow!("Failed to query sourcedb."));
         }
+        // Type-check all handles at once so the work can be parallelised across
+        // the thread pool, instead of checking one file at a time sequentially.
+        transaction.run(&handles, Require::Everything, None);
         for handle in handles {
-            transaction.run(&[handle.dupe()], Require::Everything);
             let stdlib = transaction.get_stdlib(&handle);
             let inferred_types: Option<Vec<(ruff_text_size::TextSize, Type, AnnotationKind)>> =
                 transaction.inferred_types(&handle, flags.return_types(), flags.containers());
@@ -258,12 +314,12 @@ impl InferArgs {
             if let Some(inferred_types) = inferred_types {
                 parameter_types.extend(inferred_types);
                 let heap = TypeHeap::new();
-                let formatted = format_hints(
+                let (formatted, needed_imports) = format_hints(
                     parameter_types,
                     &stdlib,
                     &|cls| {
                         transaction
-                            .ad_hoc_solve(&handle, |solver| {
+                            .ad_hoc_solve(&handle, "infer_enum_metadata", |solver| {
                                 let meta = solver.get_metadata_for_class(cls);
                                 if meta.is_enum() {
                                     Some(solver.get_enum_members(cls).len())
@@ -274,60 +330,34 @@ impl InferArgs {
                             .flatten()
                     },
                     &heap,
+                    handle.module(),
                 );
                 let sorted = sort_inlay_hints(formatted);
                 let file_path = handle.path().as_path();
                 Self::add_annotations_to_file(file_path, sorted)?;
-            }
-        }
-        // Add imports, if needed
-        let check_args = check::CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
-        let current_dir_config =
-            get_project_config_for_current_dir(ConfigOverrideArgs::default())?.0;
-        let config_finder = ConfigFinder::new_constant(current_dir_config);
-        let state = holder.as_ref();
-        match check_args.run_once(files_to_check, config_finder) {
-            Ok((_, errors)) => {
-                for error in errors {
-                    match error.error_kind() {
-                        ErrorKind::UnknownName => {
-                            let module_info = error.module();
-                            let module_path = module_info.path().clone();
-                            let config = state.config_finder().python_file(
-                                pyrefly_python::module_name::ModuleNameWithKind::guaranteed(
-                                    pyrefly_python::module_name::ModuleName::unknown(),
-                                ),
-                                &module_path,
-                            );
-                            let handle = config.handle_from_module_path(module_path);
-                            if let Some(ast) = transaction.get_ast(&handle) {
-                                let error_range = error.range();
-                                let unknown_name = module_info.code_at(error_range);
-                                let imports: Vec<(TextSize, String, String)> = transaction
-                                    .search_exports_exact(unknown_name)
-                                    .into_iter()
-                                    .map(|(handle_to_import_from, _)| {
-                                        insert_import_edit_with_forced_import_format(
-                                            &ast,
-                                            handle.dupe(),
-                                            handle_to_import_from.dupe(),
-                                            unknown_name,
-                                            true,
-                                        )
-                                    })
-                                    .collect();
-                                let path = error.path();
-                                Self::add_imports_to_file(path.as_path(), imports)?;
-                            }
-                        }
-                        _ => {}
-                    }
+                // Add imports for types used in the new annotations
+                if flags.imports()
+                    && !needed_imports.is_empty()
+                    && let Some(ast) = transaction.get_ast(&handle)
+                {
+                    let position = ast
+                        .body
+                        .iter()
+                        .find(|stmt| !is_docstring_stmt(stmt))
+                        .map_or(ast.range.end(), |stmt| stmt.range().start());
+                    let mut imports: Vec<(TextSize, String, String)> = needed_imports
+                        .into_iter()
+                        .map(|(module_name, name)| {
+                            let import_text =
+                                format!("from {} import {}\n", module_name.as_str(), name);
+                            (position, import_text, module_name.as_str().to_owned())
+                        })
+                        .collect();
+                    imports.sort_by(|(_, a, _), (_, b, _)| a.cmp(b));
+                    Self::add_imports_to_file(file_path, imports)?;
                 }
             }
-            Err(e) => {
-                error!("Failed to run pyrefly check: {}", e);
-            }
-        };
+        }
         Ok(CommandExitStatus::Success)
     }
 
@@ -420,7 +450,7 @@ mod test {
         t.add(&file_two_path.display().to_string(), file_two);
         t.add(&config_path.display().to_string(), configuration);
         let args = InferArgs::parse_from(["infer", "--config", &config_path.display().to_string()]);
-        let result = args.run();
+        let result = args.run(None);
         assert!(result.is_ok(), "infer command failed: {:?}", result.err());
 
         let got_file = fs_anyhow::read_to_string(&file_one_path).unwrap();
@@ -594,6 +624,25 @@ def foo() -> str:
     def example(c = None) -> None:
         pass
     example(None)
+    "#,
+            None,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_fully_annotated_function_skipped() -> anyhow::Result<()> {
+        // Parameters on a fully annotated function should not be re-inferred.
+        assert_annotations(
+            r#"
+    def example(a: int, b: str) -> None:
+        pass
+    example(1, "hello")
+    "#,
+            r#"
+    def example(a: int, b: str) -> None:
+        pass
+    example(1, "hello")
     "#,
             None,
         );
@@ -789,6 +838,74 @@ from file_two import get_a, get_b
             return get_b()
         "#;
         assert_imports_and_annotations(file_one, file_two, output);
+        Ok(())
+    }
+
+    #[test]
+    fn test_best_import_selected_when_multiple_modules_export_same_name() -> anyhow::Result<()> {
+        // When multiple modules export the same name, only the best import
+        // should be added (shortest public module path).
+        let configuration = r#"
+        project_includes = [
+            "file_one.py",
+            "short.py",
+            "_private/long_path.py",
+        ]
+        project_excludes = []
+        "#;
+        let tdir = tempfile::TempDir::with_prefix("pyrefly_infer_test").unwrap();
+
+        let file_one = r#"
+from short import get_a
+def foo():
+    return get_a()
+"#;
+        // short.py exports MyClass — public, short path
+        let file_short = r#"
+class MyClass:
+    pass
+def get_a():
+    return MyClass()
+"#;
+        // _private/long_path.py also exports MyClass — private, longer path
+        let private_dir = tdir.path().join("_private");
+        std::fs::create_dir_all(&private_dir).unwrap();
+        let file_private = r#"
+class MyClass:
+    pass
+"#;
+
+        let file_one_path = tdir.path().join("file_one.py");
+        fs_anyhow::write(&file_one_path, file_one).unwrap();
+        let file_short_path = tdir.path().join("short.py");
+        fs_anyhow::write(&file_short_path, file_short).unwrap();
+        let file_private_path = private_dir.join("long_path.py");
+        fs_anyhow::write(&file_private_path, file_private).unwrap();
+        let config_path = tdir.path().join("pyrefly.toml");
+        fs_anyhow::write(&config_path, configuration).unwrap();
+
+        let mut t = TestEnv::new();
+        t.add(&file_one_path.display().to_string(), file_one);
+        t.add(&file_short_path.display().to_string(), file_short);
+        t.add(&file_private_path.display().to_string(), file_private);
+        t.add(&config_path.display().to_string(), configuration);
+        let args = InferArgs::parse_from(["infer", "--config", &config_path.display().to_string()]);
+        let result = args.run(None);
+        assert!(result.is_ok(), "infer command failed: {:?}", result.err());
+
+        let got_file = fs_anyhow::read_to_string(&file_one_path).unwrap();
+        // Should import from "short" (public, 1 component), not from
+        // "_private.long_path" (private, 2 components).
+        assert!(
+            got_file.contains("from short import MyClass"),
+            "Expected import from 'short' module, got:\n{}",
+            got_file,
+        );
+        assert!(
+            !got_file.contains("_private"),
+            "Should not import from private module, got:\n{}",
+            got_file,
+        );
         Ok(())
     }
 }

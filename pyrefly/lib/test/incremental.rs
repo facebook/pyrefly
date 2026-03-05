@@ -134,11 +134,12 @@ impl Incremental {
             &handles,
             self.require.unwrap_or(Require::Everything),
             None,
+            None,
         );
         let loaded = Self::USER_FILES.map(|x| self.handle(x));
         let errors = self.state.transaction().get_errors(&loaded);
         let project_root = PathBuf::new();
-        print_errors(project_root.as_path(), &errors.collect_errors().shown);
+        print_errors(project_root.as_path(), &errors.collect_errors().ordinary);
 
         let mut changed = Vec::new();
         for (x, (count, _)) in subscriber.finish() {
@@ -344,7 +345,7 @@ fn test_error_clearing_on_dependency() {
         .collect_errors();
 
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected errors before fixing the dependency"
     );
 
@@ -357,7 +358,7 @@ fn test_error_clearing_on_dependency() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after_fix.shown.is_empty(),
+        errors_after_fix.ordinary.is_empty(),
         "Expected errors after fixing the dependency"
     );
 }
@@ -382,7 +383,7 @@ fn test_error_clearing_on_dependency_star_import() {
         .collect_errors();
 
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected errors before fixing the dependency"
     );
 
@@ -395,7 +396,7 @@ fn test_error_clearing_on_dependency_star_import() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after_fix.shown.is_empty(),
+        errors_after_fix.ordinary.is_empty(),
         "Expected no errors after fixing the dependency"
     );
 }
@@ -448,7 +449,7 @@ fn test_stale_class() {
     i.set("main", "from bar import c; v = c.x # hello");
     let res = i.unchecked(&["main", "foo"]);
     res.check_recompute_dedup(&["main", "foo", "bar"]);
-    assert_eq!(res.errors.collect_errors().shown.len(), 1);
+    assert_eq!(res.errors.collect_errors().ordinary.len(), 1);
 }
 
 #[test]
@@ -505,7 +506,7 @@ fn test_dueling_typevar() {
     i.set("bar", "from foo import T");
     i.set(
         "main",
-        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x",
+        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x  # E: Type variable `T` is not in scope  # E: Type variable `T` is not in scope",
     );
     i.check(&["main"], &["main", "foo", "bar"]);
 
@@ -515,7 +516,7 @@ fn test_dueling_typevar() {
     // Observe that foo.T and bar.T are no longer equal.
     i.set(
         "main",
-        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x # E: `TypeVar[T]` is not assignable to `TypeVar[T]`",
+        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x  # E: `TypeVar[T]` is not assignable to `TypeVar[T]`  # E: Type variable `T` is not in scope  # E: Type variable `T` is not in scope",
     );
     i.check(&["main"], &["main"]);
 }
@@ -688,7 +689,7 @@ fn test_transitive_export_addition_clears_error() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected errors before foo exports x"
     );
 
@@ -703,9 +704,9 @@ fn test_transitive_export_addition_clears_error() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after_fix.shown.is_empty(),
+        errors_after_fix.ordinary.is_empty(),
         "Expected no errors after foo exports x, but got: {:?}",
-        errors_after_fix.shown
+        errors_after_fix.ordinary
     );
 }
 
@@ -1253,7 +1254,7 @@ fn test_mixed_import_failed_export_invalidated() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error before foo exports y"
     );
 
@@ -1265,7 +1266,7 @@ fn test_mixed_import_failed_export_invalidated() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected error after foo exports y"
     );
 }
@@ -1499,15 +1500,15 @@ fn test_dunder_all_missing_name_error_clears() {
         .get_errors([&foo_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error when __all__ lists undefined name"
     );
     assert!(
-        errors.shown.iter().any(|e| e
+        errors.ordinary.iter().any(|e| e
             .msg()
             .contains("Name `test` is listed in `__all__` but is not defined in the module")),
         "Expected error message about missing __all__ name, but got: {:?}",
-        errors.shown.iter().map(|e| e.msg()).collect::<Vec<_>>()
+        errors.ordinary.iter().map(|e| e.msg()).collect::<Vec<_>>()
     );
 
     // Add the missing name - error should disappear
@@ -1520,9 +1521,9 @@ fn test_dunder_all_missing_name_error_clears() {
         .get_errors([&foo_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected no errors after defining the missing name, but got: {:?}",
-        errors_after.shown
+        errors_after.ordinary
     );
 }
 
@@ -1556,16 +1557,16 @@ fn test_dunder_all_star_import_error_clears() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error when using name not in __all__"
     );
     assert!(
         errors
-            .shown
+            .ordinary
             .iter()
             .any(|e| e.msg().contains("Could not find name `y`")),
         "Expected error about missing name y, but got: {:?}",
-        errors.shown.iter().map(|e| e.msg()).collect::<Vec<_>>()
+        errors.ordinary.iter().map(|e| e.msg()).collect::<Vec<_>>()
     );
 
     // Update __all__ to include y - error should disappear
@@ -1578,9 +1579,9 @@ fn test_dunder_all_star_import_error_clears() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected no errors after adding y to __all__, but got: {:?}",
-        errors_after.shown
+        errors_after.ordinary
     );
 }
 
@@ -1609,7 +1610,7 @@ fn test_name_existence_change_invalidates_importer() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error when importing non-existent name"
     );
 
@@ -1624,9 +1625,9 @@ fn test_name_existence_change_invalidates_importer() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected no errors after adding y to foo, but got: {:?}",
-        errors_after.shown
+        errors_after.ordinary
     );
 }
 
@@ -1656,7 +1657,7 @@ fn test_name_not_in_dunder_all_invalidates_importer() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error when importing non-existent name"
     );
 
@@ -1671,9 +1672,9 @@ fn test_name_not_in_dunder_all_invalidates_importer() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected no errors after adding y to foo (even though y is not in __all__), but got: {:?}",
-        errors_after.shown
+        errors_after.ordinary
     );
 }
 
@@ -1781,7 +1782,7 @@ fn test_dunder_all_star_import_missing_definition_error_clears() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error when using name listed in __all__ but not defined"
     );
 
@@ -1795,9 +1796,9 @@ fn test_dunder_all_star_import_missing_definition_error_clears() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected no errors after adding y definition, but got: {:?}",
-        errors_after.shown
+        errors_after.ordinary
     );
 }
 
@@ -1827,7 +1828,7 @@ fn test_transitive_star_import_missing_name_error_clears() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error when using undefined name via transitive star import"
     );
 
@@ -1841,9 +1842,9 @@ fn test_transitive_star_import_missing_name_error_clears() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected no errors after adding x to foo, but got: {:?}",
-        errors_after.shown
+        errors_after.ordinary
     );
 }
 

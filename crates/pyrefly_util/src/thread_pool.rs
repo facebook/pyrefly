@@ -61,7 +61,7 @@ pub struct ThreadPool(
 );
 
 impl ThreadPool {
-    fn stack_size() -> usize {
+    pub fn stack_size() -> usize {
         match env::var("PYREFLY_STACK_SIZE") {
             Ok(s) => {
                 let res = s
@@ -110,6 +110,8 @@ impl ThreadPool {
         Self::with_thread_count(*THREADS.lock())
     }
 
+    /// Spawns `f` on the thread pool, or runs it directly if running single-threaded.
+    /// Note that this will block the entire thread pool until the work is complete.
     pub fn spawn_many(&self, f: impl Fn() + Sync) {
         match &self.0 {
             None => f(),
