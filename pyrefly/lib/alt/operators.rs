@@ -30,6 +30,9 @@ use vec1::vec1;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
+use crate::alt::call_env::ConstrainedEnvResult;
+use crate::alt::call_env::EnvTrialResult;
+use crate::alt::call_env::run_with_constrained_envs;
 use crate::alt::callable::CallArg;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::KeyAnnotation;
@@ -153,6 +156,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn try_binop_calls(
+        &self,
+        calls: &[(&Name, &Type, &Type)],
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: &dyn Fn() -> ErrorContext,
+    ) -> Type {
+        // Try correlated constrained-TypeVar branching.
+        // Collect seed types from all call entries (target, arg pairs).
+        let seed_types: Vec<&Type> = calls
+            .iter()
+            .flat_map(|(_, target, arg)| [*target, *arg])
+            .collect();
+        if let Some(ConstrainedEnvResult::Success(returns)) =
+            run_with_constrained_envs(&seed_types, &mut |substituted| {
+                // Rebuild calls with substituted types.
+                let subst_calls: Vec<(&Name, &Type, &Type)> = calls
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (name, _, _))| (*name, &substituted[i * 2], &substituted[i * 2 + 1]))
+                    .collect();
+                let trial_errors = self.error_collector();
+                let ret = self.try_binop_calls_inner(&subst_calls, range, &trial_errors, context);
+                EnvTrialResult {
+                    ret,
+                    has_errors: !trial_errors.is_empty(),
+                    error_count: trial_errors.len(),
+                }
+            })
+        {
+            return self.unions(returns);
+        }
+        // Fallback: no constrained quantifieds, cap exceeded, or all envs failed.
+        self.try_binop_calls_inner(calls, range, errors, context)
+    }
+
+    /// Core logic for trying binary operator dunder calls. The `try_binop_calls`
+    /// wrapper adds correlated constrained-TypeVar branching around this.
+    fn try_binop_calls_inner(
         &self,
         calls: &[(&Name, &Type, &Type)],
         range: TextRange,

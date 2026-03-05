@@ -597,11 +597,10 @@ f(X())  # E: `X` is not assignable to upper bound `int | str` of type variable `
 );
 
 testcase!(
-    bug = "This should succeed with no errors",
     test_add_with_constraints,
     r#"
 def add[T: (int, str)](x: T, y: T) -> T:
-    return x + y # E: `+` is not supported between `T` and `T` # E: `+` is not supported between `T` and `T`
+    return x + y
     "#,
 );
 
@@ -1177,5 +1176,44 @@ class CustomCoercer(Generic[_Deserialized, _Serialized]):
             self,
             key: type[_Deserialized],
         ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...
+"#,
+);
+
+testcase!(
+    test_constrained_typevar_correlated_method_must_error,
+    r#"
+class A:
+    def method(self, x: "B") -> int: ...
+class B:
+    def method(self, x: "A") -> str: ...
+
+def foo[T: (A, B)](a: T, b: T) -> None:
+    # T=A requires method(B) but b is A, and T=B requires method(A)
+    # but b is B. Both envs fail, so this must error.
+    a.method(b)  # E: `T` is not assignable to parameter `x` with type `B`  # E: `T` is not assignable to parameter `x` with type `A`
+"#,
+);
+
+testcase!(
+    bug = "Method calls go through call_method_or_error, not covered by constrained-env branching yet",
+    test_constrained_typevar_correlated_method_must_pass,
+    r#"
+class A:
+    def combine(self, other: "A") -> "A": ...
+class B:
+    def combine(self, other: "B") -> "B": ...
+
+def foo[T: (A, B)](x: T, y: T) -> None:
+    x.combine(y)  # E: `T` is not assignable to parameter `other` with type `A`  # E: `T` is not assignable to parameter `other` with type `B`
+"#,
+);
+
+testcase!(
+    test_constrained_typevar_correlated_call,
+    r#"
+from typing import Callable
+
+def apply[T: (int, str)](f: Callable[[T], T], x: T) -> None:
+    f(x)
 "#,
 );

@@ -783,3 +783,52 @@ def test(x, y):
     f(z)
 "#,
 );
+
+testcase!(
+    test_constrained_typevar_comparison,
+    r#"
+def foo[T: (int, float)](a: T, b: T) -> bool:
+    return a < b
+"#,
+);
+
+testcase!(
+    bug = "Direct dunder method calls go through the method call path, not the operator dispatch path, so env-branching doesn't apply yet",
+    test_constrained_typevar_dunder_comparison,
+    r#"
+def foo[T: (int, float)](a: T, b: T) -> bool:
+    return a.__lt__(b)  # E: Argument `T` is not assignable to parameter `value` with type `int` in function `int.__lt__`
+"#,
+);
+
+testcase!(
+    test_constrained_typevar_add,
+    r#"
+from typing import assert_type
+def add[T: (int, str)](x: T, y: T) -> T:
+    # Precision caveat: return type is int | str, which is a
+    # supertype of T. This is accepted for soundness.
+    return x + y  # type: ignore[bad-return]
+"#,
+);
+
+testcase!(
+    test_constrained_typevar_augassign,
+    r#"
+def inc[T: (int, float)](x: T) -> None:
+    x += x
+"#,
+);
+
+testcase!(
+    test_constrained_typevar_all_comparisons,
+    r#"
+def compare[T: (int, float)](a: T, b: T) -> None:
+    a < b
+    a <= b
+    a > b
+    a >= b
+    a == b
+    a != b
+"#,
+);
