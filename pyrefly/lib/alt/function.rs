@@ -1675,8 +1675,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let want = &self
                 .heap
                 .mk_callable_from(sig_for_input_check(&overload_func.signature));
-            // eprintln!("impl sig for input check: {}", self.for_display(got.clone()));
-            // eprintln!("overload sig for input check: {}", self.for_display(want.clone()));
             self.check_type(got, want, *range, errors, &|| {
                 TypeCheckContext::of_kind(TypeCheckKind::OverloadInput(
                     original_overload_func.signature.clone(),
