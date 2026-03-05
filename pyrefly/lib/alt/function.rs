@@ -1691,8 +1691,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .ret
                     .clone()
                     .self_type_to_class_type();
-                let impl_func_ret =
-                    impl_func.signature.ret.clone().self_type_to_class_type();
+                let impl_func_ret = impl_func.signature.ret.clone().self_type_to_class_type();
                 self.check_type(&overload_ret, &impl_func_ret, *range, errors, &|| {
                     TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn)
                 });
