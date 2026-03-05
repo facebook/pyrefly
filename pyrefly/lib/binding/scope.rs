@@ -364,6 +364,8 @@ impl Static {
         }
     }
 
+    /// Populate static definitions from a list of statements.
+    /// Returns the set of implicit captures (names read but not locally defined).
     fn stmts(
         &mut self,
         x: &[Stmt],
@@ -373,7 +375,7 @@ impl Static {
         sys_info: &SysInfo,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
         scopes: Option<&Scopes>,
-    ) {
+    ) -> SmallSet<Name> {
         let mut d = Definitions::new(
             x,
             module_info.name(),
@@ -386,6 +388,8 @@ impl Static {
             }
             d.inject_implicit_globals();
         }
+
+        let implicit_captures = d.implicit_captures();
 
         let mut all_wildcards = Vec::with_capacity(d.import_all.len());
         for (m, range) in d.import_all {
@@ -419,6 +423,7 @@ impl Static {
                 self.upsert(name.cloned(), range, StaticStyle::MergeableImport)
             }
         }
+        implicit_captures
     }
 
     fn expr_lvalue(&mut self, x: &Expr) {
@@ -1037,6 +1042,10 @@ pub struct Scope {
     finally_depth: usize,
     /// Depth of with blocks we're in. Resets in new function scopes.
     with_depth: usize,
+    /// Names that are read but not locally defined in this scope — implicit captures
+    /// from enclosing scopes. Populated during `init_current_static` from the
+    /// `Definitions` phase. Used to seed flow entries for captured variables.
+    implicit_captures: SmallSet<Name>,
 }
 
 impl Scope {
@@ -1054,6 +1063,7 @@ impl Scope {
             variables: SmallMap::new(),
             finally_depth: 0,
             with_depth: 0,
+            implicit_captures: SmallSet::new(),
         }
     }
 
@@ -1401,7 +1411,7 @@ impl Scopes {
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
     ) {
         let mut initialize = |scope: &mut Scope, myself: Option<&Self>| {
-            scope.stat.stmts(
+            let implicit_captures = scope.stat.stmts(
                 x,
                 module_info,
                 top_level,
@@ -1410,6 +1420,7 @@ impl Scopes {
                 get_annotation_idx,
                 myself,
             );
+            scope.implicit_captures = implicit_captures;
             // Presize the flow, as its likely to need as much space as static
             scope.flow.info.reserve(scope.stat.0.capacity());
         };
