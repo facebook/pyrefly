@@ -71,6 +71,7 @@ pub struct Workspace {
     pub runnable_code_lens: bool,
     pub display_type_errors: Option<DisplayTypeErrors>,
     pub lsp_analysis_config: Option<LspAnalysisConfig>,
+    pub rename_config: Option<RenameConfig>,
     pub stream_diagnostics: Option<bool>,
     pub diagnostic_mode: Option<DiagnosticMode>,
     pub workspace_config: Option<PathBuf>,
@@ -202,6 +203,7 @@ struct PyreflyClientConfig {
     diagnostic_mode: Option<DiagnosticMode>,
     #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
+    rename: Option<RenameConfig>,
     #[serde(default)]
     disabled_language_services: Option<DisabledLanguageServices>,
     stream_diagnostics: Option<bool>,
@@ -253,6 +255,15 @@ pub struct DisabledLanguageServices {
     pub semantic_tokens: bool,
     #[serde(default)]
     pub implementation: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameConfig {
+    #[serde(default)]
+    pub comments_and_strings: bool,
+    #[serde(default)]
+    pub text_occurrences: bool,
 }
 
 impl DisabledLanguageServices {
@@ -426,6 +437,9 @@ impl Workspaces {
             if let Some(runnable_code_lens) = pyrefly.runnable_code_lens {
                 self.update_runnable_code_lens(scope_uri, runnable_code_lens);
             }
+            if let Some(rename) = pyrefly.rename {
+                self.update_rename_config(scope_uri, rename);
+            }
             if let Some(stream_diagnostics) = pyrefly.stream_diagnostics {
                 self.update_stream_diagnostics(scope_uri, stream_diagnostics);
             }
@@ -498,6 +512,19 @@ impl Workspaces {
                 }
             }
             None => self.default.write().runnable_code_lens = runnable_code_lens,
+    }
+    /// Update rename options for scope_uri, None if default workspace
+    fn update_rename_config(&self, scope_uri: &Option<Url>, rename: RenameConfig) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
+                    workspace.rename_config = Some(rename);
+                }
+            }
+            None => self.default.write().rename_config = Some(rename),
         }
     }
 
@@ -715,6 +742,13 @@ impl Workspaces {
                         .and_then(|c| c.diagnostic_mode)
                 })
                 .unwrap_or_default()
+        })
+    }
+
+    /// Get the rename configuration for a file at the given path.
+    pub fn rename_config(&self, path: &Path) -> RenameConfig {
+        self.get_with(path.to_path_buf(), |(_, workspace)| {
+            workspace.rename_config.unwrap_or_default()
         })
     }
 

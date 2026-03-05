@@ -2734,7 +2734,7 @@ impl<'a> Transaction<'a> {
     /// site-packages directories (e.g., `site-packages/`, `dist-packages/`).
     /// Modules in editable install source paths are NOT considered third-party,
     /// even if they appear in sys.path.
-    fn is_third_party_module(&self, module: &Module, handle: &Handle) -> bool {
+    pub(crate) fn is_third_party_module(&self, module: &Module, handle: &Handle) -> bool {
         let config = self.get_config(handle);
         let module_path = module.path();
 
@@ -2749,7 +2749,7 @@ impl<'a> Transaction<'a> {
         false
     }
 
-    fn is_source_file(&self, module: &Module, handle: &Handle) -> bool {
+    pub(crate) fn is_source_file(&self, module: &Module, handle: &Handle) -> bool {
         let config = self.get_config(handle);
         let module_path = module.path();
 
@@ -3373,6 +3373,16 @@ impl<'a> Transaction<'a> {
         ranges
     }
 
+    pub fn text_occurrences_in_comments_and_strings(
+        &self,
+        module: &ModuleInfo,
+        name: &str,
+    ) -> Vec<TextRange> {
+        let source = module.contents();
+        let ranges = comment_and_string_content_ranges(source);
+        find_word_occurrences_in_ranges(source, name, &ranges)
+    }
+
     fn export_from_location(
         &self,
         handle: &Handle,
@@ -3891,6 +3901,184 @@ impl<'a> CancellableTransaction<'a> {
 
         Ok(all_implementations)
     }
+}
+
+fn is_identifier_char(ch: char) -> bool {
+    ch == '_' || ch.is_alphanumeric()
+}
+
+fn is_raw_string_prefix(source: &str, quote_index: usize) -> bool {
+    let bytes = source.as_bytes();
+    let mut start = quote_index;
+    while start > 0 {
+        let b = bytes[start - 1];
+        if matches!(b, b'r' | b'R' | b'u' | b'U' | b'b' | b'B' | b'f' | b'F') {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+
+    if start == quote_index {
+        return false;
+    }
+
+    if start > 0 {
+        if let Some(prev) = source[..start].chars().last()
+            && is_identifier_char(prev)
+        {
+            return false;
+        }
+    }
+
+    bytes[start..quote_index]
+        .iter()
+        .any(|b| matches!(b, b'r' | b'R'))
+}
+
+fn comment_and_string_content_ranges(source: &str) -> Vec<TextRange> {
+    let mut ranges = Vec::new();
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    let mut string_state: Option<(u8, bool, usize, bool)> = None;
+    // tuple: (quote_byte, raw, content_start, is_triple)
+
+    while i < bytes.len() {
+        let ch = source[i..].chars().next().unwrap();
+        let ch_len = ch.len_utf8();
+
+        if let Some((quote, raw, content_start, is_triple)) = string_state {
+            if !raw && ch == '\\' {
+                i += ch_len;
+                if i < bytes.len() {
+                    let next_len = source[i..].chars().next().unwrap().len_utf8();
+                    i += next_len;
+                }
+                continue;
+            }
+
+            if ch as u8 == quote {
+                if is_triple {
+                    if bytes.get(i + 1) == Some(&quote) && bytes.get(i + 2) == Some(&quote) {
+                        if content_start <= i {
+                            ranges.push(TextRange::new(
+                                TextSize::from(content_start as u32),
+                                TextSize::from(i as u32),
+                            ));
+                        }
+                        string_state = None;
+                        i += 3;
+                        continue;
+                    }
+                } else {
+                    if content_start <= i {
+                        ranges.push(TextRange::new(
+                            TextSize::from(content_start as u32),
+                            TextSize::from(i as u32),
+                        ));
+                    }
+                    string_state = None;
+                    i += ch_len;
+                    continue;
+                }
+            }
+
+            if !is_triple && ch == '\n' {
+                if content_start <= i {
+                    ranges.push(TextRange::new(
+                        TextSize::from(content_start as u32),
+                        TextSize::from(i as u32),
+                    ));
+                }
+                string_state = None;
+                i += ch_len;
+                continue;
+            }
+
+            i += ch_len;
+            continue;
+        }
+
+        if ch == '#' {
+            let line_end = source[i..]
+                .find('\n')
+                .map(|offset| i + offset)
+                .unwrap_or(bytes.len());
+            ranges.push(TextRange::new(
+                TextSize::from(i as u32),
+                TextSize::from(line_end as u32),
+            ));
+            i = line_end;
+            continue;
+        }
+
+        if ch == '\'' || ch == '"' {
+            let quote = ch as u8;
+            let raw = is_raw_string_prefix(source, i);
+            let is_triple = bytes.get(i + 1) == Some(&quote) && bytes.get(i + 2) == Some(&quote);
+            let content_start = if is_triple { i + 3 } else { i + ch_len };
+            string_state = Some((quote, raw, content_start, is_triple));
+            i += if is_triple { 3 } else { ch_len };
+            continue;
+        }
+
+        i += ch_len;
+    }
+
+    if let Some((_, _, content_start, _)) = string_state
+        && content_start <= bytes.len()
+    {
+        ranges.push(TextRange::new(
+            TextSize::from(content_start as u32),
+            TextSize::from(bytes.len() as u32),
+        ));
+    }
+
+    ranges
+}
+
+pub(crate) fn find_word_occurrences(source: &str, word: &str) -> Vec<TextRange> {
+    if word.is_empty() {
+        return Vec::new();
+    }
+    let full_range = TextRange::new(TextSize::from(0), TextSize::from(source.len() as u32));
+    find_word_occurrences_in_ranges(source, word, &[full_range])
+}
+
+fn find_word_occurrences_in_ranges(
+    source: &str,
+    word: &str,
+    ranges: &[TextRange],
+) -> Vec<TextRange> {
+    if word.is_empty() {
+        return Vec::new();
+    }
+
+    let mut matches = Vec::new();
+    let word_len = word.len();
+
+    for range in ranges {
+        let start = range.start().to_usize();
+        let end = range.end().to_usize().min(source.len());
+        if start >= end {
+            continue;
+        }
+        let slice = &source[start..end];
+        for (rel_idx, _) in slice.match_indices(word) {
+            let absolute = start + rel_idx;
+            let before = source[..absolute].chars().last();
+            let after = source[absolute + word_len..].chars().next();
+            if before.is_some_and(is_identifier_char) || after.is_some_and(is_identifier_char) {
+                continue;
+            }
+            matches.push(TextRange::new(
+                TextSize::from(absolute as u32),
+                TextSize::from((absolute + word_len) as u32),
+            ));
+        }
+    }
+
+    matches
 }
 
 #[cfg(test)]
