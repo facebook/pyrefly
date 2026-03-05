@@ -935,3 +935,26 @@ def f():
     x = "foo"
     "#,
 );
+
+testcase!(
+    test_captured_var_in_nested_function_with_flow_merge,
+    r#"
+def test_annotated():
+    x: dict[int, int]
+    x = {}
+    def nested(a: int, bs: list[int]):
+        if not x[0]:
+            return None
+        for b in bs:
+            break
+        return x # E:
+def test_unannotated():
+    x = {}
+    def nested(a: int, bs: list[int]):
+        if not x[0]:
+            return None
+        for b in bs:
+            break
+        return x # E:
+"#,
+);
