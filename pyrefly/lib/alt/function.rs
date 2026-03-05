@@ -1607,10 +1607,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(Arc::new(all_tparams))
             }
         };
+        let has_self_param = def.defining_cls().is_some() && !def.metadata().flags.is_staticmethod;
         let sig_for_input_check = |sig: &Callable| {
             let mut sig = sig.clone().self_type_to_class_type();
             // Set the return type to `Any` so that we check just the input signature.
             sig.ret = self.heap.mk_any_implicit();
+            // For methods (non-static), skip the self/cls parameter. Checking it
+            // would trigger variance computation on the defining class, which in
+            // turn needs class fields (including this very overloaded method),
+            // causing a cycle.
+            if has_self_param {
+                let mut owner = Owner::new();
+                if let Some((_, rest)) = sig.split_first_param(&mut owner) {
+                    sig = rest;
+                }
+            }
             sig
         };
         // Collect param name -> default map from implementation so we can check for
@@ -1863,9 +1874,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn bind_dunder_init_for_callable(&self, m: &BoundMethod) -> Option<Type> {
         let mut func_type = m.func.clone().as_type();
         // For each callable, set its return type to its first param's type (i.e. `self`).
+        // Convert SelfType to ClassType so that the constructor return type is a concrete class.
         func_type.transform_toplevel_callable(&mut |c: &mut Callable| {
             if let Some(self_type) = c.get_first_param() {
-                c.ret = self_type;
+                c.ret = self_type.self_type_to_class_type();
             }
         });
         self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)
