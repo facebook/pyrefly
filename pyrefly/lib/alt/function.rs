@@ -1704,13 +1704,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     msg,
                 );
             }
-            self.check_type(
-                &overload_func.signature.ret.self_type_to_class_type(),
-                &impl_func.signature.ret.self_type_to_class_type(),
-                *range,
-                errors,
-                &|| TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn),
-            );
+            // For methods of a class, skip the return type check. Comparing
+            // return types that reference the defining class (e.g. `partial[...]`)
+            // triggers variance computation, which needs class fields (including
+            // this very overloaded method), causing a cycle.
+            if def.defining_cls().is_none() {
+                self.check_type(
+                    &overload_func.signature.ret.self_type_to_class_type(),
+                    &impl_func.signature.ret.self_type_to_class_type(),
+                    *range,
+                    errors,
+                    &|| TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn),
+                );
+            }
             match &overload_func.signature.params {
                 Params::List(params) => {
                     for param in params.items() {
