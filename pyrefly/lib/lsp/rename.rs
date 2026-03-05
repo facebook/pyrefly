@@ -5,10 +5,14 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use ruff_python_ast::BytesLiteral;
+use ruff_python_ast::Expr;
+use ruff_python_ast::Mod;
 use ruff_python_ast::StringFlags;
+use ruff_python_ast::visitor::Visitor;
+use ruff_python_ast::visitor::walk_expr;
 use ruff_python_parser::Mode;
 use ruff_python_parser::ParseOptions;
-use ruff_python_parser::Token;
 use ruff_python_parser::TokenKind;
 use ruff_python_parser::parse_unchecked;
 use ruff_text_size::Ranged;
@@ -24,40 +28,75 @@ pub(crate) fn comment_and_string_content_ranges(source: &str) -> Vec<TextRange> 
     let mut ranges = Vec::new();
 
     for token in parsed.tokens() {
-        match token.kind() {
-            TokenKind::Comment => ranges.push(token.range()),
-            TokenKind::String => {
-                if let Some(range) = string_literal_content_range(token) {
-                    ranges.push(range);
-                }
-            }
-            TokenKind::FStringMiddle | TokenKind::TStringMiddle => ranges.push(token.range()),
-            _ => {}
+        if token.kind() == TokenKind::Comment {
+            ranges.push(token.range());
         }
     }
+
+    let mut collector = StringContentRangeCollector::default();
+    match parsed.syntax() {
+        Mod::Module(module) => {
+            for stmt in &module.body {
+                collector.visit_stmt(stmt);
+            }
+        }
+        Mod::Expression(expr) => collector.visit_expr(&expr.body),
+    }
+    ranges.extend(collector.ranges);
 
     ranges
 }
 
-fn string_literal_content_range(token: &Token) -> Option<TextRange> {
-    let flags = token.string_flags()?;
-    let prefix_len = flags.prefix().text_len();
-    let quote_len = if flags.triple_quotes().is_yes() {
-        TextSize::new(3)
-    } else {
-        TextSize::new(1)
-    };
+#[derive(Default)]
+struct StringContentRangeCollector {
+    ranges: Vec<TextRange>,
+}
 
-    let start = token.range().start() + prefix_len + quote_len;
-    let mut end = token.range().end();
-    if !flags.is_unclosed() {
-        end = end.saturating_sub(quote_len);
+impl<'a> Visitor<'a> for StringContentRangeCollector {
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::StringLiteral(expr) => {
+                for literal in expr.value.iter() {
+                    self.ranges.push(literal.content_range());
+                }
+            }
+            Expr::BytesLiteral(expr) => {
+                for literal in expr.value.iter() {
+                    if let Some(range) = bytes_literal_content_range(literal) {
+                        self.ranges.push(range);
+                    }
+                }
+            }
+            Expr::FString(expr) => {
+                for element in expr.value.elements() {
+                    if let Some(literal) = element.as_literal() {
+                        self.ranges.push(literal.range);
+                    }
+                }
+            }
+            Expr::TString(expr) => {
+                for element in expr.value.elements() {
+                    if let Some(literal) = element.as_literal() {
+                        self.ranges.push(literal.range);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        walk_expr(self, expr);
     }
+}
 
+fn bytes_literal_content_range(literal: &BytesLiteral) -> Option<TextRange> {
+    let start = literal.range.start() + literal.flags.opener_len();
+    let end = literal
+        .range
+        .end()
+        .saturating_sub(literal.flags.closer_len());
     if start >= end {
         return None;
     }
-
     Some(TextRange::new(start, end))
 }
 
@@ -149,6 +188,10 @@ mod tests {
         let foo_hits = find_word_occurrences_in_ranges(source, "foo", &ranges);
 
         assert!(r_hits.is_empty());
-        assert!(foo_hits.is_empty());
+        assert_eq!(foo_hits.len(), 1);
+        let range = foo_hits[0];
+        let start = range.start().to_usize();
+        let end = range.end().to_usize();
+        assert_eq!(&source[start..end], "foo");
     }
 }
