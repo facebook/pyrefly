@@ -159,6 +159,9 @@ pub struct Definitions {
     pub final_names: SmallSet<Name>,
     /// Special exports defined in this module
     pub special_exports: SmallMap<Name, SpecialExport>,
+    /// Names that are read (not just defined) in this scope.
+    /// Used to compute implicit captures when entering nested function scopes.
+    pub name_reads: SmallSet<Name>,
 }
 
 /// Whether `__all__` was explicitly defined by the user or synthesized from module definitions.
@@ -376,6 +379,16 @@ impl Definitions {
                     .push(DunderAllEntry::Name(def.range, name.clone()));
             }
         }
+    }
+
+    /// Names that are read but not locally defined in this scope.
+    /// These are implicit captures from enclosing scopes.
+    pub fn implicit_captures(&self) -> SmallSet<Name> {
+        self.name_reads
+            .iter()
+            .filter(|name| !self.definitions.contains_key(name.as_str()))
+            .cloned()
+            .collect()
     }
 
     /// Add these names to `dunder_all`, if they are defined in the module.
@@ -789,29 +802,35 @@ impl<'a> DefinitionsBuilder<'a> {
                     self.named_in_expr(c);
                 }
             }
-            Stmt::Return(..)
-            | Stmt::Pass(..)
-            | Stmt::Break(..)
-            | Stmt::Continue(..)
-            | Stmt::IpyEscapeCommand(..) => {}
+            Stmt::Return(x) => {
+                if let Some(value) = &x.value {
+                    self.named_in_expr(value);
+                }
+            }
+            Stmt::Pass(..) | Stmt::Break(..) | Stmt::Continue(..) | Stmt::IpyEscapeCommand(..) => {}
         }
         x.recurse(&mut |xs| self.stmt(xs))
     }
 
-    /// Accumulate names defined by walrus operators in an expression.
+    /// Accumulate names defined by walrus operators in an expression,
+    /// and collect all name reads for implicit capture analysis.
     fn named_in_expr(&mut self, x: &Expr) {
         match x {
             Expr::Named(expr_named) => {
                 self.expr_lvalue(&expr_named.target);
+                expr_named.value.recurse(&mut |x| self.named_in_expr(x));
             }
+            Expr::Name(name) => {
+                self.inner.name_reads.insert(name.id.clone());
+            }
+            // These expressions define a scope, so walrus operators only define a name
+            // within that scope, not in the surrounding statement's scope.
+            // Name reads inside them belong to that inner scope, not ours.
             Expr::Lambda(..)
             | Expr::SetComp(..)
             | Expr::DictComp(..)
             | Expr::ListComp(..)
-            | Expr::Generator(..) => {
-                // These expressions define a scope, so walrus operators only define a name
-                // within that scope, not in the surrounding statement's scope.
-            }
+            | Expr::Generator(..) => {}
             _ => x.recurse(&mut |x| self.named_in_expr(x)),
         }
     }
