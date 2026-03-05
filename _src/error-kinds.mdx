@@ -515,6 +515,22 @@ def f(x: int) -> int | str:
     return x
 ```
 
+## inconsistent-overload-default
+
+In an overloaded function, the type of a parameter in an overload signature is inconsistent with
+its default value in the implementation.
+
+Example:
+```python
+from typing import Literal, overload
+@overload
+def f(x: Literal[True] = ...) -> None: ...  # error, `x` has default `False`, which is inconsistent with type `Literal[True]`
+@overload
+def f(x: Literal[False]) -> int: ...
+def f(x: bool = False) -> int | None:
+    return 0 if x else None
+```
+
 ## internal-error
 
 Ideally you'll never see this one. If you do, please consider [filing a bug](https://github.com/facebook/pyrefly/issues).
@@ -923,6 +939,8 @@ def describe(color: Color) -> str:
       return "danger"
 ```
 
+The default severity of this diagnostic is `warn`.
+
 ## not-a-type
 
 This indicates an attempt to use something that isn't a type where a type is expected.
@@ -1113,13 +1131,15 @@ This error is used to indicate a type that's equivalent to True or False is used
 def f() -> bool:
   ...
 
-# This will throw error, as it's likely that the function needs to be invoked.
+# This is likely a mistake, as it's likely that the function needs to be invoked.
 if f:
   ...
-# This will throw error, as it's equivalent to `if True`.
+# This is likely a mistake, as it's equivalent to `if True`.
 if "abc":
   ...
 ```
+
+The default severity of this diagnostic is `warn`.
 
 ## reveal-type
 
@@ -1279,6 +1299,8 @@ def valid_generator():
     yield 1
     yield 2  # This is valid
 ```
+
+The default severity of this diagnostic is `warn`.
 
 ## unresolvable-dunder-all
 
