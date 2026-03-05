@@ -326,12 +326,11 @@ class C:
 );
 
 testcase!(
-    bug = "should be allowed",
     test_type_self_constructor_call,
     r#"
 from typing import Self
 class C:
     def foo(self) -> Self:
-        return type(self)() # E: Returned type `C` is not assignable to declared return type `Self@C`
+        return type(self)()
 "#,
 );

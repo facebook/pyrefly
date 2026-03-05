@@ -5172,9 +5172,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // we'll fall back to builtins.type. We can add more cases here as-needed.
     pub fn type_of(&self, ty: Type) -> Type {
         match ty {
-            Type::ClassType(cls) | Type::SelfType(cls) => {
-                self.heap.mk_class_def(cls.class_object().clone())
-            }
+            Type::ClassType(cls) => self.heap.mk_class_def(cls.class_object().clone()),
+            Type::SelfType(_) => self.heap.mk_type(ty),
             Type::Literal(lit) => self.heap.mk_class_def(
                 lit.value
                     .general_class_type(self.stdlib)
