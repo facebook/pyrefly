@@ -1632,6 +1632,15 @@ impl Type {
         self
     }
 
+    /// Replace all `SelfType` occurrences with the corresponding `ClassType`.
+    pub fn self_type_to_class_type(self) -> Self {
+        self.transform(&mut |ty| {
+            if let Type::SelfType(cls) = ty {
+                *ty = Type::ClassType(cls.clone());
+            }
+        })
+    }
+
     pub fn as_quantified(&self) -> Option<Quantified> {
         match self {
             Type::Quantified(q) => Some((**q).clone()),

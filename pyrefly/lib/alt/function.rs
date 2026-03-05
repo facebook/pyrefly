@@ -1605,34 +1605,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         let sig_for_input_check = |sig: &Callable| {
-            let mut sig = sig.clone();
-            // If the first argument is Self, we convert the SelfType to a ClassType for input signature check.
-            if let Params::List(ref mut params) = sig.params {
-                if let Some(Param::PosOnly(_, ty, _)) | Some(Param::Pos(_, ty, _)) =
-                    params.items().first()
-                {
-                    if let Type::SelfType(cls) = ty {
-                        let class_type = self.heap.mk_class_type(cls.clone());
-                        let first_param = params
-                            .clone()
-                            .into_items()
-                            .into_iter()
-                            .next()
-                            .expect("first param exists");
-                        let rest = params.clone().into_items().into_iter().skip(1);
-                        let updated_param = match first_param {
-                            Param::PosOnly(name, _, required) => {
-                                Param::PosOnly(name, class_type, required)
-                            }
-                            Param::Pos(name, _, required) => Param::Pos(name, class_type, required),
-                            _ => unreachable!(),
-                        };
-                        let new_params =
-                            ParamList::new(std::iter::once(updated_param).chain(rest).collect());
-                        sig.params = Params::List(new_params);
-                    }
-                }
-            }
+            let mut sig = sig.clone().self_type_to_class_type();
             // Set the return type to `Any` so that we check just the input signature.
             sig.ret = self.heap.mk_any_implicit();
             sig
@@ -1696,18 +1669,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     impl_sig.clone(),
                 ))
             });
-            // eprintln!("impl sig: {}", self.for_display(impl_func.signature.ret.clone()));
-            // eprintln!("overload sig: {}", self.for_display(overload_func.signature.ret.clone()));
-            let overload_ret = if let Type::SelfType(cls) = &overload_func.signature.ret {
-                self.heap.mk_class_type(cls.clone())
-            } else {
-                overload_func.signature.ret.clone()
-            };
-            let impl_func_ret = if let Type::SelfType(cls) = &impl_func.signature.ret {
-                self.heap.mk_class_type(cls.clone())
-            } else {
-                impl_func.signature.ret.clone()
-            };
+            let overload_ret = overload_func
+                .signature
+                .ret
+                .clone()
+                .self_type_to_class_type();
+            let impl_func_ret = impl_func.signature.ret.clone().self_type_to_class_type();
             self.check_type(&overload_ret, &impl_func_ret, *range, errors, &|| {
                 TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn)
             });
