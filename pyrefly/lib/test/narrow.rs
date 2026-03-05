@@ -987,7 +987,19 @@ def f(x: object, y: type[str]) -> None:
 
 def g(x: object, y: type[Any]) -> None:
     if isinstance(x, y):
-        assert_type(x, Any)
+        assert_type(x, object)
+"#,
+);
+
+testcase!(
+    test_isinstance_type_no_widen,
+    r#"
+from typing import Literal, assert_type
+
+def f(flag: bool, t: type) -> None:
+    x = 1 if flag else "foo"
+    if isinstance(x, t):
+        assert_type(x, Literal[1, "foo"])
 "#,
 );
 
