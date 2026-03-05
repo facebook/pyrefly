@@ -248,6 +248,17 @@ def func(c: T) -> C:
 );
 
 testcase!(
+    test_bounded_typevar_type_attribute_access,
+    r#"
+from typing import TypeVar, assert_type
+T = TypeVar('T', bound=type)
+def get_class_name(cls: T) -> str:
+    assert_type(cls.__name__, str)
+    return cls.__name__
+ "#,
+);
+
+testcase!(
     test_instantiate_default_typevar,
     r#"
 from typing import assert_type, reveal_type, Callable, Self

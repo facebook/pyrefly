@@ -1870,6 +1870,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Extract the ClassType to use for attribute lookup on a quantified (TypeVar)
+    /// type from the attribute base of its bound.
+    fn quantified_bound_class(&self, base: AttributeBase1) -> Option<ClassType> {
+        match base {
+            AttributeBase1::ClassInstance(cls) => Some(cls),
+            // Handle `type[Any]`, which happens for TypeVars w/ `bound=type`
+            AttributeBase1::TypeAny(_) => Some(self.stdlib.builtins_type().clone()),
+            _ => None,
+        }
+    }
+
     fn as_attribute_base(&self, ty: Type) -> Option<AttributeBase> {
         let mut acc = Vec::new();
         self.as_attribute_base1(ty, &mut acc);
@@ -1979,7 +1990,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let mut use_fallback = false;
                     if let Some(base) = self.as_attribute_base(ty.clone()) {
                         for base1 in base.0 {
-                            if let AttributeBase1::ClassInstance(cls) = base1 {
+                            if let Some(cls) = self.quantified_bound_class(base1) {
                                 acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
                                     (*quantified).clone(),
                                     cls,
@@ -2001,7 +2012,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     for ty in constraints {
                         if let Some(base) = self.as_attribute_base(ty.clone()) {
                             for base1 in base.0 {
-                                if let AttributeBase1::ClassInstance(cls) = base1 {
+                                if let Some(cls) = self.quantified_bound_class(base1) {
                                     acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
                                         (*quantified).clone(),
                                         cls,
@@ -2185,7 +2196,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let mut use_fallback = false;
                     if let Some(base) = self.as_attribute_base(ty.clone()) {
                         for base1 in base.0 {
-                            if let AttributeBase1::ClassInstance(cls) = base1 {
+                            if let Some(cls) = self.quantified_bound_class(base1) {
                                 acc.push(AttributeBase1::Quantified((*quantified).clone(), cls));
                             } else {
                                 use_fallback = true;
@@ -2204,7 +2215,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     for ty in constraints {
                         if let Some(base) = self.as_attribute_base(ty.clone()) {
                             for base1 in base.0 {
-                                if let AttributeBase1::ClassInstance(cls) = base1 {
+                                if let Some(cls) = self.quantified_bound_class(base1) {
                                     acc.push(AttributeBase1::Quantified(
                                         (*quantified).clone(),
                                         cls,
