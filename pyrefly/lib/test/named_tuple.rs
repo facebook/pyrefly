@@ -598,3 +598,28 @@ class QConfig(namedtuple("QConfig", ["activation", "weight"])):
         return super().__new__(cls, activation, weight)
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2622
+// `import collections.abc` should not break special handling of `collections.namedtuple`.
+testcase!(
+    test_named_tuple_collections_submodule_import,
+    r#"
+import collections
+import collections.abc
+
+Point = collections.namedtuple("Point", ["x", "y"])
+p = Point(x=1, y=2)
+    "#,
+);
+
+// `import collections.abc` alone (without explicit `import collections`) should still
+// allow `collections.namedtuple` to work, since `import X.Y` implicitly imports `X`.
+testcase!(
+    test_named_tuple_collections_submodule_import_only,
+    r#"
+import collections.abc
+
+Point = collections.namedtuple("Point", ["x", "y"])
+p = Point(x=1, y=2)
+    "#,
+);

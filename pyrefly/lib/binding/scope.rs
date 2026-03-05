@@ -1879,9 +1879,15 @@ impl Scopes {
             // is a special export.
             let value = self.get_flow_info(base_name)?.value()?;
             match &value.style {
-                FlowStyle::MergeableImport(m) | FlowStyle::ImportAs(m) => {
-                    lookup.is_special_export(*m, name)
+                FlowStyle::MergeableImport(m) => {
+                    // For dotted imports like `import collections.abc`, the base module `collections`
+                    // is also implicitly imported, so we should check that too.
+                    let base_module = ModuleName::from_name(base_name);
+                    lookup
+                        .is_special_export(*m, name)
+                        .or_else(|| lookup.is_special_export(base_module, name))
                 }
+                FlowStyle::ImportAs(m) => lookup.is_special_export(*m, name),
                 FlowStyle::Import(m, upstream_name) => lookup.is_special_export(*m, upstream_name),
                 _ => None,
             }
