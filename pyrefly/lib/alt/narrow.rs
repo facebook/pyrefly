@@ -958,9 +958,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 {
                                     result = Lit::Bool(!b).to_implicit_type();
                                 }
-                                (Type::ClassType(left_cls), Type::Literal(right))
-                                    if let Lit::Enum(right) = &right.value
-                                        && left_cls == &right.class =>
+                                (
+                                    Type::ClassType(left_cls) | Type::SelfType(left_cls),
+                                    Type::Literal(right),
+                                ) if let Lit::Enum(right) = &right.value
+                                    && left_cls == &right.class =>
                                 {
                                     result = self.subtract_enum_member(left_cls, &right.member);
                                 }
@@ -1021,9 +1023,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         {
                             Lit::Bool(!b).to_implicit_type()
                         }
-                        (Type::ClassType(left_cls), Type::Literal(right))
-                            if let Lit::Enum(right) = &right.value
-                                && left_cls == &right.class =>
+                        (
+                            Type::ClassType(left_cls) | Type::SelfType(left_cls),
+                            Type::Literal(right),
+                        ) if let Lit::Enum(right) = &right.value
+                            && left_cls == &right.class =>
                         {
                             self.subtract_enum_member(left_cls, &right.member)
                         }
@@ -1212,9 +1216,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         {
                             Lit::Bool(!b).to_implicit_type()
                         }
-                        (Type::ClassType(left_cls), Type::Literal(right))
-                            if let Lit::Enum(right) = &right.value
-                                && left_cls == &right.class =>
+                        (
+                            Type::ClassType(left_cls) | Type::SelfType(left_cls),
+                            Type::Literal(right),
+                        ) if let Lit::Enum(right) = &right.value
+                            && left_cls == &right.class =>
                         {
                             self.subtract_enum_member(left_cls, &right.member)
                         }

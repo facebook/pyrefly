@@ -50,6 +50,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn get_enum_members(&self, cls: &Class) -> SmallSet<Lit> {
         cls.fields()
+            .filter(|f| cls.could_field_be_enum_member(f))
             .filter_map(|f| self.get_enum_member(cls, f))
             .collect()
     }

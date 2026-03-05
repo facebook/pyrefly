@@ -86,6 +86,10 @@ pub struct ClassFieldProperties {
     is_initialized_on_class: bool,
     // The field is defined in the class body (not in a method via self.x = ...)
     is_defined_in_class_body: bool,
+    // Whether this field could potentially be an enum member (assigned or defined in the class
+    // body, not a method or nested class). Used to skip fields early in enum member enumeration
+    // to avoid circular dependencies when resolving field types.
+    could_be_enum_member: bool,
     range: TextRange,
     // The range of the docstring following this field, if present
     docstring_range: Option<TextRange>,
@@ -108,9 +112,15 @@ impl ClassFieldProperties {
             is_annotated,
             is_initialized_on_class: has_default_value,
             is_defined_in_class_body,
+            could_be_enum_member: false,
             range,
             docstring_range,
         }
+    }
+
+    pub fn with_could_be_enum_member(mut self, could_be_enum_member: bool) -> Self {
+        self.could_be_enum_member = could_be_enum_member;
+        self
     }
 
     pub fn is_initialized_on_class(&self) -> bool {
@@ -287,6 +297,16 @@ impl Class {
 
     pub fn field_docstring_range(&self, name: &Name) -> Option<TextRange> {
         self.0.fields.get(name)?.docstring_range
+    }
+
+    /// Whether a field could potentially be an enum member based on its definition form.
+    /// This is a cheap check that avoids resolving field types, used to skip non-candidate
+    /// fields early in enum member enumeration and break circular dependencies.
+    pub fn could_field_be_enum_member(&self, name: &Name) -> bool {
+        self.0
+            .fields
+            .get(name)
+            .is_some_and(|prop| prop.could_be_enum_member)
     }
 
     pub fn has_qname(&self, module: &str, parent: &NestingContext, name: &str) -> bool {

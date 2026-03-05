@@ -636,6 +636,7 @@ testcase!(
     test_exhaustiveness_in_enum_method,
     r#"
 from enum import Enum
+from typing import reveal_type
 
 class E(Enum):
     X = 1
@@ -644,14 +645,49 @@ class E(Enum):
     def f_exhaustive(self) -> str:
         match self:
             case E.X:
+                reveal_type(self)  # E: Literal[E.X]
                 return "X"
             case E.Y:
+                reveal_type(self)  # E: Literal[E.Y]
                 return "Y"
 
     def f_nonexhaustive(self) -> str:  # E: missing an explicit `return`
         match self:  # E: Missing cases: E.Y
             case E.X:
                 return "X"
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2604
+// Calling an enum method that uses `match self` from outside should return
+// the declared return type, not Any.
+testcase!(
+    test_enum_method_return_type,
+    r#"
+from enum import Enum
+from typing import assert_type
+
+class A(Enum):
+    FOO = 1
+    BAR = 2
+
+    def method_with_match(self) -> int:
+        match self:
+            case A.FOO: return 1
+            case A.BAR: return 2
+
+    def method_with_if(self) -> int:
+        if self == A.FOO:
+            return 1
+        return 2
+
+    def method_no_ref(self) -> int:
+        return 1
+
+def test(a: A) -> None:
+    assert_type(a.method_no_ref(), int)
+    assert_type(a.method_with_if(), int)
+    assert_type(a.method_with_match(), int)
     "#,
 );
 

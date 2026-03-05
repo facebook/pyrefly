@@ -405,6 +405,15 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     _ => (true, false, true),
                 };
+            // Only AssignedInBody and DefinedWithoutAssign can be enum members
+            // (matching the check in is_valid_enum_member). This flag lets
+            // get_enum_members skip methods and nested classes without resolving
+            // their types, breaking circular dependencies.
+            let could_be_enum_member = matches!(
+                &definition,
+                ClassFieldDefinition::AssignedInBody { .. }
+                    | ClassFieldDefinition::DefinedWithoutAssign { .. }
+            );
 
             let docstring_range = field_docstrings.get(&range).copied();
 
@@ -416,7 +425,8 @@ impl<'a> BindingsBuilder<'a> {
                     is_defined_in_class_body,
                     range,
                     docstring_range,
-                ),
+                )
+                .with_could_be_enum_member(could_be_enum_member),
             );
             let key_field = KeyClassField(class_indices.def_index, name.clone().into_key());
             let binding = BindingClassField {

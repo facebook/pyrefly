@@ -1732,7 +1732,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Literal(lit), Type::LiteralString(_)) => {
                 ok_or(lit.value.is_string(), SubsetError::Other)
             }
-            (Type::Literal(lit), t @ Type::ClassType(_)) => self.is_subset_eq(
+            (Type::Literal(lit), t @ Type::ClassType(_))
+            | (Type::Literal(lit), t @ Type::SelfType(_)) => self.is_subset_eq(
                 &self.solver.heap.mk_class_type(
                     lit.value
                         .general_class_type(self.type_order.stdlib())

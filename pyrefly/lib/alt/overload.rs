@@ -163,7 +163,7 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                     Lit::Bool(false).to_implicit_type(),
                 ]
             }
-            Type::ClassType(cls)
+            Type::ClassType(cls) | Type::SelfType(cls)
                 if self
                     .solver
                     .get_metadata_for_class(cls.class_object())
