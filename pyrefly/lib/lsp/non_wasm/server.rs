@@ -31,7 +31,6 @@ use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
-use ignore::WalkBuilder;
 use itertools::Itertools;
 use lsp_server::ErrorCode;
 use lsp_server::RequestId;
@@ -225,7 +224,6 @@ use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::HiddenDirFilter;
 use pyrefly_util::includes::Includes as _;
 use pyrefly_util::interned_path::InternedPath;
-use pyrefly_util::lined_buffer::LinedBuffer;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
@@ -304,6 +302,8 @@ use crate::lsp::non_wasm::protocol::write_lsp_message;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
+use crate::lsp::non_wasm::rename::append_comment_and_string_occurrences;
+use crate::lsp::non_wasm::rename::text_occurrence_edits_in_workspace;
 use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
 use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
 use crate::lsp::non_wasm::stdlib::no_config_severity_override;
@@ -339,7 +339,6 @@ use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::ImportBehavior;
 use crate::state::lsp::LocalRefactorCodeAction;
-use crate::state::lsp::find_word_occurrences;
 use crate::state::notebook::LspNotebook;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
@@ -4983,54 +4982,16 @@ impl Server {
                 )?;
 
                 if rename_config.comments_and_strings {
-                    let tx = transaction.as_ref();
-                    let mut merged = references;
-
-                    let handles = tx.handles();
-                    for candidate in handles {
-                        let Some(module_info) = tx.get_module_info(&candidate) else {
-                            continue;
-                        };
-                        if let Some(root) = &workspace_root
-                            && !candidate.path().as_path().starts_with(root)
-                        {
-                            continue;
-                        }
-                        if !PYTHON_EXTENSIONS.iter().any(|ext| {
-                            candidate
-                                .path()
-                                .as_path()
-                                .extension()
-                                .and_then(|e| e.to_str())
-                                == Some(*ext)
-                        }) {
-                            continue;
-                        }
-                        if tx.is_third_party_module(&module_info, &candidate)
-                            && !tx.is_source_file(&module_info, &candidate)
-                        {
-                            continue;
-                        }
-                        let comment_ranges =
-                            tx.text_occurrences_in_comments_and_strings(&module_info, &old_name);
-                        if comment_ranges.is_empty() {
-                            continue;
-                        }
-                        if let Some((_, ranges)) = merged
-                            .iter_mut()
-                            .find(|(existing, _)| existing.path() == module_info.path())
-                        {
-                            ranges.extend(comment_ranges);
-                        } else {
-                            merged.push((module_info, comment_ranges));
-                        }
-                    }
-
-                    references = merged;
+                    append_comment_and_string_occurrences(
+                        transaction,
+                        workspace_root.as_deref(),
+                        &old_name,
+                        &mut references,
+                    );
                 }
 
                 let text_occurrences = if rename_config.text_occurrences {
-                    Self::text_occurrence_edits_in_workspace(
+                    text_occurrence_edits_in_workspace(
                         workspace_root.as_deref(),
                         &old_name,
                         &new_name_for_text_occurrences,
@@ -5082,87 +5043,6 @@ impl Server {
                 }
             },
         )
-    }
-
-    fn text_occurrence_edits_in_workspace(
-        workspace_root: Option<&Path>,
-        old_name: &str,
-        new_name: &str,
-    ) -> HashMap<Url, Vec<TextEdit>> {
-        let Some(root) = workspace_root else {
-            return HashMap::new();
-        };
-
-        let mut changes = HashMap::new();
-        let mut builder = WalkBuilder::new(root);
-        builder
-            .hidden(true)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .follow_links(false)
-            .filter_entry(|entry| {
-                if entry.file_type().is_some_and(|t| t.is_dir()) {
-                    let name = entry.file_name().to_string_lossy();
-                    !matches!(
-                        name.as_ref(),
-                        ".git"
-                            | ".hg"
-                            | ".sl"
-                            | ".venv"
-                            | "venv"
-                            | "__pycache__"
-                            | "node_modules"
-                            | "target"
-                            | "dist"
-                            | "build"
-                    )
-                } else {
-                    true
-                }
-            });
-
-        for entry in builder.build() {
-            let Ok(entry) = entry else {
-                continue;
-            };
-            if !entry.file_type().is_some_and(|t| t.is_file()) {
-                continue;
-            }
-            let path = entry.path();
-            if PYTHON_EXTENSIONS
-                .iter()
-                .any(|ext| path.extension().and_then(|e| e.to_str()) == Some(*ext))
-            {
-                continue;
-            }
-            let Ok(bytes) = std::fs::read(path) else {
-                continue;
-            };
-            if bytes.iter().any(|b| *b == 0) {
-                continue;
-            }
-            let Ok(text) = String::from_utf8(bytes) else {
-                continue;
-            };
-            let ranges = find_word_occurrences(&text, old_name);
-            if ranges.is_empty() {
-                continue;
-            }
-            let buffer = LinedBuffer::new(Arc::new(text));
-            let edits = ranges
-                .into_iter()
-                .map(|range| TextEdit {
-                    range: buffer.to_lsp_range(range, None),
-                    new_text: new_name.to_owned(),
-                })
-                .collect::<Vec<_>>();
-            if let Ok(uri) = Url::from_file_path(path) {
-                changes.insert(uri, edits);
-            }
-        }
-
-        changes
     }
 
     fn linked_editing_range(

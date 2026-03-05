@@ -17,6 +17,7 @@ pub mod module_helpers;
 mod mru;
 pub mod protocol;
 pub mod queue;
+mod rename;
 pub mod safe_delete_file;
 pub mod server;
 pub mod stdlib;
