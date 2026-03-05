@@ -3421,16 +3421,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .collect(),
             _ => {
                 let exception_types = self.expr_infer(ann, errors);
-                match exception_types {
-                    Type::Tuple(Tuple::Concrete(ts)) => ts
-                        .into_iter()
-                        .map(|t| check_exception_type(t, ann.range()))
-                        .collect(),
-                    Type::Tuple(Tuple::Unbounded(t)) => {
-                        vec![check_exception_type(*t, ann.range())]
-                    }
-                    _ => vec![check_exception_type(exception_types, ann.range())],
-                }
+                self.decompose_except_types(exception_types, ann.range(), &check_exception_type)
             }
         };
         let exceptions = self.unions(exceptions);
@@ -3438,6 +3429,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.heap.mk_class_type(t)
         } else {
             exceptions
+        }
+    }
+
+    /// Decompose a type used in an `except` clause into individual exception types,
+    /// validating each one via `check`. In Python, an `except` clause accepts a single
+    /// exception class or a tuple of exception classes. The type may also be a union
+    /// (e.g. `type[X] | tuple[type[X], ...]`), in which case each member is processed
+    /// independently.
+    fn decompose_except_types(
+        &self,
+        ty: Type,
+        range: TextRange,
+        check: &impl Fn(Type, TextRange) -> Type,
+    ) -> Vec<Type> {
+        // Normalize nominal tuple ClassTypes (e.g. from `tuple()` constructor calls)
+        // to structural Type::Tuple so they match the tuple arms below.
+        let ty = match ty {
+            Type::ClassType(cls) => match self.as_tuple(&cls) {
+                Some(tuple) => Type::Tuple(tuple),
+                None => Type::ClassType(cls),
+            },
+            other => other,
+        };
+        match ty {
+            Type::Tuple(Tuple::Concrete(ts)) => ts.into_iter().map(|t| check(t, range)).collect(),
+            Type::Tuple(Tuple::Unbounded(t)) => {
+                vec![check(*t, range)]
+            }
+            Type::Union(box Union { members, .. }) => members
+                .into_iter()
+                .flat_map(|t| self.decompose_except_types(t, range, check))
+                .collect(),
+            _ => vec![check(ty, range)],
         }
     }
 
