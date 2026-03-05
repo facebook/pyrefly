@@ -504,6 +504,34 @@ assert_type(a, A)
     "#,
 );
 
+testcase!(
+    test_binop_not_implemented_type_uses_runtime_fallback,
+    r#"
+from types import NotImplementedType
+from typing import assert_type
+
+class A:
+    def __add__(self, other: object) -> NotImplementedType:
+        return NotImplemented
+
+class B:
+    def __radd__(self, other: A) -> int:
+        return 1
+
+assert_type(A() + B(), int)
+
+class C:
+    def __add__(self, other: object) -> int | NotImplementedType:
+        return 1 if isinstance(other, C) else NotImplemented
+
+class D:
+    def __radd__(self, other: C) -> str:
+        return ""
+
+assert_type(C() + D(), int | str)
+    "#,
+);
+
 // We try __iadd__ and some fallback dunders. When all fail, the least confusing option is to use __iadd__.
 testcase!(
     test_iadd_error,
