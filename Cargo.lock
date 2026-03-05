@@ -2182,6 +2182,7 @@ dependencies = [
  "faster-hex",
  "fuzzy-matcher",
  "fxhash",
+ "ignore",
  "indicatif",
  "itertools 0.14.0",
  "lsp-server",
