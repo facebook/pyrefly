@@ -1700,14 +1700,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Params::List(params) => {
                     for param in params.items() {
                         match param {
-                            Param::PosOnly(Some(name), ty, Required::Optional(_))
-                            | Param::Pos(name, ty, Required::Optional(_))
-                            | Param::KwOnly(name, ty, Required::Optional(_)) => {
+                            Param::PosOnly(
+                                Some(name),
+                                ty,
+                                Required::Optional(overload_default),
+                            )
+                            | Param::Pos(name, ty, Required::Optional(overload_default))
+                            | Param::KwOnly(name, ty, Required::Optional(overload_default)) => {
                                 // We only check a parameter's default against the first signature that has a default for the parameter.
                                 // This avoids false positives in situations in which Python syntax forces subsequent signatures to have
                                 // `= ...` even though the first signature is always matched.
                                 let default = defaults.shift_remove(name);
-                                if let Some(default) = default {
+                                if overload_default.is_none()
+                                    && let Some(default) = default
+                                {
                                     self.check_type(default, ty, *range, errors, &|| {
                                         TypeCheckContext::of_kind(TypeCheckKind::OverloadDefault(
                                             name.clone(),

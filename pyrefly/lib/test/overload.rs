@@ -216,6 +216,22 @@ def f(x: int = 0, y: int | None = None) -> str | int: ...
 "#,
 );
 
+// See `dataclasses_transform_field.py` in the conformance test suite.
+// This pattern is used to indicate that the value of one parameter is implicitly specified by
+// another, which is useful for expressing dataclass transforms.
+testcase!(
+    test_overload_default_do_not_check_non_ellipsis,
+    r#"
+from typing import Literal, overload
+
+@overload
+def f(x: int, y: Literal[True] = True): ...
+@overload
+def f(x: None, y: Literal[False] = False): ...
+def f(x: int | None, y: bool = False): ...
+    "#,
+);
+
 testcase!(
     test_overload_missing_implementation,
     r#"
