@@ -512,6 +512,7 @@ impl Workspaces {
                 }
             }
             None => self.default.write().runnable_code_lens = runnable_code_lens,
+        }
     }
     /// Update rename options for scope_uri, None if default workspace
     fn update_rename_config(&self, scope_uri: &Option<Url>, rename: RenameConfig) {

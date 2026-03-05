@@ -5051,7 +5051,9 @@ impl Server {
         params: LinkedEditingRangeParams,
     ) -> Option<LinkedEditingRanges> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD)).ok()?;
+        let handle = self
+            .make_handle_if_enabled(uri, Some(Rename::METHOD))
+            .ok()?;
         if self.open_notebook_cells.read().contains_key(uri) {
             return None;
         }
