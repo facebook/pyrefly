@@ -35,7 +35,6 @@ use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::alt::traits::Solve;
 use crate::binding::binding::AnyIdx;
-use crate::binding::binding::ChangedExport;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
 use crate::binding::binding::Keyed;
@@ -53,6 +52,7 @@ use crate::solver::solver::Solver;
 use crate::solver::solver::VarRecurser;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::key_to_intermediate_definition;
+use crate::state::state::ModuleChanges;
 use crate::table;
 use crate::table_for_each;
 use crate::table_mut_for_each;
@@ -62,6 +62,9 @@ use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;
 use crate::types::heap::TypeHeap;
 use crate::types::stdlib::Stdlib;
+use crate::types::types::Forall;
+use crate::types::types::Forallable;
+use crate::types::types::TParams;
 use crate::types::types::Type;
 
 /// The index stores all the references where the definition is external to the current module.
@@ -82,14 +85,36 @@ pub struct Index {
     pub parent_methods_map: SmallMap<TextRange, Vec<(ModulePath, TextRange)>>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct OverloadTrace {
+    callable: Callable,
+    tparams: Option<Arc<TParams>>,
+}
+
+impl OverloadTrace {
+    pub(crate) fn new(callable: Callable, tparams: Option<Arc<TParams>>) -> Self {
+        Self { callable, tparams }
+    }
+
+    fn as_type(&self) -> Type {
+        match &self.tparams {
+            Some(tparams) if !tparams.is_empty() => Type::Forall(Box::new(Forall {
+                tparams: tparams.clone(),
+                body: Forallable::Callable(self.callable.clone()),
+            })),
+            _ => Type::Callable(Box::new(self.callable.clone())),
+        }
+    }
+}
+
 #[derive(Debug)]
 enum OverloadedCallee {
     Resolved {
-        callable: Callable,
+        callable: OverloadTrace,
     },
     Candidates {
-        all: Vec<Callable>,
-        closest: Callable,
+        all: Vec<OverloadTrace>,
+        closest: OverloadTrace,
         is_closest_chosen: bool,
     },
 }
@@ -353,20 +378,17 @@ impl Solutions {
         difference
     }
 
-    /// Compute the set of exports that have changed between two solutions.
-    /// Returns a set of `ChangedExport` values: either `Name` (for `KeyExport`) or
-    /// `ClassDefIndex` (for class-related keys).
-    pub fn changed_exports(
-        &self,
-        other: &Self,
-    ) -> starlark_map::small_set::SmallSet<ChangedExport> {
-        use starlark_map::small_set::SmallSet;
-
+    /// Diff two solutions and merge changed keys into `changed`.
+    ///
+    /// For each exported key, records the change with the correct semantics:
+    /// - Added/removed keys: existence change (default NameDep for name keys).
+    /// - Value changed: type/metadata change (name still exists).
+    pub fn changed_exports(&self, other: &Self, changed: &mut ModuleChanges) {
         fn check_table<K: Keyed>(
             x: &SolutionsEntry<K>,
             y: &Solutions,
             ctx: &mut TypeEqCtx,
-            changed: &mut SmallSet<ChangedExport>,
+            changed: &mut ModuleChanges,
         ) where
             SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
         {
@@ -376,12 +398,12 @@ impl Solutions {
 
             let y_table = y.table.get::<K>();
 
-            // Check for items only in y (added keys)
+            // Check for items only in y (added keys) — existence change.
             for (k, _v) in y_table {
                 if !x.contains_key(k)
                     && let Some(anykey) = k.try_to_anykey()
                 {
-                    changed.insert(anykey.to_changed_export());
+                    changed.add_key_existence(anykey);
                 }
             }
 
@@ -389,15 +411,15 @@ impl Solutions {
             for (k, v) in x {
                 match y_table.get(k) {
                     Some(v2) if !v.type_eq(v2, ctx) => {
-                        // Value changed
+                        // Value changed — type/metadata change, key still exists.
                         if let Some(anykey) = k.try_to_anykey() {
-                            changed.insert(anykey.to_changed_export());
+                            changed.add_key(anykey);
                         }
                     }
                     None => {
-                        // Key removed
+                        // Key removed — existence change.
                         if let Some(anykey) = k.try_to_anykey() {
-                            changed.insert(anykey.to_changed_export());
+                            changed.add_key_existence(anykey);
                         }
                     }
                     _ => {}
@@ -405,17 +427,75 @@ impl Solutions {
             }
         }
 
-        let mut changed = SmallSet::new();
         // Important we have a single TypeEqCtx, so that we don't have
         // types used in different ways.
         let mut ctx = TypeEqCtx::default();
 
         // Check all tables
         table_for_each!(self.table, |x| {
-            check_table(x, other, &mut ctx, &mut changed);
+            check_table(x, other, &mut ctx, changed);
         });
+    }
 
-        changed
+    /// Record exports that changed between new solutions (self) and old answers
+    /// (bindings + answers) into `changed`. This is used when the old solutions
+    /// were None but old answers exist — e.g., the module was previously only
+    /// computed up to Answers and is now computed to Solutions for the first time.
+    ///
+    /// If a calculation in old answers was never forced, we skip it — nothing
+    /// could have depended on it, so there's no change to propagate.
+    pub fn changed_exports_vs_answers(
+        &self,
+        old_bindings: &Bindings,
+        old_answers: &Answers,
+        changed: &mut ModuleChanges,
+    ) {
+        fn check_table_vs_answers<K: Keyed>(
+            new_solutions: &SolutionsEntry<K>,
+            old_bindings: &Bindings,
+            old_answers: &Answers,
+            ctx: &mut TypeEqCtx,
+            changed: &mut ModuleChanges,
+        ) where
+            SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+            BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+            AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        {
+            if !K::EXPORTED {
+                return;
+            }
+
+            for (k, new_val) in new_solutions {
+                let Some(anykey) = k.try_to_anykey() else {
+                    continue;
+                };
+                let hashed_k = Hashed::new(k);
+                match old_bindings.key_to_idx_hashed_opt::<K>(hashed_k) {
+                    Some(idx) => {
+                        // Key existed in old answers — compare values.
+                        match old_answers.get_idx::<K>(idx) {
+                            Some(old_val) if !old_val.type_eq(new_val, ctx) => {
+                                changed.add_key(anykey);
+                            }
+                            // None means the old answer was never computed, so
+                            // no downstream module ever depended on this value.
+                            // No change to propagate.
+                            _ => {}
+                        }
+                    }
+                    None => {
+                        // Key didn't exist in old bindings — new export, treat as changed.
+                        changed.add_key_existence(anykey);
+                    }
+                }
+            }
+        }
+
+        let mut ctx = TypeEqCtx::default();
+
+        table_for_each!(self.table, |x| {
+            check_table_vs_answers(x, old_bindings, old_answers, &mut ctx, changed);
+        });
     }
 
     pub fn get_index(&self) -> Option<Arc<Mutex<Index>>> {
@@ -719,16 +799,12 @@ impl Answers {
     pub fn get_chosen_overload_trace(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
         match lock.overloaded_callees.get(&range)? {
-            OverloadedCallee::Resolved { callable } => {
-                Some(self.deep_force(self.heap().mk_callable_from(callable.clone())))
-            }
+            OverloadedCallee::Resolved { callable } => Some(self.deep_force(callable.as_type())),
             OverloadedCallee::Candidates {
                 closest,
                 is_closest_chosen,
                 ..
-            } if *is_closest_chosen => {
-                Some(self.deep_force(self.heap().mk_callable_from(closest.clone())))
-            }
+            } if *is_closest_chosen => Some(self.deep_force(closest.as_type())),
             _ => None,
         }
     }
@@ -740,10 +816,15 @@ impl Answers {
     ) -> Option<(Vec<Callable>, Option<usize>)> {
         let lock = self.trace.as_ref()?.lock();
         match lock.overloaded_callees.get(&range)? {
-            OverloadedCallee::Resolved { callable } => Some((vec![callable.clone()], Some(0))),
+            OverloadedCallee::Resolved { callable } => {
+                Some((vec![callable.callable.clone()], Some(0)))
+            }
             OverloadedCallee::Candidates { all, closest, .. } => {
-                let chosen_index = all.iter().position(|signature| signature == closest);
-                Some((all.clone(), chosen_index))
+                let chosen_index = all
+                    .iter()
+                    .position(|signature| signature.callable == closest.callable);
+                let signatures = all.iter().map(|trace| trace.callable.clone()).collect();
+                Some((signatures, chosen_index))
             }
         }
     }
@@ -791,28 +872,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(trace) = &self.current().trace
             && let Some(callable) = ty.to_callable()
         {
-            trace
-                .lock()
-                .overloaded_callees
-                .insert(loc, OverloadedCallee::Resolved { callable });
+            trace.lock().overloaded_callees.insert(
+                loc,
+                OverloadedCallee::Resolved {
+                    callable: OverloadTrace::new(callable, None),
+                },
+            );
         }
     }
 
     /// Record all the overloads and the chosen overload.
     /// The trace will be used to power signature help and hover for overloaded functions.
-    pub fn record_overload_trace(
+    pub(crate) fn record_overload_trace(
         &self,
         loc: TextRange,
-        all_overloads: Vec<&Callable>,
-        closest_overload: &Callable,
+        all_overloads: Vec<OverloadTrace>,
+        closest_overload: OverloadTrace,
         is_closest_overload_chosen: bool,
     ) {
         if let Some(trace) = &self.current().trace {
             trace.lock().overloaded_callees.insert(
                 loc,
                 OverloadedCallee::Candidates {
-                    all: all_overloads.into_iter().cloned().collect(),
-                    closest: closest_overload.clone(),
+                    all: all_overloads,
+                    closest: closest_overload,
                     is_closest_chosen: is_closest_overload_chosen,
                 },
             );

@@ -16,11 +16,12 @@ use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::request::Completion;
 use lsp_types::request::ResolveCompletionItem;
+use pyrefly::commands::lsp::IndexingMode;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_completion_basic() {
@@ -416,7 +417,7 @@ fn test_completion_with_autoimport() {
     let root_path = root.path().join("tests_requiring_config");
 
     let mut interaction =
-        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
 
     interaction.set_root(root_path.clone());
     interaction
@@ -446,6 +447,41 @@ fn test_completion_with_autoimport() {
             && item.additional_text_edits.as_ref().is_some_and(|edits| !edits.is_empty())
         })
     }).unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_with_autoimport_submodule() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("autoimport_submodule");
+
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+    interaction.client.did_change("foo.py", "auto_submodule");
+
+    interaction
+        .client
+        .completion("foo.py", 0, 14)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| {
+                item.label == "auto_submodule"
+                    && item.detail.as_ref().is_some_and(|detail| {
+                        detail.contains("from autoimport_submodule_pkg import auto_submodule")
+                    })
+                    && item
+                        .additional_text_edits
+                        .as_ref()
+                        .is_some_and(|edits| !edits.is_empty())
+            })
+        })
+        .unwrap();
 
     interaction.shutdown().unwrap();
 }
@@ -679,7 +715,7 @@ fn test_stdlib_submodule_completion() {
     let root_path = root.path().join("basic");
 
     let mut interaction =
-        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
 
     interaction.set_root(root_path.clone());
     interaction
@@ -709,7 +745,7 @@ fn test_stdlib_class_completion() {
     let root_path = root.path().join("basic");
 
     let mut interaction =
-        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
 
     interaction.set_root(root_path.clone());
     interaction
@@ -833,7 +869,7 @@ fn test_autoimport_completions_show_reexported_paths() {
     let root_path = root.path().join("autoimport_reexport_test");
 
     let mut interaction =
-        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
 
     interaction.set_root(root_path.clone());
     interaction

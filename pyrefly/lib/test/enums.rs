@@ -773,3 +773,21 @@ def f() -> dict: ...
 X = Enum("X", {'FOO': 1, **f()})  # E: Unpacking is not supported
     "#,
 );
+
+testcase!(
+    test_enum_classmethod,
+    r#"
+from enum import Enum
+
+class Foo(str, Enum):
+    A = "a"
+    B = "b"
+
+    @classmethod
+    def from_dict(cls, default=None):
+        if default is None:
+            default = cls.A
+        return cls(default)
+Foo.from_dict({})
+    "#,
+);

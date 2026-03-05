@@ -17,6 +17,7 @@ use tempfile::TempDir;
 
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
+use crate::query::PythonASTRange;
 use crate::query::Query;
 use crate::test::util::init_test;
 
@@ -32,7 +33,7 @@ fn create_query() -> Query {
 
 /// Convert the result of get_types_in_file to a pretty-printed JSON string.
 /// This format makes test failures easy to patch by copy-pasting the actual output.
-fn types_to_json_string(types: Vec<(crate::query::PythonASTRange, String)>) -> String {
+fn types_to_json_string(types: Vec<(PythonASTRange, String)>) -> String {
     let entries: Vec<serde_json::Value> = types
         .into_iter()
         .map(|(range, type_str)| {

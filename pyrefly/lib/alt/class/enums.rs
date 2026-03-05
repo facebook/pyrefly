@@ -28,6 +28,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::EnumMetadata;
+use crate::binding::binding::ClassFieldDefinition;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
@@ -57,23 +58,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         name: &Name,
         ty: &Type,
-        is_initialized_on_class_body: bool,
+        field_definition: &ClassFieldDefinition,
     ) -> bool {
-        // Names starting but not ending with __ are private
-        // Names starting and ending with _ are reserved by the enum
-        if Ast::is_mangled_attr(name) || (is_sunder(name.as_str()) || is_dunder(name.as_str())) {
+        // Names starting but not ending with __ are private.
+        // Names starting and ending with _ are reserved by the enum.
+        if Ast::is_mangled_attr(name) || is_sunder(name.as_str()) || is_dunder(name.as_str()) {
             return false;
         }
-        // Enum members must be initialized on the class
-        if !is_initialized_on_class_body {
-            return false;
+        // Methods decorated with @enum.member are always enum members.
+        if ty.has_enum_member_decoration() {
+            return true;
+        }
+        // Only values assigned or defined in the class body can be enum members.
+        // MethodLike definitions (def statements) are not enum member candidates
+        // unless decorated with @member (handled above).
+        match field_definition {
+            ClassFieldDefinition::AssignedInBody { .. }
+            | ClassFieldDefinition::DefinedWithoutAssign { .. } => {}
+            _ => return false,
         }
         match ty {
-            // Methods decorated with @member are members
-            _ if ty.has_enum_member_decoration() => true,
-            // Callables are not valid enum members
+            // Callables are not valid enum members.
             _ if ty.is_toplevel_callable() => false,
-            // Values initialized with nonmember() are not members
+            // Values initialized with nonmember() or descriptor-like wrappers are not members.
             Type::ClassType(cls)
                 if cls.has_qname("enum", "nonmember")
                     || cls.is_builtin("staticmethod")
@@ -251,8 +258,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         direct_annotation: Option<&Annotation>,
         ty: &Type,
-        alias_of: Option<&Name>,
-        is_initialized_on_class_body: bool,
+        field_definition: &ClassFieldDefinition,
         is_descriptor: bool,
         range: TextRange,
         errors: &ErrorCollector,
@@ -260,9 +266,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if is_descriptor {
             return None;
         }
+        // Extract alias_of from field_definition for enum alias detection
+        let alias_of = match field_definition {
+            ClassFieldDefinition::AssignedInBody { alias_of, .. } => alias_of.as_ref(),
+            _ => None,
+        };
         let metadata = self.get_metadata_for_class(class);
         if let Some(enum_) = metadata.enum_metadata()
-            && self.is_valid_enum_member(name, ty, is_initialized_on_class_body)
+            && self.is_valid_enum_member(name, ty, field_definition)
         {
             if direct_annotation.is_some() {
                 self.error(

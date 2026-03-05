@@ -1,0 +1,13 @@
+project_a (https://github.com/example/project_a)
+- ERROR src/a.py:1:1-10: Unused variable `x` [bad-argument]
+
+project_b (https://github.com/example/project_b)
++ ERROR src/b.py:5:1-20: thread 'main' panicked at 'overflow' [internal-error]
+
+project_c (https://github.com/example/project_c)
++ ERROR src/c.py:10:5-20: New message for this error [bad-return]
+- ERROR src/c.py:10:5-20: Old message for this error [bad-return]
+
+project_d (https://github.com/example/project_d)
++ ERROR src/d.py:1:1-10: Object of class `Foo` has no attribute `bar` [missing-attribute]
++ ERROR src/d.py:2:1-10: Object of class `Foo` has no attribute `baz` [missing-attribute]

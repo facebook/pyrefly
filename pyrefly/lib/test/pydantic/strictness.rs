@@ -322,6 +322,24 @@ c = TestModel(items=my_set)
 );
 
 pydantic_testcase!(
+    test_lax_mode_mapping_field,
+    r#"
+from typing import Any, Mapping, reveal_type
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    parameters: Mapping[str, Any] | None = None
+
+# The key type should not be expanded for Mapping, since Mapping is invariant in its key type.
+# This means dict[str, Any] | None should be assignable to the init parameter.
+reveal_type(Model.__init__)  # E: revealed type: (self: Model, *, parameters: Mapping[str, Any] | None = ..., **Unknown) -> None
+
+d: dict[str, Any] = {}
+Model(parameters=d)
+    "#,
+);
+
+pydantic_testcase!(
     test_lax_mode_other,
     r#"
 from pydantic import BaseModel

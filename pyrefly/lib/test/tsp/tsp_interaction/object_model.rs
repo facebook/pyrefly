@@ -135,6 +135,30 @@ impl TestTspServer {
         }));
     }
 
+    /// Send a `typeServer/resolveImport` request.
+    pub fn resolve_import(
+        &mut self,
+        source_uri: &str,
+        name_parts: Vec<&str>,
+        leading_dots: i32,
+        snapshot: i32,
+    ) {
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "typeServer/resolveImport".to_owned(),
+            params: serde_json::json!({
+                "sourceUri": source_uri,
+                "moduleDescriptor": {
+                    "nameParts": name_parts,
+                    "leadingDots": leading_dots,
+                },
+                "snapshot": snapshot,
+            }),
+            activity_key: None,
+        }));
+    }
+
     pub fn did_open(&self, file: &'static str) {
         let path = self.get_root_or_panic().join(file);
         self.send_message(Message::Notification(Notification {
@@ -330,6 +354,31 @@ impl TestTspClient {
             }
         }
     }
+
+    /// Receive messages until a Response is found, skipping any Notification
+    /// or Request messages. Returns the Response.
+    pub fn receive_response_skip_notifications(&self) -> Response {
+        loop {
+            match self.receiver.recv_timeout(self.timeout) {
+                Ok(msg) => {
+                    eprintln!(
+                        "client<---server {}",
+                        serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+                    );
+                    if let Message::Response(resp) = msg {
+                        return resp;
+                    }
+                    // Skip notifications and requests
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    panic!("Timeout waiting for response (skipping notifications)");
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("Channel disconnected while waiting for response");
+                }
+            }
+        }
+    }
 }
 
 pub struct TspInteraction {
@@ -341,7 +390,8 @@ impl TspInteraction {
     pub fn new() -> Self {
         init_test();
 
-        let (conn_server, conn_client) = Connection::memory();
+        let ((conn_server, server_reader), (conn_client, _client_reader)) = Connection::memory();
+        let client_receiver = conn_client.channel_receiver().clone();
 
         let args = TspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
@@ -356,14 +406,14 @@ impl TspInteraction {
 
         // Spawn the server thread and store its handle
         let thread_handle = thread::spawn(move || {
-            run_tsp(conn_server, args, &NoTelemetry)
+            run_tsp(conn_server, server_reader, args, &NoTelemetry, None)
                 .map(|_| ())
                 .map_err(|e| std::io::Error::other(e.to_string()))
         });
 
         server.server_thread = Some(thread_handle);
 
-        let client = TestTspClient::new(conn_client.receiver);
+        let client = TestTspClient::new(client_receiver);
 
         Self { server, client }
     }

@@ -1482,6 +1482,622 @@
                 "start": 160
               },
               "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "int"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 173
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "int"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 179
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 205
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "int"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 211
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 230
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 235
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "int"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 241
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 264
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "int"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 270
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 284
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "return_types.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "return_types.Set"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 284
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Set"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 293
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 51
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Set"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 166
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "bool"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 185
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "None"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 200
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "return_types.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "return_types.List"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 200
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.List"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 225
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "return_types.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "return_types.Dict"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 225
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Dict"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 288
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "return_types.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "return_types.List"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 288
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.List"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 29
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Dict"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 320
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "None"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 35
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.List"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 119
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "return_types.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "return_types.Union"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 119
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Union"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 134
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "return_types.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "return_types.Union"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 134
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Union"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 56
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Union"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 5
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 140
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "return_types.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "return_types.FooClass"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 150
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "return_types.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "return_types.Callable"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 150
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Callable"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 19
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Callable"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 255
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "return_types.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "return_types.Optional"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 255
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Optional"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 41
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Optional"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.xrefs.XRefsByFile.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "return_types.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 3,
+                "start": 160
+              },
+              "target": {
                 "id": 0,
                 "key": "int"
               }
@@ -2100,6 +2716,22 @@
         "id": 0,
         "key": {
           "id": 0,
+          "key": "typing"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "typing"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
           "key": "typing.Callable"
         },
         "value": {
@@ -2264,6 +2896,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "835e529061f1429222e801fbfe85f209"
+    "schema_id": "8f24e877367cad77ea2a10942e644b42"
   }
 ]

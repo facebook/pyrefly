@@ -509,7 +509,7 @@ testcase!(
     test_in_generator,
     r#"
 'x' in (x for x in ['y'])
-42 in (x for x in ['y'])  # E: `in` is not supported between `Literal[42]` and `Generator[str, None, None]`
+42 in (x for x in ['y'])  # E: `in` is not supported between `Literal[42]` and `Generator[str]`
     "#,
 );
 
@@ -766,4 +766,20 @@ def test(a: A, b: B, c: C) -> None:
     a < b < c  # Should be OK: (a < b) and (b < c)
     a < c      # E: `<` is not supported between `A` and `C`
     "#,
+);
+
+testcase!(
+    test_bitor_unknown_operands,
+    r#"
+from typing import assert_type, Any
+
+def f(x: int): ...
+
+def test(x, y):
+    z = x | y
+    # When operands are unknown, the result should be Any, not type[Any]
+    assert_type(z, Any)
+    # This should not produce an error since z is Any
+    f(z)
+"#,
 );

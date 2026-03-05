@@ -21,6 +21,44 @@ class C:
 );
 
 testcase!(
+    test_method_can_access_dunder_class,
+    r#"
+from typing import assert_type
+class Base:
+    x: int
+    def test(self):
+        return __class__
+
+    def test_nested(self):
+        def inner():
+            return __class__
+        return inner()
+
+assert_type(Base().test(), type[Base])
+assert_type(Base().test_nested(), type[Base])
+assert_type(Base().test().x, int)
+
+class Child(Base):
+    def test2(self):
+        return __class__
+
+assert_type(Child().test(), type[Base])
+assert_type(Child().test2(), type[Child])
+"#,
+);
+
+testcase!(
+    test_nested_function_can_access_dunder_class,
+    r#"
+class Base:
+    def show_class(self) -> type:
+        def inner() -> type:
+            return __class__
+        return inner()
+"#,
+);
+
+testcase!(
     test_unknown_name_suggests_similar,
     r#"
 long_variable_name = 1

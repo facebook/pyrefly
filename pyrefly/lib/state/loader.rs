@@ -165,7 +165,7 @@ impl<T> FindingOrError<T> {
         }
     }
 
-    pub fn map<T2>(self, f: impl Fn(T) -> T2) -> FindingOrError<T2> {
+    pub fn map<T2>(self, f: impl FnOnce(T) -> T2) -> FindingOrError<T2> {
         match self {
             Self::Finding(Finding { finding, error }) => FindingOrError::Finding(Finding {
                 finding: f(finding),

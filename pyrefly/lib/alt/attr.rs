@@ -1358,12 +1358,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             AttributeBase1::ClassInstance(class) => {
+                // Special handling for nn.ModuleDict with TypedDict type argument
+                if let Some(attr) = self.try_nn_module_dict_attr(class, attr_name) {
+                    acc.found_class_attribute(attr, base);
+                    return;
+                }
+
+                // Normal class instance attribute lookup
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let attr_lookup_result =
                     self.get_enum_or_instance_attribute(class, &metadata, attr_name);
                 match attr_lookup_result {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
+                        acc.found_type(self.heap.mk_any_implicit(), base)
+                    }
+                    None if metadata
+                        .named_tuple_metadata()
+                        .is_some_and(|m| m.has_dynamic_fields) =>
+                    {
                         acc.found_type(self.heap.mk_any_implicit(), base)
                     }
                     None => {
@@ -2226,6 +2239,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ElementOfTypeVarTuple(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.object().clone()))
             }
+            // At runtime, `Annotated[T, ...]` is an instance of `typing._AnnotatedAlias`,
+            // which inherits from `typing._GenericAlias`. We model it as `GenericAlias`.
+            Type::Annotated(_) => acc.push(AttributeBase1::ClassInstance(
+                self.stdlib.generic_alias().clone(),
+            )),
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
             | Type::Type(_)

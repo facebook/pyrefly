@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::env;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -27,14 +28,18 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::quantified::Quantified;
+use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasData;
-use pyrefly_types::type_alias::TypeAliasRef;
+use pyrefly_types::type_var::PreInferenceVariance;
+use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::recurser::Guard;
 use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::visit::VisitMut;
+use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
@@ -51,6 +56,7 @@ use crate::alt::traits::Solve;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Exported;
+use crate::binding::binding::Key;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::bindings::BindingEntry;
@@ -82,7 +88,13 @@ pub struct CalcId(pub Bindings, pub AnyIdx);
 
 impl Debug for CalcId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CalcId({}, {:?})", self.0.module().name(), self.1)
+        write!(
+            f,
+            "CalcId({}, {}, {:?})",
+            self.0.module().name(),
+            self.0.module().path(),
+            self.1,
+        )
     }
 }
 
@@ -90,8 +102,9 @@ impl Display for CalcId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "CalcId({}, {})",
+            "CalcId({}, {}, {})",
             self.0.module().name(),
+            self.0.module().path(),
             self.1.display_with(&self.0),
         )
     }
@@ -99,7 +112,8 @@ impl Display for CalcId {
 
 impl PartialEq for CalcId {
     fn eq(&self, other: &Self) -> bool {
-        (self.0.module().name(), &self.1) == (other.0.module().name(), &other.1)
+        (self.0.module().name(), self.0.module().path(), &self.1)
+            == (other.0.module().name(), other.0.module().path(), &other.1)
     }
 }
 
@@ -108,7 +122,10 @@ impl Eq for CalcId {}
 impl Ord for CalcId {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.1.cmp(&other.1) {
-            Ordering::Equal => self.0.module().name().cmp(&other.0.module().name()),
+            Ordering::Equal => match self.0.module().name().cmp(&other.0.module().name()) {
+                Ordering::Equal => self.0.module().path().cmp(other.0.module().path()),
+                not_equal => not_equal,
+            },
             not_equal => not_equal,
         }
     }
@@ -123,6 +140,7 @@ impl PartialOrd for CalcId {
 impl Hash for CalcId {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.module().name().hash(state);
+        self.0.module().path().hash(state);
         self.1.hash(state);
     }
 }
@@ -229,14 +247,34 @@ impl CalcStack {
             SccState::NotInScc | SccState::RevisitingInProgress => {
                 match calculation.propose_calculation() {
                     ProposalResult::Calculated(v) => BindingAction::Calculated(v),
-                    ProposalResult::CycleDetected => {
-                        let current_cycle = self.current_cycle().unwrap();
-                        match self.on_scc_detected(current_cycle) {
-                            SccDetectedResult::BreakHere => BindingAction::Unwind,
-                            SccDetectedResult::Continue => BindingAction::Calculate,
+                    // Use the thread-local stack as the source of truth for
+                    // cycle detection: `position_of` tells us definitively
+                    // whether this CalcId has a live frame on the current stack.
+                    ProposalResult::Calculatable | ProposalResult::CycleDetected => {
+                        if let Some(current_cycle) = self.current_cycle() {
+                            match self.on_scc_detected(current_cycle) {
+                                SccDetectedResult::BreakHere => BindingAction::Unwind,
+                                SccDetectedResult::Continue => BindingAction::Calculate,
+                            }
+                        } else {
+                            // No cycle on the stack, proceed
+                            //
+                            // TODO: Note that the `CycleDetected` case is surprising: it means
+                            // the current thread *started* a calculation but never saved an answer,
+                            // and the stack frame that did this is gone.
+                            //
+                            // That shouldn't happen - a computation isn't supposed to be interruptible
+                            // with a persistent Answers value, and the SCC merging + batch commit
+                            // should make it so that we always get some other state whenever we're
+                            // at the point where a preliminary answer has been saved.
+                            //
+                            // It seems likely that this may indicate some bug in Scc merging, state
+                            // transition tracking, or batch commit (a bug in any of these could lead to
+                            // invalid states). As of this comment being written, we've only observed
+                            // this occur in LSP (not full check).
+                            BindingAction::Calculate
                         }
                     }
-                    ProposalResult::Calculatable => BindingAction::Calculate,
                 }
             }
             SccState::RevisitingDone => {
@@ -1095,6 +1133,23 @@ pub struct ThreadState {
     debug: RefCell<bool>,
     /// Configuration for recursion depth limiting. None means disabled.
     recursion_limit_config: Option<RecursionLimitConfig>,
+    /// How SCC participants store answers during solving.
+    scc_solving_mode: SccSolvingMode,
+    /// Partial answers for inline first-use pinning, keyed by (NameAssign def_idx, CalcStack height).
+    /// The height ensures that only ForwardToFirstUse bindings at the same CalcStack depth
+    /// as the NameAssign's solve_binding can see the partial answer (offset 0 in get_idx,
+    /// which checks before pushing its own frame).
+    partial_answers: RefCell<FxHashMap<(Idx<Key>, usize), Arc<TypeInfo>>>,
+}
+
+/// Internal SCC-solving modes controlled via `PYREFLY_SCC_SOLVING_MODE`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SccSolvingMode {
+    /// Write SCC participant answers to Calculation immediately.
+    #[default]
+    CyclesDualWrite,
+    /// Thread-local SCC solving with batch commits to Calculation.
+    CyclesThreadLocal,
 }
 
 impl ThreadState {
@@ -1103,6 +1158,28 @@ impl ThreadState {
             stack: CalcStack::new(),
             debug: RefCell::new(false),
             recursion_limit_config,
+            scc_solving_mode: SccSolvingMode::from_env(),
+            partial_answers: RefCell::new(FxHashMap::default()),
+        }
+    }
+
+    fn scc_solving_mode(&self) -> SccSolvingMode {
+        self.scc_solving_mode
+    }
+}
+
+impl SccSolvingMode {
+    fn from_env() -> Self {
+        match env::var("PYREFLY_SCC_SOLVING_MODE") {
+            Ok(value) => match value.as_str() {
+                "cycles-thread-local" => Self::CyclesThreadLocal,
+                "cycles-dual-write" => Self::CyclesDualWrite,
+                _ => panic!(
+                    "$PYREFLY_SCC_SOLVING_MODE must be one of \
+                     `cycles-thread-local` or `cycles-dual-write`, got `{value}`"
+                ),
+            },
+            Err(_) => Self::default(),
         }
     }
 }
@@ -1121,6 +1198,11 @@ pub struct AnswersSolver<'a, Ans: LookupAnswer> {
     pub recurser: &'a VarRecurser,
     pub stdlib: &'a Stdlib,
     pub heap: &'a TypeHeap,
+    /// Cache for jaxtyping dimension name → Quantified type mappings.
+    /// Module-scoped: the same dimension name always maps to the same Quantified,
+    /// which is correct because each function independently wraps its signature
+    /// in a Forall (just like legacy TypeVars defined at module scope).
+    jaxtyping_dims: RefCell<FxHashMap<Name, Quantified>>,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -1147,6 +1229,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             current,
             thread_state,
             heap,
+            jaxtyping_dims: RefCell::new(FxHashMap::default()),
         }
     }
 
@@ -1159,6 +1242,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     #[allow(dead_code)]
     pub fn set_debug(&self, value: bool) {
         *self.thread_state.debug.borrow_mut() = value;
+    }
+
+    /// Get or create a Quantified type for a jaxtyping dimension name.
+    /// Cached per module: the same name always returns the same Quantified.
+    pub fn get_or_create_jaxtyping_dim(&self, name: Name, kind: QuantifiedKind) -> Quantified {
+        let mut dims = self.jaxtyping_dims.borrow_mut();
+        dims.entry(name.clone())
+            .or_insert_with(|| match kind {
+                QuantifiedKind::TypeVar => Quantified::type_var(
+                    name,
+                    self.uniques,
+                    None,
+                    Restriction::Unrestricted,
+                    PreInferenceVariance::Invariant,
+                ),
+                QuantifiedKind::TypeVarTuple => {
+                    Quantified::type_var_tuple(name, self.uniques, None)
+                }
+                QuantifiedKind::ParamSpec => {
+                    unreachable!("jaxtyping dimensions cannot be ParamSpec")
+                }
+            })
+            .clone()
+    }
+
+    /// Check if a Quantified type was created by jaxtyping dimension parsing.
+    pub fn is_jaxtyping_dim(&self, q: &Quantified) -> bool {
+        self.jaxtyping_dims.borrow().values().any(|v| v == q)
     }
 
     pub fn current(&self) -> &Answers {
@@ -1179,6 +1290,55 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn stack(&self) -> &CalcStack {
         &self.thread_state.stack
+    }
+
+    /// Store a partial answer for inline first-use pinning.
+    /// `def_idx` is the Key::Definition idx of the NameAssign.
+    /// Keyed by (def_idx, current CalcStack height).
+    pub(crate) fn store_partial_answer(&self, def_idx: Idx<Key>, type_info: Arc<TypeInfo>) {
+        let height = self.stack().len();
+        self.thread_state
+            .partial_answers
+            .borrow_mut()
+            .insert((def_idx, height), type_info);
+    }
+
+    /// Remove the partial answer for a NameAssign at the current height.
+    pub(crate) fn clear_partial_answer(&self, def_idx: Idx<Key>) {
+        let height = self.stack().len();
+        self.thread_state
+            .partial_answers
+            .borrow_mut()
+            .remove(&(def_idx, height));
+    }
+
+    /// Check for a matching partial answer at the current CalcStack height.
+    ///
+    /// The height check ensures that only a ForwardToFirstUse resolved at the same
+    /// CalcStack depth as the NameAssign's solve_binding can see the partial answer.
+    /// This is offset 0 because the check runs in `get_idx` BEFORE pushing the
+    /// ForwardToFirstUse's own frame. Bindings at deeper heights (e.g., a ClassField
+    /// that indirectly depends on the same variable) correctly miss the partial answer
+    /// and go through normal resolution.
+    pub(crate) fn check_partial_answer(&self, def_idx: Idx<Key>) -> Option<Arc<TypeInfo>> {
+        let height = self.stack().len();
+        self.thread_state
+            .partial_answers
+            .borrow()
+            .get(&(def_idx, height))
+            .cloned()
+    }
+
+    /// Given the target idx of a ForwardToFirstUse binding, find the NameAssign's
+    /// def_idx for partial answer lookup.
+    ///
+    /// ForwardToFirstUse always points to a NameAssign with `def_idx.is_some()`.
+    pub(crate) fn def_idx_for_forward_to_first_use(&self, target: Idx<Key>) -> Option<Idx<Key>> {
+        let binding = self.bindings().get(target);
+        match binding {
+            Binding::NameAssign(na) if na.def_idx.is_some() => Some(target),
+            _ => None,
+        }
     }
 
     fn recursion_limit_config(&self) -> Option<RecursionLimitConfig> {
@@ -1209,6 +1369,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
+        // Check for a partial answer shortcut before pushing to the CalcStack.
+        // This is used by ForwardToFirstUse during inline first-use pinning to
+        // return the raw type without caching it in shared Answers and without
+        // triggering cycle detection against the NameAssign's CalcStack frame.
+        let binding = self.bindings().get(idx);
+        if let Some(answer) = K::check_shortcut(self, binding) {
+            return answer;
+        }
+
         let current = CalcId(self.bindings().dupe(), K::to_anyidx(idx));
         let calculation = self.get_calculation(idx);
 
@@ -1269,7 +1438,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Note that we intentionally do not pass in the key when solving the binding,
         // as the result of a binding should not depend on the key it was bound to.
         // We use the range for error reporting.
-        let range = self.bindings().idx_to_key(idx).range();
+        let range = K::range_with(idx, self.bindings());
 
         let local_errors = self.error_collector();
         let raw_answer = K::solve(self, binding, range, &local_errors);
@@ -1287,7 +1456,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         if self.stack().is_scc_participant(&current) {
-            // SCC path: store in NodeState::Done, defer Calculation write to batch commit.
+            // SCC path: store in NodeState::Done and (optionally) write to Calculation.
             //
             // If this is a break_at node (has a placeholder Var), we must finalize
             // the recursive answer now, before storing. Finalization mutates solver
@@ -1297,12 +1466,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 raw_answer
             };
-            let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(answer.dupe());
-            let canonical_erased = self.stack().on_calculation_finished(
-                &current,
-                Some(answer_erased),
-                Some(Arc::new(local_errors)),
-            );
+            let (calc_answer, errors) =
+                if self.thread_state.scc_solving_mode() == SccSolvingMode::CyclesDualWrite {
+                    // Write to Calculation immediately for cross-thread visibility.
+                    // Without this, the Calculation stays in Calculating status during
+                    // SCC processing, allowing other threads to independently re-compute
+                    // this binding via propose_calculation() → Calculatable. Since
+                    // cycle-oriented solving is not entrypoint-invariant, independent
+                    // re-computation can produce different results depending on thread
+                    // scheduling, causing non-determinism.
+                    let (calc_answer, did_write) = calculation.record_value(answer.dupe());
+                    if did_write {
+                        self.base_errors.extend(local_errors);
+                    }
+                    (calc_answer, None)
+                } else {
+                    (answer, Some(Arc::new(local_errors)))
+                };
+            // Also store in NodeState::Done for SCC-local isolation (the SCC
+            // uses these answers via SccLocalAnswer without touching Calculation).
+            let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(calc_answer.dupe());
+            let canonical_erased =
+                self.stack()
+                    .on_calculation_finished(&current, Some(answer_erased), errors);
             // Use the canonical answer from thread-local state, mirroring how
             // Calculation::record_value returns the first-written answer.
             match canonical_erased {
@@ -1311,7 +1497,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .downcast::<Arc<K::Answer>>()
                         .expect("on_calculation_finished canonical answer downcast failed"),
                 ),
-                None => answer,
+                None => calc_answer,
             }
         } else {
             // Non-SCC path: write directly to Calculation as before.
@@ -1378,10 +1564,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: Option<Arc<ErrorCollector>>,
     ) {
         let CalcId(ref bindings, ref any_idx) = calc_id;
-        if bindings.module().name() != self.bindings().module().name() {
+        if bindings.module().name() != self.bindings().module().name()
+            || bindings.module().path() != self.bindings().module().path()
+        {
             // Cross-module: delegate to the LookupAnswer trait to route
             // the commit to the correct module's Answers.
-            self.answers.commit_to_module(calc_id, answer, errors);
+            assert!(
+                self.answers
+                    .commit_to_module(calc_id.dupe(), answer, errors),
+                "commit_single_result: cross-module commit failed for {}. \
+                 The target module's Answers may not be loaded, which would \
+                 leave its Calculation cell stuck in Calculating state.",
+                calc_id,
+            );
             return;
         }
         dispatch_anyidx!(any_idx, self, commit_typed, answer, errors)
@@ -1395,27 +1590,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Nodes with `answer: None` are skipped (they were already committed by
     /// another thread via the Participant revisit path).
     fn batch_commit_scc(&self, completed_scc: Scc) {
-        // Validate invariant: no Fresh or InProgress nodes should remain.
-        debug_assert!(
-            completed_scc.node_state.values().all(|state| matches!(
-                state,
-                NodeState::Done { .. } | NodeState::HasPlaceholder(_)
-            )),
-            "batch_commit_scc: SCC has participants that are not Done or HasPlaceholder: {:?}",
-            completed_scc
-                .node_state
-                .iter()
-                .filter(|(_, s)| matches!(s, NodeState::Fresh | NodeState::InProgress))
-                .map(|(id, s)| format!("{}: {:?}", id, s))
-                .collect::<Vec<_>>(),
-        );
         for (calc_id, node_state) in completed_scc.node_state {
-            if let NodeState::Done {
-                answer: Some(answer),
-                errors,
-            } = node_state
-            {
-                self.commit_single_result(calc_id, answer, errors);
+            match node_state {
+                NodeState::Done {
+                    answer: Some(answer),
+                    errors,
+                } => {
+                    self.commit_single_result(calc_id, answer, errors);
+                }
+                NodeState::Done { answer: None, .. } => {
+                    // Already committed by another thread via the Participant revisit path.
+                }
+                NodeState::HasPlaceholder(_) => {
+                    panic!(
+                        "batch_commit_scc: node {} is still HasPlaceholder at commit time. \
+                         This means its calculate_and_record_answer never completed, \
+                         which would leave its Calculation cell stuck in Calculating state.",
+                        calc_id,
+                    );
+                }
+                NodeState::Fresh | NodeState::InProgress => {
+                    panic!(
+                        "batch_commit_scc: node {} is {:?} at commit time",
+                        calc_id, node_state,
+                    );
+                }
             }
         }
     }
@@ -1439,7 +1638,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        let range = self.bindings().idx_to_key(idx).range();
+        let range = K::range_with(idx, self.bindings());
         let final_answer = K::record_recursive(self, range, answer, var, errors);
         if var != Var::ZERO {
             self.solver().force_var(var);
@@ -1516,7 +1715,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        let range = self.bindings().idx_to_key(idx).range();
+        let range = K::range_with(idx, self.bindings());
         self.base_errors.add(
             range,
             ErrorInfo::Kind(ErrorKind::InternalError),
@@ -1560,7 +1759,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         eprintln!("\n--- Triggering Idx Details ---");
         let key = self.bindings().idx_to_key(idx);
-        let range = key.range();
+        let range = K::range_with(idx, self.bindings());
         let display_range = self.bindings().module().display_range(range);
         eprintln!("  Module: {}", self.module().name());
         eprintln!("  Range: {}", display_range);
@@ -1669,22 +1868,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.get_idx(*prior_idx)
                     .arc_clone_ty()
                     .promote_implicit_literals(self.stdlib),
-            ),
-            Binding::TypeAlias {
-                name,
-                tparams,
-                key_type_alias,
-                range: _,
-            } => self.solver().fresh_alias_recursive(
-                self.uniques,
-                TypeAliasRef {
-                    name: name.clone(),
-                    args: None,
-                    module_name: self.module().name(),
-                    module_path: self.module().path().clone(),
-                    index: self.bindings().idx_to_key(*key_type_alias).0,
-                },
-                self.create_type_alias_params_recursive(tparams),
             ),
             _ => self.solver().fresh_recursive(self.uniques),
         }
@@ -2242,5 +2425,32 @@ mod scc_tests {
 
         // Should keep the minimum anchor_pos
         assert_eq!(merged.anchor_pos, 2);
+    }
+
+    #[test]
+    fn test_stale_calculation_panic() {
+        // Reproduces the panic where Calculation has stale state but CalcStack is fresh.
+        let calc_id = CalcId::for_test("m", 0);
+        let calculation: Calculation<usize> = Calculation::new();
+
+        // 1. Simulate stale state: propose calculation on this thread.
+        // This sets the thread bit in calculation.
+        match calculation.propose_calculation() {
+            ProposalResult::Calculatable => {}
+            _ => panic!("Expected Calculatable"),
+        }
+
+        // 2. Create a fresh stack (simulating a new request/thread reuse).
+        let stack = CalcStack::new();
+
+        // 3. Push the same calculation.
+        // This should NOT panic.
+        let action = stack.push(calc_id, &calculation);
+
+        // 4. Expect Calculate action (to recover).
+        match action {
+            BindingAction::Calculate => {}
+            _ => panic!("Expected Calculate action to recover from stale state"),
+        }
     }
 }

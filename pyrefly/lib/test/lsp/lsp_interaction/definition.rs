@@ -11,17 +11,17 @@ use lsp_server::RequestId;
 use lsp_types::GotoDefinitionResponse;
 use lsp_types::Location;
 use lsp_types::Url;
+use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly::lsp::non_wasm::protocol::Request;
 use serde_json::json;
 use tempfile::TempDir;
 
-use crate::lsp::non_wasm::protocol::Message;
-use crate::lsp::non_wasm::protocol::Request;
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::bundled_typeshed_path;
-use crate::test::lsp::lsp_interaction::util::expect_definition_points_to_symbol;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
-use crate::test::lsp::lsp_interaction::util::line_at_location;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::bundled_typeshed_path;
+use crate::util::expect_definition_points_to_symbol;
+use crate::util::get_test_files_root;
+use crate::util::line_at_location;
 
 fn test_go_to_def(
     root: PathBuf,

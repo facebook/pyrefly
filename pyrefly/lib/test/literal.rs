@@ -421,3 +421,17 @@ x: Literal["a", "b"] = "a"
 assert_type(x, Literal["a", "b"])
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2633
+testcase!(
+    test_literal_union_annotated,
+    r#"
+from typing import Annotated, Literal, TypeAlias
+
+One: TypeAlias = Literal[1]
+Two: TypeAlias = Annotated[Literal[2], "irrelevant"]
+OneOrTwo: TypeAlias = One | Two
+
+Spam: TypeAlias = Literal[OneOrTwo]
+"#,
+);

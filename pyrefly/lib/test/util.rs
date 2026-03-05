@@ -342,7 +342,9 @@ impl TestEnv {
             Some(Box::new(subscriber.dupe())),
         );
         transaction.as_mut().set_memory(self.get_memory());
-        transaction.as_mut().run(&handles, Require::Everything);
+        transaction
+            .as_mut()
+            .run(&handles, Require::Everything, None);
         state.commit_transaction(transaction, None);
         subscriber.finish();
         let project_root = PathBuf::new();
@@ -594,7 +596,7 @@ pub fn testcase_for_macro(
                 PathBuf::from(file),
                 Some(Arc::new(FileContents::from_source(contents.clone()))),
             )]);
-            t.run(&[h.dupe()], Require::Everything);
+            t.run(&[h.dupe()], Require::Everything, None);
             let errors = t.get_errors([&h]);
             let project_root = PathBuf::new();
             print_errors(project_root.as_path(), &errors.collect_errors().shown);

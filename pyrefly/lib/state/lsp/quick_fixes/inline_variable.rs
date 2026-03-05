@@ -57,7 +57,7 @@ pub(crate) fn inline_variable_code_actions(
     ) {
         return None;
     }
-    let references = transaction.find_local_references(handle, def.definition_range.start());
+    let references = transaction.find_local_references(handle, def.definition_range.start(), true);
     if references.is_empty() {
         return None;
     }

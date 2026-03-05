@@ -489,3 +489,16 @@ class Child(Base):
 x = Child()
 "#,
 );
+
+testcase!(
+    test_implicit_return_in_abstract_method,
+    r#"
+from abc import ABC, abstractmethod
+
+class A(ABC):
+    @abstractmethod
+    def f(self, x: bool) -> int:  # E: one or more paths are missing an explicit `return`
+        if x:
+            return 0
+    "#,
+);

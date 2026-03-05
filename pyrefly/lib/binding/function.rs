@@ -38,19 +38,21 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingUndecoratedFunction;
+use crate::binding::binding::BindingUndecoratedFunctionRange;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::ExhaustivenessKind;
+use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
-use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
+use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::ReturnExplicit;
@@ -170,7 +172,7 @@ impl<'a> SelfAttrNames<'a> {
                 (
                     n,
                     InstanceAttribute(
-                        super::binding::ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
+                        ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
                         None,
                         r,
                         MethodSelfKind::Instance,
@@ -309,6 +311,18 @@ impl<'a> BindingsBuilder<'a> {
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
         self.parameters(parameters, undecorated_idx, class_key, method_self_kind);
         self.init_static_scope(&body, false);
+        if class_key.is_some() && !self.scopes.current_static_contains(&dunder::CLASS) {
+            let implicit_range = TextRange::empty(range.start());
+            let dunder_class_identifier = Identifier::new(dunder::CLASS.clone(), implicit_range);
+            self.scopes
+                .add_name_to_current_static(&dunder_class_identifier);
+            let class_object_idx = self.scopes.enclosing_class_object_idx().unwrap();
+            let idx = self.insert_binding(
+                Key::Definition(ShortIdentifier::new(&dunder_class_identifier)),
+                Binding::Forward(class_object_idx),
+            );
+            self.bind_name(&dunder_class_identifier.id, idx, FlowStyle::Other);
+        }
         self.stmts(
             body,
             &NestingContext::function(ShortIdentifier::new(func_name), parent.dupe()),
@@ -378,9 +392,6 @@ impl<'a> BindingsBuilder<'a> {
         implicit_return: Option<Idx<Key>>,
         should_infer_return_type: bool,
         stub_or_impl: FunctionStubOrImpl,
-        decorators: Box<[Idx<KeyDecorator>]>,
-        body_is_trivial: bool,
-        class_metadata_key: Option<Idx<KeyClassMetadata>>,
     ) {
         let is_generator =
             !(yields_and_returns.yields.is_empty() && yields_and_returns.yield_froms.is_empty());
@@ -433,39 +444,37 @@ impl<'a> BindingsBuilder<'a> {
             .into_boxed_slice();
 
         let return_type_binding = {
-            let kind = match (return_ann_with_range, implicit_return) {
-                (Some((range, annotation)), Some(implicit_return)) => {
+            let kind = match (return_ann_with_range, implicit_return, stub_or_impl) {
+                (Some((range, annotation)), Some(implicit_return), FunctionStubOrImpl::Impl) => {
                     // We have an explicit return annotation and we want to validate it.
                     ReturnTypeKind::ShouldValidateAnnotation {
                         range,
                         annotation,
-                        stub_or_impl,
-                        decorators,
                         implicit_return,
                         is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
                         has_explicit_return: !return_keys.is_empty(),
                     }
                 }
-                (Some((range, annotation)), None) => {
-                    // We have an explicit return annotation and we just want to trust it.
+                // We have an explicit return annotation on a stub function, so we just trust it, ignoring the implicit return.
+                (Some((range, annotation)), Some(_), FunctionStubOrImpl::Stub)
+                // We have an explicit return annotation and no implicit return.
+                | (Some((range, annotation)), None, _) => {
                     ReturnTypeKind::ShouldTrustAnnotation {
                         annotation,
                         range,
                         is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
                     }
                 }
-                (None, Some(implicit_return)) if should_infer_return_type => {
+                (None, Some(implicit_return), _) if should_infer_return_type => {
                     // We don't have an explicit return annotation, but we want to infer it.
                     ReturnTypeKind::ShouldInferType {
                         returns: return_keys,
                         implicit_return,
                         yields: yield_keys,
                         yield_froms: yield_from_keys,
-                        body_is_trivial,
-                        class_metadata_key,
                     }
                 }
-                (None, _) => {
+                (None, _, _) => {
                     // We don't have an explicit return annotation, or we don't want to infer return type.
                     // Just treat the return type as `Any`.
                     ReturnTypeKind::ShouldReturnAny {
@@ -538,7 +547,6 @@ impl<'a> BindingsBuilder<'a> {
         parent: &NestingContext,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
-        metadata_key: Option<Idx<KeyClassMetadata>>,
     ) -> (FunctionStubOrImpl, Option<SelfAssignments>) {
         // If the first statement in the body is a docstring, remove it
         let body_no_docstring = if let Some(s) = body.first()
@@ -548,13 +556,21 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             body.as_slice()
         };
-        let body_is_trivial = match body_no_docstring {
-            [] => true,
-            [Stmt::Pass(_)] => true,
+        let body_is_ellipse = match body_no_docstring {
+            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => true,
+            _ => false,
+        };
+        let body_is_trivial = body_is_ellipse
+            || (match body_no_docstring {
+                [] => true,
+                [Stmt::Pass(_)] => true,
+                _ => false,
+            });
+        let body_is_not_implemented = match body_no_docstring {
             // raise NotImplementedError(...)
             [
                 Stmt::Raise(StmtRaise {
-                    exc: Some(box Expr::Call(ExprCall { box func, .. })),
+                    exc: Some(box (Expr::Call(ExprCall { box func, .. }) | func)),
                     ..
                 }),
             ] if self.as_special_export(func) == Some(SpecialExport::NotImplementedError) => true,
@@ -565,18 +581,15 @@ impl<'a> BindingsBuilder<'a> {
                     ..
                 }),
             ] if self.as_special_export(val) == Some(SpecialExport::NotImplemented) => true,
-            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => true,
             _ => false,
         };
-        let body_is_ellipse = match body_no_docstring {
-            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => true,
-            _ => false,
-        };
-        let stub_or_impl = if (self.scopes.is_in_protocol_class()
-            || decorators.is_abstract_method
-            || decorators.is_overload
-            || body_is_ellipse)
-            && body_is_trivial
+        // A `...` body is always interpreted as a stub function.
+        // Functions with other trivial bodies are interpreted as stubs in some contexts.
+        let stub_or_impl = if body_is_ellipse
+            || ((self.scopes.is_in_protocol_class()
+                || decorators.is_abstract_method
+                || decorators.is_overload)
+                && body_is_trivial)
         {
             FunctionStubOrImpl::Stub
         } else {
@@ -584,6 +597,7 @@ impl<'a> BindingsBuilder<'a> {
         };
         let should_report_unused_parameters = stub_or_impl == FunctionStubOrImpl::Impl
             && !body_is_trivial
+            && !body_is_not_implemented
             && !decorators.is_overload
             && !decorators.is_override
             && !decorators.is_abstract_method;
@@ -639,9 +653,6 @@ impl<'a> BindingsBuilder<'a> {
                         None,
                         false, // this disables return type inference
                         stub_or_impl,
-                        decorators.decorators.clone(),
-                        body_is_trivial,
-                        metadata_key,
                     );
                     self_assignments
                 }
@@ -671,9 +682,6 @@ impl<'a> BindingsBuilder<'a> {
                         Some(implicit_return),
                         false, // this disables return type inference
                         stub_or_impl,
-                        decorators.decorators.clone(),
-                        body_is_trivial,
-                        metadata_key,
                     );
                     self_assignments
                 }
@@ -703,9 +711,6 @@ impl<'a> BindingsBuilder<'a> {
                         Some(implicit_return),
                         true,
                         stub_or_impl,
-                        decorators.decorators.clone(),
-                        body_is_trivial,
-                        metadata_key,
                     );
                     self_assignments
                 }
@@ -720,8 +725,16 @@ impl<'a> BindingsBuilder<'a> {
         let mut def_idx =
             self.declare_current_idx(Key::Definition(ShortIdentifier::new(&func_name)));
 
+        let func_def_index = self.func_def_index();
+
         let undecorated_idx =
             self.idx_for_promise(KeyUndecoratedFunction(ShortIdentifier::new(&func_name)));
+
+        // Map FuncDefIndex to ShortIdentifier for reverse lookup.
+        self.insert_binding(
+            KeyUndecoratedFunctionRange(func_def_index),
+            BindingUndecoratedFunctionRange(ShortIdentifier::new(&func_name)),
+        );
 
         // Get preceding function definition, if any. Used for building an overload type.
         let (function_idx, pred_idx) = self.create_function_index(&func_name);
@@ -749,7 +762,6 @@ impl<'a> BindingsBuilder<'a> {
             parent,
             undecorated_idx,
             class_key,
-            metadata_key,
         );
 
         // Pop the annotation scope to get back to the parent scope, and handle this
@@ -760,6 +772,7 @@ impl<'a> BindingsBuilder<'a> {
         let undecorated_idx = self.insert_binding_idx(
             undecorated_idx,
             BindingUndecoratedFunction {
+                def_index: func_def_index,
                 def: FunctionDefData::new(x),
                 stub_or_impl,
                 class_key,
@@ -847,9 +860,15 @@ fn function_last_expressions<'a>(
             }
             Stmt::If(x) => {
                 let mut last_test = None;
+                let mut any_branch_processed = false;
                 for (test, body) in sys_info.pruned_if_branches(x) {
+                    any_branch_processed = true;
                     last_test = test;
                     f(sys_info, body, res)?;
+                }
+                if !any_branch_processed {
+                    // All branches were pruned, so the code falls through
+                    return None;
                 }
                 if last_test.is_some() {
                     // The if/elif chain has no else clause, so it's not syntactically exhaustive.

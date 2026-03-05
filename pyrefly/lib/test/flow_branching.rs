@@ -332,9 +332,9 @@ try:
 except* int as e1:  # E: Invalid exception class
     reveal_type(e1)  # E: revealed type: ExceptionGroup[int]
 except* Exception as e2:
-    reveal_type(e2)  # E: revealed type: ExceptionGroup[Exception]
+    reveal_type(e2)  # E: revealed type: ExceptionGroup
 except* ExceptionGroup as e3:  # E: Exception handler annotation in `except*` clause may not extend `BaseExceptionGroup`
-    reveal_type(e3)  # E: ExceptionGroup[ExceptionGroup[Exception]]
+    reveal_type(e3)  # E: ExceptionGroup[ExceptionGroup]
 except* (Exception1, Exception2) as e4:
     reveal_type(e4)  # E: ExceptionGroup[Exception1 | Exception2]
 except* Exception1 as e5:
@@ -1125,6 +1125,84 @@ def f(v):
     "#,
 );
 
+// Regression tests for https://github.com/facebook/pyrefly/issues/2382
+// Walrus operator in ternary test expression
+
+testcase!(
+    test_walrus_in_ternary_else_branch,
+    r#"
+def f(i: float) -> int:
+    return a if (a := round(i)) - 1 else a + 1
+    "#,
+);
+
+testcase!(
+    test_walrus_in_ternary_only_in_else,
+    r#"
+def f(x: int) -> int:
+    return 0 if (y := x) > 0 else y
+    "#,
+);
+
+// x is narrowed to int in the body (is not None) and
+// the else branch returns 0 (int), so the return type is int. No error.
+testcase!(
+    test_walrus_in_ternary_with_narrowing,
+    r#"
+from typing import assert_type
+def get() -> int | None: ...
+def f() -> int:
+    return x if (x := get()) is not None else 0
+    "#,
+);
+
+testcase!(
+    test_walrus_ternary_truthiness_narrowing,
+    r#"
+from typing import assert_type
+def get() -> str | None: ...
+def f() -> str:
+    return x if (x := get()) else "default"
+    "#,
+);
+
+testcase!(
+    test_walrus_in_ternary_short_circuit,
+    r#"
+def condition() -> bool: ...
+def get() -> int: ...
+def f1() -> int:
+    return x if condition() and (x := get()) else 0  # no error
+# BoolOp merging uses lax handling, so `x` is treated as defined even though
+# `x := get()` may not execute. This is a known false negative from BoolOp laxness.
+def f2() -> int:
+    return x if condition() or (x := get()) else 0  # false negative
+def f3() -> int:
+    return x if condition() and (x := get()) else x  # false negative
+    "#,
+);
+
+// Walrus in outer ternary test: `a` should be visible in both branches.
+// Currently this works because truthiness narrowing on `a` adds it to the
+// else flow, masking the uninitialized status.
+testcase!(
+    test_walrus_in_nested_ternary_outer,
+    r#"
+def f(v: int) -> int:
+    return (a if a > 0 else -a) if (a := v) else -a
+    "#,
+);
+
+testcase!(
+    test_walrus_in_nested_ternary_inner,
+    r#"
+def condition() -> bool: ...
+def get() -> int: ...
+def f() -> int:
+    return (b if (b := get()) > 0 else 0) if condition() else -1
+    "#,
+);
+
 testcase!(
     test_trycatch_implicit_return,
     r#"
@@ -1675,5 +1753,45 @@ def f(x: int | str, y: int | str) -> str:  # E: Function declared to return `str
     elif isinstance(y, str):
         return "y is str"
     # Different subjects in different branches - cannot determine exhaustiveness
+"#,
+);
+
+// Issue #2406: NoReturn in except block should make variable always initialized
+testcase!(
+    test_noreturn_try_except_simple,
+    r#"
+from typing import NoReturn
+
+def foo() -> NoReturn:
+    raise ValueError('')
+
+def main() -> None:
+    try:
+        node = 1
+    except Exception:
+        foo()
+    print(node)
+"#,
+);
+
+testcase!(
+    test_noreturn_try_except_if_nested,
+    r#"
+from typing import NoReturn
+
+def foo() -> NoReturn:
+    raise ValueError('')
+
+def main(resolve: bool) -> None:
+    try:
+        node = 1
+    except Exception as exc:
+        foo()
+    if resolve:
+        try:
+            node = 2
+        except Exception:
+            foo()
+    print(node)
 "#,
 );

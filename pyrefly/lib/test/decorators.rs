@@ -99,6 +99,28 @@ def takes_inferred(i) -> None:
 );
 
 testcase!(
+    test_generic_decorator_with_unannotated_param,
+    r#"
+from typing import Callable, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+T3 = TypeVar("T3")
+
+def decorator(func: Callable[[T1, T2], T3]) -> Callable[[T1, T2], T3]:
+    return func
+
+class Expr:
+    @decorator
+    def __truediv__(self, other) -> "Expr":
+        return Expr()
+
+x = Expr()
+y = x / 2
+    "#,
+);
+
+testcase!(
     test_callable_instance,
     r#"
 from typing import Callable, reveal_type

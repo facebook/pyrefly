@@ -963,3 +963,25 @@ class Options1(Protocol):
 op1: Options1 = _protocols_modules1  # E: `Module[_protocols_modules1]` is not assignable to `Options1`
 "#,
 );
+
+testcase!(
+    test_protocol_any_args_kwargs,
+    r#"
+from typing import Generic, Sized, Iterable, Any, TypeVar, Protocol, Self
+
+class NativeSeries(Protocol):
+    def filter(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class MySeries:
+    def filter(self, _predicate: Iterable[bool]) -> Self:
+        return self
+
+T = TypeVar('T', bound=NativeSeries)
+
+class Foo(Generic[T]):
+    ...
+
+def to_foo() -> Foo[MySeries]:
+    ...
+"#,
+);

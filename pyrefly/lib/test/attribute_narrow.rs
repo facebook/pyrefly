@@ -91,6 +91,28 @@ def f(foo: Foo):
 "#,
 );
 
+testcase!(
+    test_dunder_class_attribute_narrow,
+    r#"
+from typing import assert_type
+def f(x: int | str):
+    if x.__class__ is int:
+        assert_type(x, int)
+    else:
+        assert_type(x, int | str)
+    if x.__class__ == int:
+        assert_type(x, int)
+def g(x: int | str):
+    assert x.__class__ is int
+    assert_type(x, int)
+def h(x: bool | str):
+    if x.__class__ is bool:
+        assert_type(x, bool)
+    else:
+        assert_type(x, str)
+"#,
+);
+
 // The expected behavior when narrowing an invalid attribute chain is to produce
 // type errors at the narrow site, but apply the narrowing downstream
 // (motivation: being noisy downstream could be quite frustrating for gradually

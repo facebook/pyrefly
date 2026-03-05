@@ -16,6 +16,7 @@ use pyrefly_derive::VisitMut;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
@@ -38,6 +39,7 @@ use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::ExprTuple;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -55,6 +57,7 @@ use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::binding::binding::Binding;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
@@ -1457,7 +1460,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_inherited,
             direct_annotation,
         ) = match field_definition {
-            ClassFieldDefinition::DeclaredByAnnotation { annotation: annot } => {
+            ClassFieldDefinition::DeclaredByAnnotation {
+                annotation: annot,
+                initialized_in_recognized_method,
+            } => {
                 let direct_annotation = Some(self.get_idx(*annot).annotation.clone());
 
                 // Check if there's an inherited descriptor from a parent class.
@@ -1510,6 +1516,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     ClassFieldInitialization::Uninitialized
                 };
+                // A Final field declared in the class body must be initialized either there
+                // or in a recognized attribute-defining method like `__init__`.
+                // Dataclasses and NamedTuples are excluded because their synthesized `__init__`
+                // initializes fields that have no default value. Protocols are excluded because
+                // protocol members are abstract declarations that don't need initialization.
+                let is_uninit_final = !initialized_in_recognized_method
+                    && direct_annotation.as_ref().is_some_and(|a| a.is_final())
+                    && matches!(initialization, ClassFieldInitialization::Uninitialized);
+                let is_special_class = metadata.dataclass_metadata().is_some()
+                    || metadata.named_tuple_metadata().is_some()
+                    || metadata.is_protocol();
+                if is_uninit_final && !is_special_class {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        "Final attribute declared in class body must be initialized with a value or in `__init__`".to_owned(),
+                    );
+                }
                 let value =
                     value_storage.push(ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)));
                 let (value_ty, annotation, is_inherited) = self.analyze_class_field_value(
@@ -1536,7 +1561,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             } => {
                 let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
-                let initialization = if let ExprOrBinding::Expr(e) = value
+                let initialization = if let ExprOrBinding::Expr(e) = value.as_ref()
                     && let Some(dm) = metadata.dataclass_metadata()
                     && let Expr::Call(call) = e
                 {
@@ -1776,10 +1801,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && matches!(&ty, Type::ClassType(cls) if self.is_foreign_key_field(cls.class_object()));
 
         // Check if this is a Django field with choices
-        let has_choices = if let ClassFieldDefinition::AssignedInBody {
-            value: ExprOrBinding::Expr(expr),
-            ..
-        } = field_definition
+        let has_choices = if let ClassFieldDefinition::AssignedInBody { value, .. } =
+            field_definition
+            && let ExprOrBinding::Expr(expr) = value.as_ref()
             && let Some(call_expr) = expr.as_call_expr()
         {
             metadata.is_django_model() && self.has_django_field_choices(call_expr)
@@ -1985,6 +2009,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(errors, x.range(), ErrorInfo::Kind(ErrorKind::UnannotatedAttribute), "This expression is implicitly inferred to be `Any | None`. Please provide an explicit type annotation.".to_owned());
                 self.union(self.heap.mk_none(), self.heap.mk_any_implicit())
             }
+            // We interpret `self.foo = ()` to mean the type of foo is an arbitrary-length tuple,
+            // since an empty tuple base attr almost always means to hold a tuple of something in
+            // derived classes. We exclude `__match_args__` because its value is semantically
+            // significant: `__match_args__ = ()` means "no positional match arguments" and
+            // should have type `tuple[()]`, not `tuple[Any, ...]`.
+            (None, Expr::Tuple(ExprTuple { elts, .. }))
+                if elts.is_empty() && *name != dunder::MATCH_ARGS =>
+            {
+                self.error(errors, x.range(), ErrorInfo::Kind(ErrorKind::UnannotatedAttribute), "This expression is implicitly inferred to be `tuple[Any, ...]`. Please provide an explicit type annotation.".to_owned());
+                self.heap.mk_unbounded_tuple(self.heap.mk_any_implicit())
+            }
             (None, _) => self.expr_infer(x, errors),
         };
         self.expand_vars_mut(&mut ty);
@@ -2005,24 +2040,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
-        let is_initialized_on_class_body = matches!(
-            field_definition,
-            ClassFieldDefinition::AssignedInBody { .. }
-                | ClassFieldDefinition::MethodLike { .. }
-                | ClassFieldDefinition::DefinedWithoutAssign { .. }
-        );
-        // Extract alias_of from field_definition for enum alias detection
-        let alias_of = match field_definition {
-            ClassFieldDefinition::AssignedInBody { alias_of, .. } => alias_of.as_ref(),
-            _ => None,
-        };
         self.get_enum_class_field_type(
             class,
             name,
             direct_annotation,
             ty,
-            alias_of,
-            is_initialized_on_class_body,
+            field_definition,
             is_descriptor,
             range,
             errors,
@@ -2030,10 +2053,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         .or_else(|| self.get_pydantic_root_model_class_field_type(class, name))
         .or_else(|| {
             let initial_value_expr = match field_definition {
-                ClassFieldDefinition::AssignedInBody {
-                    value: ExprOrBinding::Expr(expr),
-                    ..
-                } => Some(expr),
+                ClassFieldDefinition::AssignedInBody { value, .. } => {
+                    if let ExprOrBinding::Expr(expr) = value.as_ref() {
+                        Some(expr)
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             };
             self.get_django_field_type(ty, class, Some(name), initial_value_expr)
@@ -2202,7 +2228,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Otherwise, analyze the value to determine the type
         let (inherited_ty, inherited_annotation) =
             self.get_inherited_type_and_annotation(class, name);
-        let is_inherited = if inherited_ty.is_none() {
+        let mut is_inherited = if inherited_ty.is_none() {
             IsInherited::No
         } else {
             IsInherited::Maybe
@@ -2231,15 +2257,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             &errors2,
                         );
                         if errors2.is_empty() {
-                            // The new type is compatible with the inherited one; use the inherited type to
-                            // avoid spurious errors about changing the type of a read-write attribute.
-                            // However, we need to clear the is_abstract_method flag since assigning
-                            // a concrete implementation makes this field non-abstract.
-                            let mut ty = inherited_ty;
-                            ty.transform_toplevel_func_metadata(|meta| {
-                                meta.flags.is_abstract_method = false;
-                            });
-                            ty
+                            // The new type is compatible with the inherited one; use the child's
+                            // inferred type to preserve type precision. Skip the override check
+                            // since we've already validated compatibility above.
+                            is_inherited = IsInherited::No;
+                            self.attribute_expr_infer(e, None, name, errors)
                         } else {
                             // The hint was no good; infer the type without it.
                             self.attribute_expr_infer(e, None, name, errors)
@@ -2290,7 +2312,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn compute_dataclass_field_initialization(
         &self,
         call: &ExprCall,
-        dm: &crate::alt::types::class_metadata::DataclassMetadata,
+        dm: &DataclassMetadata,
     ) -> Option<DataclassFieldKeywords> {
         let ExprCall {
             node_index: _,
@@ -2566,6 +2588,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         module: module.clone(),
                         cls: None,
                         name: field_name.clone(),
+                        def_index: None,
                     };
                     ty = self.heap.mk_function(Function {
                         signature: callable,
@@ -3054,12 +3077,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 continue;
             }
-            // Substitute `Self` with derived class to support contravariant occurrences of `Self`
-            let want_attribute = self.as_instance_attribute(
-                field_name,
-                &want_class_field,
-                &Instance::of_protocol(parent, self.instantiate(cls)),
-            );
+            let want_attribute = {
+                let mut attr = self.as_instance_attribute(
+                    field_name,
+                    &want_class_field,
+                    // Substitute `Self` with derived class to support contravariant occurrences of `Self`
+                    &Instance::of_protocol(parent, self.instantiate(cls)),
+                );
+                if !want_class_field.has_explicit_annotation() {
+                    match &mut attr {
+                        ClassAttribute::ReadOnly(ty, _) | ClassAttribute::ReadWrite(ty)
+                            if ty.has_toplevel_func_metadata() =>
+                        {
+                            // If parent return type was Never (for example a method that only raises),
+                            // skip override consistency checks on the return type so we don't produce noisy bad-override diagnostics.
+                            ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
+                                if callable.ret.is_never() {
+                                    callable.ret = Type::any_implicit();
+                                }
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                attr
+            };
             if got_attribute.is_none() {
                 // Optimisation: Only compute the `got_attr` once, and only if we actually need it.
                 got_attribute = Some(self.as_instance_attribute(

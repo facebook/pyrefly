@@ -65,6 +65,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub(crate) fn named_tuple_element_types(&self, cls: &ClassType) -> Option<Vec<Type>> {
         let class_metadata = self.get_metadata_for_class(cls.class_object());
         let named_tuple_metadata = class_metadata.named_tuple_metadata()?;
+        // If the namedtuple has dynamic fields, we can't know the element types statically.
+        // Return None so that tuple indexing falls back to regular tuple behavior.
+        if named_tuple_metadata.has_dynamic_fields {
+            return None;
+        }
         Some(
             named_tuple_metadata
                 .elements
@@ -103,7 +108,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ParamList::new(params),
                 self.heap.mk_self_type(self.as_class_type_unchecked(cls)),
             ),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::NEW),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::NEW, None),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -117,7 +122,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ];
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT, None),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -143,7 +148,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap
                     .mk_class_type(self.stdlib.iterable(self.unions(element_types))),
             ),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::ITER),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::ITER, None),
         });
         ClassSynthesizedField::new(ty)
     }

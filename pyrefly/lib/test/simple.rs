@@ -197,6 +197,41 @@ assert_type(y, Literal[1])
 );
 
 testcase!(
+    test_shadow_builtin_zip,
+    r#"
+from typing import assert_type
+
+def zip(*args) -> list[int]:
+    return []
+
+def f(a: list[int], b: list[int]):
+    return zip(a, b)
+
+assert_type(f([1], [2]), list[int])
+"#,
+);
+
+testcase!(
+    test_conditional_shadow_builtin_zip,
+    r#"
+from typing import assert_type
+import random
+
+cond = random.randint(0, 1)
+if cond:
+    def zip(*args) -> list[int]:
+        return []
+
+def f(a: list[int], b: list[int]):
+    return zip(a, b)
+
+# Note that we completely ignore the builtin `zip` here even though it is conditionally shadowed.
+# This matches the behavior of pyright, mypy, and ty.
+assert_type(f([1], [2]), list[int])
+"#,
+);
+
+testcase!(
     test_unordered_defs,
     r#"
 def f() -> int:
@@ -404,8 +439,8 @@ for x in [1, 2, 3]:  # E: Cannot assign to variable `x` because it is marked fin
 xs: Final[list[int]] = []
 [_, *xs] = [1, 2, 3]  # E: Cannot assign to variable `xs` because it is marked final
 
-f: Final[TextIO]
-with open("file.txt") as f: # E: Cannot assign to variable `f` because it is marked final
+f: Final[TextIO] = open("file.txt")
+with open("file.txt") as f:  # E: Cannot assign to variable `f` because it is marked final
     ...
 "#,
 );
@@ -475,7 +510,7 @@ testcase!(
 def f(x: str) -> str:
     return x
 
-x = f"abc{f(1)}def"  # E: Argument `Literal[1]` is not assignable to parameter `x` with type `str`
+x = f"abc{f(1)}def"
 "#,
 );
 
@@ -886,6 +921,15 @@ Y = Annotated[int] # E: `Annotated` needs at least one piece of metadata in addi
 );
 
 testcase!(
+    test_annotated_dunder_doc,
+    r#"
+from typing import Annotated, assert_type
+x = Annotated[int, "meta"].__doc__
+assert_type(x, str | None)
+    "#,
+);
+
+testcase!(
     test_nested_string_annotation,
     r#"
 x: "'int'" = 1  # E: Expected a type form, got instance of `Literal['int']`
@@ -952,6 +996,17 @@ assert_type(type(x5), type[str])
 class TD(TypedDict): ...
 x6: TD = {}
 assert_type(type(x6), type[dict])
+"#,
+);
+
+testcase!(
+    test_assert_nonetype,
+    r#"
+from types import NoneType
+from typing import assert_type
+
+def f(x: int | NoneType):
+    assert_type(x, int | None)
 "#,
 );
 

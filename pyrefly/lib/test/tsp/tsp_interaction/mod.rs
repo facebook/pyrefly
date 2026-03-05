@@ -10,3 +10,4 @@
 pub mod get_snapshot;
 pub mod get_supported_protocol_version;
 pub mod object_model;
+pub mod resolve_import;

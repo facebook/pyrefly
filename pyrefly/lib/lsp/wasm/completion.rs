@@ -24,6 +24,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
+use pyrefly_util::thread_pool::ThreadPool;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::Identifier;
@@ -38,6 +39,7 @@ use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
+use crate::lsp::wasm::signature_help::CallInfo;
 use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -247,6 +249,47 @@ impl Transaction<'_> {
         }
     }
 
+    /// Like `add_literal_completions_from_type`, but deduplicates using a shared `seen` set.
+    /// This is used when collecting literal completions across multiple overloads.
+    fn add_literal_completions_from_type_dedup(
+        param_type: &Type,
+        completions: &mut Vec<RankedCompletion>,
+        in_string_literal: bool,
+        seen: &mut SmallSet<(String, Option<String>)>,
+    ) {
+        match param_type {
+            Type::Literal(lit) => {
+                let label = lit.value.to_string_escaped(true);
+                let detail = format!("{param_type}");
+                if seen.insert((label.clone(), Some(detail.clone()))) {
+                    let insert_text = if in_string_literal && let Lit::Str(s) = &lit.value {
+                        s.to_string()
+                    } else {
+                        label.clone()
+                    };
+                    completions.push(RankedCompletion::new(CompletionItem {
+                        label,
+                        kind: Some(CompletionItemKind::VALUE),
+                        detail: Some(detail),
+                        insert_text: Some(insert_text),
+                        ..Default::default()
+                    }));
+                }
+            }
+            Type::Union(box Union { members, .. }) => {
+                for member in members {
+                    Self::add_literal_completions_from_type_dedup(
+                        member,
+                        completions,
+                        in_string_literal,
+                        seen,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Adds completions for magic methods (dunder methods like `__init__`, `__str__`, etc.).
     pub(crate) fn add_magic_method_completions(
         identifier: &Identifier,
@@ -332,27 +375,42 @@ impl Transaction<'_> {
         position: TextSize,
         completions: &mut Vec<RankedCompletion>,
     ) {
-        if let Some((callables, overload_idx, _, _)) =
-            self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(overload_idx).cloned()
-            && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
+        if let Some(CallInfo {
+            callables,
+            provided_arg_ranges,
+            ..
+        }) = self.get_callables_from_call(handle, position)
         {
-            for param in params {
-                match param {
-                    Param::Pos(name, ty, _)
-                    | Param::PosOnly(Some(name), ty, _)
-                    | Param::KwOnly(name, ty, _)
-                    | Param::VarArg(Some(name), ty) => {
-                        if name.as_str() != "self" {
-                            completions.push(RankedCompletion::new(CompletionItem {
-                                label: format!("{}=", name.as_str()),
-                                detail: Some(ty.to_string()),
-                                kind: Some(CompletionItemKind::VARIABLE),
-                                ..Default::default()
-                            }));
+            let callables =
+                self.filter_compatible_overloads(handle, callables, &provided_arg_ranges);
+            let mut seen = SmallSet::new();
+            for callable in callables {
+                if let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
+                {
+                    for param in params {
+                        match param {
+                            Param::Pos(name, ty, _)
+                            | Param::PosOnly(Some(name), ty, _)
+                            | Param::KwOnly(name, ty, _)
+                            | Param::VarArg(Some(name), ty) => {
+                                let label = format!("{}=", name.as_str());
+                                let detail = ty.to_string();
+                                if name.as_str() != "self"
+                                    && seen.insert((label.clone(), detail.clone()))
+                                {
+                                    completions.push(RankedCompletion::new(CompletionItem {
+                                        label,
+                                        detail: Some(detail),
+                                        kind: Some(CompletionItemKind::VARIABLE),
+                                        ..Default::default()
+                                    }));
+                                }
+                            }
+                            Param::VarArg(None, _)
+                            | Param::Kwargs(_, _)
+                            | Param::PosOnly(None, _, _) => {}
                         }
                     }
-                    Param::VarArg(None, _) | Param::Kwargs(_, _) | Param::PosOnly(None, _, _) => {}
                 }
             }
         }
@@ -426,9 +484,13 @@ impl Transaction<'_> {
     }
 
     fn expected_call_argument_type(&self, handle: &Handle, position: TextSize) -> Option<Type> {
-        let (callables, chosen_overload_index, active_argument, _) =
-            self.get_callables_from_call(handle, position)?;
-        let callable = callables.get(chosen_overload_index)?.clone();
+        let CallInfo {
+            callables,
+            chosen_overload_index,
+            active_argument,
+            ..
+        } = self.get_callables_from_call(handle, position)?;
+        let callable = callables.get(chosen_overload_index.unwrap_or(0))?.clone();
         let params = Self::normalize_singleton_function_type_into_params(callable)?;
         let arg_index = Self::active_parameter_index(&params, &active_argument)?;
         let param = params.get(arg_index)?;
@@ -447,7 +509,7 @@ impl Transaction<'_> {
         let Some(actual_type) = actual_type else {
             return false;
         };
-        self.ad_hoc_solve(handle, |solver| {
+        self.ad_hoc_solve(handle, "completion_type_compat", |solver| {
             solver.is_subset_eq(actual_type, expected_type)
         })
         .map(|compatible| !compatible)
@@ -472,7 +534,7 @@ impl Transaction<'_> {
                 let key = bindings.idx_to_key(idx);
                 let label = match key {
                     Key::Definition(id) => module_info.code_at(id.range()),
-                    Key::Anywhere(id, _) => id,
+                    Key::Anywhere(x, ..) => &x.0,
                     _ => continue,
                 };
                 if let Some(identifier) = identifier
@@ -502,7 +564,7 @@ impl Transaction<'_> {
 
                 let is_deprecated = ty.as_ref().is_some_and(|t| {
                     if let Type::ClassDef(cls) = t {
-                        self.ad_hoc_solve(handle, |solver| {
+                        self.ad_hoc_solve(handle, "completion_deprecation", |solver| {
                             solver.get_metadata_for_class(cls).deprecation().is_some()
                         })
                         .unwrap_or(false)
@@ -545,19 +607,30 @@ impl Transaction<'_> {
         completions: &mut Vec<RankedCompletion>,
         in_string_literal: bool,
     ) {
-        if let Some((callables, chosen_overload_index, active_argument, _)) =
-            self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(chosen_overload_index)
-            && let Some(params) =
-                Self::normalize_singleton_function_type_into_params(callable.clone())
-            && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
-            && let Some(param) = params.get(arg_index)
+        if let Some(CallInfo {
+            callables,
+            active_argument,
+            provided_arg_ranges,
+            ..
+        }) = self.get_callables_from_call(handle, position)
         {
-            Self::add_literal_completions_from_type(
-                param.as_type(),
-                completions,
-                in_string_literal,
-            );
+            let callables =
+                self.filter_compatible_overloads(handle, callables, &provided_arg_ranges);
+            let mut seen = SmallSet::new();
+            for callable in callables {
+                if let Some(params) =
+                    Self::normalize_singleton_function_type_into_params(callable.clone())
+                    && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
+                    && let Some(param) = params.get(arg_index)
+                {
+                    Self::add_literal_completions_from_type_dedup(
+                        param.as_type(),
+                        completions,
+                        in_string_literal,
+                        &mut seen,
+                    );
+                }
+            }
         }
     }
 
@@ -569,6 +642,7 @@ impl Transaction<'_> {
         completions: &mut Vec<RankedCompletion>,
         import_format: ImportFormat,
         supports_completion_item_details: bool,
+        custom_thread_pool: Option<&ThreadPool>,
     ) {
         // Auto-import can be slow. Let's only return results if there are no local
         // results for now. TODO: re-enable it once we no longer have perf issues.
@@ -593,7 +667,9 @@ impl Transaction<'_> {
             if identifier_text.len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
                 return;
             }
-            for (handle_to_import_from, name, export) in self.search_exports_fuzzy(identifier_text)
+            for (handle_to_import_from, name, export) in self
+                .search_exports_fuzzy(identifier_text, custom_thread_pool)
+                .unwrap_or_default()
             {
                 // Using handle itself doesn't always work because handles can be made separately and have different hashes
                 if handle_to_import_from.module() == handle.module()
@@ -656,6 +732,33 @@ impl Transaction<'_> {
                 }
                 let module_name_str = module_name.as_str().to_owned();
                 let source = autoimport_source(&module_name_str);
+                if let Some((submodule_name, position, insert_text, imported_module)) =
+                    self.submodule_autoimport_edit(handle, &ast, module_name, import_format)
+                {
+                    let import_text_edit = TextEdit {
+                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
+                        new_text: insert_text.clone(),
+                    };
+                    let additional_text_edits = Some(vec![import_text_edit]);
+                    let auto_import_label_detail = format!(" (import {imported_module})");
+                    completions.push(RankedCompletion {
+                        item: CompletionItem {
+                            label: submodule_name,
+                            detail: Some(insert_text),
+                            kind: Some(CompletionItemKind::MODULE),
+                            additional_text_edits,
+                            label_details: supports_completion_item_details.then_some(
+                                CompletionItemLabelDetails {
+                                    detail: Some(auto_import_label_detail),
+                                    description: Some(module_name_str.clone()),
+                                },
+                            ),
+                            ..Default::default()
+                        },
+                        source,
+                        is_incompatible: false,
+                    });
+                }
                 if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
                 {
                     let (import_text, additional_text_edits) = {
@@ -741,6 +844,7 @@ impl Transaction<'_> {
         import_format: ImportFormat,
         options: CompletionOptions,
         mut mru_index: Option<F>,
+        custom_thread_pool: Option<&ThreadPool>,
     ) -> (Vec<CompletionItem>, bool)
     where
         F: FnMut(&CompletionItem) -> Option<usize>,
@@ -816,7 +920,7 @@ impl Transaction<'_> {
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
                 {
-                    self.ad_hoc_solve(handle, |solver| {
+                    self.ad_hoc_solve(handle, "completion_attributes", |solver| {
                         solver
                             .completions(base_type, None, true)
                             .iter()
@@ -901,6 +1005,7 @@ impl Transaction<'_> {
                         &mut result,
                         import_format,
                         supports_completion_item_details,
+                        custom_thread_pool,
                     );
                 }
                 // Mark results as incomplete in the following cases so clients keep asking
@@ -943,13 +1048,20 @@ impl Transaction<'_> {
                         &mut result,
                         in_string_literal,
                     );
-                    self.add_literal_completions(handle, position, &mut result, in_string_literal);
-                    self.add_dict_key_completions(
+                    let dict_key_claimed = self.add_dict_key_completions(
                         handle,
                         mod_module.as_ref(),
                         position,
                         &mut result,
                     );
+                    if !dict_key_claimed {
+                        self.add_literal_completions(
+                            handle,
+                            position,
+                            &mut result,
+                            in_string_literal,
+                        );
+                    }
                     // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
                     // in foo(<>), the first containing node is AnyNodeRef::ExprCall
                     if let Some(first) = nodes.first()

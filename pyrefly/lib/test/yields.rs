@@ -121,11 +121,11 @@ def bar() -> Generator[Y, S2, None]:
     assert_type(r, R)
 
 def baz() -> Generator[Y2, S2, None]:
-    s = yield from bar() # E: Cannot yield from `Generator[Y, S2, None]`, which is not assignable to declared return type `Generator[Y2, S2, Unknown]`
+    s = yield from bar() # E: Cannot yield from `Generator[Y, S2]`, which is not assignable to declared return type `Generator[Y2, S2, Unknown]`
     assert_type(s, None)
 
 def qux() -> Generator[Y, S, None]:
-    s = yield from bar() # E: Cannot yield from `Generator[Y, S2, None]`, which is not assignable to declared return type `Generator[Y, S, Unknown]`
+    s = yield from bar() # E: Cannot yield from `Generator[Y, S2]`, which is not assignable to declared return type `Generator[Y, S, Unknown]`
     assert_type(s, None)
 "#,
 );
@@ -405,7 +405,7 @@ async def test() -> None:
         assert_type(x, int)
     async for y in [1, 2, 3]:  # E: Type `list[int]` is not an async iterable
         pass
-    for z in gen():  # E: Type `AsyncGenerator[int, None]` is not iterable
+    for z in gen():  # E: Type `AsyncGenerator[int]` is not iterable
         pass
 "#,
 );

@@ -88,7 +88,7 @@ def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
 def foo[T](x: T, y: T) -> T:
     return x
 foo2 = identity(foo)
-reveal_type(foo2)  # E: revealed type: (x: @_, y: @_) -> @_
+reveal_type(foo2)  # E: revealed type: (x: Unknown, y: Unknown) -> Unknown
 "#,
 );
 

@@ -344,6 +344,12 @@ fn on_class(
                 Variance::Invariant
             };
         on_type(variance, true, ty, on_edge, on_var);
+
+        // For properties with both a getter and setter, the stored type is the setter function,
+        // but the getter is stored separately. Walk it so its covariant contribution is counted.
+        if let Some(getter) = ty.is_property_setter_with_getter() {
+            on_type(Variance::Covariant, true, &getter, on_edge, on_var);
+        }
     }
 }
 

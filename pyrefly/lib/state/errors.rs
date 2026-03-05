@@ -295,7 +295,7 @@ mod tests {
             get_path(&tdir),
             Some(Arc::new(FileContents::from_source(contents.to_owned()))),
         )]);
-        transaction.run(&[handle.dupe()], Require::Everything);
+        transaction.run(&[handle.dupe()], Require::Everything, None);
         (transaction.get_errors([handle.clone()].iter()), tdir)
     }
 

@@ -6,16 +6,20 @@
  */
 
 use std::io::Write;
+use std::sync::Arc;
 
 use clap::Parser;
 use clap::ValueEnum;
-use lsp_types::InitializeParams;
 use lsp_types::ServerInfo;
 use pyrefly_util::telemetry::Telemetry;
 
+use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::util::CommandExitStatus;
+use crate::lsp::non_wasm::external_references::ExternalReferences;
 use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::server::Connection;
+use crate::lsp::non_wasm::server::InitializeInfo;
+use crate::lsp::non_wasm::server::MessageReader;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::server::initialize_finish;
 use crate::lsp::non_wasm::server::initialize_start;
@@ -25,7 +29,7 @@ use crate::lsp::non_wasm::server::lsp_loop;
 /// requests.
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
-pub(crate) enum IndexingMode {
+pub enum IndexingMode {
     /// Do not index anything. Features that depend on indexing (e.g. find-refs) will be disabled.
     None,
     /// Start indexing when opening a file that belongs to a config in the background.
@@ -44,17 +48,21 @@ pub(crate) enum IndexingMode {
 pub struct LspArgs {
     /// Find the struct that contains this field and add the indexing mode used by the language server
     #[arg(long, value_enum, default_value_t)]
-    pub(crate) indexing_mode: IndexingMode,
+    pub indexing_mode: IndexingMode,
 
     /// Sets the maximum number of user files for Pyrefly to index in the workspace.
     /// Note that indexing files is a performance-intensive task.
     #[arg(long, default_value_t = if cfg!(fbcode_build) {0} else {2000})]
-    pub(crate) workspace_indexing_limit: usize,
+    pub workspace_indexing_limit: usize,
 
     /// Block for build system operations, only using fallback heuristics after checking
     /// an up-to-date source DB. Only useful for benchmarking.
     #[arg(long)]
-    pub(crate) build_system_blocking: bool,
+    pub build_system_blocking: bool,
+
+    /// Enable external references integration for cross-repo go-to-definition.
+    #[arg(long, hide = true)]
+    pub enable_external_references: bool,
 }
 
 /// Run LSP server with optional path remapping.
@@ -63,22 +71,28 @@ pub struct LspArgs {
 /// package files.
 pub fn run_lsp(
     connection: Connection,
+    mut reader: MessageReader,
     args: LspArgs,
     server_info: Option<ServerInfo>,
     path_remapper: Option<PathRemapper>,
     telemetry: &impl Telemetry,
+    external_references: Arc<dyn ExternalReferences>,
+    wrapper: Option<ConfigConfigurerWrapper>,
 ) -> anyhow::Result<()> {
-    if let Some(initialize_params) =
-        initialize_connection(&connection, args.indexing_mode, server_info)?
+    if let Some(initialize_info) =
+        initialize_connection(&connection, &mut reader, args.indexing_mode, server_info)?
     {
         lsp_loop(
             connection,
-            initialize_params,
+            reader,
+            initialize_info,
             args.indexing_mode,
             args.workspace_indexing_limit,
             args.build_system_blocking,
             path_remapper,
             telemetry,
+            external_references,
+            wrapper,
         )?;
     }
     Ok(())
@@ -86,17 +100,18 @@ pub fn run_lsp(
 
 fn initialize_connection(
     connection: &Connection,
+    reader: &mut MessageReader,
     indexing_mode: IndexingMode,
     server_info: Option<ServerInfo>,
-) -> anyhow::Result<Option<InitializeParams>> {
-    let Some((id, initialize_params)) = initialize_start(connection)? else {
+) -> anyhow::Result<Option<InitializeInfo>> {
+    let Some((id, initialize_info)) = initialize_start(&connection.sender, reader)? else {
         return Ok(None);
     };
-    let capabilities = capabilities(indexing_mode, &initialize_params);
-    if !initialize_finish(connection, id, capabilities, server_info)? {
+    let capabilities = capabilities(indexing_mode, &initialize_info.params);
+    if !initialize_finish(&connection.sender, reader, id, capabilities, server_info)? {
         return Ok(None);
     }
-    Ok(Some(initialize_params))
+    Ok(Some(initialize_info))
 }
 
 impl LspArgs {
@@ -108,13 +123,15 @@ impl LspArgs {
         version: &str,
         path_remapper: Option<PathRemapper>,
         telemetry: &impl Telemetry,
+        external_references: Arc<dyn ExternalReferences>,
+        wrapper: Option<ConfigConfigurerWrapper>,
     ) -> anyhow::Result<CommandExitStatus> {
         // Note that we must have our logging only write out to stderr.
         eprintln!("starting generic LSP server");
 
         // Create the transport. Includes the stdio (stdin and stdout) versions but this could
         // also be implemented to use sockets or HTTP.
-        let (connection, io_threads) = Connection::stdio();
+        let (connection, reader, io_threads) = Connection::stdio();
 
         let server_info = ServerInfo {
             name: "pyrefly-lsp".to_owned(),
@@ -123,10 +140,13 @@ impl LspArgs {
 
         run_lsp(
             connection,
+            reader,
             self,
             Some(server_info),
             path_remapper,
             telemetry,
+            external_references,
+            wrapper,
         )?;
         io_threads.join()?;
         // We have shut down gracefully.

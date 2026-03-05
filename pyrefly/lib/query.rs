@@ -713,12 +713,14 @@ impl<'a> CalleesWithLocation<'a> {
         fallback_name: &str,
         callee_from_ancestor: F,
     ) -> Vec<Callee> {
-        let call_target = self.transaction.ad_hoc_solve(&self.handle, |solver| {
-            let mro = solver.get_mro_for_class(c);
-            iter::once(c)
-                .chain(mro.ancestors(solver.stdlib).map(|x| x.class_object()))
-                .find_map(|c| callee_from_ancestor(&solver, c))
-        });
+        let call_target = self
+            .transaction
+            .ad_hoc_solve(&self.handle, "query_mro", |solver| {
+                let mro = solver.get_mro_for_class(c);
+                iter::once(c)
+                    .chain(mro.ancestors(solver.stdlib).map(|x| x.class_object()))
+                    .find_map(|c| callee_from_ancestor(&solver, c))
+            });
         let class_name = Self::qname_to_string(c.qname());
         let target = if let Some(Some(t)) = call_target {
             t
@@ -960,7 +962,7 @@ impl Query {
             .new_committable_transaction(Require::Exports, None);
         let new_transaction_mut = transaction.as_mut();
         new_transaction_mut.invalidate_events(events);
-        new_transaction_mut.run(&[], Require::Exports);
+        new_transaction_mut.run(&[], Require::Exports, None);
         self.state.commit_transaction(transaction, None);
         let all_files = self.files.lock().iter().cloned().collect::<Vec<_>>();
         self.add_files(all_files);
@@ -973,7 +975,9 @@ impl Query {
             .state
             .new_committable_transaction(Require::Exports, None);
         let handles = files.into_map(|(name, file)| self.make_handle(name, file));
-        transaction.as_mut().run(&handles, Require::Everything);
+        transaction
+            .as_mut()
+            .run(&handles, Require::Everything, None);
         let errors = transaction.as_mut().get_errors(&handles);
         self.state.commit_transaction(transaction, None);
         let project_root = PathBuf::new();
@@ -1045,7 +1049,7 @@ impl Query {
                         bindings.key_to_idx_hashed_opt(Hashed::new(&class_field_index))?;
                     let class_field = bindings.get(class_field_idx);
                     let is_final = match &class_field.definition {
-                        ClassFieldDefinition::DeclaredByAnnotation { annotation } => {
+                        ClassFieldDefinition::DeclaredByAnnotation { annotation, .. } => {
                             Some(*annotation)
                         }
                         ClassFieldDefinition::AssignedInBody { annotation, .. } => *annotation,
@@ -1071,7 +1075,7 @@ impl Query {
                                 .and_then(|a| a.annotation.ty.clone())
                                 // Fall back to expression type trace
                                 .or_else(|| {
-                                    if let ExprOrBinding::Expr(expr) = value {
+                                    if let ExprOrBinding::Expr(expr) = value.as_ref() {
                                         answers.get_type_trace(expr.range())
                                     } else {
                                         None
@@ -1281,7 +1285,7 @@ impl Query {
             path.clone(),
             Some(Arc::new(FileContents::from_source(code))),
         )]);
-        t.run(&[handle.dupe()], Require::Everything);
+        t.run(&[handle.dupe()], Require::Everything, None);
         let errors = t.get_errors([handle]).collect_errors();
         if !errors.shown.is_empty() {
             let mut res = Vec::new();
@@ -1358,7 +1362,9 @@ impl Query {
                 let t = self.state.transaction();
                 let h = self.make_handle(name, ModulePath::filesystem(path));
                 let result = t
-                    .ad_hoc_solve(&h, |solver| solver.is_subset_eq(&sub_ty, &super_ty))
+                    .ad_hoc_solve(&h, "query_is_subset_eq", |solver| {
+                        solver.is_subset_eq(&sub_ty, &super_ty)
+                    })
                     .unwrap_or(false);
                 return Ok(result);
             }
@@ -1411,7 +1417,7 @@ impl Query {
         let result = if is_typed_dict_request {
             matches!(sub_ty, Type::TypedDict(_) | Type::PartialTypedDict(_))
         } else {
-            t.ad_hoc_solve(&h, |solver| {
+            t.ad_hoc_solve(&h, "query_is_subset_eq", |solver| {
                 solver.is_subset_eq(&sub_ty, &super_ty_opt.unwrap())
             })
             .unwrap_or(false)

@@ -221,6 +221,7 @@ impl CancellableTransaction<'_> {
                         definition_kind.clone(),
                         patched_definition.range,
                         &patched_definition.module,
+                        true,
                     )
                     .unwrap_or_default();
 

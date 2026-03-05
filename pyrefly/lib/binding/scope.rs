@@ -297,11 +297,11 @@ impl StaticInfo {
             })
         };
         match self.style {
-            StaticStyle::Anywhere(..) => Key::Anywhere(name.clone(), self.range),
+            StaticStyle::Anywhere(..) => Key::Anywhere(Box::new((name.clone(), self.range))),
             StaticStyle::Delete => Key::Delete(self.range),
             StaticStyle::MutableCapture(..) => Key::MutableCapture(short_identifier()),
-            StaticStyle::MergeableImport => Key::Import(name.clone(), self.range),
-            StaticStyle::ImplicitGlobal => Key::ImplicitGlobal(name.clone()),
+            StaticStyle::MergeableImport => Key::Import(Box::new((name.clone(), self.range))),
+            StaticStyle::ImplicitGlobal => Key::ImplicitGlobal(Box::new(name.clone())),
             StaticStyle::SingleDef(..) => Key::Definition(short_identifier()),
             StaticStyle::PossibleLegacyTParam => Key::PossibleLegacyTParam(self.range),
         }
@@ -390,13 +390,13 @@ impl Static {
         let mut all_wildcards = Vec::with_capacity(d.import_all.len());
         for (m, range) in d.import_all {
             if let Some(wildcards) = lookup.get_wildcard(m) {
-                all_wildcards.push((range, wildcards))
+                all_wildcards.push((m, range, wildcards))
             }
         }
 
         // Try and avoid rehashing while we insert, with a little bit of spare space
         let capacity_guess =
-            d.definitions.len() + all_wildcards.iter().map(|x| x.1.len()).sum::<usize>();
+            d.definitions.len() + all_wildcards.iter().map(|x| x.2.len()).sum::<usize>();
         self.0.reserve(((capacity_guess * 5) / 4) + 25);
 
         for (name, definition) in d.definitions.into_iter_hashed() {
@@ -407,9 +407,15 @@ impl Static {
                 StaticStyle::of_definition(name.as_ref(), definition, scopes, get_annotation_idx);
             self.upsert(name, range, style);
         }
-        for (range, wildcard) in all_wildcards {
+        for (module, range, wildcard) in all_wildcards {
+            // Builtins are a fallback, so they should never shadow an existing definition.
+            let skip_existing =
+                module == ModuleName::builtins() || module == ModuleName::extra_builtins();
             for name in wildcard.iter_hashed() {
                 // TODO: semantics of import * and global var with same name
+                if skip_existing && self.0.get_hashed(name).is_some() {
+                    continue;
+                }
                 self.upsert(name.cloned(), range, StaticStyle::MergeableImport)
             }
         }
@@ -647,24 +653,29 @@ impl FlowStyle {
     ) -> FlowStyle {
         let mut merged = styles.next().unwrap_or(FlowStyle::Other);
         for x in styles {
-            match (&merged, x) {
+            match (&mut merged, x) {
                 // If they're identical, keep it
-                (l, r) if l == &r => {}
+                (l, ref r) if *l == *r => {}
                 // Uninitialized-like branches merge into PossiblyUninitialized.
-                // MaybeInitialized is treated like PossiblyUninitialized for merge purposes.
-                (
-                    FlowStyle::Uninitialized
-                    | FlowStyle::PossiblyUninitialized
-                    | FlowStyle::MaybeInitialized(_),
-                    _,
-                )
-                | (
-                    _,
-                    FlowStyle::Uninitialized
-                    | FlowStyle::PossiblyUninitialized
-                    | FlowStyle::MaybeInitialized(_),
-                ) => {
+                // Must come before MaybeInitialized catch-all to avoid masking
+                // valid uninitialized paths.
+                (FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized, _)
+                | (_, FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized) => {
                     return FlowStyle::PossiblyUninitialized;
+                }
+                // Two MaybeInitialized: combine termination keys from both branches.
+                // Each branch independently needs its keys to be Never for that path
+                // to be initialized, so we collect all keys.
+                (FlowStyle::MaybeInitialized(keys), FlowStyle::MaybeInitialized(other_keys)) => {
+                    keys.extend(other_keys);
+                }
+                // MaybeInitialized + a fully initialized style: keep the MaybeInitialized
+                // keys since those paths still need verification at solve time.
+                (FlowStyle::MaybeInitialized(keys), _) => {
+                    merged = FlowStyle::MaybeInitialized(keys.clone());
+                }
+                (_, FlowStyle::MaybeInitialized(keys)) => {
+                    merged = FlowStyle::MaybeInitialized(keys);
                 }
                 // Unclear how to merge, default to None
                 _ => {
@@ -715,6 +726,7 @@ impl FlowStyle {
 pub struct ClassIndices {
     pub def_index: ClassDefIndex,
     pub class_idx: Idx<KeyClass>,
+    pub class_object_idx: Idx<Key>,
     pub base_type_idx: Idx<KeyClassBaseType>,
     pub metadata_idx: Idx<KeyClassMetadata>,
     pub mro_idx: Idx<KeyClassMro>,
@@ -1118,6 +1130,13 @@ impl Scope {
             _ => None,
         }
     }
+
+    fn class_object_idx(&self) -> Option<Idx<Key>> {
+        match &self.kind {
+            ScopeKind::Class(class_scope) => Some(class_scope.indices.class_object_idx),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1216,6 +1235,10 @@ impl Scopes {
             .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
     }
 
+    pub fn current_static_contains(&self, name: &Name) -> bool {
+        self.current().stat.0.contains_key(name)
+    }
+
     /// Enter a with block.
     pub fn enter_with(&mut self) {
         self.current_mut().with_depth += 1;
@@ -1269,6 +1292,17 @@ impl Scopes {
         for scope in self.iter_rev() {
             if let Some(class_and_metadata) = scope.class_and_metadata_keys() {
                 return Some(class_and_metadata);
+            }
+        }
+        None
+    }
+
+    /// Are we anywhere inside a class? If so, return the class object idx.
+    /// This function looks at enclosing scopes.
+    pub fn enclosing_class_object_idx(&self) -> Option<Idx<Key>> {
+        for scope in self.iter_rev() {
+            if let Some(class_object_idx) = scope.class_object_idx() {
+                return Some(class_object_idx);
             }
         }
         None
@@ -1740,6 +1774,22 @@ impl Scopes {
         None
     }
 
+    /// Check if `name` was imported from a module with the given name.
+    /// Traverses all enclosing scopes to find the import.
+    pub fn is_imported_from_module(&self, name: &Name, module_name: &str) -> bool {
+        if let Some(flow_info) = self.get_flow_info(name)
+            && let Some(value) = flow_info.value()
+        {
+            return match &value.style {
+                FlowStyle::Import(m, _)
+                | FlowStyle::ImportAs(m)
+                | FlowStyle::MergeableImport(m) => m.as_str() == module_name,
+                _ => false,
+            };
+        }
+        false
+    }
+
     /// Get the flow style for `name` in the current scope.
     ///
     /// Returns `None` if there is no current flow (which may mean the
@@ -1951,6 +2001,18 @@ impl Scopes {
         )
     }
 
+    /// Add a name to the current static scope.
+    ///
+    /// Callers must always define the name via a `Key::Definition` immediately
+    /// afterward or downstream lookups may panic.
+    pub fn add_name_to_current_static(&mut self, name: &Identifier) {
+        self.current_mut().stat.upsert(
+            Hashed::new(name.id.clone()),
+            name.range,
+            StaticStyle::SingleDef(None),
+        );
+    }
+
     /// Add an adhoc name - if it does not already exist - to the current static
     /// scope. If the name already exists, nothing happens.
     ///
@@ -2140,6 +2202,25 @@ impl Scopes {
             }
         };
         self.pop(); // Also pop the annotation scope that wrapped the class body.
+
+        // Collect method-defined attributes up front so we can compute which class-body fields
+        // are initialized in a recognized instance method (e.g. `__init__`) before building
+        // field definitions — a Final field is legally uninitialized in the class body if it
+        // appears in such a method.
+        let method_attrs: Vec<_> = class_scope.method_defined_attributes().collect();
+        let recognized_instance_attrs: SmallSet<Name> = method_attrs
+            .iter()
+            .filter_map(|(name, method, _)| {
+                if method.recognized_attribute_defining_method
+                    && matches!(method.instance_or_class, MethodSelfKind::Instance)
+                {
+                    Some(name.key().clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         class_body.stat.0.iter_hashed().for_each(
             |(name, static_info)| {
             if matches!(static_info.style, StaticStyle::MutableCapture(..)) {
@@ -2174,7 +2255,7 @@ impl Scopes {
                             }
                         }
                         ClassFieldDefinition::AssignedInBody {
-                            value: ExprOrBinding::Expr(e.clone()),
+                            value: Box::new(ExprOrBinding::Expr(e.clone())),
                             annotation: static_info.annotation(),
                             alias_of,
                         }
@@ -2185,6 +2266,8 @@ impl Scopes {
                         annotation: static_info.annotation().unwrap_or_else(
                             || panic!("A class field known in the body but uninitialized always has an annotation.")
                         ),
+                        initialized_in_recognized_method: recognized_instance_attrs
+                            .contains(name.key().as_str()),
                     },
                     _ => ClassFieldDefinition::DefinedWithoutAssign {
                         definition: value.idx,
@@ -2193,14 +2276,14 @@ impl Scopes {
                 field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
             }
         });
-        class_scope.method_defined_attributes().for_each(
+        method_attrs.into_iter().for_each(
             |(name, method, InstanceAttribute(value, annotation, range, _))| {
                 if !field_definitions.contains_key_hashed(name.as_ref()) {
                     field_definitions.insert_hashed(
                         name,
                         (
                             ClassFieldDefinition::DefinedInMethod {
-                                value,
+                                value: Box::new(value),
                                 annotation,
                                 method,
                             },
@@ -2369,7 +2452,7 @@ impl Scopes {
     /// - For other usages: Normal lookup behavior.
     pub fn look_up_name_for_read(&self, name: Hashed<&Name>, usage: &Usage) -> NameReadInfo {
         let skip_class_overload_function_definitions =
-            matches!(usage, Usage::StaticTypeInformation);
+            matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs);
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
 
@@ -2702,7 +2785,10 @@ impl<'a> BindingsBuilder<'a> {
             self.insert_binding_idx(phi_idx, Binding::LoopPhi(loop_prior, branch_idxs));
             phi_idx
         } else {
-            self.insert_binding_idx(phi_idx, Binding::Phi(join_style, branch_infos));
+            self.insert_binding_idx(
+                phi_idx,
+                Binding::Phi(join_style, branch_infos.into_boxed_slice()),
+            );
             phi_idx
         }
     }
@@ -3032,7 +3118,7 @@ impl<'a> BindingsBuilder<'a> {
         // For each name and merge item, produce the merged FlowInfo for our new Flow
         let mut merged_flow_infos = SmallMap::with_capacity(merge_items.len());
         for (name, merge_item) in merge_items.into_iter_hashed() {
-            let phi_idx = self.idx_for_promise(Key::Phi(name.key().clone(), range));
+            let phi_idx = self.idx_for_promise(Key::Phi(Box::new((name.key().clone(), range))));
             merged_flow_infos.insert_hashed(
                 name,
                 self.merged_flow_info(
@@ -3067,7 +3153,7 @@ impl<'a> BindingsBuilder<'a> {
                 continue;
             }
             // We are promising to insert a binding for this key when we merge the flow
-            let phi_idx = self.idx_for_promise(Key::Phi(name.clone(), range));
+            let phi_idx = self.idx_for_promise(Key::Phi(Box::new((name.clone(), range))));
             match &mut info.value {
                 Some(value) => {
                     value.idx = phi_idx;

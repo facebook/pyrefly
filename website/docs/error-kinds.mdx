@@ -923,6 +923,8 @@ def describe(color: Color) -> str:
       return "danger"
 ```
 
+The default severity of this diagnostic is `warn`.
+
 ## not-a-type
 
 This indicates an attempt to use something that isn't a type where a type is expected.
@@ -1208,6 +1210,15 @@ def takes_kwonly(*, x: int) -> int:
 takes_kwonly(1)  # should be `takes_kwonly(x=1)`!
 ```
 
+## unimported-directive
+
+Using a [type checker directive](https://typing.python.org/en/latest/spec/directives.html#type-checker-directives) without importing it from `typing` first will result in a runtime error.
+
+```python
+reveal_type(1)  # error
+assert_type(1, int)  # error
+```
+
 ## unknown-name
 
 `unknown-name` occurs when attempting to load a name from another scope, but the name cannot be found.
@@ -1269,6 +1280,26 @@ can produce multiple values:
 def valid_generator():
     yield 1
     yield 2  # This is valid
+```
+
+## unresolvable-dunder-all
+
+Default severity: **warn**
+
+This warning is raised when `__all__` is defined but its value cannot be
+statically analyzed. This can happen when `__all__` is assigned a function call,
+a variable, a list comprehension, or any expression that Pyrefly cannot resolve
+at analysis time.
+
+When this occurs, Pyrefly falls back to inferring public exports from
+module-level definitions (all names that do not start with an underscore).
+
+```python
+def generate_all():
+    return ["x", "y"]
+
+__all__ = generate_all()
+# `__all__` could not be statically analyzed [unresolvable-dunder-all]
 ```
 
 ## unsafe-overlap

@@ -18,6 +18,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::class::targs_cursor::TArgsCursor;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
@@ -356,56 +357,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> TArgs {
         let nparams = tparams.len();
-        let nargs = targs.len();
+        let mut targs_cursor = TArgsCursor::new(targs);
         let mut checked_targs = Vec::new();
-        let mut targ_idx = 0;
         let mut name_to_idx = SmallMap::new();
         for (param_idx, param) in tparams.iter().enumerate() {
-            if let Some(arg) = targs.get(targ_idx) {
+            if let Some(arg) = targs_cursor.peek() {
                 // Get next type argument
                 match param.kind() {
                     QuantifiedKind::TypeVarTuple => {
-                        // We know that ParamSpec params must be matched by ParamSpec args, so chop off both params and args
-                        // at the next ParamSpec when computing how many args the TypeVarTuple should consume.
-                        let paramspec_param_idx =
-                            self.peek_next_paramspec_param(param_idx + 1, &tparams);
-                        let paramspec_arg_idx = self.peek_next_paramspec_arg(targ_idx, &targs);
-                        let nparams_for_tvt = paramspec_param_idx.unwrap_or(nparams);
-                        let nargs_for_tvt = paramspec_arg_idx.unwrap_or(nargs);
-                        let args_to_consume = self.num_typevartuple_args_to_consume(
-                            param_idx,
-                            nparams_for_tvt,
-                            targ_idx,
-                            nargs_for_tvt,
-                        );
-                        let new_targ_idx = targ_idx + args_to_consume;
                         checked_targs.push(self.create_next_typevartuple_arg(
-                            &targs[targ_idx..new_targ_idx],
+                            targs_cursor.consume_for_typevartuple_arg(param_idx, &tparams),
                             range,
                             errors,
                         ));
-                        targ_idx = new_targ_idx;
                     }
                     QuantifiedKind::ParamSpec if nparams == 1 && !arg.is_kind_param_spec() => {
                         // If the only type param is a ParamSpec and the type argument
                         // is not a parameter expression, then treat the entire type argument list
                         // as a parameter list
-                        checked_targs.push(self.create_paramspec_value(&targs));
-                        targ_idx = nargs;
+                        checked_targs.push(
+                            self.create_paramspec_value(targs_cursor.consume_for_paramspec_value()),
+                        );
                     }
                     QuantifiedKind::ParamSpec => {
-                        checked_targs.push(self.create_next_paramspec_arg(arg, range, errors));
-                        targ_idx += 1;
+                        checked_targs.push(self.create_next_paramspec_arg(
+                            targs_cursor.consume_for_paramspec_arg(),
+                            range,
+                            errors,
+                        ));
                     }
                     QuantifiedKind::TypeVar => {
                         checked_targs.push(self.create_next_typevar_arg(
                             param,
-                            arg,
+                            targs_cursor.consume_for_typevar_arg(),
                             range,
                             validate_restriction,
                             errors,
                         ));
-                        targ_idx += 1;
                     }
                 }
             } else {
@@ -415,7 +403,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &tparams,
                     param_idx,
                     &checked_targs,
-                    nargs,
+                    targs_cursor.nargs(),
                     &name_to_idx,
                     range,
                     errors,
@@ -424,7 +412,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             name_to_idx.insert(param.name(), param_idx);
         }
-        if targ_idx < nargs {
+        if targs_cursor.nargs_unconsumed(targs_cursor.nargs()) > 0 {
             self.error(
                 errors,
                 range,
@@ -433,42 +421,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     "Expected {} for `{}`, got {}",
                     count(nparams, "type argument"),
                     name,
-                    nargs
+                    targs_cursor.nargs()
                 ),
             );
         }
         drop(name_to_idx);
         TArgs::new(tparams, checked_targs)
-    }
-
-    fn peek_next_paramspec_param(&self, start_idx: usize, tparams: &TParams) -> Option<usize> {
-        for (i, param) in tparams.iter().enumerate().skip(start_idx) {
-            if param.is_param_spec() {
-                return Some(i);
-            }
-        }
-        None
-    }
-
-    fn peek_next_paramspec_arg(&self, start_idx: usize, args: &[Type]) -> Option<usize> {
-        for (i, arg) in args.iter().enumerate().skip(start_idx) {
-            if arg.is_kind_param_spec() {
-                return Some(i);
-            }
-        }
-        None
-    }
-
-    fn num_typevartuple_args_to_consume(
-        &self,
-        param_idx: usize,
-        nparams: usize,
-        targ_idx: usize,
-        nargs: usize,
-    ) -> usize {
-        let n_remaining_params = nparams - param_idx - 1;
-        let n_remaining_args = nargs - targ_idx;
-        n_remaining_args.saturating_sub(n_remaining_params)
     }
 
     fn create_next_typevartuple_arg(
@@ -697,7 +655,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tparams
             .iter()
             .skip(param_idx)
-            .map(|x| self.get_tparam_default(x, checked_targs, name_to_idx))
+            .map(|x| {
+                // A TypeVarTuple with no remaining args captures zero types when
+                // the specialization is otherwise valid. In error recovery (not
+                // enough args for non-defaulted params), keep the gradual type
+                // to avoid cascading errors.
+                if all_remaining_params_can_be_empty && x.is_type_var_tuple() {
+                    self.heap.mk_concrete_tuple(Vec::new())
+                } else {
+                    self.get_tparam_default(x, checked_targs, name_to_idx)
+                }
+            })
             .collect()
     }
 }

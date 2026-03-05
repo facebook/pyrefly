@@ -44,6 +44,10 @@
                     {
                         "kind": "reference",
                         "name": "Type"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
                     }
                 ]
             }
@@ -89,6 +93,10 @@
                     {
                         "kind": "reference",
                         "name": "Type"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
                     }
                 ]
             }
@@ -134,6 +142,10 @@
                     {
                         "kind": "reference",
                         "name": "Type"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
                     }
                 ]
             }
@@ -156,6 +168,10 @@
                             "kind": "base",
                             "name": "string"
                         }
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
                     }
                 ]
             }
@@ -195,6 +211,10 @@
                     {
                         "kind": "base",
                         "name": "string"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "null"
                     }
                 ]
             }
@@ -213,147 +233,6 @@
         }
     ],
     "types": {
-        "Position": {
-            "kind": "interface",
-            "properties": [
-                {
-                    "name": "line",
-                    "type": {
-                        "kind": "base",
-                        "name": "uinteger"
-                    },
-                    "optional": false,
-                    "documentation": "Line position in a document (zero-based)."
-                },
-                {
-                    "name": "character",
-                    "type": {
-                        "kind": "base",
-                        "name": "uinteger"
-                    },
-                    "optional": false,
-                    "documentation": "Character offset on a line in a document (zero-based)."
-                }
-            ],
-            "documentation": "Position in a text document expressed as zero-based line and character offset."
-        },
-        "Range": {
-            "kind": "interface",
-            "properties": [
-                {
-                    "name": "start",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Position"
-                    },
-                    "optional": false,
-                    "documentation": "The range's start position."
-                },
-                {
-                    "name": "end",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Position"
-                    },
-                    "optional": false,
-                    "documentation": "The range's end position."
-                }
-            ],
-            "documentation": "A range in a text document expressed as (zero-based) start and end positions."
-        },
-        "TypeBase": {
-            "kind": "interface",
-            "properties": [
-                {
-                    "name": "kind",
-                    "type": {
-                        "kind": "reference",
-                        "name": "TypeKind"
-                    },
-                    "optional": false,
-                    "documentation": "The kind/category of this type."
-                },
-                {
-                    "name": "flags",
-                    "type": {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "TypeFlags"
-                        }
-                    },
-                    "optional": true,
-                    "documentation": "Flags that describe the characteristics of this type."
-                }
-            ],
-            "documentation": "Base interface for all type variants. Contains common fields shared by all types."
-        },
-        "DeclarationBase": {
-            "kind": "interface",
-            "properties": [
-                {
-                    "name": "category",
-                    "type": {
-                        "kind": "reference",
-                        "name": "DeclarationCategory"
-                    },
-                    "optional": false,
-                    "documentation": "The category of this declaration."
-                },
-                {
-                    "name": "name",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "optional": false,
-                    "documentation": "The name of the declaration."
-                },
-                {
-                    "name": "moduleName",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "optional": false,
-                    "documentation": "The module where this declaration is defined."
-                }
-            ],
-            "documentation": "Base interface for all declaration variants."
-        },
-        "DeclaredType": {
-            "kind": "interface",
-            "properties": [
-                {
-                    "name": "declaration",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Declaration"
-                    },
-                    "optional": true,
-                    "documentation": "The declaration that defines this type."
-                },
-                {
-                    "name": "typeArgs",
-                    "type": {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "Type"
-                        }
-                    },
-                    "optional": true,
-                    "documentation": "Type arguments if this is a generic type."
-                }
-            ],
-            "extends": [
-                {
-                    "kind": "reference",
-                    "name": "TypeBase"
-                }
-            ],
-            "documentation": "A type that is declared in source code."
-        },
         "TypeServerVersion": {
             "kind": "stringEnum",
             "values": {
@@ -398,15 +277,6 @@
                 "Unbound": "Indicates if the type is unbound (used with *args in tuple type arguments)."
             }
         },
-        "TypeVarFlags": {
-            "kind": "stringLiteral",
-            "value": ["None", "IsParamSpec", "IsTypeVarTuple"],
-            "documentation": "Flags that describe the characteristics of a type variable. These flags can be combined using bitwise operations.",
-            "valueDocumentation": {
-                "IsParamSpec": "Indicates if the type variable is a ParamSpec (as defined in PEP 612).",
-                "IsTypeVarTuple": "Indicates if the type variable is a TypeVarTuple (as defined in PEP 646)."
-            }
-        },
         "DeclarationCategory": {
             "kind": "stringLiteral",
             "value": ["Intrinsic", "Variable", "Param", "TypeParam", "TypeAlias", "Function", "Class", "Import"],
@@ -421,48 +291,6 @@
                 "Class": "A class is any construct that begins with the `class` keyword and has a body, which can be instantiated.",
                 "Import": "An import declaration, which is a reference to another module."
             }
-        },
-        "ClassTypeFlags": {
-            "kind": "stringLiteral",
-            "value": [
-                "None",
-                "BuiltIn",
-                "SpecialBuiltIn",
-                "TypedDictClass",
-                "TypedDictMarkedClosed",
-                "TypedDictEffectivelyClosed",
-                "CanOmitDictValues",
-                "SupportsAbstractMethods",
-                "PropertyClass",
-                "Final",
-                "ProtocolClass",
-                "PseudoGenericClass",
-                "RuntimeCheckable",
-                "TypingExtensionClass",
-                "HasCustomClassGetItem",
-                "TupleClass",
-                "EnumClass",
-                "ClassProperty",
-                "DefinedInStub",
-                "TypeCheckOnly",
-                "NewTypeClass",
-                "ValidTypeAliasClass",
-                "SpecialFormClass",
-                "IllegalIsinstanceClass"
-            ]
-        },
-        "ParamCategory": {
-            "kind": "stringLiteral",
-            "value": ["Simple", "ArgsList", "KwargsDict"],
-            "valueDocumentation": {
-                "Simple": "Regular parameter: def foo(x: int)",
-                "ArgsList": "Variadic positional: def foo(*args: int)",
-                "KwargsDict": "Variadic keyword: def foo(**kwargs: str)"
-            }
-        },
-        "FunctionParamFlags": {
-            "kind": "stringLiteral",
-            "value": ["None", "NameSynthesized", "TypeDeclared"]
         },
         "TypeKind": {
             "kind": "stringLiteral",
@@ -651,110 +479,6 @@
             ],
             "documentation": "Parameters for the GetPythonSearchPathsRequest. Requests the list of directories that Python searches for modules and packages. The search paths include: - Standard library directories - Site-packages directories (third-party packages) - Virtual environment paths (if active) - Project-specific paths (PYTHONPATH, src directories) Used for: - Resolving import statements to find module files - Auto-import suggestions - Determining which packages are available Example search paths: ``` [ \"/usr/lib/python3.11\",              # Standard library \"/venv/lib/python3.11/site-packages\",  # Virtual env packages \"/project/src\"                       # Project source ] ```"
         },
-        "TypedDictEntry": {
-            "kind": "interface",
-            "properties": [
-                {
-                    "name": "valueType",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "optional": false,
-                    "documentation": "The type of values for this TypedDict key. Example: For `name: str`, valueType is the str type."
-                },
-                {
-                    "name": "isRequired",
-                    "type": {
-                        "kind": "base",
-                        "name": "boolean"
-                    },
-                    "optional": false,
-                    "documentation": "True if this key must be present in the dictionary. False for NotRequired[] fields. Example: `year: NotRequired[int]` has isRequired=false."
-                },
-                {
-                    "name": "isReadOnly",
-                    "type": {
-                        "kind": "base",
-                        "name": "boolean"
-                    },
-                    "optional": false,
-                    "documentation": "True if this key cannot be modified after creation. Set by ReadOnly[] annotation. Example: `id: ReadOnly[int]` has isReadOnly=true."
-                },
-                {
-                    "name": "isProvided",
-                    "type": {
-                        "kind": "base",
-                        "name": "boolean"
-                    },
-                    "optional": false,
-                    "documentation": "True if this key has been provided during partial TypedDict construction. Used for tracking incremental TypedDict building."
-                }
-            ],
-            "documentation": "Represents a single field in a TypedDict. Contains the type and metadata for one key-value pair in a TypedDict definition. Fields: - valueType: The type of the value for this key - isRequired: Whether this key must be present (vs. optional using NotRequired[]) - isReadOnly: Whether this key cannot be modified (using ReadOnly[]) - isProvided: Whether this key has been provided in a partial TypedDict construction Examples: ```python class Movie(TypedDict): name: str              # isRequired=true, isReadOnly=false year: int              # isRequired=true, isReadOnly=false rating: NotRequired[float]  # isRequired=false id: ReadOnly[int]      # isRequired=true, isReadOnly=true ```"
-        },
-        "TypedDictEntries": {
-            "kind": "interface",
-            "properties": [],
-            "documentation": "Represents all fields in a TypedDict class. Contains both explicitly declared fields and optional extra items. Fields: - knownItems: Dictionary mapping field names to their TypedDictEntry definitions - extraItems: Optional type for additional keys (when using extra_items parameter) Examples: ```python # Standard TypedDict class Movie(TypedDict): name: str year: int # knownItems = {\"name\": TypedDictEntry(...), \"year\": TypedDictEntry(...)} # extraItems = undefined # TypedDict with extra_items (closed TypedDict) class Config(TypedDict, extra_items=str): host: str port: int # knownItems = {\"host\": ..., \"port\": ...} # extraItems = TypedDictEntry for str type ```"
-        },
-        "TupleTypeArg": {
-            "kind": "interface",
-            "properties": [
-                {
-                    "name": "type",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "optional": false,
-                    "documentation": "The type of this tuple element. Example: In `tuple[int, str, bool]`, each position has a different type."
-                },
-                {
-                    "name": "isUnbounded",
-                    "type": {
-                        "kind": "base",
-                        "name": "boolean"
-                    },
-                    "optional": false,
-                    "documentation": "Does the type argument represent a single value or an \"unbounded\" (zero or more) arguments? True for `tuple[int, ...]` (variadic), false for `tuple[int, str]` (fixed)."
-                },
-                {
-                    "name": "isOptional",
-                    "type": {
-                        "kind": "base",
-                        "name": "boolean"
-                    },
-                    "optional": true,
-                    "documentation": "For tuples captured from a callable, this indicates the corresponding positional parameter has a default argument and can therefore be omitted. Example: For `def foo(a: int, b: str = \"\")`, b's type has isOptional=true."
-                }
-            ],
-            "documentation": "Represents a single type argument in a tuple type. Used for tuple[...] generic type arguments, handling both fixed and variadic elements. Fields: - type: The type of this tuple element - isUnbounded: True for *args-style variadic elements (zero or more of this type) - isOptional: True if this element can be omitted (has a default) Examples: ```python # Fixed tuple x: tuple[int, str, bool] # Three TupleTypeArg: [int, str, bool], all with isUnbounded=false # Unbounded tuple y: tuple[int, ...] # One TupleTypeArg: int with isUnbounded=true # Callable with optional params def foo(a: int, b: str = \"\") -> None: ... # Captured as tuple[int, str] where str has isOptional=true ```"
-        },
-        "PropertyMethodInfo": {
-            "kind": "interface",
-            "properties": [
-                {
-                    "name": "methodType",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "optional": false,
-                    "documentation": "The type of the decorated function (fget, fset, or fdel). Contains the function signature including parameters and return type. Example: For `@property def name(self) -> str`, this is the function type."
-                },
-                {
-                    "name": "classType",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "optional": true,
-                    "documentation": "The class that declared this property method. Used to track which class in the inheritance hierarchy defined the method. Example: If a property is inherited, classType points to the declaring class."
-                }
-            ],
-            "documentation": "Represents information about a property method (getter, setter, or deleter). Used to track the implementation of @property decorated methods. Fields: - methodType: The type of the decorated function (fget, fset, or fdel) - classType: The class that declared this method Examples: ```python class Person: @property def name(self) -> str:  # fgetInfo contains this method's type return self._name @name.setter def name(self, value: str) -> None:  # fsetInfo contains this method's type self._name = value @name.deleter def name(self) -> None:  # fdelInfo contains this method's type del self._name ```"
-        },
         "SpecializedFunctionTypes": {
             "kind": "interface",
             "properties": [
@@ -794,15 +518,10 @@
                 {
                     "name": "returnType",
                     "type": {
-                        "kind": "or",
-                        "items": [
-                            {
                                 "kind": "reference",
                                 "name": "Type"
-                            }
-                        ]
                     },
-                    "optional": false,
+                    "optional": true,
                     "documentation": "Specialized type of the declared return type. Undefined if there is no declared return type. Example: For `def foo[T](x: T) -> T` specialized to `T=int`, returnType=int."
                 }
             ],
@@ -874,6 +593,21 @@
             ],
             "documentation": "Represents a sentinel value (a unique object used as a marker). Used for special singleton values that act as sentinels in APIs. Fields: - classNode: AST node where the sentinel class is defined - moduleName: Module containing the sentinel - className: Name of the sentinel class Examples: ```python # Common sentinel pattern class _Sentinel: pass MISSING = _Sentinel() def get_value(key: str, default: int | _Sentinel = MISSING) -> int: ... # MISSING is a SentinelLiteral pointing to the _Sentinel class instance # Used in standard library (e.g., dataclasses.MISSING) from dataclasses import field, MISSING # MISSING is tracked as a SentinelLiteral ```"
         },
+        "DeclarationBase": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "kind",
+                    "type": {
+                        "kind": "reference",
+                        "name": "T"
+                    },
+                    "optional": false,
+                    "documentation": "Discriminator field that determines which declaration variant this is. Regular: Has source code and AST node Synthesized: Created by type checker, no source node"
+                }
+            ],
+            "documentation": "Base interface for all declaration types. Provides the discriminator field for the Declaration union. This is a generic interface that is extended by: - RegularDeclaration (kind = Regular) - SynthesizedDeclaration (kind = Synthesized) The type parameter T ensures that the kind field matches the implementing interface. Used for type-safe discrimination: ```typescript if (declaration.kind === DeclarationKind.Regular) { // TypeScript knows this is RegularDeclaration const node = declaration.node; } ```"
+        },
         "RegularDeclaration": {
             "kind": "interface",
             "properties": [
@@ -898,15 +632,10 @@
                 {
                     "name": "name",
                     "type": {
-                        "kind": "or",
-                        "items": [
-                            {
                                 "kind": "base",
                                 "name": "string"
-                            }
-                        ]
                     },
-                    "optional": false,
+                    "optional": true,
                     "documentation": "Name of the declared symbol, or undefined for anonymous declarations. Example: \"foo\" for `def foo():`, undefined for lambda functions."
                 }
             ],
@@ -1035,6 +764,48 @@
             ],
             "documentation": "Contains metadata about a type alias. Used when a type is created through a type alias statement (PEP 613) or traditional assignment. Fields: - name: Short name of the alias - fullName: Fully qualified name including module path - moduleName: Module where the alias is defined - fileUri: File location of the alias definition - scopeId: Scope identifier for the alias (for scoped type variables) - isTypeAliasType: True if this uses the `type` keyword (PEP 695) - typeParams: Generic type parameters declared by the alias - typeArgs: Concrete type arguments when the alias is specialized - computedVariance: Inferred variance for type parameters Examples: ```python # PEP 695 style (isTypeAliasType=true) type IntList = list[int] # Traditional style (isTypeAliasType=false) IntList = list[int] # Generic alias with type parameters type Pair[T] = tuple[T, T] # typeParams=[T], can be specialized to Pair[int] # Using typing.TypeAlias from typing import TypeAlias UserId: TypeAlias = int ```"
         },
+        "TypeBase": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "id",
+                    "type": {
+                        "kind": "base",
+                        "name": "number"
+                    },
+                    "optional": false,
+                    "documentation": "Unique identifier for this type instance. Used to detect cycles and cache type lookups. Example: During recursive type resolution, the id is checked to avoid infinite loops."
+                },
+                {
+                    "name": "kind",
+                    "type": {
+                        "kind": "reference",
+                        "name": "T"
+                    },
+                    "optional": false,
+                    "documentation": "Discriminator field that determines which Type variant this is. Used for type narrowing when processing Type unions. Example: `if (type.kind === TypeKind.BuiltIn) { ... }`"
+                },
+                {
+                    "name": "flags",
+                    "type": {
+                        "kind": "reference",
+                        "name": "TypeFlags"
+                    },
+                    "optional": false,
+                    "documentation": "Bitfield of TypeFlags that describe characteristics of the type. Common flags: Instantiable (can create instances), Instance (is an instance), Callable (has __call__), Literal (is a literal value), Generic (has type parameters). Example: Check if type is callable: `(flags & TypeFlags.Callable) !== 0`"
+                },
+                {
+                    "name": "typeAliasInfo",
+                    "type": {
+                        "kind": "reference",
+                        "name": "TypeAliasInfo"
+                    },
+                    "optional": true,
+                    "documentation": "Information about type aliases. Present when this type was created from a type alias. Contains the alias name, module, file location, type parameters, and type arguments. Example: `type MyList = list[int]` - typeAliasInfo contains name=\"MyList\", typeArgs=[int]"
+                }
+            ],
+            "documentation": "Base interface for all Type variants. Provides common fields shared by all type representations in the protocol. This is the foundation interface extended by all Type types: - BuiltInType - RegularType (and its subclasses FunctionType, ClassType) - UnionType - ModuleType - TypeVarType - OverloadedType - SynthesizedType - TypeReference The type parameter T constrains the `kind` field to match the implementing type. Common fields: - id: Unique identifier for cycle detection and caching - kind: Discriminator for the Type union - flags: Characteristics of the type (Instantiable, Instance, Callable, etc.) - typeAliasInfo: Optional alias information if type comes from a type alias Used throughout the protocol to represent Python types in a serializable format."
+        },
         "BuiltInType": {
             "kind": "interface",
             "properties": [
@@ -1067,6 +838,27 @@
                 }
             ],
             "documentation": "Represents special built-in types that are fundamental to Python's type system. These are not regular classes but represent special semantic meanings. Used for: - Type inference failures (unknown) - Gradual typing (any) - Uninitialized variables (unbound) - Special literals (ellipsis for ...) - Non-returning functions (never/noreturn) Examples: - `unknown`: `x` in `def foo(x):` with no type hints and no usage to infer from - `any`: Explicit `Any` annotation or from untyped imports - `unbound`: Variable declared but not yet assigned: `x: int` (before assignment) - `ellipsis`: The `...` in `def foo(...): ...` or `Tuple[int, ...]` - `never`: `def raise_error() -> Never:` or function with only raise statements",
+            "extends": [
+                {
+                    "kind": "reference",
+                    "name": "TypeBase"
+                }
+            ]
+        },
+        "DeclaredType": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "declaration",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Declaration"
+                    },
+                    "optional": false,
+                    "documentation": "Declaration node information (source location, category, name). Points to where this type was declared in the source code. Example: For a function, this contains the node pointing to the 'def' keyword and function name."
+                }
+            ],
+            "documentation": "Base type for symbols that have a declaration in source code. This is the common parent for FunctionType and ClassType when the type comes from an actual declaration node in the parse tree. The type parameter T allows subtypes to specify their own TypeKind (e.g., Function or Class) while sharing the common declaration field. Used for: - Functions and methods with actual `def` statements (TypeKind.Function) - Classes with actual `class` statements (TypeKind.Class) - Variables with declarations in source (TypeKind.Declared) Not used for: - Synthesized types (use SynthesizedType) - Built-in types (use BuiltInType) Example: ```python def my_function(x: int) -> str:  # FunctionType with TypeKind.Function return str(x) class MyClass:  # ClassType with TypeKind.Class pass ```",
             "extends": [
                 {
                     "kind": "reference",
@@ -1303,6 +1095,54 @@
                     "name": "TypeBase"
                 }
             ]
+        },
+        "Range": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "start",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Position"
+                    },
+                    "optional": false,
+                    "documentation": "The range's start position."
+                },
+                {
+                    "name": "end",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Position"
+                    },
+                    "optional": false,
+                    "documentation": "The range's end position."
+                }
+            ],
+            "documentation": "A range in a text document expressed as (zero-based) start and end positions."
+        },
+        "Position": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "line",
+                    "type": {
+                        "kind": "base",
+                        "name": "uinteger"
+                    },
+                    "optional": false,
+                    "documentation": "Line position in a document (zero-based)."
+                },
+                {
+                    "name": "character",
+                    "type": {
+                        "kind": "base",
+                        "name": "uinteger"
+                    },
+                    "optional": false,
+                    "documentation": "Character offset on a line in a document (zero-based)."
+                }
+            ],
+            "documentation": "Position in a text document expressed as zero-based line and character offset."
         },
         "LiteralValue": {
             "kind": "alias",

@@ -256,6 +256,8 @@ pub enum ErrorKind {
     UnexpectedKeyword,
     /// An error caused by passing a positional argument for a keyword-only parameter.
     UnexpectedPositionalArgument,
+    /// Attempting to use a type checker directive without importing it from `typing`.
+    UnimportedDirective,
     /// Attempting to use a name that is not defined.
     UnknownName,
     /// Identity comparison (`is` or `is not`) between types that are provably disjoint
@@ -265,6 +267,8 @@ pub enum ErrorKind {
     /// This occurs when a return/yield follows a statement that always exits,
     /// such as return, raise, break, or continue.
     Unreachable,
+    /// `__all__` is defined but cannot be statically analyzed.
+    UnresolvableDunderAll,
     /// Protocols decorated with `@runtime_checkable` can be used in `isinstance` checks
     /// The runtime only checks that an attribute with that name is present, so the
     /// type checker must warn if the types are not compatible.
@@ -321,23 +325,24 @@ impl ErrorKind {
     pub fn default_severity(self) -> Severity {
         // IMPORTANT: When updating these, also update error-kinds.mdx in the docs
         match self {
-            ErrorKind::RevealType => Severity::Info,
             ErrorKind::Deprecated => Severity::Warn,
-            ErrorKind::RedundantCast => Severity::Warn,
-            ErrorKind::UnnecessaryComparison => Severity::Warn,
-            // TODO: up severity to Warn when https://github.com/facebook/pyrefly/issues/1950 is fixed
-            ErrorKind::UntypedImport => Severity::Ignore,
-            ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
-            ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
+            ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
+            ErrorKind::MissingOverrideDecorator => Severity::Ignore,
+            ErrorKind::MissingSource => Severity::Ignore,
+            ErrorKind::NonExhaustiveMatch => Severity::Warn,
+            ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
+            ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::RedundantCast => Severity::Warn,
+            ErrorKind::RevealType => Severity::Info,
+            ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
-            ErrorKind::UnannotatedAttribute => Severity::Ignore,
-            ErrorKind::MissingSource => Severity::Ignore,
-            ErrorKind::MissingOverrideDecorator => Severity::Ignore,
-            ErrorKind::OpenUnpacking => Severity::Ignore,
-            ErrorKind::NonExhaustiveMatch => Severity::Warn,
+            ErrorKind::UnnecessaryComparison => Severity::Warn,
+            ErrorKind::UnresolvableDunderAll => Severity::Warn,
+            // TODO: up severity to Warn when https://github.com/facebook/pyrefly/issues/1950 is fixed
+            ErrorKind::UntypedImport => Severity::Ignore,
             ErrorKind::UnusedIgnore => Severity::Ignore,
             ErrorKind::VarianceMismatch => Severity::Warn,
             _ => Severity::Error,

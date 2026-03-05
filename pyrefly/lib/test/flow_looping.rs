@@ -9,7 +9,6 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
-    bug = "The results include over-eager pinning of vars in generic solving, see https://github.com/facebook/pyrefly/issues/105",
     test_loop_with_generic_pin,
     r#"
 def condition() -> bool: ...
@@ -92,11 +91,11 @@ def f(condition) -> None:
     # It's fine to error here, but ideally we would error at the assignment
     # rather than the `while`, and ideally we would note that the type is recursive
     # in a way we don't support.
-    while condition():  # E: `Literal[1] | list[int]` is not assignable to `int`
-        assert_type(x, Literal[1] | list[int])
+    while condition():
+        assert_type(x, Literal[1] | list[Literal[1] | list[Any]])
         x = [x]
-        assert_type(x, list[int])
-    assert_type(x, Literal[1] | list[int])
+        assert_type(x, list[Literal[1] | list[Any]])
+    assert_type(x, Literal[1] | list[Literal[1] | list[Any]])
     "#,
 );
 
@@ -883,4 +882,26 @@ def foo(cond: bool):
     x: int | None = None
     assert_type(x, int | None)
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/714
+testcase!(
+    test_loop_variable_type_with_cross_branch_reassignment,
+    r#"
+lineStart: int | None = None
+lineno: int = 0
+
+def needsInt(i: int) -> None:
+    ...
+
+for part in ['a', 'b', 'c', 'd']:
+    if part == 'a':
+        ...
+    elif part == 'b':
+        lineno = lineStart if lineStart is not None else 0
+    elif part == 'c':
+        needsInt(lineno)
+    elif part == 'd':
+        lineStart = lineno
+"#,
 );

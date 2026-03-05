@@ -90,7 +90,7 @@ fn get_test_report(
             ..
         } in state
             .transaction()
-            .completion(handle, position, import_format, true)
+            .completion(handle, position, import_format, true, None)
         {
             let is_deprecated = if let Some(tags) = tags {
                 tags.contains(&lsp_types::CompletionItemTag::DEPRECATED)
@@ -138,7 +138,7 @@ fn get_test_report(
 }
 
 fn dict_field_labels(txn: &Transaction<'_>, handle: &Handle, position: TextSize) -> Vec<String> {
-    txn.completion(handle, position, ImportFormat::Absolute, true)
+    txn.completion(handle, position, ImportFormat::Absolute, true, None)
         .into_iter()
         .filter(|item| item.kind == Some(CompletionItemKind::FIELD))
         .map(|item| item.label)
@@ -321,7 +321,6 @@ dim.get(key="")
         report.contains(
             r#"
 Completion Results:
-- (Value) 'x': Literal['x'] inserting `x`
 - (Field) x: int
 - (Field) y: int
 - (Field) z: int
@@ -1550,12 +1549,17 @@ foo(
         ^
 Completion Results:
 - (Variable) x=: int
+- (Variable) y=: bool
 "#
         .trim(),
         report.trim(),
     );
 }
 
+/// When an argument is provided that narrows down the overload,
+/// only params from compatible overloads are shown. Here `1` (int)
+/// is compatible with `x: int` (second overload) but not `y: bool`
+/// (first overload), so only the second overload's params appear.
 #[test]
 fn kwargs_completion_overload_correct() {
     let code = r#"
@@ -1579,6 +1583,67 @@ foo(1,
 Completion Results:
 - (Variable) x=: int
 - (Variable) y=: str
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+/// When overloads share the same first arg and differ on later args,
+/// show params from all overloads (here both overloads accept `x: int`,
+/// so `y=` and `z=` should both appear).
+#[test]
+fn kwargs_completion_overload_shared_first_arg() {
+    let code = r#"
+from typing import overload
+@overload
+def foo(x: int, y: str): ...
+@overload
+def foo(x: int, z: bool): ...
+def foo(x, **kwargs): ...
+foo(1, 
+#      ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+8 | foo(1, 
+           ^
+Completion Results:
+- (Variable) x=: int
+- (Variable) y=: str
+- (Variable) z=: bool
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn kwargs_completion_overload_same_name_different_types() {
+    let code = r#"
+from typing import Any, overload
+@overload
+def foo(x: int) -> int: ...
+@overload
+def foo(x: str) -> str: ...
+def foo(x: Any) -> Any:
+    return x
+foo(
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+9 | foo(
+        ^
+Completion Results:
+- (Variable) x=: int
+- (Variable) x=: str
 "#
         .trim(),
         report.trim(),
@@ -1839,7 +1904,7 @@ T = spio
     let completions =
         state
             .transaction()
-            .completion(handle, position, ImportFormat::Absolute, true);
+            .completion(handle, position, ImportFormat::Absolute, true, None);
     let autoimport = completions
         .iter()
         .find(|item| item.label == "spio")
@@ -1881,7 +1946,7 @@ T = np
     let completions =
         state
             .transaction()
-            .completion(handle, position, ImportFormat::Absolute, true);
+            .completion(handle, position, ImportFormat::Absolute, true, None);
     let autoimport = completions
         .iter()
         .find(|item| item.label == "np")
@@ -1942,6 +2007,41 @@ Completion Results:
 }
 
 #[test]
+fn autoimport_explicit_reexport_suggests_reexport_path() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("source", "Thing = 1\n"),
+            ("public", "from source import Thing as Thing\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from public import Thing
+
+- (Variable) Thing: from source import Thing
+
+
+
+# source.py
+
+# public.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn autoimport_prefers_shorter_module() {
     let code = r#"
 T = Thing
@@ -1991,7 +2091,7 @@ T = foooooo
     let completions =
         state
             .transaction()
-            .completion(handle, position, ImportFormat::Absolute, true);
+            .completion(handle, position, ImportFormat::Absolute, true, None);
     let autoimport = completions
         .into_iter()
         .find(|item| item.label == "foooooo")
@@ -2006,7 +2106,7 @@ T = foooooo
     let completions =
         state
             .transaction()
-            .completion(handle, position, ImportFormat::Absolute, false);
+            .completion(handle, position, ImportFormat::Absolute, false, None);
     completions
         .into_iter()
         .find(|item| item.label == "foooooo")
@@ -2681,7 +2781,8 @@ x = sys.version
     let txn = state.transaction();
 
     // Position 0: inside comment - should return empty
-    let comment_completions = txn.completion(handle, positions[0], ImportFormat::Absolute, true);
+    let comment_completions =
+        txn.completion(handle, positions[0], ImportFormat::Absolute, true, None);
     assert!(
         comment_completions.is_empty(),
         "Expected no completions in comment, but got {} completions",
@@ -2689,7 +2790,8 @@ x = sys.version
     );
 
     // Position 1: normal code - should return completions
-    let normal_completions = txn.completion(handle, positions[1], ImportFormat::Absolute, true);
+    let normal_completions =
+        txn.completion(handle, positions[1], ImportFormat::Absolute, true, None);
     assert!(
         !normal_completions.is_empty(),
         "Expected completions in normal code but got none"
@@ -2723,7 +2825,7 @@ needs_base(val)
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();
-    let completions = txn.completion(handle, position, ImportFormat::Absolute, true);
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
 
     let exact_index = completions
         .iter()
@@ -2813,7 +2915,7 @@ class Constraint:
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();
-    let completions = txn.completion(handle, position, ImportFormat::Absolute, true);
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
 
     let completion_labels: Vec<_> = completions.iter().map(|c| c.label.as_str()).collect();
 

@@ -248,6 +248,100 @@ impl DisplayWith<ModuleInfo> for NarrowOp {
 }
 
 impl AtomicNarrowOp {
+    /// Produce a Python-like snippet for hover display.
+    ///
+    /// `subject` is the name (possibly with facet chain) being narrowed.
+    /// `snippet` converts a `TextRange` to a cleaned-up source string; it returns
+    /// `None` for empty or unresolvable ranges, which propagates to the output.
+    /// Returns `None` for `Placeholder` since it carries no useful information.
+    pub fn as_python_snippet(
+        &self,
+        subject: &str,
+        snippet: &impl Fn(TextRange) -> Option<String>,
+    ) -> Option<String> {
+        match self {
+            Self::Is(expr) => Some(format!("{subject} is {}", snippet(expr.range())?)),
+            Self::IsNot(expr) => Some(format!("{subject} is not {}", snippet(expr.range())?)),
+            Self::Eq(expr) => Some(format!("{subject} == {}", snippet(expr.range())?)),
+            Self::NotEq(expr) => Some(format!("{subject} != {}", snippet(expr.range())?)),
+            Self::IsInstance(expr, _) => {
+                Some(format!("isinstance({subject}, {})", snippet(expr.range())?))
+            }
+            Self::IsNotInstance(expr, _) => Some(format!(
+                "not isinstance({subject}, {})",
+                snippet(expr.range())?
+            )),
+            Self::IsSubclass(expr) => {
+                Some(format!("issubclass({subject}, {})", snippet(expr.range())?))
+            }
+            Self::IsNotSubclass(expr) => Some(format!(
+                "not issubclass({subject}, {})",
+                snippet(expr.range())?
+            )),
+            Self::TypeEq(expr) => Some(format!("type({subject}) == {}", snippet(expr.range())?)),
+            Self::TypeNotEq(expr) => Some(format!("type({subject}) != {}", snippet(expr.range())?)),
+            Self::In(expr) => Some(format!("{subject} in {}", snippet(expr.range())?)),
+            Self::NotIn(expr) => Some(format!("{subject} not in {}", snippet(expr.range())?)),
+            Self::HasAttr(attr) => Some(format!("hasattr({subject}, \"{attr}\")")),
+            Self::NotHasAttr(attr) => Some(format!("not hasattr({subject}, \"{attr}\")")),
+            Self::GetAttr(attr, default) => {
+                let default_snippet = default.as_ref().and_then(|e| snippet(e.range()));
+                Some(match default_snippet {
+                    Some(ds) => format!("getattr({subject}, \"{attr}\", {ds})"),
+                    None => format!("getattr({subject}, \"{attr}\")"),
+                })
+            }
+            Self::NotGetAttr(attr, default) => {
+                let default_snippet = default.as_ref().and_then(|e| snippet(e.range()));
+                Some(match default_snippet {
+                    Some(ds) => format!("not getattr({subject}, \"{attr}\", {ds})"),
+                    None => format!("not getattr({subject}, \"{attr}\")"),
+                })
+            }
+            Self::HasKey(key) => Some(format!("\"{key}\" in {subject}")),
+            Self::NotHasKey(key) => Some(format!("\"{key}\" not in {subject}")),
+            Self::LenEq(expr) => Some(format!("len({subject}) == {}", snippet(expr.range())?)),
+            Self::LenNotEq(expr) => Some(format!("len({subject}) != {}", snippet(expr.range())?)),
+            Self::LenGt(expr) => Some(format!("len({subject}) > {}", snippet(expr.range())?)),
+            Self::LenGte(expr) => Some(format!("len({subject}) >= {}", snippet(expr.range())?)),
+            Self::LenLt(expr) => Some(format!("len({subject}) < {}", snippet(expr.range())?)),
+            Self::LenLte(expr) => Some(format!("len({subject}) <= {}", snippet(expr.range())?)),
+            Self::IsSequence => Some(format!("isinstance({subject}, Sequence)")),
+            Self::IsNotSequence => Some(format!("not isinstance({subject}, Sequence)")),
+            Self::IsMapping => Some(format!("isinstance({subject}, Mapping)")),
+            Self::IsNotMapping => Some(format!("not isinstance({subject}, Mapping)")),
+            Self::Call(expr, arguments) => {
+                let func = snippet(expr.range())?;
+                let args = snippet(arguments.range()).unwrap_or_default();
+                Some(format!("{func}{args}"))
+            }
+            Self::NotCall(expr, arguments) => {
+                let func = snippet(expr.range())?;
+                let args = snippet(arguments.range()).unwrap_or_default();
+                Some(format!("not {func}{args}"))
+            }
+            Self::IsTruthy => Some(subject.to_owned()),
+            Self::IsFalsy => Some(format!("not {subject}")),
+            Self::TypeGuard(_, arguments) => Some(format!(
+                "TypeGuard{}",
+                snippet(arguments.range()).unwrap_or_default()
+            )),
+            Self::NotTypeGuard(_, arguments) => Some(format!(
+                "not TypeGuard{}",
+                snippet(arguments.range()).unwrap_or_default()
+            )),
+            Self::TypeIs(_, arguments) => Some(format!(
+                "TypeIs{}",
+                snippet(arguments.range()).unwrap_or_default()
+            )),
+            Self::NotTypeIs(_, arguments) => Some(format!(
+                "not TypeIs{}",
+                snippet(arguments.range()).unwrap_or_default()
+            )),
+            Self::Placeholder => None,
+        }
+    }
+
     pub fn negate(&self) -> Self {
         match self {
             Self::Is(v) => Self::IsNot(v.clone()),
@@ -342,6 +436,48 @@ impl NarrowingSubject {
 }
 
 impl NarrowOp {
+    /// Produce a Python-like snippet for hover display.
+    ///
+    /// `base_name` is the variable being narrowed. `snippet` converts a
+    /// `TextRange` to a cleaned-up source string.
+    pub fn as_python_snippet(
+        &self,
+        base_name: &Name,
+        snippet: &impl Fn(TextRange) -> Option<String>,
+    ) -> Option<String> {
+        match self {
+            Self::Atomic(facet, atomic) => {
+                let subject = match facet {
+                    Some(f) => format!("{base_name}{}", f.chain),
+                    None => base_name.to_string(),
+                };
+                atomic.as_python_snippet(&subject, snippet)
+            }
+            Self::And(ops) => {
+                let parts: Vec<_> = ops
+                    .iter()
+                    .filter_map(|op| op.as_python_snippet(base_name, snippet))
+                    .collect();
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(parts.join(" and "))
+                }
+            }
+            Self::Or(ops) => {
+                let parts: Vec<_> = ops
+                    .iter()
+                    .filter_map(|op| op.as_python_snippet(base_name, snippet))
+                    .collect();
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(parts.join(" or "))
+                }
+            }
+        }
+    }
+
     pub fn negate(&self) -> Self {
         match self {
             Self::Atomic(attr, op) => Self::Atomic(attr.clone(), op.negate()),
@@ -852,13 +988,9 @@ impl NarrowOps {
                 } else {
                     // Look up the definition of `name`.
                     let original_expr = match Self::get_original_binding(builder, &name.id) {
-                        Some((
-                            _,
-                            Some(Binding::NameAssign {
-                                expr: original_expr,
-                                ..
-                            }),
-                        )) => Some(&**original_expr),
+                        Some((_, Some(Binding::NameAssign(name_assign)))) => {
+                            Some(&*name_assign.expr)
+                        }
                         _ => None,
                     };
                     let mut ops = Self::from_expr_helper(builder, original_expr, seen);

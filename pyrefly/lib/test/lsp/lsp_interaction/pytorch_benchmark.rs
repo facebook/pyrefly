@@ -16,14 +16,14 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use lsp_types::Url;
+use pyrefly::commands::lsp::IndexingMode;
 use pyrefly_util::fs_anyhow::read_to_string;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::thread_pool::init_thread_pool;
 use serde_json::json;
 
-use crate::commands::lsp::IndexingMode;
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
 
 #[test]
 #[ignore] // Run manually with: PYTORCH_PATH=/path/to/pytorch cargo test --release test_pytorch_error_propagation_latency -- --ignored --nocapture

@@ -12,19 +12,15 @@ use std::cell::RefMut;
 use std::fmt;
 use std::fmt::Display;
 use std::mem;
-use std::sync::Arc;
 
 use pyrefly_types::dimension::ShapeError;
-use pyrefly_types::dimension::simplify;
+use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tensor::TensorShape;
 use pyrefly_types::tuple::Tuple;
-use pyrefly_types::type_alias::TypeAliasData;
-use pyrefly_types::type_alias::TypeAliasRef;
-use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -53,7 +49,10 @@ use crate::error::context::TypeCheckKind;
 use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
 use crate::types::callable::Function;
+use crate::types::callable::Param;
+use crate::types::callable::ParamList;
 use crate::types::callable::Params;
+use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::module::ModuleType;
 use crate::types::simplify::simplify_tuples;
@@ -102,21 +101,8 @@ enum Variable {
     /// A loop-recursive variable, e.g. `x = None; while x is None: x = f()`
     /// The Variable tracks the prior type bound to this name before the loop.
     LoopRecursive(Type, LoopBound),
-    /// A reference to a recursive type alias, like `type X = int | list[X]`.
-    ///
-    /// These are created when, in the process of inferring a type for the RHS of a type alias,
-    /// we encounter the name of the same alias. Unlike most other variables, AliasRecursive
-    /// represents a known, fixed type and exists so that we can reference the type before we've
-    /// finished computing it.
-    AliasRecursive(TypeAliasRef, Arc<TParams>),
     /// A variable that used to decompose a type, e.g. getting T from Awaitable[T]
     Unwrap,
-    /// A variable used for a parameter type (either a function or lambda parameter).
-    ///
-    /// These are created at binding time, and used so that two bindings (the parameter
-    /// and either the expression containing the lambda body or the function def)
-    /// can communicate out-of-band about the parameter type.
-    Parameter,
     /// A variable whose answer has been determined
     Answer(Type),
 }
@@ -163,9 +149,7 @@ impl Display for Variable {
                 }
             }
             Variable::LoopRecursive(t, _) => write!(f, "LoopRecursive(prior={t}, _)"),
-            Variable::AliasRecursive(r, _) => write!(f, "AliasRecursive({})", r.name),
             Variable::Recursive => write!(f, "Recursive"),
-            Variable::Parameter => write!(f, "Parameter"),
             Variable::Unwrap => write!(f, "Unwrap"),
             Variable::Answer(t) => write!(f, "{t}"),
         }
@@ -331,6 +315,7 @@ pub struct Solver {
     pub infer_with_first_use: bool,
     pub heap: TypeHeap,
     pub tensor_shapes: bool,
+    pub strict_callable_subtyping: bool,
 }
 
 impl Display for Solver {
@@ -348,13 +333,18 @@ const TYPE_LIMIT: usize = 20;
 
 impl Solver {
     /// Create a new solver.
-    pub fn new(infer_with_first_use: bool, tensor_shapes: bool) -> Self {
+    pub fn new(
+        infer_with_first_use: bool,
+        tensor_shapes: bool,
+        strict_callable_subtyping: bool,
+    ) -> Self {
         Self {
             variables: Default::default(),
             instantiation_errors: Default::default(),
             infer_with_first_use,
             heap: TypeHeap::new(),
             tensor_shapes,
+            strict_callable_subtyping,
         }
     }
 
@@ -398,14 +388,20 @@ impl Solver {
                 *variable = Variable::Answer(self.heap.mk_any_implicit());
                 None
             }
-            Variable::AliasRecursive(r, tparams) => {
-                *variable = Variable::Answer(Self::finish_alias_recursive(r, tparams));
-                None
-            }
-            Variable::Parameter => {
-                unreachable!("Unexpected Variable::Parameter")
-            }
         }
+    }
+
+    /// Check whether a Var represents a partial/placeholder type that would be
+    /// pinned by `pin_placeholder_type` with `pin_partial_types=true`.
+    /// This excludes Quantified (which represents an error case, not a normal partial type)
+    /// and focuses on the types created specifically for first-use inference.
+    pub fn var_is_partial(&self, var: Var) -> bool {
+        let variables = self.variables.lock();
+        let variable = variables.get(var);
+        matches!(
+            &*variable,
+            Variable::PartialQuantified(_) | Variable::PartialContained(_) | Variable::Unwrap
+        )
     }
 
     /// Finish the type returned from a function call. This entails expanding solved variables and
@@ -484,9 +480,6 @@ impl Solver {
                 let ty = match &mut *e {
                     Variable::Quantified(q) => q.as_gradual_type(),
                     Variable::PartialQuantified(q) => q.as_gradual_type(),
-                    Variable::AliasRecursive(r, tparams) => {
-                        Self::finish_alias_recursive(r, tparams)
-                    }
                     _ => self.heap.mk_any_implicit(),
                 };
                 *e = Variable::Answer(ty.clone());
@@ -502,7 +495,7 @@ impl Solver {
     fn simplify_forced_type(&self, mut ty: Type) -> Type {
         // Use transform_mut to visit every Type node and simplify dimensions
         ty.transform_mut(&mut |t| {
-            let simplified = simplify(t.clone());
+            let simplified = canonicalize(t.clone());
             if &simplified != t {
                 *t = simplified;
             }
@@ -526,7 +519,7 @@ impl Solver {
             t.recurse_mut(&mut |t| self.deep_force_mut_with_limit(t, limit - 1, recurser));
             // After forcing all Vars recursively, simplify dimension expressions
             // This handles cases like Tensor[(10 * 20)] after Vars are forced to 10 and 20
-            let simplified = simplify(t.clone());
+            let simplified = canonicalize(t.clone());
             if &simplified != t {
                 *t = simplified;
             }
@@ -645,6 +638,25 @@ impl Solver {
                     }
                     _ => {}
                 }
+            } else if let Some(Callable {
+                params: Params::List(param_list),
+                ret: _,
+            }) = callable
+            {
+                // When a VarArg has a concrete unpacked tuple, expand it to positional-only params
+                // e.g., (*args: Unpack[tuple[int, str]]) -> (int, str, /)
+                let mut new_params = Vec::new();
+                for param in mem::take(param_list).into_items() {
+                    match param {
+                        Param::VarArg(_, Type::Unpack(box Type::Tuple(Tuple::Concrete(elts)))) => {
+                            for elt in elts {
+                                new_params.push(Param::PosOnly(None, elt, Required::Required));
+                            }
+                        }
+                        _ => new_params.push(param),
+                    }
+                }
+                *param_list = ParamList::new(new_params);
             }
         });
     }
@@ -715,35 +727,6 @@ impl Solver {
             .lock()
             .insert_fresh(v, Variable::PartialContained(range));
         v
-    }
-
-    /// Generate a fresh variable for out-of-band logic that allows two bindings to communicate
-    /// about a type without it being explicitly in a binding result. Used for function parameters,
-    /// where the var is created during the bindings phase, then solved during answers, where we
-    /// can determine whether the first argument should be Self or type[Self] based on decorators.
-    ///
-    /// Parameter vars must be solved before they appear in a constraint, by calling solve_parameter.
-    /// If a parameter var appears in a constraint, we will panic.
-    pub fn fresh_parameter(&self, uniques: &UniqueFactory) -> Var {
-        let v = Var::new(uniques);
-        self.variables.lock().insert_fresh(v, Variable::Parameter);
-        v
-    }
-
-    /// Solve a parameter var (created using fresh_parameter) to a concrete type. This must happen
-    /// before the var can appear in a constraint, or else we will panic.
-    pub fn solve_parameter(&self, v: Var, t: Type) {
-        let lock = self.variables.lock();
-        let mut v = lock.get_mut(v);
-        match &mut *v {
-            Variable::Answer(_) => {}
-            Variable::Parameter => {
-                *v = Variable::Answer(t);
-            }
-            _ => {
-                panic!("Expected a parameter, got {}", v);
-            }
-        }
     }
 
     // Generate a fresh variable used to decompose a type, e.g. getting T from Awaitable[T]
@@ -838,6 +821,19 @@ impl Solver {
     pub fn has_instantiation_errors(&self, vs: &QuantifiedHandle) -> bool {
         let lock = self.instantiation_errors.read();
         vs.0.iter().any(|v| lock.contains_key(v))
+    }
+
+    /// Returns true if the given type is a Var that points to a partial
+    /// (PartialQuantified or PartialContained) variable.
+    pub fn is_partial(&self, ty: &Type) -> bool {
+        if let Type::Var(v) = ty {
+            matches!(
+                *self.variables.lock().get(*v),
+                Variable::PartialQuantified(_) | Variable::PartialContained(_)
+            )
+        } else {
+            false
+        }
     }
 
     /// Called after a quantified function has been called. Given `def f[T](x: int): list[T]`,
@@ -988,10 +984,6 @@ impl Solver {
             })
     }
 
-    fn finish_alias_recursive(r: &TypeAliasRef, tparams: &Arc<TParams>) -> Type {
-        Forallable::TypeAlias(TypeAliasData::Ref(r.clone())).forall(tparams.clone())
-    }
-
     /// Generate a fresh variable used to tie recursive bindings.
     pub fn fresh_recursive(&self, uniques: &UniqueFactory) -> Var {
         let v = Var::new(uniques);
@@ -1005,19 +997,6 @@ impl Solver {
             v,
             Variable::LoopRecursive(prior_type, LoopBound::UpperBounds(vec![])),
         );
-        v
-    }
-
-    pub fn fresh_alias_recursive(
-        &self,
-        uniques: &UniqueFactory,
-        r: TypeAliasRef,
-        tparams: Arc<TParams>,
-    ) -> Var {
-        let v = Var::new(uniques);
-        self.variables
-            .lock()
-            .insert_fresh(v, Variable::AliasRecursive(r, tparams));
         v
     }
 
@@ -1252,7 +1231,7 @@ impl Solver {
             solver: self,
             type_order,
             gas: INITIAL_GAS,
-            recursive_assumptions: SmallSet::new(),
+            subset_cache: SmallMap::new(),
             class_protocol_assumptions: SmallSet::new(),
         }
     }
@@ -1427,10 +1406,6 @@ pub enum SubsetError {
 }
 
 impl SubsetError {
-    fn internal_error(msg: &str) -> Self {
-        Self::InternalError(msg.to_owned())
-    }
-
     pub fn to_error_msg(self) -> Option<String> {
         match self {
             SubsetError::PosParamName(got, want) => Some(format!(
@@ -1462,15 +1437,45 @@ impl SubsetError {
     }
 }
 
+/// Cached result for a recursive subset check. Used by `Subset::subset_cache`.
+#[derive(Clone, Debug)]
+pub(crate) enum SubsetCacheEntry {
+    /// Currently being computed — used for coinductive cycle detection.
+    /// Treated as `Ok(())`: if we encounter a pair already being checked,
+    /// we optimistically assume the check succeeds (coinductive reasoning).
+    InProgress,
+    /// Computed and succeeded.
+    Ok,
+    /// Computed and failed.
+    Err(SubsetError),
+}
+
 /// A helper to implement subset ergonomically.
 /// Should only be used within `crate::subset`, which implements part of it.
 pub struct Subset<'a, Ans: LookupAnswer> {
     pub(crate) solver: &'a Solver,
     pub type_order: TypeOrder<'a, Ans>,
     gas: Gas,
-    /// Recursive assumptions of pairs of types that is_subset_eq returns true for.
-    /// Used for structural typechecking of protocols and recursive type aliases.
-    pub recursive_assumptions: SmallSet<(Type, Type)>,
+    /// Memoization cache for recursive subset checks (protocols and recursive type aliases).
+    /// Doubles as a cycle detector: `InProgress` entries break cycles via coinductive
+    /// reasoning by optimistically returning `Ok(())`.
+    ///
+    /// Unlike a stack-based cycle detector (which removes entries on return and forces
+    /// re-computation from sibling call paths), this cache persists `Ok` results across
+    /// the entire query, preventing exponential re-checking when the same `(got, want)`
+    /// pair is encountered from multiple sibling call paths (e.g., different methods of
+    /// a protocol each requiring the same structural subtype check).
+    ///
+    /// On failure, entries added *during* the failing computation are rolled back
+    /// (popped from the end of the map back to the saved size), because intermediate
+    /// `Ok` entries may have depended on a coinductive assumption that the failure
+    /// invalidated. For example, if checking `A <: P1` internally succeeds on
+    /// `A <: P2` (via the coinductive assumption that `A <: P1` holds) but then
+    /// `A <: P1` ultimately fails, the cached success for `A <: P2` is unsound and
+    /// must be discarded. Only entries added during the failing computation are
+    /// removed; entries from earlier (independent) computations are preserved.
+    /// This works because `SmallMap` preserves insertion order.
+    pub subset_cache: SmallMap<(Type, Type), SubsetCacheEntry>,
     /// Class-level recursive assumptions for protocol checks.
     /// When checking `got <: protocol` where got's type arguments contain Vars
     /// (indicating we're in a recursive pattern), we track (got_class, protocol_class)
@@ -1523,11 +1528,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variable2);
                         drop(variables);
                         self.is_subset_eq(got, &t2)
-                    }
-                    (Variable::Parameter, _) | (_, Variable::Parameter) => {
-                        Err(SubsetError::internal_error(
-                            "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
-                        ))
                     }
                     (Variable::Answer(t1), Variable::Answer(t2)) => {
                         let t1 = t1.clone();
@@ -1657,12 +1657,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 let variables = self.solver.variables.lock();
                 let v1_ref = variables.get(*v1);
                 match &*v1_ref {
-                    Variable::Parameter => Err(SubsetError::internal_error(
-                        "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
-                    )),
-                    Variable::AliasRecursive(_, _) => Err(SubsetError::internal_error(
-                        "Did not expect a `Variable::AliasRecursive` to ever appear in is_subset_eq",
-                    )),
                     Variable::Answer(t1) => {
                         let t1 = t1.clone();
                         drop(v1_ref);
@@ -1756,12 +1750,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         self.is_subset_eq(t1, &t2)
                     }
-                    Variable::Parameter => Err(SubsetError::internal_error(
-                        "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
-                    )),
-                    Variable::AliasRecursive(_, _) => Err(SubsetError::internal_error(
-                        "Did not expect a `Variable::AliasRecursive` to ever appear in is_subset_eq",
-                    )),
                     Variable::Answer(t2) => {
                         let t2 = t2.clone();
                         drop(v2_ref);

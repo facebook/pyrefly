@@ -11,6 +11,7 @@ use std::sync::Mutex;
 
 use lsp_server::RequestId;
 use lsp_types::InitializeParams;
+use pyrefly_util::telemetry::QueueName;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
@@ -18,10 +19,11 @@ use tracing::info;
 use tsp_types::TSPRequests;
 
 use crate::commands::lsp::IndexingMode;
-use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::LspEvent;
+use crate::lsp::non_wasm::server::InitializeInfo;
+use crate::lsp::non_wasm::server::MessageReader;
 use crate::lsp::non_wasm::server::ProcessEvent;
 use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
@@ -47,7 +49,7 @@ impl<T: TspInterface> TspServer<T> {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &impl Telemetry,
+        telemetry: &'a impl Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
@@ -98,7 +100,7 @@ impl<T: TspInterface> TspServer<T> {
 
     fn handle_tsp_request<'a>(
         &'a self,
-        _ide_transaction_manager: &mut TransactionManager<'a>,
+        ide_transaction_manager: &mut TransactionManager<'a>,
         request: &Request,
     ) -> anyhow::Result<bool> {
         // Convert the request into a TSPRequests enum
@@ -115,21 +117,26 @@ impl<T: TspInterface> TspServer<T> {
 
         match msg {
             TSPRequests::GetSupportedProtocolVersionRequest { .. } => {
-                self.inner.send_response(new_response(
-                    request.id.clone(),
-                    Ok(self.get_supported_protocol_version()),
-                ));
+                self.send_ok(request.id.clone(), self.get_supported_protocol_version());
                 Ok(true)
             }
             TSPRequests::GetSnapshotRequest { .. } => {
                 // Get snapshot doesn't need a transaction since it just returns the cached value
-                self.inner
-                    .send_response(new_response(request.id.clone(), Ok(self.get_snapshot())));
+                self.send_ok(request.id.clone(), self.get_snapshot());
+                Ok(true)
+            }
+            TSPRequests::ResolveImportRequest { params, .. } => {
+                self.handle_resolve_import(request.id.clone(), params, ide_transaction_manager);
                 Ok(true)
             }
             _ => {
-                // Other TSP requests not yet implemented
-                Ok(false)
+                // Recognized TSP method but not yet implemented — return MethodNotFound
+                self.inner.send_response(Response::new_err(
+                    request.id.clone(),
+                    lsp_server::ErrorCode::MethodNotFound as i32,
+                    format!("TSP method not implemented: {}", request.method),
+                ));
+                Ok(true)
             }
         }
     }
@@ -137,7 +144,8 @@ impl<T: TspInterface> TspServer<T> {
 
 pub fn tsp_loop(
     lsp_server: impl TspInterface,
-    _initialization_params: InitializeParams,
+    mut reader: MessageReader,
+    _initialization: InitializeInfo,
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     eprintln!("Reading TSP messages");
@@ -148,7 +156,7 @@ pub fn tsp_loop(
         scope.spawn(|| server.inner.run_recheck_queue(telemetry));
 
         scope.spawn(|| {
-            server.inner.dispatch_lsp_events();
+            server.inner.dispatch_lsp_events(&mut reader);
         });
 
         let mut ide_transaction_manager = TransactionManager::default();
@@ -159,6 +167,7 @@ pub fn tsp_loop(
                 TelemetryEventKind::LspEvent(event.describe()),
                 enqueued_at,
                 server.inner.telemetry_state(),
+                QueueName::LspQueue,
             );
             let event_description = event.describe();
 

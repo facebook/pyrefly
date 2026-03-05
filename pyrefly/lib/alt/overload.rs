@@ -25,6 +25,7 @@ use vec1::Vec1;
 use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers::OverloadTrace;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::TargetWithTParams;
 use crate::alt::callable::CallArg;
@@ -329,10 +330,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             *targs = chosen_targs;
         }
         // Record the closest overload to power IDE services.
+        let mut overload_trace = |target: &TargetWithTParams<Function>| {
+            let tparams = target
+                .0
+                .as_ref()
+                .filter(|tparams| !tparams.is_empty())
+                .cloned();
+            OverloadTrace::new(target.1.signature.clone(), tparams)
+        };
+        let all_overload_traces = overloads.iter().map(&mut overload_trace).collect();
+        let closest_overload_trace = overload_trace(&closest_overload.func);
         self.record_overload_trace(
             arguments_range,
-            overloads.map(|TargetWithTParams(_, Function { signature, .. })| signature),
-            &closest_overload.func.1.signature,
+            all_overload_traces,
+            closest_overload_trace,
             matched,
         );
         if matched {
