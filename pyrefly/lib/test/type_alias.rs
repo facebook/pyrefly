@@ -1240,3 +1240,26 @@ class D:
         self.x = c.y
 "#,
 );
+
+testcase!(
+    test_chained_type_alias_substitution,
+    r#"
+from typing import TypeVar, TypeAlias, assert_type
+
+_T = TypeVar("_T")
+_U = TypeVar("_U")
+
+A: TypeAlias = list[_T]
+B: TypeAlias = A[_U]
+C: TypeAlias = B[int]
+
+def f1(x: A[int]) -> None:
+    assert_type(x, list[int])
+
+def f2(x: B[int]) -> None:
+    assert_type(x, list[int])
+
+def f3(x: C) -> None:
+    assert_type(x, list[int])
+    "#,
+);

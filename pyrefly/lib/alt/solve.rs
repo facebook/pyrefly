@@ -1506,16 +1506,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::Annotated(inner) => *inner,
                     _ => return,
                 };
+                // Recursively expand any Refs in the inlined body, so that all nested
+                // alias bodies are inlined before we apply the outer substitution.
+                visiting.insert(key);
+                self.expand_type_alias_refs_inner(&mut body, visiting);
+                visiting.shift_remove(&key);
                 // Apply type arguments if the reference was parameterized.
                 // For generic aliases used without explicit args, promote_forall
                 // in untype_opt will have already injected implicit Any args.
                 if let Some(args) = &r.args {
                     args.substitute_into_mut(&mut body);
                 }
-                // Recursively expand any Refs in the inlined body
-                visiting.insert(key);
-                self.expand_type_alias_refs_inner(&mut body, visiting);
-                visiting.shift_remove(&key);
                 *ty = body;
             }
             _ => ty.recurse_mut(&mut |child: &mut Type| {
