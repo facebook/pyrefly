@@ -1221,6 +1221,18 @@ def g(x: object, y: type[Any]) -> None:
 );
 
 testcase!(
+    test_isinstance_type_no_widen,
+    r#"
+from typing import Literal, assert_type
+
+def f(flag: bool, t: type) -> None:
+    x = 1 if flag else "foo"
+    if isinstance(x, t):
+        assert_type(x, Literal[1, "foo"])
+"#,
+);
+
+testcase!(
     test_isinstance_type_negative_no_narrow,
     r#"
 from typing import assert_type

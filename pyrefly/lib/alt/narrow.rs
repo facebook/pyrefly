@@ -65,6 +65,7 @@ use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
 use crate::types::type_var::Restriction;
+use crate::types::types::AnyStyle;
 use crate::types::types::CalleeKind;
 use crate::types::types::TParams;
 use crate::types::types::Type;
@@ -117,6 +118,10 @@ const NARROW_ENUM_LIMIT: usize = 100;
 enum IntersectFallback {
     Never,
     Right,
+}
+
+fn has_implicit_type_argument(ty: &Type) -> bool {
+    matches!(ty, Type::Type(inner) if matches!(&**inner, Type::Any(AnyStyle::Implicit)))
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
@@ -697,15 +702,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn narrow_isinstance_from_definite(&self, left: &Type, right: &Type) -> Type {
+        let has_implicit_type_argument = has_implicit_type_argument(right);
         self.distribute_over_union(left, |l| {
             self.with_fresh_class_info_target(l, right, |right| {
-                if right.is_any() {
-                    // NOTE(grievejia): The most precise refinement would be `left`:
-                    // `isinstance(x, Any)` provides no concrete evidence about the type
-                    // of `x`, so keeping the original type is sound. In practice, that is
-                    // currently too strict for some primer projects. Refining to `Any` is
-                    // a gradual-typing compromise; we can revisit `left` in strict mode.
-                    right.clone()
+                if has_implicit_type_argument && right.is_any() {
+                    // A class object with an omitted type argument gives no evidence about the
+                    // subject, so it should not replace a known type with `Unknown`.
+                    l.clone()
                 } else {
                     // TODO: falling back to Never when the lhs is a union is a hack to get
                     // reasonable behavior in cases like this:
@@ -817,7 +820,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if !allows_negative_narrow {
                     continue;
                 }
+                let has_implicit_type_argument = has_implicit_type_argument(right);
                 if let Some((tparams, right)) = self.unwrap_class_info_target(&result, right) {
+                    if has_implicit_type_argument && right.is_any() {
+                        continue;
+                    }
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
