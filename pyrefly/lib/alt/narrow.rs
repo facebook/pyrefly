@@ -447,6 +447,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for right in self.as_class_info(right.clone()) {
             res.push(self.distribute_over_union(left, |l| {
                 if let Some((tparams, right)) = self.unwrap_isinstance_target(l, &right) {
+                    if right.is_any() {
+                        // An unknown class object (e.g. `type[Any]`) shouldn't widen the subject.
+                        return l.clone();
+                    }
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
@@ -500,6 +504,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     continue;
                 }
                 if let Some((tparams, right)) = self.unwrap_isinstance_target(&result, right) {
+                    if right.is_any() {
+                        continue;
+                    }
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
