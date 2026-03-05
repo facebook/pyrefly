@@ -1753,12 +1753,12 @@ fn test_star_import_unused_variable_type_change() {
     i.check_ignoring_expectations(&["bar"], &["foo", "bar"]);
 }
 
-/// Test that star import errors clear when a missing name is added to the module.
+/// Test that star imports don't surface missing-name errors when __all__ is invalid.
 ///
-/// When `__all__` lists a name that doesn't exist, star importers get an error.
-/// Adding the missing definition should clear the error.
+/// When `__all__` lists a name that doesn't exist, the error should be reported
+/// on the `__all__` definition, not on star-importers.
 #[test]
-fn test_dunder_all_star_import_missing_definition_error_clears() {
+fn test_dunder_all_star_import_missing_definition_no_import_error() {
     let mut i = Incremental::new();
 
     // foo has __all__ = ["x", "y"] but only defines x - y is missing
@@ -1766,27 +1766,25 @@ fn test_dunder_all_star_import_missing_definition_error_clears() {
         "foo",
         "x = 1\n__all__ = [\"x\", \"y\"] # E: Name `y` is listed in `__all__` but is not defined",
     );
-    // main does star import and tries to use y - should error
-    i.set(
-        "main",
-        "from foo import * # E: Could not import `y` from `foo`\nz = y",
-    );
+    // main does star import and tries to use y - should not error here
+    i.set("main", "from foo import *\nz = y");
     i.check(&["main", "foo"], &["main", "foo"]);
 
     let main_handle = i.handle("main");
 
-    // Verify there's an error
+    // Verify there's no error in the importing module
     let errors = i
         .state
         .transaction()
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
-        "Expected error when using name listed in __all__ but not defined"
+        errors.shown.is_empty(),
+        "Expected no errors in star importer, but got: {:?}",
+        errors.shown
     );
 
-    // Add the missing definition - error should disappear
+    // Add the missing definition - still no errors
     i.set("foo", "x = 1\ny = 2\n__all__ = [\"x\", \"y\"]");
     i.check_ignoring_expectations(&["main"], &["foo", "main"]);
 

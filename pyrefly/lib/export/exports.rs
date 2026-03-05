@@ -66,6 +66,10 @@ pub trait LookupExport {
 
     /// Check if an export is marked as `Final`. Records a dependency on `name` from `module` regardless of if it exists.
     fn is_final(&self, module: ModuleName, name: &Name) -> bool;
+
+    /// Check if the module has an explicitly specified `__all__`.
+    /// Records a dependency on the module's wildcard exports.
+    fn has_explicit_dunder_all(&self, module: ModuleName) -> bool;
 }
 
 #[derive(Debug, Clone)]
@@ -241,6 +245,10 @@ impl Exports {
     /// Get the docstring for this module.
     pub fn docstring_range(&self) -> Option<TextRange> {
         self.docstring_range
+    }
+
+    pub fn has_explicit_dunder_all(&self) -> bool {
+        self.definitions.dunder_all.kind == DunderAllKind::Specified
     }
 
     /// If `position` is inside a user-specified `__all__` string entry, return its range and name.
@@ -473,6 +481,11 @@ mod tests {
 
         fn is_final(&self, _module: ModuleName, _name: &Name) -> bool {
             false
+        }
+
+        fn has_explicit_dunder_all(&self, module: ModuleName) -> bool {
+            self.get(&module)
+                .is_some_and(|exports| exports.has_explicit_dunder_all())
         }
     }
 
