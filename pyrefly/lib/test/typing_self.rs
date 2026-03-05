@@ -310,3 +310,18 @@ class B(A[Y1 | Y2], Generic[Y1, Y2]):
     def __new__(cls, A: A[Y1], B: A[Y2]) -> Self: ...
     "#,
 );
+
+testcase!(
+    bug = "should not error",
+    test_self_return_in_classmethod,
+    r#"
+from typing import Self
+class C:
+    @classmethod
+    def bar(cls) -> Self:
+        return cls(1) # E: Returned type `C` is not assignable to declared return type `Self@C`
+
+    def __new__(cls, value: int) -> Self:  # Accepted
+        return cls(1) # E: Returned type `C` is not assignable to declared return type `Self@C`
+"#,
+);
