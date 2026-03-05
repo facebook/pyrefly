@@ -211,6 +211,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: &dyn Fn() -> ErrorContext,
     ) -> Type {
         let mut first_call = None;
+        let mut successful_ret = self.heap.mk_never();
+        let not_implemented_type = self.stdlib.not_implemented_type();
         for (dunder, target, arg) in calls {
             let method_type_dunder = self.type_of_magic_dunder_attr(
                 target,
@@ -239,13 +241,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Soft errors (e.g. unknown-argument-type) must not reject an otherwise
             // valid dunder call, so gate on hard errors only.
             if !call_errors.has_hard() {
+                let ret_without_not_implemented = self.distribute_over_union(&ret, |ret| {
+                    if matches!(ret, Type::ClassType(cls) if cls == not_implemented_type) {
+                        self.heap.mk_never()
+                    } else {
+                        ret.clone()
+                    }
+                });
+                if ret_without_not_implemented.is_never() {
+                    continue;
+                }
                 errors.extend(callee_errors);
-                return ret;
+                if ret_without_not_implemented != ret {
+                    successful_ret = self.union(successful_ret, ret_without_not_implemented);
+                    continue;
+                }
+                return self.union(successful_ret, ret_without_not_implemented);
             } else if first_call.is_none() {
                 first_call = Some((callee_errors, call_errors, ret));
             }
         }
-        if let Some((callee_errors, call_errors, ret)) = first_call {
+        if !successful_ret.is_never() {
+            successful_ret
+        } else if let Some((callee_errors, call_errors, ret)) = first_call {
             errors.extend(callee_errors);
             errors.extend(call_errors);
             ret
