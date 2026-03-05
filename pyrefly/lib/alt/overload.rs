@@ -281,10 +281,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
 
                 // Step 3: perform argument type expansion.
+                // Per the spec, step 3 runs ONLY when step 2 fails. However, when step 2
+                // succeeds with a union argument, the result may be imprecise: e.g.,
+                // `round(int | float, 4)` may resolve to `float` (since `int <: float`
+                // satisfies the overload constraint), whereas the precise result is
+                // `int | float` (each union member independently picks its overload).
+                //
+                // To improve precision, we also run step 3 even when step 2 already matched.
+                // If step 3 succeeds AND produces a different (more specific) type, we
+                // prefer step 3's union-of-results over the second step single result.
+
                 let mut args_expander = ArgsExpander::new(args.clone(), keywords.clone(), self);
                 let owner = Owner::new();
-                'outer: while !matched && let Some(arg_lists) = args_expander.expand(errors, &owner)
-                {
+                'outer: while let Some(arg_lists) = args_expander.expand(errors, &owner) {
                     // Expand by one argument (for example, try splitting up union types), and try the call with each
                     // resulting arguments list.
                     // - If all expanded lists match, we union all return types together and declare a successful match
@@ -304,17 +313,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             &ctor_targs,
                         );
                         if !cur_matched {
+                            // This expansion didn't work; try the next splittable argument.
+                            // If step 2 already matched, we simply keep the step-2 result.
                             continue 'outer;
                         }
                         matched_overloads.push(cur_closest);
                     }
-                    if let Some(first_overload) = matched_overloads.first() {
-                        closest_overload = CalledOverload {
-                            func: first_overload.func.clone(),
-                            ctor_targs: first_overload.ctor_targs.clone(),
-                            res: self.unions(matched_overloads.into_map(|o| o.res)),
-                            call_errors: self.error_collector(),
-                        };
+                    if !matched_overloads.is_empty() {
+                        let first_func = matched_overloads[0].func.clone();
+                        let first_ctor_targs = matched_overloads[0].ctor_targs.clone();
+                        let step3_res = self.unions(matched_overloads.into_map(|o| o.res));
+                        if !matched || step3_res != closest_overload.res {
+                            // case where either step 2 failed (so we must use step 3), or step 3
+                            // produced a more precise result (e.g. `int | float` instead
+                            // of `float`) => Prefer step 3.
+                            closest_overload = CalledOverload {
+                                func: first_func,
+                                ctor_targs: first_ctor_targs,
+                                res: step3_res,
+                                call_errors: self.error_collector(),
+                            };
+                        }
                         matched = true;
                         break;
                     }
