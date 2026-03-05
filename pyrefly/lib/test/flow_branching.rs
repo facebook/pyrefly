@@ -994,7 +994,6 @@ except as r: # E: Parse error: Expected one or more exception types
 );
 
 testcase!(
-    bug = "We unsoundly merge narrows dropping missing flow. See the incorrect reveal_type(y) result.",
     test_narrows_in_flow_merge_when_not_in_base_flow,
     r#"
 from typing import reveal_type
@@ -1010,10 +1009,8 @@ def f():
     elif isinstance(x, C):
         assert isinstance(y, C)
         pass
-    # We get this case right, but for a brittle reason: we negate the tests in the base flow.
-    reveal_type(x)  # E: revealed type: A | B | C
-    # The negation trick doesn't work here, and we get an incorrect narrow.
-    reveal_type(y)  # E: revealed type: B | C
+    reveal_type(x)  # E: revealed type: A
+    reveal_type(y)  # E: revealed type: A
 "#,
 );
 

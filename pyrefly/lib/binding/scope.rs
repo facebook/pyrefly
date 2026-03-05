@@ -716,6 +716,24 @@ impl FlowStyle {
             }
         }
     }
+
+    // Transform uninitialized flow styles to FlowStyle::Other
+    // This lets us assume captured variables exist in nested scopes
+    pub fn assume_initialized(self) -> Self {
+        match self {
+            FlowStyle::Import(..)
+            | FlowStyle::ImportAs(_)
+            | FlowStyle::MergeableImport(_)
+            | FlowStyle::FunctionDef { .. }
+            | FlowStyle::ClassDef
+            | FlowStyle::ClassField { .. }
+            | FlowStyle::LoopRecursion
+            | FlowStyle::Other => self,
+            FlowStyle::Uninitialized
+            | FlowStyle::PossiblyUninitialized
+            | FlowStyle::MaybeInitialized { .. } => FlowStyle::Other,
+        }
+    }
 }
 
 /// Because of complications related both to recursion in the binding graph and to
@@ -1231,6 +1249,19 @@ impl Scopes {
 
     pub fn clone_current_flow(&self) -> Flow {
         self.current().flow.clone()
+    }
+
+    /// Returns names that are implicit captures in the current scope:
+    /// read in the body but not locally defined (not in static definitions).
+    /// Parameters are excluded because they are in static definitions.
+    pub fn implicit_capture_names(&self) -> SmallSet<Name> {
+        let scope = self.current();
+        scope
+            .implicit_captures
+            .iter()
+            .filter(|name| scope.stat.0.get_hashed(Hashed::new(*name)).is_none())
+            .cloned()
+            .collect()
     }
 
     pub fn in_class_body(&self) -> bool {
@@ -1823,6 +1854,15 @@ impl Scopes {
         let info = self.get_flow_info(name)?;
         let value = info.value()?;
         Some((value.idx, value.style.clone()))
+    }
+
+    /// Look up the FlowStyle for `name`, skipping class body scopes
+    pub fn flow_style_for_name(&self, name: &Name) -> Option<FlowStyle> {
+        let hashed = Hashed::new(name);
+        self.visit_scopes(|_, scope, _| {
+            let value = scope.flow.get_info_hashed(hashed)?.value()?;
+            Some(value.style.clone())
+        })
     }
 
     /// Look up either `name` or `base_name.name` in the current scope, assuming we are

@@ -1115,6 +1115,27 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_name(&name.id, idx, FlowStyle::Other);
     }
 
+    /// For names that are read but not locally-defined (implicit captures),
+    /// this method creates flow entries pointing to the outer scope's binding.
+    pub fn seed_captured_variables(&mut self) {
+        let captures = self.scopes.implicit_capture_names();
+        for name in captures.into_iter() {
+            let hashed_name = Hashed::new(&name);
+            let name_read_info = self
+                .scopes
+                .look_up_name_for_read(hashed_name, &Usage::Narrowing(None));
+            if let NameReadInfo::Anywhere { key, .. } = name_read_info {
+                let idx = self.idx_for_promise(key);
+                let style = self
+                    .scopes
+                    .flow_style_for_name(&name)
+                    .map(FlowStyle::assume_initialized)
+                    .unwrap_or(FlowStyle::Other);
+                self.scopes.define_in_current_flow(hashed_name, idx, style);
+            }
+        }
+    }
+
     /// Look up a name in scope, marking it as used, but without first-use detection.
     ///
     /// This is the primary lookup method for deferred BoundName creation.

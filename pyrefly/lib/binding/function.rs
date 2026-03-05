@@ -311,6 +311,7 @@ impl<'a> BindingsBuilder<'a> {
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
         self.parameters(parameters, undecorated_idx, class_key, method_self_kind);
         self.init_static_scope(&body, false);
+        self.seed_captured_variables();
         if class_key.is_some() && !self.scopes.current_static_contains(&dunder::CLASS) {
             let implicit_range = TextRange::empty(range.start());
             let dunder_class_identifier = Identifier::new(dunder::CLASS.clone(), implicit_range);

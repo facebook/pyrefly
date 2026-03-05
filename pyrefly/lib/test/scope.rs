@@ -947,7 +947,7 @@ def test_annotated():
             return None
         for b in bs:
             break
-        return x # E:
+        return x
 def test_unannotated():
     x = {}
     def nested(a: int, bs: list[int]):
@@ -955,6 +955,6 @@ def test_unannotated():
             return None
         for b in bs:
             break
-        return x # E:
+        return x
 "#,
 );
