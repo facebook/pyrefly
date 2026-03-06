@@ -8,6 +8,7 @@
  */
 
 import {ExtensionContext, workspace} from 'vscode';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   CancellationToken,
@@ -34,6 +35,8 @@ import {
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
 let traceOutputChannel: vscode.OutputChannel;
+let runTerminal: vscode.Terminal | undefined;
+let runTerminalCwd: string | undefined;
 
 /// Get a setting at the path, or throw an error if it's not set.
 function requireSetting<T>(path: string): T {
@@ -90,6 +93,154 @@ async function overridePythonPath(
     }),
   );
   return newResult;
+}
+
+function shellQuote(value: string): string {
+  if (value.length === 0) {
+    return "''";
+  }
+  if (process.platform === 'win32') {
+    return `"${value.replace(/"/g, '\\"')}"`;
+  }
+  return "'" + value.replace(/'/g, "'\"'\"'") + "'";
+}
+
+function getRunTerminal(cwd?: string): vscode.Terminal {
+  if (runTerminal && cwd && runTerminalCwd && runTerminalCwd !== cwd) {
+    runTerminal.dispose();
+    runTerminal = undefined;
+    runTerminalCwd = undefined;
+  }
+  if (!runTerminal) {
+    runTerminal = vscode.window.createTerminal({
+      name: 'Pyrefly Run',
+      cwd,
+    });
+    runTerminalCwd = cwd;
+  }
+  return runTerminal;
+}
+
+function moduleNameFromPath(uri: vscode.Uri): string | undefined {
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+  if (!workspaceFolder) {
+    return undefined;
+  }
+  let relativePath = path.relative(workspaceFolder.uri.fsPath, uri.fsPath);
+  if (relativePath.startsWith('..')) {
+    return undefined;
+  }
+  if (relativePath.endsWith('.py')) {
+    relativePath = relativePath.slice(0, -3);
+  }
+  return relativePath
+    .split(path.sep)
+    .filter(part => part.length > 0)
+    .join('.');
+}
+
+async function runTestAtLocation(
+  args: {
+    uri?: string;
+    position?: {line: number; character: number};
+    testName?: string;
+    className?: string;
+    isUnittest?: boolean;
+  },
+  pythonExtension: PythonExtension,
+) {
+  if (!args.uri) {
+    return;
+  }
+  const uri = vscode.Uri.parse(args.uri);
+  const envPath = await pythonExtension.environments.getActiveEnvironmentPath(
+    uri,
+  );
+  const pythonPath = envPath.path;
+  const interpreter = pythonPath.length > 0 ? pythonPath : 'python';
+  const cwd = vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath;
+  const terminal = getRunTerminal(cwd);
+
+  const className = args.className;
+  const testName = args.testName;
+  const isUnittest = args.isUnittest === true;
+
+  if (args.position && !testName && !className) {
+    const document = await vscode.workspace.openTextDocument(uri);
+    const editor = await vscode.window.showTextDocument(document, {
+      preview: false,
+    });
+    const position = new vscode.Position(
+      args.position.line,
+      args.position.character,
+    );
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position));
+    await vscode.commands.executeCommand('testing.runAtCursor');
+    return;
+  }
+
+  let command: string | undefined;
+  if (isUnittest) {
+    const moduleName = moduleNameFromPath(uri);
+    if (moduleName) {
+      let target = moduleName;
+      if (className) {
+        target = `${target}.${className}`;
+      }
+      if (testName) {
+        target = `${target}.${testName}`;
+      }
+      command = `${shellQuote(interpreter)} -m unittest ${shellQuote(target)}`;
+    } else {
+      if (args.position) {
+        const document = await vscode.workspace.openTextDocument(uri);
+        const editor = await vscode.window.showTextDocument(document, {
+          preview: false,
+        });
+        const position = new vscode.Position(
+          args.position.line,
+          args.position.character,
+        );
+        editor.selection = new vscode.Selection(position, position);
+        editor.revealRange(new vscode.Range(position, position));
+        await vscode.commands.executeCommand('testing.runAtCursor');
+      }
+      return;
+    }
+  } else {
+    let nodeId = uri.fsPath;
+    if (className) {
+      nodeId = `${nodeId}::${className}`;
+    }
+    if (testName) {
+      nodeId = `${nodeId}::${testName}`;
+    }
+    command = `${shellQuote(interpreter)} -m pytest ${shellQuote(nodeId)}`;
+  }
+
+  terminal.show(true);
+  terminal.sendText(command ?? `${shellQuote(interpreter)} -m pytest`);
+}
+
+async function runMainFile(
+  args: {uri?: string},
+  pythonExtension: PythonExtension,
+) {
+  if (!args.uri) {
+    return;
+  }
+  const uri = vscode.Uri.parse(args.uri);
+  const envPath = await pythonExtension.environments.getActiveEnvironmentPath(
+    uri,
+  );
+  const pythonPath = envPath.path;
+  const interpreter = pythonPath.length > 0 ? pythonPath : 'python';
+  const command = `${shellQuote(interpreter)} ${shellQuote(uri.fsPath)}`;
+  const cwd = vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath;
+  const terminal = getRunTerminal(cwd);
+  terminal.show(true);
+  terminal.sendText(command);
 }
 
 export async function activate(context: ExtensionContext) {
@@ -234,6 +385,27 @@ export async function activate(context: ExtensionContext) {
     }),
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('pyrefly.runTest', async args => {
+      await runTestAtLocation(
+        args as {
+          uri?: string;
+          position?: {line: number; character: number};
+          testName?: string;
+          className?: string;
+          isUnittest?: boolean;
+        },
+        pythonExtension,
+      );
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('pyrefly.runMain', async args => {
+      await runMainFile(args as {uri?: string}, pythonExtension);
+    }),
+  );
+
   // When our extension is activated, make sure ms-python knows
   // TODO(kylei): remove this hack once ms-python has this behavior
   await triggerMsPythonRefreshLanguageServers();
@@ -267,6 +439,15 @@ export async function activate(context: ExtensionContext) {
   if (statusBarItem) {
     context.subscriptions.push(statusBarItem);
   }
+
+  context.subscriptions.push(
+    vscode.window.onDidCloseTerminal(terminal => {
+      if (terminal === runTerminal) {
+        runTerminal = undefined;
+        runTerminalCwd = undefined;
+      }
+    }),
+  );
 }
 
 export function deactivate(): Thenable<void> | undefined {
@@ -279,6 +460,11 @@ export function deactivate(): Thenable<void> | undefined {
   }
   if (traceOutputChannel) {
     traceOutputChannel.dispose();
+  }
+  if (runTerminal) {
+    runTerminal.dispose();
+    runTerminal = undefined;
+    runTerminalCwd = undefined;
   }
   return client.stop();
 }

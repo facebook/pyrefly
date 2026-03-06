@@ -7,6 +7,7 @@
 
 mod build_system;
 pub mod call_hierarchy;
+pub mod code_lens;
 pub mod convert_module_package;
 pub mod document_symbols;
 pub mod external_references;
