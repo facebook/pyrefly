@@ -3483,11 +3483,11 @@ def caller():
 }
 
 #[test]
-fn change_signature_remove_parameter_updates_calls() {
+fn change_signature_remove_unused_parameter_updates_calls() {
     let code = r#"
 def greet(name, message):
 #                ^
-    return f"{message}, {name}"
+    return name
 
 def caller():
     greet("Ada", "Hello")
@@ -3498,13 +3498,29 @@ def caller():
     let expected = r#"
 def greet(name):
 #                ^
-    return f"{message}, {name}"
+    return name
 
 def caller():
     greet(name="Ada")
     greet(name="Bob")
 "#;
     assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn change_signature_does_not_remove_used_parameter() {
+    let code = r#"
+def greet(name, message):
+#                ^
+    return f"{message}, {name}"
+"#;
+    let (_, _, titles) = compute_change_signature_actions(code);
+    assert!(
+        !titles
+            .iter()
+            .any(|title| title == "Remove parameter `message`"),
+        "did not expect remove-parameter action for used parameter, found {titles:?}"
+    );
 }
 
 #[test]
