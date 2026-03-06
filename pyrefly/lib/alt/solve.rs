@@ -1438,12 +1438,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.scoped_type_params(scoped_tparams.as_ref(), errors)
             }
         };
-        Forallable::TypeAlias(TypeAliasData::Value(ta)).forall(self.validated_tparams(
-            range,
-            tparams,
-            TParamsSource::TypeAlias,
-            errors,
-        ))
+        let validated_tparams =
+            self.validated_tparams(range, tparams, TParamsSource::TypeAlias, errors);
+        if validated_tparams.is_empty() {
+            let name = name.as_str();
+            match ta.as_type_mut() {
+                Type::Union(box Union { display_name, .. }) => {
+                    if display_name.is_none() {
+                        *display_name = Some(name.into());
+                    }
+                }
+                Type::Type(inner) => {
+                    if let Type::Union(box Union { display_name, .. }) = inner.as_mut()
+                        && display_name.is_none()
+                    {
+                        *display_name = Some(name.into());
+                    }
+                }
+                _ => {}
+            }
+        }
+        Forallable::TypeAlias(TypeAliasData::Value(ta)).forall(validated_tparams)
     }
 
     /// Create TParams for a recursive reference to a type alias. This is essentially a
@@ -5122,7 +5137,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypeAlias(box TypeAliasData::Value(ta)) => {
                 let mut aliased_type = self.untype_opt(ta.as_type(), range, errors)?;
                 if let Type::Union(box Union { display_name, .. }) = &mut aliased_type {
-                    *display_name = Some(ta.name.as_str().into());
+                    if display_name.is_none() {
+                        *display_name = Some(ta.name.as_str().into());
+                    }
                 }
                 Some(aliased_type)
             }
