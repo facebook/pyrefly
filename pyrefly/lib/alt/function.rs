@@ -1683,21 +1683,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     impl_sig.clone(),
                 ))
             });
-            // For methods of a class, skip the return type check. Comparing
-            // return types that reference the defining class (e.g. `partial[...]`)
-            // triggers variance computation, which needs class fields (including
-            // this very overloaded method), causing a cycle.
-            if def.defining_cls().is_none() {
-                let overload_ret = overload_func
-                    .signature
-                    .ret
-                    .clone()
-                    .self_type_to_class_type();
-                let impl_func_ret = impl_func.signature.ret.clone().self_type_to_class_type();
-                self.check_type(&overload_ret, &impl_func_ret, *range, errors, &|| {
-                    TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn)
-                });
-            }
+            let overload_ret = overload_func
+                .signature
+                .ret
+                .clone()
+                .self_type_to_class_type();
+            let impl_func_ret = impl_func.signature.ret.clone().self_type_to_class_type();
+            self.check_type(&overload_ret, &impl_func_ret, *range, errors, &|| {
+                TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn)
+            });
             if let Err(specialization_errors) = self.solver().finish_quantified(vs, false) {
                 let mut msg = vec1![format!(
                     "Overload signature `{}` is not consistent with implementation signature `{}`",
@@ -2100,8 +2094,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                     }
                 }
-                // type[Self] is valid (default type)
-                Type::Type(box Type::SelfType(_)) => {}
+                // type[Self] and type[TypeVar] are valid
+                Type::Type(box Type::SelfType(_) | box Type::Quantified(_)) => {}
                 _ => {
                     errors.add(
                         range,
