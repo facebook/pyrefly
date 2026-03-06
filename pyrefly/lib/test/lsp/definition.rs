@@ -61,6 +61,30 @@ fn get_test_report_do_not_jump_through_renamed_import(
     }
 }
 
+fn get_declaration_report(state: &State, handle: &Handle, position: TextSize) -> String {
+    let defs = state
+        .transaction()
+        .goto_declaration(handle, position)
+        .unwrap_or_default();
+    if !defs.is_empty() {
+        defs.into_iter()
+            .map(
+                |TextRangeWithModule {
+                     module: module_info,
+                     range,
+                 }| {
+                    format!(
+                        "Declaration Result:\n{}",
+                        code_frame_of_source_at_range(module_info.contents(), range)
+                    )
+                },
+            )
+            .join("\n")
+    } else {
+        "Declaration Result: None".to_owned()
+    }
+}
+
 #[test]
 fn ignored_test() {
     let code = r#"
@@ -153,6 +177,58 @@ Definition Result:
 Definition Result:
 11 | class A: pass
            ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn overriding_method_declaration_jumps_to_parent_test() {
+    let code = r#"
+class Base:
+    def f(self) -> int:
+        return 1
+
+class Child(Base):
+    def f(self) -> int:
+#       ^
+        return 2
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_declaration_report);
+    assert_eq!(
+        r#"
+# main.py
+7 |     def f(self) -> int:
+            ^
+Declaration Result:
+3 |     def f(self) -> int:
+            ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn overriding_class_attribute_declaration_jumps_to_parent_test() {
+    let code = r#"
+class Base:
+    value = 1
+
+class Child(Base):
+    value = 2
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_declaration_report);
+    assert_eq!(
+        r#"
+# main.py
+6 |     value = 2
+        ^
+Declaration Result:
+3 |     value = 1
+        ^^^^^
 "#
         .trim(),
         report.trim(),
