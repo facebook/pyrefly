@@ -95,7 +95,11 @@ enum Variable {
     /// the default type if the first use does not pin.
     PartialQuantified(Quantified),
     /// A variable due to generic instantiation, `def f[T](x: T): T` with `f(1)`
-    Quantified { quantified: Quantified },
+    Quantified {
+        quantified: Quantified,
+        /// Does this variable have `typing.Any` as a lower bound?
+        has_any_lower_bound: bool,
+    },
     /// A variable caused by general recursion, e.g. `x = f(); def f(): return x`.
     Recursive,
     /// A loop-recursive variable, e.g. `x = None; while x is None: x = f()`
@@ -135,7 +139,11 @@ impl Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Variable::PartialContained(_) => write!(f, "PartialContained"),
-            Variable::PartialQuantified(q) | Variable::Quantified { quantified: q } => {
+            Variable::PartialQuantified(q)
+            | Variable::Quantified {
+                quantified: q,
+                has_any_lower_bound: _,
+            } => {
                 let label = if matches!(self, Variable::PartialQuantified(_)) {
                     "PartialQuantified"
                 } else {
@@ -363,7 +371,10 @@ impl Solver {
                 // which do not represent placeholder types.
                 None
             }
-            Variable::Quantified { quantified: q } => {
+            Variable::Quantified {
+                quantified: q,
+                has_any_lower_bound: _,
+            } => {
                 // A Variable::Quantified should always be finished (see `finish_quantified`) by
                 // the code that creates it, because we need to know when we're done collecting
                 // constraints. If we see a Quantified while pinning other placeholder types, that
@@ -478,7 +489,10 @@ impl Solver {
             }
             _ => {
                 let ty = match &mut *e {
-                    Variable::Quantified { quantified: q } => q.as_gradual_type(),
+                    Variable::Quantified {
+                        quantified: q,
+                        has_any_lower_bound: _,
+                    } => q.as_gradual_type(),
                     Variable::PartialQuantified(q) => q.as_gradual_type(),
                     _ => self.heap.mk_any_implicit(),
                 };
@@ -750,6 +764,7 @@ impl Solver {
                 *v,
                 Variable::Quantified {
                     quantified: (*q).clone(),
+                    has_any_lower_bound: false,
                 },
             );
         }
@@ -863,12 +878,19 @@ impl Solver {
                         err.push(e.clone());
                     }
                 }
-                Variable::Quantified { quantified: q } => {
-                    if infer_with_first_use {
-                        *e = Variable::finished(q);
-                    } else {
-                        *e = Variable::Answer(q.as_gradual_type())
-                    }
+                Variable::Quantified {
+                    quantified: q,
+                    has_any_lower_bound: false,
+                } if infer_with_first_use => {
+                    *e = Variable::finished(q);
+                }
+                Variable::Quantified {
+                    quantified: q,
+                    has_any_lower_bound: _,
+                } => {
+                    // Either `infer_with_first_use` is false or the variable has already been
+                    // solved to `Any`.
+                    *e = Variable::Answer(q.as_gradual_type());
                 }
                 _ => {}
             }
@@ -905,6 +927,7 @@ impl Solver {
                     v,
                     Variable::Quantified {
                         quantified: param.clone(),
+                        has_any_lower_bound: false,
                     },
                 );
             }
@@ -924,7 +947,11 @@ impl Solver {
         let lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Var(v) = t
-                && let Variable::Quantified { quantified: q } = &*lock.get(*v)
+                && let Variable::Quantified {
+                    quantified: q,
+                    // If the variable has already been solved to `Any`, do not generalize it.
+                    has_any_lower_bound: false,
+                } = &*lock.get(*v)
                 && *q == *param
             {
                 *t = param.clone().to_type(&self.heap);
@@ -1599,8 +1626,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     // The `unify` function preserves the Variable data from its second argument,
                     // so we call it with the stricter bound in the v2 position.
                     (
-                        Variable::Quantified { quantified: q1 },
-                        Variable::Quantified { quantified: q2 },
+                        Variable::Quantified {
+                            quantified: q1,
+                            has_any_lower_bound: _,
+                        },
+                        Variable::Quantified {
+                            quantified: q2,
+                            has_any_lower_bound: _,
+                        },
                     )
                     | (Variable::PartialQuantified(q1), Variable::PartialQuantified(q2)) => {
                         let r1 = q1.restriction().clone();
@@ -1649,7 +1682,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                         Ok(())
                     }
-                    (_, Variable::Quantified { quantified: _ }) => {
+                    (
+                        _,
+                        Variable::Quantified {
+                            quantified: _,
+                            has_any_lower_bound: _,
+                        },
+                    ) => {
                         drop(variable1);
                         drop(variable2);
                         // `unify` preserves the Variable in its second argument. When a Quantified
@@ -1676,7 +1715,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         self.is_subset_eq(&t1, t2)
                     }
-                    Variable::Quantified { quantified: q } | Variable::PartialQuantified(q) => {
+                    Variable::Quantified {
+                        quantified: q,
+                        has_any_lower_bound: _,
+                    }
+                    | Variable::PartialQuantified(q) => {
                         let name = q.name.clone();
                         let bound = q
                             .restriction()
@@ -1769,7 +1812,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         self.is_subset_eq(t1, &t2)
                     }
-                    Variable::Quantified { quantified: q } | Variable::PartialQuantified(q) => {
+                    Variable::Quantified {
+                        quantified: q,
+                        has_any_lower_bound: _,
+                    }
+                    | Variable::PartialQuantified(q) => {
                         let t1_p = t1
                             .clone()
                             .promote_implicit_literals(self.type_order.stdlib());
