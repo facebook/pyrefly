@@ -664,7 +664,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         .forall(tparams);
         ty = self.move_return_tparams_of_type(ty);
         for (x, range) in def.decorators.iter().rev() {
-            ty = self.apply_function_decorator(x.clone(), ty, &def.metadata, *range, errors);
+            ty = self.apply_function_decorator(
+                x.clone(),
+                ty,
+                &def.metadata,
+                &def.defining_cls,
+                *range,
+                errors,
+            );
         }
         Arc::new(ty)
     }
@@ -1261,6 +1268,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorator: Type,
         decoratee: Type,
         metadata: &FuncMetadata,
+        defining_cls: &Option<Class>,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
@@ -1280,9 +1288,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Forall(forall) => (Some(forall.tparams.clone()), forall.body.clone().as_type()),
             _ => (None, decoratee.clone()),
         };
-        // Convert SelfType to ClassType so that e.g. `(self: Self@C) -> int` is compatible
-        // with a decorator parameter like `Callable[[C], int]`.
-        let decoratee_arg = decoratee_arg.self_type_to_class_type();
+        // Substitute SelfType with the concrete class type so that e.g. `(self: Self@C) -> int`
+        // is compatible with a decorator parameter like `Callable[[C], int]`.
+        let mut decoratee_arg = decoratee_arg;
+        if let Some(cls) = defining_cls {
+            let cls_type = self.instantiate(cls);
+            decoratee_arg.subst_self_type_mut(&cls_type);
+        }
         let arg = CallArg::ty(&decoratee_arg, range);
         // Compute the raw return type - this may need tweaks to handle Forall well.
         let inferred_ty =
@@ -1609,9 +1621,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(Arc::new(all_tparams))
             }
         };
+        let cls_type = def.defining_cls().map(|cls| self.instantiate(cls));
         let has_self_param = def.defining_cls().is_some() && !def.metadata().flags.is_staticmethod;
         let sig_for_input_check = |sig: &Callable| {
-            let mut sig = sig.clone().self_type_to_class_type();
+            let mut sig = sig.clone();
+            if let Some(cls_ty) = &cls_type {
+                sig.subst_self_type_mut(cls_ty);
+            }
             // Set the return type to `Any` so that we check just the input signature.
             sig.ret = self.heap.mk_any_implicit();
             // For methods (non-static), skip the self/cls parameter. Checking it
@@ -1683,12 +1699,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     impl_sig.clone(),
                 ))
             });
-            let overload_ret = overload_func
-                .signature
-                .ret
-                .clone()
-                .self_type_to_class_type();
-            let impl_func_ret = impl_func.signature.ret.clone().self_type_to_class_type();
+            let mut overload_ret = overload_func.signature.ret.clone();
+            let mut impl_func_ret = impl_func.signature.ret.clone();
+            if let Some(cls_ty) = &cls_type {
+                overload_ret.subst_self_type_mut(cls_ty);
+                impl_func_ret.subst_self_type_mut(cls_ty);
+            }
             self.check_type(&overload_ret, &impl_func_ret, *range, errors, &|| {
                 TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn)
             });
@@ -1877,7 +1893,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Convert SelfType to ClassType so that the constructor return type is a concrete class.
         func_type.transform_toplevel_callable(&mut |c: &mut Callable| {
             if let Some(self_type) = c.get_first_param() {
-                c.ret = self_type.self_type_to_class_type();
+                c.ret = match self_type {
+                    Type::SelfType(cls) => Type::ClassType(cls),
+                    other => other,
+                };
             }
         });
         self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)

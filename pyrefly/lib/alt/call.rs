@@ -1339,7 +1339,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Convert SelfType to ClassType so that the constructor return type is a concrete class.
                 let ret_type = t
                     .callable_first_param(self.heap)
-                    .map(|ty| ty.self_type_to_class_type())
+                    .map(|ty| match ty {
+                        Type::SelfType(cls) => Type::ClassType(cls),
+                        other => other,
+                    })
                     .unwrap_or_else(|| class_type.clone());
                 let mut t = t;
                 t.transform_toplevel_callable(&mut |c: &mut Callable| c.ret = ret_type.clone());
