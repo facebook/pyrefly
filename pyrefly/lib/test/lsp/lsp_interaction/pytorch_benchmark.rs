@@ -11,6 +11,8 @@
 //! a type error to propagate from `torch/nn/__init__.py` to
 //! `torch/distributed/pipelining/_backward.py` when removing an export.
 
+#![cfg(not(fbcode_build))]
+
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;

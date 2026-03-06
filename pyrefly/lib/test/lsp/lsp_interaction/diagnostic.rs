@@ -286,7 +286,6 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
 /// Test opening a file while a recheck for another file is happening.
 /// Start with only b open, then open file d while a recheck for b is happening.
 #[test]
-#[ignore] // TODO: flaky
 fn test_open_file_during_recheck() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");

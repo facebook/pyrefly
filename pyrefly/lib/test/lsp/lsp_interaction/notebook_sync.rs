@@ -479,7 +479,6 @@ fn test_notebook_did_change_delete_cell() {
 }
 
 #[test]
-#[ignore] // This currently panics, but not sure how we want to proceed
 fn test_notebook_did_change_add_cell() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
