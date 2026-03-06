@@ -648,7 +648,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(cls) = &def.defining_cls
             && stmt.name.id == dunder::INIT
         {
-            self.validate_init_self_annotation(cls.name(), &callable, def.id_range(), errors);
+            self.validate_init_self_annotation(cls, &callable, def.id_range(), errors);
         }
         // Extend tparams with any implicit jaxtyping dimension TypeVars found
         // in the signature, and detect mixing of native and jaxtyping syntax.
@@ -2014,12 +2014,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Ensure that self annotation does not contain class-scoped type variables.
+    /// Validate the self annotation on `__init__`.
     /// Per spec: https://typing.python.org/en/latest/spec/constructors.html#init-method
-    /// "Class-scoped type variables should not be used in the self annotation"
+    /// - The self type must be the defining class or a superclass of it.
+    /// - Class-scoped type variables should not be used in the self annotation.
     fn validate_init_self_annotation(
         &self,
-        cls_name: &Name,
+        cls: &Class,
         callable: &Callable,
         range: TextRange,
         errors: &ErrorCollector,
@@ -2027,8 +2028,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Params::List(param_list) = &callable.params
             && let Some(Param::Pos(_, self_ty, _)) = param_list.items().first()
             && let Type::ClassType(cls_ty) = self_ty
-            && cls_ty.name() == cls_name
         {
+            let cls_name = cls.name();
+            // The self type must be the defining class itself or a superclass of it.
+            if cls_ty.name() != cls_name
+                && !self
+                    .type_order()
+                    .has_superclass(cls, cls_ty.class_object())
+            {
+                errors.add(
+                    range,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    vec1![format!(
+                        "`__init__` method self type `{}` is not a superclass of class `{cls_name}`",
+                        self.for_display(self_ty.clone()),
+                    )],
+                );
+                return;
+            }
             let tparams_names = cls_ty.tparams().iter().collect::<SmallSet<_>>();
             let mut class_scoped_tvars = SmallSet::new();
             for (_, ty) in cls_ty.targs().iter_paired() {
