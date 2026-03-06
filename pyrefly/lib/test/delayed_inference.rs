@@ -477,3 +477,19 @@ a.add(5)
 assert_type(a, A[int])
     "#,
 );
+
+testcase!(
+    bug = "Unwanted infer-on-first-use when parameter should have been solved to Any",
+    test_should_not_infer_on_first_use_if_solved_to_any,
+    r#"
+from typing import Any, assert_type
+
+def f[T](x: list[T]) -> list[T]:
+    return x
+
+def g(x: Any):
+    y = f(x)
+    y.append(1)
+    assert_type(y, list[Any])  # E: assert_type(list[int], list[Any])
+    "#,
+);
