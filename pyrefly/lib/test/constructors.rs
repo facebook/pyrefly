@@ -629,6 +629,35 @@ class C[T]:
 );
 
 testcase!(
+    test_new_bad_receiver_annotation,
+    r#"
+from typing import Literal, assert_type, overload, Self
+
+class A: ...
+class B: ...
+class D:
+    def __new__(cls: type[A]): pass  # E: `__new__` method cls type `type[A]` is not a superclass of class `D`
+class E(A):
+    def __new__(cls: type[A]): pass
+class F:
+    def __new__(cls: A): pass  # E: `__new__` method cls type `A` is not a valid `type[...]` annotation
+class G:
+    def __new__(cls: Self): pass  # E: `__new__` method cls type `Self@G` is not a valid `type[...]` annotation
+class H:
+    def __new__(cls: type[Self]): pass
+
+class C[T]:
+    @overload
+    def __new__(cls: type[A], x: Literal[True]): ...  # E: `__new__` method cls type `type[A]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> None` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> None`
+    @overload
+    def __new__(cls: type[B], x: Literal[False]): ...  # E: `__new__` method cls type `type[B]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> None` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> None` accepts
+    def __new__(cls, x):
+        pass
+
+    "#,
+);
+
+testcase!(
     test_generic_in_generic,
     r#"
 from typing import Literal, assert_type, overload
