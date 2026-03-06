@@ -195,18 +195,17 @@ class C:
 );
 
 testcase!(
-    bug = "conformance: Should error when returning concrete class instead of Self",
     test_self_return_concrete_class,
     r#"
 from typing import Self
 
 class Shape:
     def method(self) -> Self:
-        return Shape()  # should error: returns Shape, not Self
+        return Shape()  # E: Returned type `Shape` is not assignable to declared return type `Self@Shape`
 
     @classmethod
     def cls_method(cls) -> Self:
-        return Shape()  # should error: returns Shape, not Self
+        return Shape()  # E: Returned type `Shape` is not assignable to declared return type `Self@Shape`
 "#,
 );
 
@@ -310,4 +309,44 @@ class A(Generic[X]):
 class B(A[Y1 | Y2], Generic[Y1, Y2]):
     def __new__(cls, A: A[Y1], B: A[Y2]) -> Self: ...
     "#,
+);
+
+testcase!(
+    test_self_return_in_classmethod,
+    r#"
+from typing import Self
+class C:
+    @classmethod
+    def bar(cls) -> Self:
+        return cls(1)
+
+    def __new__(cls, value: int) -> Self:  # Accepted
+        return cls(1)
+"#,
+);
+
+testcase!(
+    test_type_self_constructor_call,
+    r#"
+from typing import Self
+class C:
+    def foo(self) -> Self:
+        return type(self)()
+"#,
+);
+
+testcase!(
+    bug = "Mypy allows this but Pyright doesn't, we should support it since enums are effectively final classes",
+    test_self_in_enum_classmethod,
+    r#"
+from typing import Self
+from enum import Enum
+
+class E(Enum):
+    A = 1
+
+    @classmethod
+    def f(cls) -> Self:
+        return cls.A # E: Returned type `Literal[E.A]` is not assignable to declared return type `Self@E`
+"#,
 );
