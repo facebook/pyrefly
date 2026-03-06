@@ -30,6 +30,11 @@ import {runDocstringFoldingCommand} from './docstring';
 import {registerCodeLensCommands} from './codeLens';
 import {PythonEnvironment} from './python-environment';
 import {
+  OverrideCodeLensProvider,
+  navigateToOverrideTarget,
+  showOverrideTargets,
+} from './overrideCodeLens';
+import {
   triggerMsPythonRefreshLanguageServersIfInstalled,
 } from './extension-interop';
 
@@ -101,6 +106,7 @@ export async function activate(context: ExtensionContext) {
 
   const path: string = requireSetting('pyrefly.lspPath');
   const args: [string] = requireSetting('pyrefly.lspArguments');
+  const overrideCodeLensProvider = new OverrideCodeLensProvider();
 
   const bundledPyreflyPath = vscode.Uri.joinPath(
     context.extensionUri,
@@ -196,7 +202,20 @@ export async function activate(context: ExtensionContext) {
   );
 
   context.subscriptions.push(
+    vscode.languages.registerCodeLensProvider(
+      [
+        {scheme: 'file', language: 'python'},
+        {scheme: 'untitled', language: 'python'},
+        {scheme: 'vscode-notebook-cell', language: 'python'},
+        {scheme: 'inmemory', language: 'python'},
+      ],
+      overrideCodeLensProvider,
+    ),
+  );
+
+  context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(async () => {
+      overrideCodeLensProvider.refresh();
       await updateStatusBar(client);
     }),
   );
@@ -219,8 +238,17 @@ export async function activate(context: ExtensionContext) {
         client.sendNotification(DidChangeConfigurationNotification.type, {
           settings: {},
         });
+        overrideCodeLensProvider.refresh();
       }
       await updateStatusBar(client);
+    }),
+  );
+
+  context.subscriptions.push(
+    workspace.onDidChangeTextDocument(event => {
+      if (event.document.languageId === 'python') {
+        overrideCodeLensProvider.refresh();
+      }
     }),
   );
 
@@ -253,6 +281,17 @@ export async function activate(context: ExtensionContext) {
   );
   registerCodeLensCommands(context, pythonEnv);
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'pyrefly.navigateToOverrideTarget',
+      navigateToOverrideTarget,
+    ),
+    vscode.commands.registerCommand(
+      'pyrefly.showOverrideTargets',
+      showOverrideTargets,
+    ),
+  );
+
   // When our extension is activated, make sure ms-python knows
   // TODO(kylei): remove this hack once ms-python has this behavior
   await triggerMsPythonRefreshLanguageServersIfInstalled();
@@ -266,6 +305,7 @@ export async function activate(context: ExtensionContext) {
 
   // Start the client. This will also launch the server
   await client.start();
+  overrideCodeLensProvider.refresh();
 
   await updateStatusBar(client);
   const statusBarItem = getStatusBarItem();
