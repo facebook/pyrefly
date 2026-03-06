@@ -530,6 +530,73 @@ assert_type(g("bar"), Literal["bar"])
 );
 
 testcase!(
+    test_constraint_promotion_bool_to_int,
+    r#"
+from typing import assert_type
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# bool is a subtype of int, so T should resolve to int (the constraint), not bool.
+assert_type(f(True), int)
+assert_type(f(False), int)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_literal_int,
+    r#"
+from typing import assert_type
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# Literal[42] is a subtype of int, so T should resolve to int.
+assert_type(f(42), int)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_literal_str,
+    r#"
+from typing import assert_type
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# Literal["hi"] is a subtype of str, so T should resolve to str.
+assert_type(f("hi"), str)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_subclass,
+    r#"
+from typing import assert_type
+
+class B: ...
+class C(B): ...
+class D(C): ...
+
+def f[T: (B, C)](x: T) -> T: ...
+
+# D is a subtype of C (and B), so T should resolve to C (the narrowest constraint).
+assert_type(f(D()), C)
+# B matches B exactly.
+assert_type(f(B()), B)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_no_match,
+    r#"
+class X: ...
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# X is not assignable to int or str, so this should error.
+f(X())  # E: `X` is not assignable to upper bound `int | str` of type variable `T`
+    "#,
+);
+
+testcase!(
     bug = "This should succeed with no errors",
     test_add_with_constraints,
     r#"
@@ -1111,4 +1178,21 @@ class CustomCoercer(Generic[_Deserialized, _Serialized]):
             key: type[_Deserialized],
         ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...
 "#,
+);
+
+testcase!(
+    test_constraint_promotion_anystr_passthrough,
+    r#"
+from typing import AnyStr, assert_type
+
+def f(x: AnyStr) -> AnyStr: ...
+def g(x: AnyStr) -> AnyStr:
+    # Passing an abstract AnyStr (which is itself constrained to str | bytes)
+    # to another function that also expects AnyStr should succeed without error.
+    return f(x)
+
+# Concrete calls still promote correctly.
+assert_type(f("hi"), str)
+assert_type(f(b"hi"), bytes)
+    "#,
 );
