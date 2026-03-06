@@ -965,14 +965,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 },
                 |ty| ty.to_type(),
             );
-            let value_ty = value_hint.map_or_else(
-                || {
-                    self.solver()
-                        .fresh_partial_contained(self.uniques, range)
-                        .to_type(self.heap)
-                },
-                |ty| ty.to_type(),
-            );
+            // For empty dict literals, we don't infer the value type from first use.
+            // Inferring value types from the first assignment (e.g. `d["key"] = None`)
+            // causes false positives when later assignments use different value types,
+            // which is extremely common in real-world Python code.
+            let value_ty =
+                value_hint.map_or_else(|| self.heap.mk_any_implicit(), |ty| ty.to_type());
             self.heap.mk_class_type(self.stdlib.dict(key_ty, value_ty))
         } else {
             // Use a map to track fields by name so later fields override earlier ones

@@ -653,7 +653,7 @@ def foo() -> str:
     "#,
             r#"
     def foo() -> None:
-        x: dict[str, int] = {}
+        x = {}
         x["a"] = 1
     "#,
             Some(flags),

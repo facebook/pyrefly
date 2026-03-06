@@ -42,7 +42,7 @@ assert_type(result, tuple[list[int], list[int]])
 
 # Same pattern with dict
 dict_result = pair({}, {"a": 1})
-assert_type(dict_result, tuple[dict[str, int], dict[str, int]])
+assert_type(dict_result, tuple[dict[str, int], dict[str, int]])  # E: assert_type(tuple[dict[str, Any], dict[str, Any]], tuple[dict[str, int], dict[str, int]])
 "#,
 );
 
