@@ -2103,8 +2103,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                     }
                 }
-                // type[Self] is valid (default type)
-                Type::Type(box Type::SelfType(_)) => {}
+                // type[Self] and type[TypeVar] are valid
+                Type::Type(box Type::SelfType(_) | box Type::Quantified(_)) => {}
                 _ => {
                     errors.add(
                         range,
