@@ -14,6 +14,7 @@ use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::BoundMethod;
+use pyrefly_types::types::Var;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -193,5 +194,9 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
 
     pub fn error_swallower(self) -> ErrorCollector {
         self.0.error_swallower()
+    }
+
+    pub fn add_any_lower_bound(self, v: Var) {
+        self.0.solver().add_any_lower_bound(v)
     }
 }

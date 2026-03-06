@@ -856,6 +856,21 @@ impl Solver {
         }
     }
 
+    /// Add `Any` as a lower bound to the variable if it is a Quantified
+    pub fn add_any_lower_bound(&self, v: Var) {
+        let lock = self.variables.lock();
+        let mut e = lock.get_mut(v);
+        match &mut *e {
+            Variable::Quantified {
+                quantified: _,
+                has_any_lower_bound,
+            } => {
+                *has_any_lower_bound = true;
+            }
+            _ => {}
+        }
+    }
+
     /// Called after a quantified function has been called. Given `def f[T](x: int): list[T]`,
     /// after the generic has completed.
     /// If `infer_with_first_use` is true, the variable `T` will be have like an

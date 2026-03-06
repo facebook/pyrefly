@@ -431,22 +431,21 @@ assert_type(y, dict[str, int])  # E: assert_type(dict[Literal['k'], Literal[3]],
 );
 
 testcase!(
-    bug = "Unwanted infer-on-first-use when container is non-empty",
     test_container_of_unknown_function_parameter,
     r#"
 from typing import Any, assert_type
 def f(a):
     x = list(a)
     x.append(1)
-    assert_type(x, list[Any])  # E: assert_type(list[int], list[Any])
+    assert_type(x, list[Any])
 
     y = set(a)
     y.add(2)
-    assert_type(y, set[Any])  # E: assert_type(set[int], set[Any])
+    assert_type(y, set[Any])
 
     z = dict(a)
     z['k'] = 3
-    assert_type(z, dict[Any, Any])  # E: assert_type(dict[str, int], dict[Any, Any])
+    assert_type(z, dict[Any, Any])
     "#,
 );
 
@@ -479,7 +478,6 @@ assert_type(a, A[int])
 );
 
 testcase!(
-    bug = "Unwanted infer-on-first-use when parameter should have been solved to Any",
     test_should_not_infer_on_first_use_if_solved_to_any,
     r#"
 from typing import Any, assert_type
@@ -490,6 +488,6 @@ def f[T](x: list[T]) -> list[T]:
 def g(x: Any):
     y = f(x)
     y.append(1)
-    assert_type(y, list[Any])  # E: assert_type(list[int], list[Any])
+    assert_type(y, list[Any])
     "#,
 );
