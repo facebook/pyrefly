@@ -530,11 +530,77 @@ assert_type(g("bar"), Literal["bar"])
 );
 
 testcase!(
-    bug = "This should succeed with no errors",
+    test_constraint_promotion_bool_to_int,
+    r#"
+from typing import assert_type
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# bool is a subtype of int, so T should resolve to int (the constraint), not bool.
+assert_type(f(True), int)
+assert_type(f(False), int)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_literal_int,
+    r#"
+from typing import assert_type
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# Literal[42] is a subtype of int, so T should resolve to int.
+assert_type(f(42), int)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_literal_str,
+    r#"
+from typing import assert_type
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# Literal["hi"] is a subtype of str, so T should resolve to str.
+assert_type(f("hi"), str)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_subclass,
+    r#"
+from typing import assert_type
+
+class B: ...
+class C(B): ...
+class D(C): ...
+
+def f[T: (B, C)](x: T) -> T: ...
+
+# D is a subtype of C (and B), so T should resolve to C (the narrowest constraint).
+assert_type(f(D()), C)
+# B matches B exactly.
+assert_type(f(B()), B)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_no_match,
+    r#"
+class X: ...
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# X is not assignable to int or str, so this should error.
+f(X())  # E: `X` is not assignable to upper bound `int | str` of type variable `T`
+    "#,
+);
+
+testcase!(
     test_add_with_constraints,
     r#"
 def add[T: (int, str)](x: T, y: T) -> T:
-    return x + y # E: `+` is not supported between `T` and `T` # E: `+` is not supported between `T` and `T`
+    return x + y
     "#,
 );
 
@@ -1110,5 +1176,43 @@ class CustomCoercer(Generic[_Deserialized, _Serialized]):
             self,
             key: type[_Deserialized],
         ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...
+"#,
+);
+
+testcase!(
+    test_constrained_typevar_correlated_method_must_error,
+    r#"
+class A:
+    def method(self, x: "B") -> int: ...
+class B:
+    def method(self, x: "A") -> str: ...
+
+def foo[T: (A, B)](a: T, b: T) -> None:
+    # T=A requires method(B) but b is A, and T=B requires method(A)
+    # but b is B. Both envs fail, so this must error.
+    a.method(b)  # E: `T` is not assignable to parameter `x` with type `B`  # E: `T` is not assignable to parameter `x` with type `A`
+"#,
+);
+
+testcase!(
+    test_constrained_typevar_correlated_method_must_pass,
+    r#"
+class A:
+    def combine(self, other: "A") -> "A": ...
+class B:
+    def combine(self, other: "B") -> "B": ...
+
+def foo[T: (A, B)](x: T, y: T) -> None:
+    x.combine(y)
+"#,
+);
+
+testcase!(
+    test_constrained_typevar_correlated_call,
+    r#"
+from typing import Callable
+
+def apply[T: (int, str)](f: Callable[[T], T], x: T) -> None:
+    f(x)
 "#,
 );

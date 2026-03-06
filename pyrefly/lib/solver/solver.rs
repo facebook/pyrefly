@@ -21,6 +21,7 @@ use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tensor::TensorShape;
 use pyrefly_types::tuple::Tuple;
+use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -1500,6 +1501,34 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         res
     }
 
+    /// For a constrained TypeVar, find the narrowest constraint that `ty` is assignable to.
+    ///
+    /// Per the typing spec, a constrained TypeVar (`T = TypeVar("T", int, str)`) must resolve
+    /// to exactly one of its constraint types — never a subtype like `bool` or `Literal[42]`.
+    /// This method finds the best (narrowest) matching constraint by checking assignability
+    /// and preferring the most specific constraint when multiple match.
+    fn find_matching_constraint<'c>(
+        &mut self,
+        ty: &Type,
+        constraints: &'c [Type],
+    ) -> Option<&'c Type> {
+        let matching: Vec<&Type> = constraints
+            .iter()
+            .filter(|c| self.is_subset_eq(ty, c).is_ok())
+            .collect();
+        if matching.is_empty() {
+            return None;
+        }
+        // Pick the narrowest matching constraint: the one that is a subtype of all others.
+        let mut best = matching[0];
+        for &candidate in &matching[1..] {
+            if self.is_subset_eq(candidate, best).is_ok() {
+                best = candidate;
+            }
+        }
+        Some(best)
+    }
+
     /// Implementation of Var subset cases, calling onward to solve non-Var cases.
     ///
     /// This function does two things: it checks that got <: want, and it solves free variables assuming that
@@ -1665,23 +1694,48 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                     Variable::Quantified(q) | Variable::PartialQuantified(q) => {
                         let name = q.name.clone();
-                        let bound = q
-                            .restriction()
-                            .as_type(self.type_order.stdlib(), &self.solver.heap);
+                        let restriction = q.restriction().clone();
+                        let bound =
+                            restriction.as_type(self.type_order.stdlib(), &self.solver.heap);
                         drop(v1_ref);
-                        variables.update(*v1, Variable::Answer(t2.clone()));
-                        drop(variables);
 
-                        if let Err(e) = self.is_subset_eq(t2, &bound) {
-                            self.solver.instantiation_errors.write().insert(
-                                *v1,
-                                TypeVarSpecializationError {
-                                    name,
-                                    got: t2.clone(),
-                                    want: bound,
-                                    error: e,
-                                },
-                            );
+                        // For constrained TypeVars, promote to the matching constraint type
+                        // rather than pinning to the raw argument type.
+                        if let Restriction::Constraints(ref constraints) = restriction {
+                            variables.update(*v1, Variable::Answer(t2.clone()));
+                            drop(variables);
+                            if let Some(constraint) = self.find_matching_constraint(t2, constraints)
+                            {
+                                let constraint = constraint.clone();
+                                self.solver
+                                    .variables
+                                    .lock()
+                                    .update(*v1, Variable::Answer(constraint));
+                            } else {
+                                self.solver.instantiation_errors.write().insert(
+                                    *v1,
+                                    TypeVarSpecializationError {
+                                        name,
+                                        got: t2.clone(),
+                                        want: bound,
+                                        error: SubsetError::Other,
+                                    },
+                                );
+                            }
+                        } else {
+                            variables.update(*v1, Variable::Answer(t2.clone()));
+                            drop(variables);
+                            if let Err(e) = self.is_subset_eq(t2, &bound) {
+                                self.solver.instantiation_errors.write().insert(
+                                    *v1,
+                                    TypeVarSpecializationError {
+                                        name,
+                                        got: t2.clone(),
+                                        want: bound,
+                                        error: e,
+                                    },
+                                );
+                            }
                         }
                         Ok(())
                     }
@@ -1761,35 +1815,69 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             .clone()
                             .promote_implicit_literals(self.type_order.stdlib());
                         let name = q.name.clone();
-                        let bound = q
-                            .restriction()
-                            .as_type(self.type_order.stdlib(), &self.solver.heap);
+                        let restriction = q.restriction().clone();
+                        let bound =
+                            restriction.as_type(self.type_order.stdlib(), &self.solver.heap);
                         drop(v2_ref);
-                        variables.update(*v2, Variable::Answer(t1_p.clone()));
-                        drop(variables);
 
-                        if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
-                            // If the promoted type fails, try again with the original type, in case the bound itself is literal.
-                            // This could be more optimized, but errors are rare, so this code path should not be hot.
-                            self.solver
-                                .variables
-                                .lock()
-                                .update(*v2, Variable::Answer(t1.clone()));
-                            if self.is_subset_eq(t1, &bound).is_err() {
-                                // If the original type is also an error, use the promoted type.
+                        // For constrained TypeVars, promote to the matching constraint type.
+                        if let Restriction::Constraints(ref constraints) = restriction {
+                            variables.update(*v2, Variable::Answer(t1_p.clone()));
+                            drop(variables);
+                            // Try promoted type first, then fall back to original (for literal bounds).
+                            if let Some(constraint) =
+                                self.find_matching_constraint(&t1_p, constraints)
+                            {
+                                let constraint = constraint.clone();
                                 self.solver
                                     .variables
                                     .lock()
-                                    .update(*v2, Variable::Answer(t1_p.clone()));
+                                    .update(*v2, Variable::Answer(constraint));
+                            } else if let Some(constraint) =
+                                self.find_matching_constraint(t1, constraints)
+                            {
+                                let constraint = constraint.clone();
+                                self.solver
+                                    .variables
+                                    .lock()
+                                    .update(*v2, Variable::Answer(constraint));
+                            } else {
                                 self.solver.instantiation_errors.write().insert(
                                     *v2,
                                     TypeVarSpecializationError {
                                         name,
                                         got: t1_p.clone(),
                                         want: bound,
-                                        error: err_p,
+                                        error: SubsetError::Other,
                                     },
                                 );
+                            }
+                        } else {
+                            variables.update(*v2, Variable::Answer(t1_p.clone()));
+                            drop(variables);
+                            if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
+                                // If the promoted type fails, try again with the original type, in case the bound itself is literal.
+                                // This could be more optimized, but errors are rare, so this code path should not be hot.
+                                self.solver
+                                    .variables
+                                    .lock()
+                                    .update(*v2, Variable::Answer(t1.clone()));
+                                if self.is_subset_eq(t1, &bound).is_err() {
+                                    // If the original type is also an error, use the promoted type.
+                                    self.solver
+                                        .variables
+                                        .lock()
+                                        .update(*v2, Variable::Answer(t1_p.clone()));
+                                    self.solver.instantiation_errors.write().insert(
+                                        *v2,
+                                        TypeVarSpecializationError {
+                                            name,
+                                            got: t1_p.clone(),
+                                            want: bound,
+                                            error: err_p,
+                                        },
+                                    );
+                                }
                             }
                         }
                         Ok(())
