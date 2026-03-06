@@ -506,6 +506,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let elem_ty = self.expr_infer_with_hint_promote(
                     &x.elt,
                     elem_hint.as_ref().map(|hint| hint.as_ref()),
+                    true,
                     errors,
                 );
                 self.heap.mk_class_type(self.stdlib.list(elem_ty))
@@ -516,6 +517,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let elem_ty = self.expr_infer_with_hint_promote(
                     &x.elt,
                     elem_hint.as_ref().map(|hint| hint.as_ref()),
+                    true,
                     errors,
                 );
                 self.heap.mk_class_type(self.stdlib.set(elem_ty))
@@ -527,11 +529,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let key_ty = self.expr_infer_with_hint_promote(
                     &x.key,
                     key_hint.as_ref().map(|hint| hint.as_ref()),
+                    true,
                     errors,
                 );
                 let value_ty = self.expr_infer_with_hint_promote(
                     &x.value,
                     value_hint.as_ref().map(|hint| hint.as_ref()),
+                    true,
                     errors,
                 );
                 self.heap.mk_class_type(self.stdlib.dict(key_ty, value_ty))
@@ -665,6 +669,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         x: &Expr,
         hint: Option<HintRef>,
+        promote_all_literals: bool,
         errors: &ErrorCollector,
     ) -> Type {
         let ty = self.expr_infer_with_hint(x, hint, errors);
@@ -672,6 +677,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && self.is_subset_eq(&ty, want.ty())
         {
             want.ty().clone()
+        } else if promote_all_literals {
+            ty.promote_all_literals(self.stdlib)
         } else {
             ty.promote_implicit_literals(self.stdlib)
         }
@@ -996,11 +1003,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let key_t = self.expr_infer_with_hint_promote(
                         key,
                         key_hint.as_ref().map(|hint| hint.as_ref()),
+                        false,
                         errors,
                     );
                     let value_t = self.expr_infer_with_hint_promote(
                         &x.value,
                         value_hint.as_ref().map(|hint| hint.as_ref()),
+                        false,
                         errors,
                     );
                     if !key_t.is_error() {
@@ -1841,6 +1850,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let unpacked_ty = self.expr_infer_with_hint_promote(
                     value,
                     star_hint.as_ref().map(|hint| hint.as_ref()),
+                    false,
                     errors,
                 );
                 if let Some(iterable_ty) = self.unwrap_iterable(&unpacked_ty) {
@@ -1860,6 +1870,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => self.expr_infer_with_hint_promote(
                 x,
                 elt_hint.as_ref().map(|hint| hint.as_ref()),
+                false,
                 errors,
             ),
         })
