@@ -33,6 +33,7 @@ use yansi::Painted;
     Deserialize,
     Serialize
 )]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Ignore,
@@ -79,6 +80,7 @@ impl Severity {
 // go with what feels right.
 #[derive(Debug, Copy, Dupe, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 #[derive(Display, Sequence, Deserialize, Serialize, ValueEnum)]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorKind {
     /// Attempting to call a method marked with `@abstractmethod`.

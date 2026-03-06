@@ -42,6 +42,7 @@ fn use_systemd() -> bool {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default, Hash)]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub struct BxlArgs {
     isolation_dir: Option<String>,

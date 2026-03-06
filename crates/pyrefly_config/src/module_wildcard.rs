@@ -114,6 +114,18 @@ impl Serialize for ModuleWildcard {
     }
 }
 
+#[cfg(feature = "jsonschema")]
+impl schemars::JsonSchema for ModuleWildcard {
+    fn schema_name() -> String {
+        "ModuleWildcard".to_owned()
+    }
+
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        // ModuleWildcard serializes as a plain string
+        generator.subschema_for::<String>()
+    }
+}
+
 /// Rewrites a module glob pattern into a regex. Uses the same logic
 /// as mypy to reduce issues when converting module path globs.
 fn rewrite_pattern_as_regex(original: &str) -> anyhow::Result<Regex> {
