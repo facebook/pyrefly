@@ -485,6 +485,19 @@ class C:
         self.y = 0  # error, `y` may be undefined if `f` does not execute
 ```
 
+## incompatible-comparison
+
+This error is raised when Pyrefly can prove that an equality (`==`) or inequality
+(`!=`) comparison is made between incompatible built-in scalar types (for example,
+`int` versus `str`). This check is currently limited to primitive scalar types and
+does not analyze unions, `None`, or user-defined classes.
+
+```python
+x: int = 1
+y: str = ""
+if x == y: ...  # Comparison `==` between incompatible types `int` and `str` [incompatible-comparison]
+```
+
 ## inconsistent-inheritance
 
 When a class inherits from multiple base classes, the inherited fields must be consistent.
