@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+pub(crate) mod change_signature;
 pub(crate) mod convert_star_import;
 pub(crate) mod extract_field;
 pub(crate) mod extract_function;

@@ -384,6 +384,46 @@ fn assert_no_introduce_parameter_action(code: &str) {
     );
 }
 
+fn compute_change_signature_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(code);
+    let actions = transaction
+        .change_signature_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn apply_change_signature_action(code: &str, title: &str) -> Option<String> {
+    let (module_info, actions, titles) = compute_change_signature_actions(code);
+    let index = titles.iter().position(|candidate| candidate == title)?;
+    Some(apply_refactor_edits_for_module(
+        &module_info,
+        &actions[index],
+    ))
+}
+
+fn assert_no_change_signature_action(code: &str) {
+    let (_, actions, _) = compute_change_signature_actions(code);
+    assert!(
+        actions.is_empty(),
+        "expected no change-signature actions, found {}",
+        actions.len()
+    );
+}
+
 fn assert_no_extract_variable_action(code: &str) {
     let (_, actions, _) = compute_extract_variable_actions(code);
     assert!(
@@ -3440,6 +3480,95 @@ def caller():
     accept(**values)
 "#;
     assert_no_introduce_parameter_action(code);
+}
+
+#[test]
+fn change_signature_remove_parameter_updates_calls() {
+    let code = r#"
+def greet(name, message):
+#                ^
+    return f"{message}, {name}"
+
+def caller():
+    greet("Ada", "Hello")
+    greet(name="Bob", message="Hi")
+"#;
+    let updated = apply_change_signature_action(code, "Remove parameter `message`")
+        .expect("expected remove-parameter action");
+    let expected = r#"
+def greet(name):
+#                ^
+    return f"{message}, {name}"
+
+def caller():
+    greet(name="Ada")
+    greet(name="Bob")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn change_signature_move_parameter_left_updates_calls() {
+    let code = r#"
+def greet(name, message):
+#                ^
+    return f"{message}, {name}"
+
+def caller():
+    greet("Ada", "Hello")
+    greet(name="Bob", message="Hi")
+"#;
+    let updated = apply_change_signature_action(code, "Move parameter `message` left")
+        .expect("expected move-parameter action");
+    let expected = r#"
+def greet(message, name):
+#                ^
+    return f"{message}, {name}"
+
+def caller():
+    greet(message="Hello", name="Ada")
+    greet(message="Hi", name="Bob")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn change_signature_move_method_parameter_left_updates_bound_and_unbound_calls() {
+    let code = r#"
+class Greeter:
+    def greet(self, name, message):
+#                         ^
+        return f"{message}, {name}"
+
+def caller():
+    greeter = Greeter()
+    greeter.greet("Ada", "Hello")
+    Greeter.greet(greeter, "Bob", "Hi")
+"#;
+    let updated = apply_change_signature_action(code, "Move parameter `message` left")
+        .expect("expected move-parameter action");
+    let expected = r#"
+class Greeter:
+    def greet(self, message, name):
+#                         ^
+        return f"{message}, {name}"
+
+def caller():
+    greeter = Greeter()
+    greeter.greet(message="Hello", name="Ada")
+    Greeter.greet(greeter, message="Hi", name="Bob")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn change_signature_rejects_variadic_functions() {
+    let code = r#"
+def greet(name, *args):
+#         ^
+    return args
+"#;
+    assert_no_change_signature_action(code);
 }
 
 mod extract_field_tests {
