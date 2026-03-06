@@ -10,6 +10,9 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 
+const MAX_METHOD_SYMBOLS = 200;
+const CODE_LENS_CONCURRENCY = 12;
+
 type MethodSymbol = {
   range: vscode.Range;
   position: vscode.Position;
@@ -63,6 +66,12 @@ function normalizeLocations(
     seen.add(key);
     return true;
   });
+}
+
+function hasHierarchicalSymbols(
+  symbols: vscode.DocumentSymbol[] | vscode.SymbolInformation[] | undefined,
+): symbols is vscode.DocumentSymbol[] {
+  return symbols !== undefined && (symbols.length === 0 || 'children' in symbols[0]);
 }
 
 function collectMethodSymbols(
@@ -124,14 +133,40 @@ async function getDocumentSymbols(
   let symbols = cache.get(key);
   if (!symbols) {
     symbols = Promise.resolve(
-      vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+      vscode.commands.executeCommand<
+        vscode.DocumentSymbol[] | vscode.SymbolInformation[]
+      >(
         'vscode.executeDocumentSymbolProvider',
         uri,
       ),
-    ).then(result => result ?? []);
+    ).then(result => (hasHierarchicalSymbols(result) ? result : []));
     cache.set(key, symbols);
   }
   return await symbols;
+}
+
+async function mapMethodsWithConcurrency<T>(
+  methodSymbols: readonly MethodSymbol[],
+  token: vscode.CancellationToken,
+  mapper: (method: MethodSymbol) => Promise<T>,
+): Promise<T[]> {
+  const results: T[] = new Array(methodSymbols.length);
+  let nextIndex = 0;
+
+  const runNext = async (): Promise<void> => {
+    while (!token.isCancellationRequested) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      if (currentIndex >= methodSymbols.length) {
+        return;
+      }
+      results[currentIndex] = await mapper(methodSymbols[currentIndex]);
+    }
+  };
+
+  const workerCount = Math.min(CODE_LENS_CONCURRENCY, methodSymbols.length);
+  await Promise.all(Array.from({length: workerCount}, () => runNext()));
+  return results;
 }
 
 async function describeLocation(
@@ -191,11 +226,17 @@ export class OverrideCodeLensProvider implements vscode.CodeLensProvider {
       return [];
     }
 
-    const rootSymbols =
-      (await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+    const rootSymbolsResult =
+      (await vscode.commands.executeCommand<
+        vscode.DocumentSymbol[] | vscode.SymbolInformation[]
+      >(
         'vscode.executeDocumentSymbolProvider',
         document.uri,
       )) ?? [];
+    if (!hasHierarchicalSymbols(rootSymbolsResult) || rootSymbolsResult.length === 0) {
+      return [];
+    }
+    const rootSymbols = rootSymbolsResult;
     if (rootSymbols.length === 0) {
       return [];
     }
@@ -204,10 +245,14 @@ export class OverrideCodeLensProvider implements vscode.CodeLensProvider {
     symbolCache.set(document.uri.toString(), Promise.resolve(rootSymbols));
 
     const methodSymbols = collectMethodSymbols(rootSymbols);
-    const codeLenses = await Promise.all(
-      methodSymbols.map(method =>
-        this.getCodeLensesForMethod(document, method, symbolCache, token),
-      ),
+    if (methodSymbols.length > MAX_METHOD_SYMBOLS) {
+      return [];
+    }
+
+    const codeLenses = await mapMethodsWithConcurrency(
+      methodSymbols,
+      token,
+      method => this.getCodeLensesForMethod(document, method, symbolCache, token),
     );
     return codeLenses.flat();
   }
