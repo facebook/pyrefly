@@ -3658,7 +3658,7 @@ class Counter:
         self.value = value
 
     def increment(self):
-        self.value += 1
+        self.value = self.value + 1
 
     def reset(self, value):
         self.value = value
@@ -3695,6 +3695,37 @@ class Counter:
 
 def read(counter: Counter):
     return counter.get_value()
+"#;
+        assert_eq!(expected.trim(), updated.trim());
+    }
+
+    #[test]
+    fn encapsulate_field_rewrites_rhs_reads_in_write() {
+        let code = r#"
+class Counter:
+    def __init__(self, value):
+        self.value = value
+
+    def copy(self):
+        self.value = self.value
+#                         ^
+"#;
+        let updated =
+            apply_first_encapsulate_field_action(code).expect("expected encapsulate field action");
+        let expected = r#"
+class Counter:
+    def __init__(self, value):
+        self.value = value
+
+    def copy(self):
+        self.set_value(self.get_value())
+
+    def get_value(self):
+        return self.value
+
+    def set_value(self, value):
+        self.value = value
+#                         ^
 "#;
         assert_eq!(expected.trim(), updated.trim());
     }
@@ -3737,6 +3768,20 @@ class Counter:
     }
 
     #[test]
+    fn encapsulate_field_rejects_augmented_assignment() {
+        let code = r#"
+class Counter:
+    def __init__(self, value):
+        self.value = value
+
+    def increment(self):
+        self.value += 1
+#            ^
+"#;
+        assert_no_encapsulate_field_action(code);
+    }
+
+    #[test]
     fn encapsulate_field_rejects_tuple_assignment_targets() {
         let code = r#"
 class Counter:
@@ -3746,6 +3791,40 @@ class Counter:
     def replace(self, other):
         self.value, other.value = other.value, self.value
 #            ^
+"#;
+        assert_no_encapsulate_field_action(code);
+    }
+
+    #[test]
+    fn encapsulate_field_not_offered_for_method_attribute() {
+        let code = r#"
+class Counter:
+    def __init__(self, value):
+        self.value = value
+
+    def inc(self):
+        self.value = self.value + 1
+
+def use(counter: Counter):
+    method_ref = counter.inc
+#                        ^
+"#;
+        assert_no_encapsulate_field_action(code);
+    }
+
+    #[test]
+    fn encapsulate_field_not_offered_for_method_call() {
+        let code = r#"
+class Counter:
+    def __init__(self, value):
+        self.value = value
+
+    def inc(self):
+        self.value = self.value + 1
+
+def use(counter: Counter):
+    counter.inc()
+#          ^
 "#;
         assert_no_encapsulate_field_action(code);
     }

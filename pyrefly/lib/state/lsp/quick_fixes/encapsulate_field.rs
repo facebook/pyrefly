@@ -15,7 +15,6 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::Operator;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtAssign;
 use ruff_python_ast::StmtAugAssign;
@@ -73,6 +72,9 @@ pub(crate) fn encapsulate_field_code_actions(
                 )
         })?;
     let ast = transaction.get_ast(handle)?;
+    if definition_is_callable_member(ast.as_ref(), definition.definition_range) {
+        return None;
+    }
     let class_def = enclosing_class(ast.as_ref(), definition.definition_range)?;
     let getter_name = unique_name(&format!("get_{field_name}"), |name| {
         class_has_member_named(class_def, name)
@@ -88,15 +90,14 @@ pub(crate) fn encapsulate_field_code_actions(
     }
 
     let mut edits = Vec::new();
-    let mut handled_stmt_ranges = Vec::new();
+    let mut handled_write_stmt_ranges = Vec::new();
     for reference in references {
-        if handled_stmt_ranges
-            .iter()
-            .any(|stmt_range: &TextRange| stmt_range.contains(reference.start()))
+        let occurrence = classify_occurrence(ast.as_ref(), reference)?;
+        if occurrence.is_definition_write()
+            && handled_write_stmt_ranges.contains(&occurrence.stmt_range)
         {
             continue;
         }
-        let occurrence = classify_occurrence(ast.as_ref(), reference)?;
         if reference == definition.definition_range && occurrence.is_definition_write() {
             continue;
         }
@@ -110,7 +111,7 @@ pub(crate) fn encapsulate_field_code_actions(
                 ));
             }
             OccurrenceKind::SimpleWrite { attribute, value } => {
-                handled_stmt_ranges.push(occurrence.stmt_range);
+                handled_write_stmt_ranges.push(occurrence.stmt_range);
                 let receiver = module_info.code_at(attribute.value.range());
                 edits.push((
                     module_info.dupe(),
@@ -121,30 +122,6 @@ pub(crate) fn encapsulate_field_code_actions(
                 if !gap_range.is_empty() {
                     edits.push((module_info.dupe(), gap_range, String::new()));
                 }
-                edits.push((
-                    module_info.dupe(),
-                    TextRange::at(value.range().end(), TextSize::new(0)),
-                    ")".to_owned(),
-                ));
-            }
-            OccurrenceKind::AugmentedWrite {
-                attribute,
-                value,
-                operator,
-            } => {
-                handled_stmt_ranges.push(occurrence.stmt_range);
-                let receiver = module_info.code_at(attribute.value.range());
-                edits.push((
-                    module_info.dupe(),
-                    attribute.range(),
-                    format!("{receiver}.{setter_name}("),
-                ));
-                let gap_range = TextRange::new(attribute.range().end(), value.range().start());
-                edits.push((
-                    module_info.dupe(),
-                    gap_range,
-                    format!("{receiver}.{getter_name}() {} ", operator_text(*operator)),
-                ));
                 edits.push((
                     module_info.dupe(),
                     TextRange::at(value.range().end(), TextSize::new(0)),
@@ -178,10 +155,7 @@ struct Occurrence<'a> {
 
 impl Occurrence<'_> {
     fn is_definition_write(self) -> bool {
-        matches!(
-            self.kind,
-            OccurrenceKind::SimpleWrite { .. } | OccurrenceKind::AugmentedWrite { .. }
-        )
+        matches!(self.kind, OccurrenceKind::SimpleWrite { .. })
     }
 }
 
@@ -191,11 +165,6 @@ enum OccurrenceKind<'a> {
     SimpleWrite {
         attribute: &'a ExprAttribute,
         value: &'a Expr,
-    },
-    AugmentedWrite {
-        attribute: &'a ExprAttribute,
-        value: &'a Expr,
-        operator: &'a Operator,
     },
 }
 
@@ -280,19 +249,14 @@ fn classify_assign_occurrence<'a>(
 }
 
 fn classify_augassign_occurrence<'a>(
-    stmt: &'a Stmt,
-    assign: &'a StmtAugAssign,
+    _stmt: &'a Stmt,
+    _assign: &'a StmtAugAssign,
     attribute: &'a ExprAttribute,
 ) -> Option<Occurrence<'a>> {
-    direct_attribute_target(assign.target.as_ref(), attribute)?;
-    Some(Occurrence {
-        stmt_range: stmt.range(),
-        kind: OccurrenceKind::AugmentedWrite {
-            attribute,
-            value: assign.value.as_ref(),
-            operator: &assign.op,
-        },
-    })
+    direct_attribute_target(_assign.target.as_ref(), attribute)?;
+    // Reject augmented assignments for now. Rewriting `x += y` as `set_x(get_x() + y)`
+    // is not semantics-preserving for in-place operators like `list.__iadd__`.
+    None
 }
 
 fn classify_delete_occurrence<'a>(
@@ -317,6 +281,22 @@ fn direct_attribute_target<'a>(
         Expr::Attribute(target) if target.range() == attribute.range() => Some(target),
         _ => None,
     }
+}
+
+fn definition_is_callable_member(ast: &ModModule, definition_range: TextRange) -> bool {
+    Ast::locate_node(ast, definition_range.start())
+        .into_iter()
+        .any(|node| {
+            matches!(
+                node,
+                AnyNodeRef::StmtFunctionDef(function_def)
+                    if function_def.name.range() == definition_range
+            ) || matches!(
+                node,
+                AnyNodeRef::StmtClassDef(class_def)
+                    if class_def.name.range() == definition_range
+            )
+        })
 }
 
 fn enclosing_class<'a>(
@@ -407,22 +387,4 @@ fn replaceable_pass_stmt(class_def: &StmtClassDef) -> Option<&Stmt> {
         return None;
     }
     Some(pass_stmt)
-}
-
-fn operator_text(operator: Operator) -> &'static str {
-    match operator {
-        Operator::Add => "+",
-        Operator::Sub => "-",
-        Operator::Mult => "*",
-        Operator::MatMult => "@",
-        Operator::Div => "/",
-        Operator::Mod => "%",
-        Operator::Pow => "**",
-        Operator::LShift => "<<",
-        Operator::RShift => ">>",
-        Operator::BitOr => "|",
-        Operator::BitXor => "^",
-        Operator::BitAnd => "&",
-        Operator::FloorDiv => "//",
-    }
 }
