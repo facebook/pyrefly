@@ -1996,6 +1996,45 @@ impl<'a> Transaction<'a> {
         definitions.into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
     }
 
+    /// Finds overridden parent declarations for a method or class attribute definition.
+    ///
+    /// The answers index records override edges from a child declaration range to the
+    /// declaration ranges it overrides in the MRO. We use that mapping to make
+    /// go-to-declaration on an overriding member jump to the parent declaration instead
+    /// of back to the local implementation.
+    fn parent_declarations_for_definition(
+        &self,
+        handle: &Handle,
+        definition: &TextRangeWithModule,
+    ) -> Vec<TextRangeWithModule> {
+        let Some(index) = self
+            .get_solutions(handle)
+            .and_then(|solutions| solutions.get_index())
+        else {
+            return Vec::new();
+        };
+        let Some(parent_methods) = index
+            .lock()
+            .parent_methods_map
+            .get(&definition.range)
+            .cloned()
+        else {
+            return Vec::new();
+        };
+
+        let mut seen = HashSet::new();
+        let mut declarations = Vec::new();
+        for (parent_module_path, parent_range) in parent_methods {
+            let Some(module) = module_info_for_path(self, &parent_module_path) else {
+                continue;
+            };
+            if seen.insert((module.path().dupe(), parent_range)) {
+                declarations.push(TextRangeWithModule::new(module, parent_range));
+            }
+        }
+        declarations
+    }
+
     pub fn goto_declaration(
         &self,
         handle: &Handle,
@@ -2011,6 +2050,23 @@ impl<'a> Transaction<'a> {
                 prefer_pyi: true,
             },
         );
+
+        let declarations = definitions
+            .iter()
+            .flat_map(|definition| {
+                self.parent_declarations_for_definition(
+                    handle,
+                    &TextRangeWithModule::new(
+                        definition.module.dupe(),
+                        definition.definition_range,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        if !declarations.is_empty() {
+            return declarations;
+        }
 
         definitions.into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
     }
@@ -3344,6 +3400,24 @@ fn find_child_implementations_impl<T: RdepTransaction>(
     }
 
     child_implementations
+}
+
+fn module_info_for_path(transaction: &Transaction<'_>, module_path: &ModulePath) -> Option<Module> {
+    let counterpart_path = match module_path.details() {
+        ModulePathDetails::Memory(path) => Some(ModulePath::filesystem((**path).clone())),
+        ModulePathDetails::FileSystem(path) => Some(ModulePath::memory(path.clone().to_path_buf())),
+        _ => None,
+    };
+
+    transaction.handles().into_iter().find_map(|handle| {
+        let path = handle.path();
+        ((path == module_path)
+            || counterpart_path
+                .as_ref()
+                .is_some_and(|counterpart| path == counterpart))
+        .then(|| transaction.get_module_info(&handle))
+        .flatten()
+    })
 }
 
 fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
