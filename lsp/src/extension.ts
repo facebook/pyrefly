@@ -258,6 +258,24 @@ export async function activate(
 
   pythonEnv = new PythonEnvironment(context);
   const overrideCodeLensProvider = new OverrideCodeLensProvider();
+  let codeLensRefreshTimeout: NodeJS.Timeout | undefined;
+  const scheduleCodeLensRefresh = () => {
+    if (codeLensRefreshTimeout) {
+      clearTimeout(codeLensRefreshTimeout);
+    }
+    codeLensRefreshTimeout = setTimeout(() => {
+      codeLensRefreshTimeout = undefined;
+      overrideCodeLensProvider.refresh();
+    }, 150);
+  };
+
+  context.subscriptions.push(
+    new vscode.Disposable(() => {
+      if (codeLensRefreshTimeout) {
+        clearTimeout(codeLensRefreshTimeout);
+      }
+    }),
+  );
 
   launchSpec = await resolveExecutable(
     context.extensionUri,
@@ -367,7 +385,7 @@ export async function activate(
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(async () => {
-      overrideCodeLensProvider.refresh();
+      scheduleCodeLensRefresh();
       await updateStatusBar(client);
     }),
   );
@@ -405,7 +423,7 @@ export async function activate(
         client.sendNotification(DidChangeConfigurationNotification.type, {
           settings: {},
         });
-        overrideCodeLensProvider.refresh();
+        scheduleCodeLensRefresh();
       }
       if (
         event.affectsConfiguration('pyrefly.lspPath') ||
@@ -423,8 +441,11 @@ export async function activate(
 
   context.subscriptions.push(
     workspace.onDidChangeTextDocument(event => {
-      if (event.document.languageId === 'python') {
-        overrideCodeLensProvider.refresh();
+      if (
+        event.document.languageId === 'python' &&
+        event.document === vscode.window.activeTextEditor?.document
+      ) {
+        scheduleCodeLensRefresh();
       }
     }),
   );
@@ -450,6 +471,7 @@ export async function activate(
         }
         await restartOrRevert(previous);
       });
+      scheduleCodeLensRefresh();
     }),
   );
 
@@ -563,7 +585,7 @@ export async function activate(
     }
   });
   logServerVersion();
-  overrideCodeLensProvider.refresh();
+  scheduleCodeLensRefresh();
 
   await updateStatusBar(client);
   const statusBarItem = getStatusBarItem();
