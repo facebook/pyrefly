@@ -9,14 +9,20 @@ use dupe::Dupe;
 use lsp_types::CodeActionKind;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Parameters;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtFunctionDef;
+use ruff_python_ast::visitor::Visitor;
+use ruff_python_ast::visitor::walk_expr;
+use ruff_python_ast::visitor::walk_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -109,22 +115,35 @@ pub(crate) fn change_signature_code_actions(
     let selected_name = editable_params.get(editable_index)?.name.clone();
     let mut actions = Vec::new();
 
-    let remove_change = SignatureChange::Remove {
-        index: editable_index,
-    };
-    if let Some(edits) = build_signature_edits(
+    let selected_param = function_ctx
+        .function_def
+        .parameters
+        .args
+        .get(selected_index)?;
+    if !parameter_is_referenced_in_body(
         transaction,
         handle,
-        &function_ctx,
-        &editable_params,
-        receiver_text.as_deref(),
-        remove_change,
+        module_info.path(),
+        function_ctx.function_def,
+        selected_param,
     ) {
-        actions.push(LocalRefactorCodeAction {
-            title: format!("Remove parameter `{selected_name}`"),
-            edits,
-            kind: CodeActionKind::REFACTOR_REWRITE,
-        });
+        let remove_change = SignatureChange::Remove {
+            index: editable_index,
+        };
+        if let Some(edits) = build_signature_edits(
+            transaction,
+            handle,
+            &function_ctx,
+            &editable_params,
+            receiver_text.as_deref(),
+            remove_change,
+        ) {
+            actions.push(LocalRefactorCodeAction {
+                title: format!("Remove parameter `{selected_name}`"),
+                edits,
+                kind: CodeActionKind::REFACTOR_REWRITE,
+            });
+        }
     }
 
     if editable_index > 0 {
@@ -203,6 +222,53 @@ fn method_context_from_class(
         },
         is_staticmethod: function_has_decorator(function_def, "staticmethod"),
         is_classmethod: function_has_decorator(function_def, "classmethod"),
+    })
+}
+
+fn parameter_is_referenced_in_body(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    module_path: &ModulePath,
+    function_def: &StmtFunctionDef,
+    parameter: &ruff_python_ast::ParameterWithDefault,
+) -> bool {
+    struct NameCollector {
+        name: String,
+        ranges: Vec<TextRange>,
+    }
+
+    impl Visitor<'_> for NameCollector {
+        fn visit_stmt(&mut self, stmt: &Stmt) {
+            walk_stmt(self, stmt);
+        }
+
+        fn visit_expr(&mut self, expr: &Expr) {
+            if let Expr::Name(name) = expr
+                && name.id.as_str() == self.name
+                && !matches!(name.ctx, ExprContext::Invalid)
+            {
+                self.ranges.push(name.range());
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut collector = NameCollector {
+        name: parameter.name().id.to_string(),
+        ranges: Vec::new(),
+    };
+    for stmt in &function_def.body {
+        collector.visit_stmt(stmt);
+    }
+
+    collector.ranges.into_iter().any(|range| {
+        transaction
+            .find_definition(handle, range.start(), FindPreference::default())
+            .into_iter()
+            .any(|definition| {
+                definition.module.path() == module_path
+                    && definition.definition_range == parameter.name().range()
+            })
     })
 }
 
