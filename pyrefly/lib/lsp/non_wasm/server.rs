@@ -4095,6 +4095,10 @@ impl Server {
                 transaction.extract_field_code_actions(&handle, range)
             );
             timed_refactor_action!(
+                "encapsulate_field",
+                transaction.encapsulate_field_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "extract_variable",
                 transaction.extract_variable_code_actions(&handle, range)
             );
