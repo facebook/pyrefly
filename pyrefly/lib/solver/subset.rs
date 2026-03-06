@@ -1181,8 +1181,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         }
         match (got, want) {
             (Type::Any(_), _) => {
-                // Special case in Python, because we want `x: int = Any` to be valid,
-                // as Any is more the lack of information, rather than the actual union it is modelled to be.
+                for var in want.collect_maybe_quantified_vars() {
+                    // Variables in `want` now have `Any` as a lower bound.
+                    self.solver.add_any_lower_bound(var);
+                }
                 Ok(())
             }
             (_, Type::Any(_)) => Ok(()),

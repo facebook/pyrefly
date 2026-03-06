@@ -1483,7 +1483,6 @@ with atomic_file("foo", "w") as f:
 );
 
 testcase!(
-    bug = "We incorrectly match the `LiteralString` overload of `relpath`",
     test_literalstring_or_str_overloads,
     r#"
 from typing import Any, LiteralString, overload
@@ -1502,7 +1501,7 @@ def f(path: Any, data: Any) -> dict[str, Any]:
     outputs = {}
     relative_normalized_path = relpath(normpath(path))
     outputs[relative_normalized_path] = data
-    return outputs  # E: `dict[LiteralString, Any]` is not assignable to declared return type `dict[str, Any]`
+    return outputs
     "#,
 );
 
