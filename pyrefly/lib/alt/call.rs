@@ -794,13 +794,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             self.add_specialization_errors(e, arguments_range, errors, context);
         }
-        if let Some(mut ret) = dunder_new_ret {
+        let result = if let Some(mut ret) = dunder_new_ret {
             ret.subst_mut(&cls.targs().substitution_map());
             ret
         } else if constructor_kind == ConstructorKind::TypeOfSelf {
             self.heap.mk_self_type(cls)
         } else {
             self.heap.mk_class_type(cls)
+        };
+        // Normalize builtins.tuple instances to structural Type::Tuple so downstream
+        // match arms (concat, unpacking, except, etc.) handle them directly.
+        if let Type::ClassType(ref ct) = result
+            && ct.class_object().is_builtin("tuple")
+            && ct.targs().as_slice().len() == 1
+        {
+            let targ = ct.targs().as_slice()[0].clone();
+            self.heap.mk_unbounded_tuple(targ)
+        } else {
+            result
         }
     }
 

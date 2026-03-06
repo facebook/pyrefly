@@ -390,6 +390,46 @@ def test(y: Iterable[Any], z: Iterable[int]):
 );
 
 testcase!(
+    test_tuple_constructor_assert_type,
+    r#"
+from typing import assert_type, Iterable
+def test(x: Iterable[int]) -> None:
+    assert_type(tuple(x), tuple[int, ...])
+"#,
+);
+
+testcase!(
+    test_tuple_constructor_concat,
+    r#"
+from typing import assert_type, Iterable, Literal
+def test(x: Iterable[int]) -> None:
+    assert_type(tuple(x) + (3,), tuple[*tuple[int, ...], Literal[3]])
+"#,
+);
+
+testcase!(
+    test_namedtuple_constructor_nominal,
+    r#"
+from typing import NamedTuple, assert_type
+class Point(NamedTuple):
+    x: int
+    y: int
+p = Point(1, 2)
+assert_type(p, Point)
+"#,
+);
+
+testcase!(
+    test_tuple_subclass_constructor_nominal,
+    r#"
+from typing import assert_type
+class MyTuple(tuple[int, ...]): pass
+m = MyTuple([1, 2])
+assert_type(m, MyTuple)
+"#,
+);
+
+testcase!(
     test_tuple_aug_assign,
     r#"
 def test() -> None:
