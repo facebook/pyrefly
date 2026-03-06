@@ -4776,6 +4776,10 @@ impl Server {
                 )
             );
             timed_refactor_action!(
+                "introduce_factory",
+                transaction.introduce_factory_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "introduce_parameter",
                 transaction.introduce_parameter_code_actions(&handle, range)
             );
