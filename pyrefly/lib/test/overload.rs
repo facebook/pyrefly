@@ -1483,7 +1483,6 @@ with atomic_file("foo", "w") as f:
 );
 
 testcase!(
-    bug = "We incorrectly match the `LiteralString` overload of `relpath`",
     test_literalstring_or_str_overloads,
     r#"
 from typing import Any, LiteralString, overload
@@ -1502,7 +1501,7 @@ def f(path: Any, data: Any) -> dict[str, Any]:
     outputs = {}
     relative_normalized_path = relpath(normpath(path))
     outputs[relative_normalized_path] = data
-    return outputs  # E: `dict[LiteralString, Any]` is not assignable to declared return type `dict[str, Any]`
+    return outputs
     "#,
 );
 
@@ -1558,5 +1557,47 @@ def demo_two(s: tuple[int, int]):
 
 def demo_variadic(s: tuple[int, ...]):
     assert_type(ndim(s), int)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2600.
+testcase!(
+    test_materialization_does_not_leak_into_partial_contained,
+    r#"
+def f(x: None):
+    config = {}
+    # Intentionally introduce Error types.
+    for k, v in x:  # E: Type `None` is not iterable
+        config.setdefault(k, v)
+    for k in config:
+        if k == "hello":
+            pass
+    "#,
+);
+
+testcase!(
+    bug = "op(A[Any], A[Any]) should be treated as ambiguous",
+    test_ambiguous,
+    r#"
+from typing import Any, overload, assert_type
+
+class A[T]:  # covariant
+    def get(self) -> T: ...
+
+@overload
+def op(l: A[None], r: A[None]) -> A[None]: ...
+@overload
+def op(l: A[None], r: A[Any]) -> A[None]: ...
+@overload
+def op(l: A[Any], r: A[None]) -> A[None]: ...
+@overload
+def op(l: A[Any], r: A[Any]) -> A[Any]: ...
+def op(l, r) -> A[None | Any]: ...
+
+def test(x: A[None], y: A[Any]) -> None:
+    assert_type(op(x, x), A[None])
+    assert_type(op(x, y), A[None])
+    assert_type(op(y, x), A[None])
+    assert_type(op(y, y), Any)  # E: assert_type(A[None], Any)
     "#,
 );

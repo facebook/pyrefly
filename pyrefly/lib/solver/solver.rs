@@ -21,6 +21,7 @@ use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tensor::TensorShape;
 use pyrefly_types::tuple::Tuple;
+use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -95,7 +96,11 @@ enum Variable {
     /// the default type if the first use does not pin.
     PartialQuantified(Quantified),
     /// A variable due to generic instantiation, `def f[T](x: T): T` with `f(1)`
-    Quantified(Quantified),
+    Quantified {
+        quantified: Quantified,
+        /// Does this variable have `typing.Any` as a lower bound?
+        has_any_lower_bound: bool,
+    },
     /// A variable caused by general recursion, e.g. `x = f(); def f(): return x`.
     Recursive,
     /// A loop-recursive variable, e.g. `x = None; while x is None: x = f()`
@@ -135,7 +140,11 @@ impl Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Variable::PartialContained(_) => write!(f, "PartialContained"),
-            Variable::PartialQuantified(q) | Variable::Quantified(q) => {
+            Variable::PartialQuantified(q)
+            | Variable::Quantified {
+                quantified: q,
+                has_any_lower_bound: _,
+            } => {
                 let label = if matches!(self, Variable::PartialQuantified(_)) {
                     "PartialQuantified"
                 } else {
@@ -363,7 +372,10 @@ impl Solver {
                 // which do not represent placeholder types.
                 None
             }
-            Variable::Quantified(q) => {
+            Variable::Quantified {
+                quantified: q,
+                has_any_lower_bound: _,
+            } => {
                 // A Variable::Quantified should always be finished (see `finish_quantified`) by
                 // the code that creates it, because we need to know when we're done collecting
                 // constraints. If we see a Quantified while pinning other placeholder types, that
@@ -478,7 +490,10 @@ impl Solver {
             }
             _ => {
                 let ty = match &mut *e {
-                    Variable::Quantified(q) => q.as_gradual_type(),
+                    Variable::Quantified {
+                        quantified: q,
+                        has_any_lower_bound: _,
+                    } => q.as_gradual_type(),
                     Variable::PartialQuantified(q) => q.as_gradual_type(),
                     _ => self.heap.mk_any_implicit(),
                 };
@@ -746,7 +761,13 @@ impl Solver {
         let vs = qs.map(|_| Var::new(uniques));
         let mut lock = self.variables.lock();
         for (v, q) in vs.iter().zip(qs.iter()) {
-            lock.insert_fresh(*v, Variable::Quantified((*q).clone()));
+            lock.insert_fresh(
+                *v,
+                Variable::Quantified {
+                    quantified: (*q).clone(),
+                    has_any_lower_bound: false,
+                },
+            );
         }
         QuantifiedHandle(vs)
     }
@@ -836,6 +857,21 @@ impl Solver {
         }
     }
 
+    /// Add `Any` as a lower bound to the variable if it is a Quantified
+    pub fn add_any_lower_bound(&self, v: Var) {
+        let lock = self.variables.lock();
+        let mut e = lock.get_mut(v);
+        match &mut *e {
+            Variable::Quantified {
+                quantified: _,
+                has_any_lower_bound,
+            } => {
+                *has_any_lower_bound = true;
+            }
+            _ => {}
+        }
+    }
+
     /// Called after a quantified function has been called. Given `def f[T](x: int): list[T]`,
     /// after the generic has completed.
     /// If `infer_with_first_use` is true, the variable `T` will be have like an
@@ -858,12 +894,19 @@ impl Solver {
                         err.push(e.clone());
                     }
                 }
-                Variable::Quantified(q) => {
-                    if infer_with_first_use {
-                        *e = Variable::finished(q);
-                    } else {
-                        *e = Variable::Answer(q.as_gradual_type())
-                    }
+                Variable::Quantified {
+                    quantified: q,
+                    has_any_lower_bound: false,
+                } if infer_with_first_use => {
+                    *e = Variable::finished(q);
+                }
+                Variable::Quantified {
+                    quantified: q,
+                    has_any_lower_bound: _,
+                } => {
+                    // Either `infer_with_first_use` is false or the variable has already been
+                    // solved to `Any`.
+                    *e = Variable::Answer(q.as_gradual_type());
                 }
                 _ => {}
             }
@@ -896,7 +939,13 @@ impl Solver {
                 let v = Var::new(uniques);
                 vs.push(v);
                 *t = v.to_type(&self.heap);
-                lock.insert_fresh(v, Variable::Quantified(param.clone()));
+                lock.insert_fresh(
+                    v,
+                    Variable::Quantified {
+                        quantified: param.clone(),
+                        has_any_lower_bound: false,
+                    },
+                );
             }
         });
         QuantifiedHandle(vs)
@@ -914,7 +963,11 @@ impl Solver {
         let lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Var(v) = t
-                && let Variable::Quantified(q) = &*lock.get(*v)
+                && let Variable::Quantified {
+                    quantified: q,
+                    // If the variable has already been solved to `Any`, do not generalize it.
+                    has_any_lower_bound: false,
+                } = &*lock.get(*v)
                 && *q == *param
             {
                 *t = param.clone().to_type(&self.heap);
@@ -1216,14 +1269,14 @@ impl Solver {
         subset.is_subset_eq(got, want)
     }
 
-    pub fn is_equal<Ans: LookupAnswer>(
+    pub fn is_consistent<Ans: LookupAnswer>(
         &self,
         got: &Type,
         want: &Type,
         type_order: TypeOrder<Ans>,
     ) -> Result<(), SubsetError> {
         let mut subset = self.subset(type_order);
-        subset.is_equal(got, want)
+        subset.is_consistent(got, want)
     }
 
     fn subset<'a, Ans: LookupAnswer>(&'a self, type_order: TypeOrder<'a, Ans>) -> Subset<'a, Ans> {
@@ -1485,7 +1538,7 @@ pub struct Subset<'a, Ans: LookupAnswer> {
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
-    pub fn is_equal(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
+    pub fn is_consistent(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         self.is_subset_eq(got, want)?;
         self.is_subset_eq(want, got)
     }
@@ -1495,9 +1548,48 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // We really have no idea. Just give up for now.
             return Err(SubsetError::Other);
         }
+        if matches!(got, Type::Materialization) {
+            return self.is_subset_eq(
+                &self
+                    .solver
+                    .heap
+                    .mk_class_type(self.type_order.stdlib().object().clone()),
+                want,
+            );
+        } else if matches!(want, Type::Materialization) {
+            return self.is_subset_eq(got, &self.solver.heap.mk_never());
+        }
         let res = self.is_subset_eq_var(got, want);
         self.gas.restore();
         res
+    }
+
+    /// For a constrained TypeVar, find the narrowest constraint that `ty` is assignable to.
+    ///
+    /// Per the typing spec, a constrained TypeVar (`T = TypeVar("T", int, str)`) must resolve
+    /// to exactly one of its constraint types — never a subtype like `bool` or `Literal[42]`.
+    /// This method finds the best (narrowest) matching constraint by checking assignability
+    /// and preferring the most specific constraint when multiple match.
+    fn find_matching_constraint<'c>(
+        &mut self,
+        ty: &Type,
+        constraints: &'c [Type],
+    ) -> Option<&'c Type> {
+        let matching: Vec<&Type> = constraints
+            .iter()
+            .filter(|c| self.is_subset_eq(ty, c).is_ok())
+            .collect();
+        if matching.is_empty() {
+            return None;
+        }
+        // Pick the narrowest matching constraint: the one that is a subtype of all others.
+        let mut best = matching[0];
+        for &candidate in &matching[1..] {
+            if self.is_subset_eq(candidate, best).is_ok() {
+                best = candidate;
+            }
+        }
+        Some(best)
     }
 
     /// Implementation of Var subset cases, calling onward to solve non-Var cases.
@@ -1588,7 +1680,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     // When both variables are quantified, we need to preserve the stricter bound.
                     // The `unify` function preserves the Variable data from its second argument,
                     // so we call it with the stricter bound in the v2 position.
-                    (Variable::Quantified(q1), Variable::Quantified(q2))
+                    (
+                        Variable::Quantified {
+                            quantified: q1,
+                            has_any_lower_bound: _,
+                        },
+                        Variable::Quantified {
+                            quantified: q2,
+                            has_any_lower_bound: _,
+                        },
+                    )
                     | (Variable::PartialQuantified(q1), Variable::PartialQuantified(q2)) => {
                         let r1 = q1.restriction().clone();
                         let r2 = q2.restriction().clone();
@@ -1636,7 +1737,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                         Ok(())
                     }
-                    (_, Variable::Quantified(_)) => {
+                    (
+                        _,
+                        Variable::Quantified {
+                            quantified: _,
+                            has_any_lower_bound: _,
+                        },
+                    ) => {
                         drop(variable1);
                         drop(variable2);
                         // `unify` preserves the Variable in its second argument. When a Quantified
@@ -1663,25 +1770,58 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         self.is_subset_eq(&t1, t2)
                     }
-                    Variable::Quantified(q) | Variable::PartialQuantified(q) => {
+                    Variable::Quantified {
+                        quantified: q,
+                        has_any_lower_bound: _,
+                    }
+                    | Variable::PartialQuantified(q) => {
                         let name = q.name.clone();
-                        let bound = q
-                            .restriction()
-                            .as_type(self.type_order.stdlib(), &self.solver.heap);
+                        let restriction = q.restriction().clone();
+                        let bound =
+                            restriction.as_type(self.type_order.stdlib(), &self.solver.heap);
                         drop(v1_ref);
-                        variables.update(*v1, Variable::Answer(t2.clone()));
-                        drop(variables);
 
-                        if let Err(e) = self.is_subset_eq(t2, &bound) {
-                            self.solver.instantiation_errors.write().insert(
-                                *v1,
-                                TypeVarSpecializationError {
-                                    name,
-                                    got: t2.clone(),
-                                    want: bound,
-                                    error: e,
-                                },
-                            );
+                        // For constrained TypeVars, promote to the matching constraint type
+                        // rather than pinning to the raw argument type.
+                        if let Restriction::Constraints(ref constraints) = restriction {
+                            variables.update(*v1, Variable::Answer(t2.clone()));
+                            drop(variables);
+                            if let Some(constraint) = self.find_matching_constraint(t2, constraints)
+                            {
+                                let constraint = constraint.clone();
+                                self.solver
+                                    .variables
+                                    .lock()
+                                    .update(*v1, Variable::Answer(constraint));
+                            } else if let Err(e) = self.is_subset_eq(t2, &bound) {
+                                // No individual constraint matched, but the type may still
+                                // be assignable to the constraint union (e.g. an abstract
+                                // `AnyStr` satisfies `str | bytes`). Only error if it fails
+                                // the union bound check too.
+                                self.solver.instantiation_errors.write().insert(
+                                    *v1,
+                                    TypeVarSpecializationError {
+                                        name,
+                                        got: t2.clone(),
+                                        want: bound,
+                                        error: e,
+                                    },
+                                );
+                            }
+                        } else {
+                            variables.update(*v1, Variable::Answer(t2.clone()));
+                            drop(variables);
+                            if let Err(e) = self.is_subset_eq(t2, &bound) {
+                                self.solver.instantiation_errors.write().insert(
+                                    *v1,
+                                    TypeVarSpecializationError {
+                                        name,
+                                        got: t2.clone(),
+                                        want: bound,
+                                        error: e,
+                                    },
+                                );
+                            }
                         }
                         Ok(())
                     }
@@ -1756,40 +1896,92 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         self.is_subset_eq(t1, &t2)
                     }
-                    Variable::Quantified(q) | Variable::PartialQuantified(q) => {
+                    Variable::Quantified {
+                        quantified: q,
+                        has_any_lower_bound: _,
+                    }
+                    | Variable::PartialQuantified(q) => {
                         let t1_p = t1
                             .clone()
                             .promote_implicit_literals(self.type_order.stdlib());
                         let name = q.name.clone();
-                        let bound = q
-                            .restriction()
-                            .as_type(self.type_order.stdlib(), &self.solver.heap);
+                        let restriction = q.restriction().clone();
+                        let bound =
+                            restriction.as_type(self.type_order.stdlib(), &self.solver.heap);
                         drop(v2_ref);
-                        variables.update(*v2, Variable::Answer(t1_p.clone()));
-                        drop(variables);
 
-                        if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
-                            // If the promoted type fails, try again with the original type, in case the bound itself is literal.
-                            // This could be more optimized, but errors are rare, so this code path should not be hot.
-                            self.solver
-                                .variables
-                                .lock()
-                                .update(*v2, Variable::Answer(t1.clone()));
-                            if self.is_subset_eq(t1, &bound).is_err() {
-                                // If the original type is also an error, use the promoted type.
+                        // For constrained TypeVars, promote to the matching constraint type.
+                        if let Restriction::Constraints(ref constraints) = restriction {
+                            variables.update(*v2, Variable::Answer(t1_p.clone()));
+                            drop(variables);
+                            // Try promoted type first, then fall back to original (for literal bounds).
+                            if let Some(constraint) =
+                                self.find_matching_constraint(&t1_p, constraints)
+                            {
+                                let constraint = constraint.clone();
                                 self.solver
                                     .variables
                                     .lock()
-                                    .update(*v2, Variable::Answer(t1_p.clone()));
-                                self.solver.instantiation_errors.write().insert(
-                                    *v2,
-                                    TypeVarSpecializationError {
-                                        name,
-                                        got: t1_p.clone(),
-                                        want: bound,
-                                        error: err_p,
-                                    },
-                                );
+                                    .update(*v2, Variable::Answer(constraint));
+                            } else if let Some(constraint) =
+                                self.find_matching_constraint(t1, constraints)
+                            {
+                                let constraint = constraint.clone();
+                                self.solver
+                                    .variables
+                                    .lock()
+                                    .update(*v2, Variable::Answer(constraint));
+                            } else if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
+                                // No individual constraint matched, but the type may still
+                                // be assignable to the constraint union (e.g. an abstract
+                                // `AnyStr` satisfies `str | bytes`). Fall back to bound
+                                // checking, mirroring the non-constraint code path.
+                                self.solver
+                                    .variables
+                                    .lock()
+                                    .update(*v2, Variable::Answer(t1.clone()));
+                                if self.is_subset_eq(t1, &bound).is_err() {
+                                    self.solver
+                                        .variables
+                                        .lock()
+                                        .update(*v2, Variable::Answer(t1_p.clone()));
+                                    self.solver.instantiation_errors.write().insert(
+                                        *v2,
+                                        TypeVarSpecializationError {
+                                            name,
+                                            got: t1_p.clone(),
+                                            want: bound,
+                                            error: err_p,
+                                        },
+                                    );
+                                }
+                            }
+                        } else {
+                            variables.update(*v2, Variable::Answer(t1_p.clone()));
+                            drop(variables);
+                            if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
+                                // If the promoted type fails, try again with the original type, in case the bound itself is literal.
+                                // This could be more optimized, but errors are rare, so this code path should not be hot.
+                                self.solver
+                                    .variables
+                                    .lock()
+                                    .update(*v2, Variable::Answer(t1.clone()));
+                                if self.is_subset_eq(t1, &bound).is_err() {
+                                    // If the original type is also an error, use the promoted type.
+                                    self.solver
+                                        .variables
+                                        .lock()
+                                        .update(*v2, Variable::Answer(t1_p.clone()));
+                                    self.solver.instantiation_errors.write().insert(
+                                        *v2,
+                                        TypeVarSpecializationError {
+                                            name,
+                                            got: t1_p.clone(),
+                                            want: bound,
+                                            error: err_p,
+                                        },
+                                    );
+                                }
                             }
                         }
                         Ok(())

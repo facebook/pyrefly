@@ -20,8 +20,8 @@ use crate::module_wildcard::ModuleWildcard;
 /// This controls how strongly connected components (cycles) in the binding
 /// graph are resolved. The default is `CyclesDualWrite`, which writes answers
 /// eagerly for cross-thread visibility. `CyclesThreadLocal` defers writes
-/// until the entire SCC completes. `IterativeFixpoint` (not yet wired up)
-/// will re-solve SCC members until answers converge.
+/// until the entire SCC completes. `IterativeFixpoint` re-solves SCC members
+/// in a fixpoint loop until answers converge.
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Default)]
 #[derive(ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -130,6 +130,11 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tensor_shapes: Option<bool>,
 
+    /// Which SCC-solving strategy to use during type checking.
+    /// Defaults to `CyclesDualWrite` when not set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scc_mode: Option<SccMode>,
+
     /// Maximum recursion depth before triggering overflow protection.
     /// Set to 0 to disable (default). This helps detect potential stack overflow situations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -207,6 +212,12 @@ impl ConfigBase {
 
     pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {
         base.enabled_ignores.as_ref()
+    }
+
+    /// Get the SCC solving mode configuration.
+    /// Returns the default (`CyclesDualWrite`) if not set.
+    pub fn get_scc_mode(base: &Self) -> SccMode {
+        base.scc_mode.unwrap_or_default()
     }
 
     /// Get the recursion limit configuration, if enabled.

@@ -43,6 +43,7 @@ use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
 use crate::config::base::RecursionLimitConfig;
+use crate::config::base::SccMode;
 use crate::dispatch_anyidx;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
@@ -535,6 +536,22 @@ pub trait LookupAnswer: Sized {
     ) -> bool {
         false
     }
+
+    /// Drive a cross-module iteration member by calling `get_idx` in the
+    /// target module's context.
+    ///
+    /// Used during iterative SCC solving when a member belongs to a different
+    /// module than the current solver. The answer from `get_idx` is stored in
+    /// iteration state on the shared `CalcStack` (via the shared `ThreadState`),
+    /// so no return value is needed.
+    ///
+    /// Returns true if the driving was performed, false if the implementation
+    /// does not support cross-module driving.
+    ///
+    /// Default implementation returns false (not supported).
+    fn solve_idx_erased(&self, _calc_id: &CalcId, _thread_state: &ThreadState) -> bool {
+        false
+    }
 }
 
 impl Answers {
@@ -600,6 +617,7 @@ impl Answers {
         uniques: &UniqueFactory,
         compute_everything: bool,
         recursion_limit_config: Option<RecursionLimitConfig>,
+        scc_mode: SccMode,
     ) -> Solutions {
         let mut res = SolutionsTable::default();
 
@@ -630,7 +648,7 @@ impl Answers {
             }
         }
         let recurser = &VarRecurser::new();
-        let thread_state = &ThreadState::new(recursion_limit_config);
+        let thread_state = &ThreadState::new(recursion_limit_config, scc_mode);
         let answers_solver = AnswersSolver::new(
             answers,
             self,
@@ -749,6 +767,39 @@ impl Answers {
     /// Returns true if the write won the first-write-wins race.
     pub fn commit_preliminary(&self, any_idx: &AnyIdx, answer: Arc<dyn Any + Send + Sync>) -> bool {
         dispatch_anyidx!(any_idx, self, commit_typed, answer)
+    }
+
+    /// Drive a cross-module iteration member by constructing a temporary
+    /// `AnswersSolver` for this module and calling `get_idx` on the member.
+    ///
+    /// Target-side entry point for cross-module iterative driving. The answer
+    /// is stored in SCC iteration state on the shared `CalcStack` (via
+    /// `thread_state`), so the `get_idx` result is discarded.
+    pub fn solve_idx_erased<Ans: LookupAnswer>(
+        &self,
+        any_idx: &AnyIdx,
+        answers: &Ans,
+        bindings: &Bindings,
+        exports: &dyn LookupExport,
+        errors: &ErrorCollector,
+        stdlib: &Stdlib,
+        uniques: &UniqueFactory,
+        thread_state: &ThreadState,
+    ) {
+        let recurser = &VarRecurser::new();
+        let solver = AnswersSolver::new(
+            answers,
+            self,
+            errors,
+            bindings,
+            exports,
+            uniques,
+            recurser,
+            stdlib,
+            thread_state,
+            self.heap(),
+        );
+        dispatch_anyidx!(any_idx, solver, solve_idx_erased_typed);
     }
 
     /// Typed commit for a specific key type. Downcasts the answer and writes

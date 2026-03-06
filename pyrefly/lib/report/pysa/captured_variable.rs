@@ -264,9 +264,9 @@ impl<'a> CapturedVariableVisitor<'a> {
 
         let binding = self.module_context.bindings.get(idx);
         match binding {
-            Binding::Forward(idx) | Binding::ForwardToFirstUse(idx) => {
-                self.get_definition_from_idx(*idx, seen, depth)
-            }
+            Binding::Forward(idx)
+            | Binding::ForwardToFirstUse(idx)
+            | Binding::Narrow(idx, _, _) => self.get_definition_from_idx(*idx, seen, depth),
             Binding::Phi(_, branches) => {
                 for branch in branches {
                     if let Some(function_ref) =

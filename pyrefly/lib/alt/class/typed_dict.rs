@@ -731,7 +731,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(typed_dict)
             && !extra.read_only
             && self.typed_dict_fields(typed_dict).values().all(|field| {
-                !field.is_read_only() && !field.required && self.is_equal(&field.ty, &extra.ty)
+                !field.is_read_only() && !field.required && self.is_consistent(&field.ty, &extra.ty)
             })
         {
             Some(extra.ty)
@@ -995,7 +995,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                                 format!("Cannot add required field `{}` to TypedDict `{}` with non-read-only `extra_items`", name, base.name()),
                             );
-                        } else if !self.is_equal(field_ty, &ty) {
+                        } else if !self.is_consistent(field_ty, &ty) {
                             self.error(
                                 errors,
                                 range,

@@ -106,6 +106,7 @@ pub struct TelemetryServerState {
     pub id: Uuid,
     /// The surface/entrypoint for the language server
     pub surface: Option<String>,
+    pub server_start_time: Instant,
 }
 
 #[derive(Default)]

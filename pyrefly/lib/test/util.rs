@@ -42,6 +42,7 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::binding::binding::KeyExport;
+use crate::config::base::SccMode;
 use crate::config::base::UntypedDefBehavior;
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
@@ -115,6 +116,7 @@ pub struct TestEnv {
     missing_override_decorator_error: bool,
     not_required_key_access_error: bool,
     default_require_level: Require,
+    scc_mode: SccMode,
 }
 
 impl TestEnv {
@@ -138,6 +140,7 @@ impl TestEnv {
             missing_override_decorator_error: false,
             not_required_key_access_error: false,
             default_require_level: Require::Exports,
+            scc_mode: SccMode::default(),
         }
     }
 
@@ -226,6 +229,11 @@ impl TestEnv {
         self
     }
 
+    pub fn with_scc_mode(mut self, scc_mode: SccMode) -> Self {
+        self.scc_mode = scc_mode;
+        self
+    }
+
     pub fn add_with_path(&mut self, name: &str, path: &str, code: &str) {
         assert!(
             path.ends_with(".py") || path.ends_with(".pyi") || path.ends_with(".rs"),
@@ -287,6 +295,7 @@ impl TestEnv {
         config.python_environment.site_package_path = Some(self.site_package_path.clone());
         config.root.untyped_def_behavior = Some(self.untyped_def_behavior);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
+        config.root.scc_mode = Some(self.scc_mode);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };

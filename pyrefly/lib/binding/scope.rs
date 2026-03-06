@@ -172,6 +172,9 @@ struct Static(SmallMap<Name, StaticInfo>);
 struct StaticInfo {
     range: TextRange,
     style: StaticStyle,
+    /// The range of the textually last assignment to this name. Used to check
+    /// whether a captured variable is reassigned after a nested function definition.
+    last_range: TextRange,
 }
 
 #[derive(Clone, Debug)]
@@ -320,13 +323,27 @@ impl StaticInfo {
 }
 
 impl Static {
-    fn upsert(&mut self, name: Hashed<Name>, range: TextRange, style: StaticStyle) {
+    fn upsert(
+        &mut self,
+        name: Hashed<Name>,
+        range: TextRange,
+        style: StaticStyle,
+        last_range: TextRange,
+    ) {
         match self.0.entry_hashed(name) {
             Entry::Vacant(e) => {
-                e.insert(StaticInfo { range, style });
+                e.insert(StaticInfo {
+                    range,
+                    style,
+                    last_range,
+                });
             }
             Entry::Occupied(mut e) => {
                 let found = e.get_mut();
+                // Track the textually last assignment site.
+                if last_range.start() > found.last_range.start() {
+                    found.last_range = last_range;
+                }
                 if matches!(style, StaticStyle::PossibleLegacyTParam) {
                     // This case is reachable when the same module has multiple attributes accessed
                     // on it, each of which produces a separate possible-legacy-tparam binding that
@@ -407,9 +424,10 @@ impl Static {
             // Note that this really is an upsert: there might already be a parameter of the
             // same name in this scope.
             let range = definition.range;
+            let last_range = definition.last_range;
             let style =
                 StaticStyle::of_definition(name.as_ref(), definition, scopes, get_annotation_idx);
-            self.upsert(name, range, style);
+            self.upsert(name, range, style, last_range);
         }
         for (module, range, wildcard) in all_wildcards {
             // Builtins are a fallback, so they should never shadow an existing definition.
@@ -420,7 +438,7 @@ impl Static {
                 if skip_existing && self.0.get_hashed(name).is_some() {
                     continue;
                 }
-                self.upsert(name.cloned(), range, StaticStyle::MergeableImport)
+                self.upsert(name.cloned(), range, StaticStyle::MergeableImport, range)
             }
         }
         implicit_captures
@@ -432,6 +450,7 @@ impl Static {
                 Hashed::new(name.id.clone()),
                 name.range,
                 StaticStyle::SingleDef(None),
+                name.range,
             )
         };
         Ast::expr_lvalue(x, &mut add);
@@ -852,13 +871,19 @@ fn is_test_setup_method(method_name: &Name) -> bool {
     }
 }
 
-/// Things we collect from inside a function
+/// Things we collect from inside a function.
 /// The boolean flag is set when we know for sure the statement is definitely unreachable.
 #[derive(Default, Clone, Debug)]
 pub struct YieldsAndReturns {
     pub returns: Vec<(Idx<Key>, StmtReturn, bool)>,
     pub yields: Vec<(Idx<KeyYield>, ExprYield, bool)>,
     pub yield_froms: Vec<(Idx<KeyYieldFrom>, ExprYieldFrom, bool)>,
+    /// Whether this function syntactically contains `yield` or `yield from`.
+    /// Python determines generator status at compile time regardless of
+    /// reachability, so this is set even for yields inside dead code like
+    /// `if False:`. The `yields`/`yield_froms` vectors may be empty when this
+    /// is true, because dead-code branches are not traversed during binding.
+    pub is_generator: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1262,6 +1287,54 @@ impl Scopes {
             .filter(|name| scope.stat.0.get_hashed(Hashed::new(*name)).is_none())
             .cloned()
             .collect()
+    }
+
+    /// The range of the current (innermost) scope.
+    pub fn current_scope_range(&self) -> TextRange {
+        self.current().range
+    }
+
+    /// Get the outer scope's narrow idx for a captured variable, if the outer
+    /// scope has an active narrow and the variable is not reassigned after the
+    /// function definition.
+    ///
+    /// Walks outer scopes (skipping current and class scopes) to find the
+    /// nearest scope with a narrowed flow entry for `name`. Returns the
+    /// narrow's idx only when it is safe to propagate:
+    /// - The outer scope has an active narrow (isinstance, is not None, etc.)
+    /// - All assignments to the name precede `inner_fn_range`
+    ///
+    /// Returns `None` if there is no active narrow or the variable is
+    /// reassigned after the function definition.
+    pub fn outer_capture_narrow_idx(
+        &self,
+        name: Hashed<&Name>,
+        inner_fn_range: TextRange,
+    ) -> Option<Idx<Key>> {
+        for scope in self.iter_rev().skip(1) {
+            if matches!(scope.kind, ScopeKind::Class(_)) {
+                continue;
+            }
+            if let Some(flow_info) = scope.flow.get_info_hashed(name) {
+                // Only propagate when the outer scope has an active narrow.
+                flow_info.narrow.as_ref()?;
+                let not_reassigned_after = scope
+                    .stat
+                    .0
+                    .get_hashed(name)
+                    .map(|s| s.last_range.start() < inner_fn_range.start())
+                    .unwrap_or(true);
+                if not_reassigned_after {
+                    return Some(flow_info.idx());
+                }
+                return None;
+            }
+            // Name is in stat but not flow — possibly uninitialized, don't propagate.
+            if scope.stat.0.get_hashed(name).is_some() {
+                return None;
+            }
+        }
+        None
     }
 
     pub fn in_class_body(&self) -> bool {
@@ -1879,9 +1952,15 @@ impl Scopes {
             // is a special export.
             let value = self.get_flow_info(base_name)?.value()?;
             match &value.style {
-                FlowStyle::MergeableImport(m) | FlowStyle::ImportAs(m) => {
-                    lookup.is_special_export(*m, name)
+                FlowStyle::MergeableImport(m) => {
+                    // For dotted imports like `import collections.abc`, the base module `collections`
+                    // is also implicitly imported, so we should check that too.
+                    let base_module = ModuleName::from_name(base_name);
+                    lookup
+                        .is_special_export(*m, name)
+                        .or_else(|| lookup.is_special_export(base_module, name))
                 }
+                FlowStyle::ImportAs(m) => lookup.is_special_export(*m, name),
                 FlowStyle::Import(m, upstream_name) => lookup.is_special_export(*m, upstream_name),
                 _ => None,
             }
@@ -1919,6 +1998,7 @@ impl Scopes {
             Hashed::new(name.id.clone()),
             name.range,
             StaticStyle::SingleDef(ann),
+            name.range,
         )
     }
 
@@ -2049,6 +2129,7 @@ impl Scopes {
             Hashed::new(name.id.clone()),
             name.range,
             StaticStyle::PossibleLegacyTParam,
+            name.range,
         )
     }
 
@@ -2061,6 +2142,7 @@ impl Scopes {
             Hashed::new(name.id.clone()),
             name.range,
             StaticStyle::SingleDef(None),
+            name.range,
         );
     }
 
@@ -2212,6 +2294,7 @@ impl Scopes {
     ) -> Result<(), ExprYield> {
         match self.current_yields_and_returns_mut() {
             Some(yields_and_returns) => {
+                yields_and_returns.is_generator = true;
                 yields_and_returns.yields.push((idx, x, is_unreachable));
                 Ok(())
             }
@@ -2230,12 +2313,21 @@ impl Scopes {
     ) -> Result<(), ExprYieldFrom> {
         match self.current_yields_and_returns_mut() {
             Some(yields_and_returns) => {
+                yields_and_returns.is_generator = true;
                 yields_and_returns
                     .yield_froms
                     .push((idx, x, is_unreachable));
                 Ok(())
             }
             None => Err(x),
+        }
+    }
+
+    /// Mark that the enclosing function contains `yield` or `yield from` in a
+    /// statically-dead branch that was not traversed during binding.
+    pub fn mark_has_yield_in_dead_code(&mut self) {
+        if let Some(yields_and_returns) = self.current_yields_and_returns_mut() {
+            yields_and_returns.is_generator = true;
         }
     }
 
@@ -3378,6 +3470,7 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         negated_prev_ops_if_nonexhaustive: Option<&NarrowOps>,
         is_bool_op: bool,
+        base_termination_key: Option<Idx<Key>>,
     ) {
         let fork = self.scopes.current_mut().forks.pop().unwrap();
         assert!(
@@ -3393,6 +3486,9 @@ impl<'a> BindingsBuilder<'a> {
                 NarrowUseLocation::End(fork.range),
                 &Usage::Narrowing(None),
             );
+            if let Some(key) = base_termination_key {
+                self.scopes.current_mut().flow.last_stmt_expr = Some(key);
+            }
             self.merge_flow(fork.base, branches, fork.range, MergeStyle::Inclusive);
         } else {
             self.merge_flow(
@@ -3414,7 +3510,7 @@ impl<'a> BindingsBuilder<'a> {
     /// Panics if called when no fork is active, or if a branch is started (which
     /// means the caller forgot to call `finish_branch` and is always a bug).
     pub fn finish_exhaustive_fork(&mut self) {
-        self.finish_fork_impl(None, false)
+        self.finish_fork_impl(None, false, None)
     }
 
     /// Finish a non-exhaustive fork in which the base flow is part of the merge. It negates
@@ -3424,14 +3520,18 @@ impl<'a> BindingsBuilder<'a> {
     ///
     /// Panics if called when no fork is active, or if a branch is started (which
     /// means the caller forgot to call `finish_branch` and is always a bug).
-    pub fn finish_non_exhaustive_fork(&mut self, negated_prev_ops: &NarrowOps) {
-        self.finish_fork_impl(Some(negated_prev_ops), false)
+    pub fn finish_non_exhaustive_fork(
+        &mut self,
+        negated_prev_ops: &NarrowOps,
+        base_termination_key: Option<Idx<Key>>,
+    ) {
+        self.finish_fork_impl(Some(negated_prev_ops), false, base_termination_key)
     }
 
     /// Finish the fork for a boolean operation. This requires lax handling of
     /// possibly-uninitialized locals, see the inline comment in `FlowStyle::merge`.
     pub fn finish_bool_op_fork(&mut self) {
-        self.finish_fork_impl(None, true)
+        self.finish_fork_impl(None, true, None)
     }
 
     /// Finish a `MatchOr`, which behaves like an exhaustive fork except that we know

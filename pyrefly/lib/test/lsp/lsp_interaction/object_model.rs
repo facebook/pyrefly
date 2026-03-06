@@ -907,6 +907,7 @@ impl TestClient {
     }
 
     /// Wait for a publishDiagnostics notification for the given file path, regardless of error count.
+    #[allow(dead_code)]
     pub fn expect_publish_diagnostics_for_file(
         &self,
         path: PathBuf,

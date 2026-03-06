@@ -88,6 +88,7 @@ use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
+use crate::config::base::SccMode;
 use crate::config::config::ConfigFile;
 use crate::config::error_kind::ErrorKind;
 use crate::config::finder::ConfigError;
@@ -1072,6 +1073,7 @@ impl<'a> Transaction<'a> {
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(module_data.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
+                scc_mode: config.scc_mode(),
             };
 
             // Compute the step. This stores the result and advances current_step,
@@ -1469,7 +1471,7 @@ impl<'a> Transaction<'a> {
         }
         let loader = self.get_cached_loader(&BundledTypeshedStdlib::config());
         // Use defaults (disabled) for stdlib - depth limiting is for user code
-        let thread_state = ThreadState::new(None);
+        let thread_state = ThreadState::new(None, SccMode::default());
         for k in missing.into_iter_hashed() {
             self.data
                 .stdlib
@@ -1722,7 +1724,7 @@ impl<'a> Transaction<'a> {
         let stdlib = self.get_stdlib(handle);
         let recurser = VarRecurser::new();
         let config = module_data.config.read();
-        let thread_state = ThreadState::new(config.recursion_limit_config());
+        let thread_state = ThreadState::new(config.recursion_limit_config(), config.scc_mode());
         let solver = AnswersSolver::new(
             &lookup,
             &answers.1,
@@ -1963,6 +1965,7 @@ impl<'a> Transaction<'a> {
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(m.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
+                scc_mode: config.scc_mode(),
             };
             while let Some(step) = alt.next_step() {
                 let start = Instant::now();
@@ -2056,6 +2059,26 @@ pub(crate) struct TransactionHandle<'a> {
     module_data: ArcId<ModuleDataMut>,
 }
 
+/// Result of looking up a target module's `Answers` for a cross-module
+/// operation (commit or solve). See `TransactionHandle::lookup_target_answers`.
+enum TargetAnswers {
+    /// The target module was not found (e.g., import resolution failed or the
+    /// module has been invalidated). The caller should return `false`.
+    ModuleNotFound,
+    /// The target module's `Answers` are available. The caller should perform
+    /// its operation (commit or solve) using the contained data.
+    Available {
+        bindings: Bindings,
+        answers: Arc<Answers>,
+        load: Option<Arc<Load>>,
+        module_data: ArcId<ModuleDataMut>,
+    },
+    /// The target module's `Answers` have been evicted but `Solutions` exist.
+    /// This is a benign race: another thread already solved everything, so the
+    /// caller's operation is redundant and can be safely skipped (return `true`).
+    Evicted,
+}
+
 impl<'a> TransactionHandle<'a> {
     fn get_module(
         &self,
@@ -2131,6 +2154,70 @@ impl<'a> TransactionHandle<'a> {
             module_data,
         };
         Some(f(&exports, &lookup))
+    }
+
+    /// Look up a target module's Answers for a cross-module operation.
+    ///
+    /// Both `commit_to_module` and `solve_idx_erased` need to:
+    ///   1. Resolve the target module from a `CalcId`.
+    ///   2. Read the module's `Steps` under a read lock.
+    ///   3. Handle the case where Answers have been evicted but Solutions
+    ///      exist (a benign race — see `TargetAnswers::Evicted` docs).
+    ///
+    /// This helper centralizes that logic and returns a `TargetAnswers`
+    /// enum so callers only need to handle the "answers available" case.
+    fn lookup_target_answers(&self, calc_id: &CalcId) -> TargetAnswers {
+        let CalcId(ref bindings, _) = *calc_id;
+        let module = bindings.module().name();
+        let path = bindings.module().path();
+
+        // Look up the target module. Use default ModuleDep since cross-module
+        // operations don't establish new dependencies.
+        let module_data = match self
+            .get_module(module, Some(path), ModuleDep::Exists)
+            .finding()
+        {
+            Some(data) => data,
+            None => return TargetAnswers::ModuleNotFound,
+        };
+
+        if let Some(answers_pair) = module_data.state.get_answers() {
+            let bindings = answers_pair.0.dupe();
+            let answers = answers_pair.1.dupe();
+            let load = module_data.state.get_load();
+            TargetAnswers::Available {
+                bindings,
+                answers,
+                load,
+                module_data,
+            }
+        } else if module_data.state.get_solutions().is_some()
+            && module_data.state.last_step() == Some(Step::Solutions)
+        {
+            // The target module's Answers have been evicted, but Solutions
+            // exist. This is a benign race: another thread ran
+            // `demand(Step::Solutions)` on the target module concurrently
+            // with our SCC resolution. The sequence is:
+            //
+            //   1. Our thread duped the target's Arc<Answers> (in
+            //      `lookup_answer`) and dropped the module state lock.
+            //   2. While our thread was solving the SCC using that duped
+            //      Arc, another thread acquired the exclusive lock on the
+            //      target module and ran `step_solutions`, which solves
+            //      all keys independently (Calculation cells allow
+            //      multi-thread parallel compute via `propose_calculation`).
+            //   3. After computing Solutions, `demand` evicted the Answers
+            //      as a memory optimization (`steps.answers.take()`),
+            //      then released the exclusive lock.
+            //   4. Our cross-module operation now reads `steps.answers`
+            //      and finds None — but the Calculation cells were already
+            //      filled by the other thread's `step_solutions`, so no
+            //      data is lost. Our operation is redundant and can be
+            //      safely skipped.
+            TargetAnswers::Evicted
+        } else {
+            TargetAnswers::ModuleNotFound
+        }
     }
 }
 
@@ -2340,66 +2427,60 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         answer: Arc<dyn Any + Send + Sync>,
         errors: Option<Arc<ErrorCollector>>,
     ) -> bool {
-        let CalcId(ref bindings, ref any_idx) = calc_id;
-        let module = bindings.module().name();
-        let path = bindings.module().path();
-
-        // Look up the target module. Use default ModuleDep since cross-module
-        // commits don't establish new dependencies.
-        let module_data = match self
-            .get_module(module, Some(path), ModuleDep::Exists)
-            .finding()
-        {
-            Some(data) => data,
-            None => return false,
-        };
-
-        // Access the target module's Answers and commit the answer.
-        if let Some(answers_pair) = module_data.state.get_answers() {
-            let answers = answers_pair.1.dupe();
-            // Get the target module's error collector for error propagation.
-            let target_load = module_data.state.get_load();
-            let did_write = answers.commit_preliminary(any_idx, answer);
-            // Only extend errors if this write won the first-write-wins race.
-            if did_write && let (Some(errors), Some(target_load)) = (errors, target_load) {
-                // The errors Arc should have refcount 1 here: batch_commit_scc
-                // consumes the Scc (moved into the method), and each NodeState::Done
-                // is destructured by the for loop, so no other references remain.
-                // If this invariant is violated, something is holding an unexpected
-                // reference to the error collector, which could cause silent error
-                // loss and nondeterministic output.
-                let errors = Arc::try_unwrap(errors).expect(
-                    "cross-module batch commit: errors Arc has unexpected extra references; \
-                         the SCC should have been consumed, giving us sole ownership",
-                );
-                target_load.errors.extend(errors);
+        let CalcId(_, ref any_idx) = calc_id;
+        match self.lookup_target_answers(&calc_id) {
+            TargetAnswers::ModuleNotFound => false,
+            TargetAnswers::Evicted => true,
+            TargetAnswers::Available { answers, load, .. } => {
+                let did_write = answers.commit_preliminary(any_idx, answer);
+                // Only extend errors if this write won the first-write-wins race.
+                if did_write && let (Some(errors), Some(target_load)) = (errors, load) {
+                    // The errors Arc should have refcount 1 here: batch_commit_scc
+                    // consumes the Scc (moved into the method), and each NodeState::Done
+                    // is destructured by the for loop, so no other references remain.
+                    // If this invariant is violated, something is holding an unexpected
+                    // reference to the error collector, which could cause silent error
+                    // loss and nondeterministic output.
+                    let errors = Arc::try_unwrap(errors).expect(
+                        "cross-module batch commit: errors Arc has unexpected extra references; \
+                             the SCC should have been consumed, giving us sole ownership",
+                    );
+                    target_load.errors.extend(errors);
+                }
+                true
             }
-            true
-        } else if module_data.state.get_solutions().is_some()
-            && module_data.state.last_step() == Some(Step::Solutions)
-        {
-            // The target module's Answers have been evicted, but Solutions
-            // exist. This is a benign race: another thread ran
-            // `demand(Step::Solutions)` on the target module concurrently
-            // with our SCC resolution. The sequence is:
-            //
-            //   1. Our thread duped the target's Arc<Answers> (in
-            //      `lookup_answer`) and dropped the module state lock.
-            //   2. While our thread was solving the SCC using that duped
-            //      Arc, another thread acquired the exclusive lock on the
-            //      target module and ran `step_solutions`, which solves
-            //      all keys independently (Calculation cells allow
-            //      multi-thread parallel compute via `propose_calculation`).
-            //   3. After computing Solutions, `demand` evicted the Answers
-            //      as a memory optimization (`steps.answers.take()`),
-            //      then released the exclusive lock.
-            //   4. Our batch commit now reads `steps.answers` and finds
-            //      None — but the Calculation cells were already filled
-            //      by the other thread's `step_solutions`, so no data is
-            //      lost. Our commit is redundant and can be safely skipped.
-            true
-        } else {
-            false
+        }
+    }
+
+    fn solve_idx_erased(&self, calc_id: &CalcId, thread_state: &ThreadState) -> bool {
+        let CalcId(_, ref any_idx) = *calc_id;
+        match self.lookup_target_answers(calc_id) {
+            TargetAnswers::ModuleNotFound => false,
+            TargetAnswers::Evicted => true,
+            TargetAnswers::Available {
+                bindings: target_bindings,
+                answers: target_answers,
+                load,
+                module_data,
+            } => {
+                let target_load = load.expect(
+                    "target module has Answers but no Load; this should be unreachable \
+                     because Load is computed before Answers",
+                );
+                let stdlib = self.transaction.get_stdlib(&module_data.handle);
+                let lookup = self.transaction.lookup(module_data);
+                target_answers.solve_idx_erased(
+                    any_idx,
+                    &lookup,
+                    &target_bindings,
+                    &lookup,
+                    &target_load.errors,
+                    &stdlib,
+                    &self.transaction.data.state.uniques,
+                    thread_state,
+                );
+                true
+            }
         }
     }
 }

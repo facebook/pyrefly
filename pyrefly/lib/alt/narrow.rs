@@ -278,11 +278,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         left: &Type,
         right_expr: &Expr,
+        source: NarrowSource,
         errors: &ErrorCollector,
     ) -> Type {
+        let force_allow_negative = matches!(source, NarrowSource::Pattern);
         let mut res = Vec::new();
         for (right, allows_negative_narrow) in self.expr_as_class_info(right_expr, errors) {
             res.push(self.distribute_over_union(left, |l| {
+                let allows_negative_narrow = allows_negative_narrow || force_allow_negative;
                 if allows_negative_narrow
                     && let Some((tparams, right)) = self.unwrap_class_object_silently(&right)
                 {
@@ -1054,7 +1057,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 self.narrow_isinstance(ty, &right)
             }
-            AtomicNarrowOp::IsNotInstance(v, _source) => self.narrow_is_not_instance(ty, v, errors),
+            AtomicNarrowOp::IsNotInstance(v, source) => {
+                self.narrow_is_not_instance(ty, v, *source, errors)
+            }
             AtomicNarrowOp::TypeEq(v) => {
                 // If type(X) == Y then X has to be exactly Y, not a subclass of Y
                 // We can't model that, so we narrow it exactly like isinstance(X, Y)

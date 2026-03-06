@@ -1117,8 +1117,13 @@ impl<'a> BindingsBuilder<'a> {
 
     /// For names that are read but not locally-defined (implicit captures),
     /// this method creates flow entries pointing to the outer scope's binding.
+    ///
+    /// When the outer scope has an active narrow for the captured variable and
+    /// the variable is not reassigned after this function definition, we use
+    /// the narrowed type in the nested scope.
     pub fn seed_captured_variables(&mut self) {
         let captures = self.scopes.implicit_capture_names();
+        let inner_fn_range = self.scopes.current_scope_range();
         for name in captures.into_iter() {
             let hashed_name = Hashed::new(&name);
             let name_read_info = self
@@ -1132,6 +1137,18 @@ impl<'a> BindingsBuilder<'a> {
                     .map(FlowStyle::assume_initialized)
                     .unwrap_or(FlowStyle::Other);
                 self.scopes.define_in_current_flow(hashed_name, idx, style);
+                if let Some(narrow_idx) = self
+                    .scopes
+                    .outer_capture_narrow_idx(hashed_name, inner_fn_range)
+                {
+                    // Only propagate type-guard narrows (isinstance, is not None,
+                    // etc.), not assignment narrows from subscript/attribute writes.
+                    // Assignment narrows track mutations and should not leak into
+                    // nested scopes.
+                    if matches!(self.idx_to_binding(narrow_idx), Some(Binding::Narrow(..))) {
+                        self.scopes.narrow_in_current_flow(hashed_name, narrow_idx);
+                    }
+                }
             }
         }
     }

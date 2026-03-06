@@ -1157,3 +1157,31 @@ token-type: function
 "#,
     );
 }
+
+#[test]
+fn list_comprehension_variable_test() {
+    let code = r#"
+items = [1, 2, 3]
+result = [x for x in items]
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 0, length: 5, text: items
+token-type: variable
+
+line: 2, column: 0, length: 6, text: result
+token-type: variable
+
+line: 2, column: 10, length: 1, text: x
+token-type: variable
+
+line: 2, column: 16, length: 1, text: x
+token-type: variable
+
+line: 2, column: 21, length: 5, text: items
+token-type: variable
+"#,
+    );
+}

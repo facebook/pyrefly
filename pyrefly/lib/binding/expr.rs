@@ -433,10 +433,10 @@ impl<'a> BindingsBuilder<'a> {
             // for inner and outer loops. It is safe to overwrite it because it literally the same.
             let iterable_value_idx = self.insert_binding_overwrite(
                 Key::Anon(comp.iter.range()),
-                Binding::IterableValue(
-                    None,
+                Binding::IterableValueComprehension(
                     Box::new(comp.iter.clone()),
                     IsAsync::new(comp.is_async),
+                    comp.target.range(),
                 ),
             );
             self.scopes.add_lvalue_to_current_static(&comp.target);

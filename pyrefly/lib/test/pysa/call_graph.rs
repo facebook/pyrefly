@@ -7372,3 +7372,106 @@ class A:
         )]
     }
 );
+
+call_graph_testcase!(
+    test_property_returning_type_called_as_constructor,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Type
+
+class LogEntry:
+    def __init__(self, event: str) -> None:
+        pass
+
+class Logger:
+    @property
+    def LogEntry(self) -> Type[LogEntry]:
+        return LogEntry
+
+def foo(logger: Logger):
+    entry = logger.LogEntry(event="test")
+"#,
+    &|context: &ModuleContext| {
+        let init_targets = vec![
+            create_call_target("test.LogEntry.__init__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.LogEntry", context),
+        ];
+        let new_targets = vec![
+            create_call_target("builtins.object.__new__", TargetType::Function)
+                .with_is_static_method(true),
+        ];
+        let property_getters = vec![
+            create_call_target("test.Logger.LogEntry", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.Logger", context),
+        ];
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "14:13-14:28",
+                    attribute_access_callees(
+                        /* call_targets */ vec![],
+                        /* init_targets */ init_targets.clone(),
+                        /* new_targets */ new_targets.clone(),
+                        /* property_setters */ vec![],
+                        /* property_getters */ property_getters,
+                        /* higher_order_parameters */ vec![],
+                        /* unresolved */ Unresolved::False,
+                        /* is_attribute */ false,
+                    ),
+                ),
+                (
+                    "14:13-14:42",
+                    constructor_call_callees(init_targets, new_targets),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_classproperty_returning_type_called_as_constructor,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Type, Callable
+
+class classproperty[T, R]:
+    def __init__(self, fget: Callable[[type[T]], R]) -> None: ...
+    def __get__(self, obj: object, obj_cls_type: type[T]) -> R: ...
+
+class LogEntry:
+    def __init__(self, event: str) -> None:
+        pass
+
+class Logger:
+    @classproperty
+    def LogEntry(cls) -> Type[LogEntry]:
+        return LogEntry
+
+def foo():
+    entry = Logger.LogEntry(event="test")
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "18:13-18:19|identifier|Logger",
+                    class_identifier_without_constructors("test.Logger", context),
+                ),
+                (
+                    "18:13-18:42",
+                    // Bug: @classproperty returning Type[LogEntry] does not resolve to the LogEntry
+                    // constructor when called. The call targets show Logger.LogEntry (the classproperty
+                    // method) rather than LogEntry.__init__.
+                    regular_call_callees(vec![create_call_target(
+                        "test.Logger.LogEntry",
+                        TargetType::Function,
+                    )]),
+                ),
+            ],
+        )]
+    }
+);

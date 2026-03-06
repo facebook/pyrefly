@@ -416,9 +416,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.solver().is_subset_eq(got, want, self.type_order())
     }
 
-    /// Check that got and want are consistent with each other
-    pub fn is_equal(&self, got: &Type, want: &Type) -> bool {
-        self.solver().is_equal(got, want, self.type_order()).is_ok()
+    pub fn is_consistent(&self, got: &Type, want: &Type) -> bool {
+        self.solver()
+            .is_consistent(got, want, self.type_order())
+            .is_ok()
     }
 
     pub fn expr_class_keyword(&self, x: &Expr, errors: &ErrorCollector) -> Annotation {
@@ -731,6 +732,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn has_named_tuple_iter_override(&self, cls: &ClassType) -> bool {
+        if self
+            .get_metadata_for_class(cls.class_object())
+            .named_tuple_metadata()
+            .is_none()
+        {
+            return false;
+        }
+        let Some(iter_method) = self
+            .get_non_synthesized_class_member_and_defining_class(cls.class_object(), &dunder::ITER)
+        else {
+            return false;
+        };
+        !iter_method
+            .defining_class
+            .has_toplevel_qname("builtins", "tuple")
+            && !iter_method
+                .defining_class
+                .has_toplevel_qname("type_checker_internals", "NamedTupleFallback")
+    }
+
     /// Given an `iterable` type, determine the iteration type; this is the type
     /// of `x` if we were to loop using `for x in iterable`.
     ///
@@ -752,6 +774,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )
         };
         match iterable {
+            Type::ClassType(cls) if self.has_named_tuple_iter_override(cls) => {
+                let ty = self
+                    .call_magic_dunder_method(
+                        iterable,
+                        &dunder::ITER,
+                        range,
+                        &[],
+                        &[],
+                        errors,
+                        Some(&context),
+                    )
+                    .and_then(|iter_ty| self.unwrap_iterable(&iter_ty))
+                    .unwrap_or_else(|| {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::NotIterable),
+                            context().format(),
+                        )
+                    });
+                vec![Iterable::OfType(ty)]
+            }
             Type::ClassType(cls) if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) => {
                 vec![Iterable::FixedLen(elts.clone())]
             }
@@ -2813,16 +2857,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::TypeVar(tv) => match tv.restriction() {
                         Restriction::Constraints(default_constraints) => default_constraints
                             .iter()
-                            .all(|dc| constraints.iter().any(|c| self.is_equal(c, dc))),
+                            .all(|dc| constraints.iter().any(|c| self.is_consistent(c, dc))),
                         Restriction::Bound(_) | Restriction::Unrestricted => false,
                     },
                     Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                         Restriction::Constraints(default_constraints) => default_constraints
                             .iter()
-                            .all(|dc| constraints.iter().any(|c| self.is_equal(c, dc))),
+                            .all(|dc| constraints.iter().any(|c| self.is_consistent(c, dc))),
                         Restriction::Bound(_) | Restriction::Unrestricted => false,
                     },
-                    _ => constraints.iter().any(|c| self.is_equal(c, default)),
+                    _ => constraints.iter().any(|c| self.is_consistent(c, default)),
                 };
                 if !valid {
                     let formatted_constraints = constraints
@@ -3411,16 +3455,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .collect(),
             _ => {
                 let exception_types = self.expr_infer(ann, errors);
-                match exception_types {
-                    Type::Tuple(Tuple::Concrete(ts)) => ts
-                        .into_iter()
-                        .map(|t| check_exception_type(t, ann.range()))
-                        .collect(),
-                    Type::Tuple(Tuple::Unbounded(t)) => {
-                        vec![check_exception_type(*t, ann.range())]
-                    }
-                    _ => vec![check_exception_type(exception_types, ann.range())],
-                }
+                self.decompose_except_types(exception_types, ann.range(), &check_exception_type)
             }
         };
         let exceptions = self.unions(exceptions);
@@ -3428,6 +3463,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.heap.mk_class_type(t)
         } else {
             exceptions
+        }
+    }
+
+    /// Decompose a type used in an `except` clause into individual exception types,
+    /// validating each one via `check`. In Python, an `except` clause accepts a single
+    /// exception class or a tuple of exception classes. The type may also be a union
+    /// (e.g. `type[X] | tuple[type[X], ...]`), in which case each member is processed
+    /// independently.
+    fn decompose_except_types(
+        &self,
+        ty: Type,
+        range: TextRange,
+        check: &impl Fn(Type, TextRange) -> Type,
+    ) -> Vec<Type> {
+        // Normalize nominal tuple ClassTypes (e.g. from `tuple()` constructor calls)
+        // to structural Type::Tuple so they match the tuple arms below.
+        let ty = match ty {
+            Type::ClassType(cls) => match self.as_tuple(&cls) {
+                Some(tuple) => Type::Tuple(tuple),
+                None => Type::ClassType(cls),
+            },
+            other => other,
+        };
+        match ty {
+            Type::Tuple(Tuple::Concrete(ts)) => ts.into_iter().map(|t| check(t, range)).collect(),
+            Type::Tuple(Tuple::Unbounded(t)) => {
+                vec![check(*t, range)]
+            }
+            Type::Union(box Union { members, .. }) => members
+                .into_iter()
+                .flat_map(|t| self.decompose_except_types(t, range, check))
+                .collect(),
+            _ => vec![check(ty, range)],
         }
     }
 
@@ -4662,7 +4730,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.binding_to_type_exception_handler(ann, *is_star, errors)
             }
             Binding::AugAssign(ann, x) => self.augassign_infer(*ann, x, errors),
-            Binding::IterableValue(ann, e, is_async) => {
+            Binding::IterableValueComprehension(e, is_async, _) => {
+                self.binding_to_type_iterable_value(None, e, *is_async, errors)
+            }
+            Binding::IterableValueLoop(ann, e, is_async) => {
                 self.binding_to_type_iterable_value(*ann, e, *is_async, errors)
             }
             Binding::ContextValue(ann, e, range, kind) => {

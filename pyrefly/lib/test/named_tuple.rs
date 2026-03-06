@@ -373,7 +373,6 @@ class B(A):
 );
 
 testcase!(
-    bug = "The asserted type is wrong",
     test_custom_iter,
     r#"
 from typing import assert_type, Iterator, NamedTuple
@@ -382,7 +381,7 @@ class NT(NamedTuple):
     def __iter__(self) -> Iterator[str]: ...
 nt = NT(0)
 for x in nt:
-    assert_type(x, str)  # E: assert_type(int, str)
+    assert_type(x, str)
     "#,
 );
 
@@ -597,4 +596,29 @@ class QConfig(namedtuple("QConfig", ["activation", "weight"])):
     def __new__(cls, activation, weight):
         return super().__new__(cls, activation, weight)
 "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2622
+// `import collections.abc` should not break special handling of `collections.namedtuple`.
+testcase!(
+    test_named_tuple_collections_submodule_import,
+    r#"
+import collections
+import collections.abc
+
+Point = collections.namedtuple("Point", ["x", "y"])
+p = Point(x=1, y=2)
+    "#,
+);
+
+// `import collections.abc` alone (without explicit `import collections`) should still
+// allow `collections.namedtuple` to work, since `import X.Y` implicitly imports `X`.
+testcase!(
+    test_named_tuple_collections_submodule_import_only,
+    r#"
+import collections.abc
+
+Point = collections.namedtuple("Point", ["x", "y"])
+p = Point(x=1, y=2)
+    "#,
 );

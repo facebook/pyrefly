@@ -25,6 +25,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
 use crate::binding::bindings::Bindings;
 use crate::config::base::RecursionLimitConfig;
+use crate::config::base::SccMode;
 use crate::config::base::UntypedDefBehavior;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::Exports;
@@ -50,6 +51,7 @@ pub struct Context<'a, Lookup> {
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
     pub recursion_limit_config: Option<RecursionLimitConfig>,
+    pub scc_mode: SccMode,
 }
 
 #[derive(Debug, Default, Dupe, Clone)]
@@ -440,6 +442,7 @@ impl Step {
                 || ctx.require.keep_answers_trace()
                 || ctx.require.keep_answers(),
             ctx.recursion_limit_config,
+            ctx.scc_mode,
         );
         Arc::new(solutions)
     }

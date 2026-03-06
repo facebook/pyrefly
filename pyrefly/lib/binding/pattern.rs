@@ -488,7 +488,6 @@ impl<'a> BindingsBuilder<'a> {
         if exhaustive {
             self.finish_exhaustive_fork();
         } else {
-            self.finish_non_exhaustive_fork(&negated_prev_ops);
             // Compute exhaustiveness info if we can determine the narrowing subject
             // and have accumulated narrow ops for it.
             let exhaustiveness_info = match_narrowing_subject.and_then(|narrowing_subject| {
@@ -511,10 +510,10 @@ impl<'a> BindingsBuilder<'a> {
                     },
                 );
             }
-            // Always create Key::Exhaustive binding for return analysis.
+            // Always create Key::Exhaustive binding for return analysis and control-flow checks.
             // When exhaustiveness_info is None, the solver will conservatively
             // assume the match is not exhaustive (resolves to Type::None).
-            self.insert_binding(
+            let exhaustive_key = self.insert_binding(
                 Key::Exhaustive(ExhaustivenessKind::Match, x.range),
                 Binding::Exhaustive(Box::new(ExhaustiveBinding {
                     kind: ExhaustivenessKind::Match,
@@ -523,6 +522,7 @@ impl<'a> BindingsBuilder<'a> {
                     exhaustiveness_info,
                 })),
             );
+            self.finish_non_exhaustive_fork(&negated_prev_ops, Some(exhaustive_key));
         }
     }
 }

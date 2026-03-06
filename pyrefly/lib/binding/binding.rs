@@ -2037,10 +2037,12 @@ pub enum Binding {
     ReturnImplicit(ReturnImplicit),
     /// The return type of a function.
     ReturnType(Box<ReturnType>),
-    /// A value in an iterable expression, e.g. IterableValue(\[1\]) represents 1.
-    /// The second argument is the expression being iterated.
-    /// The third argument indicates whether iteration is async or not.
-    IterableValue(Option<Idx<KeyAnnotation>>, Box<Expr>, IsAsync),
+    /// A value in an iterable expression from a comprehension.
+    /// The `TextRange` is the position of the comprehension target, used for go-to-def.
+    IterableValueComprehension(Box<Expr>, IsAsync, TextRange),
+    /// A value in an iterable expression from a for-loop,
+    /// e.g. `for x in items`. Keeps the optional annotation from the loop target.
+    IterableValueLoop(Option<Idx<KeyAnnotation>>, Box<Expr>, IsAsync),
     /// A value produced by entering a context manager.
     /// The second argument is the expression of the context manager and its range.
     /// The fourth argument indicates whether the context manager is async or not.
@@ -2212,8 +2214,16 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::ReturnImplicit(_) => write!(f, "ReturnImplicit(_)"),
             Self::ReturnType(_) => write!(f, "ReturnType(_)"),
-            Self::IterableValue(a, x, sync) => {
-                write!(f, "IterableValue({}, {}, {sync:?})", ann(a), m.display(x))
+            Self::IterableValueComprehension(x, sync, _) => {
+                write!(f, "IterableValueComprehension({}, {sync:?})", m.display(x))
+            }
+            Self::IterableValueLoop(a, x, sync) => {
+                write!(
+                    f,
+                    "IterableValueLoop({}, {}, {sync:?})",
+                    ann(a),
+                    m.display(x)
+                )
             }
             Self::ExceptionHandler(x, b) => write!(f, "ExceptionHandler({}, {b:?})", m.display(x)),
             Self::ContextValue(a, x, _, kind) => {
@@ -2480,7 +2490,9 @@ impl Binding {
             Binding::LambdaParameter(_) | Binding::FunctionParameter(_) => {
                 Some(SymbolKind::Parameter)
             }
-            Binding::IterableValue(_, _, _) => Some(SymbolKind::Variable),
+            Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
+                Some(SymbolKind::Variable)
+            }
             Binding::UnpackedValue(_, _, _, _) => Some(SymbolKind::Variable),
             Binding::AugAssign(_, _) => Some(SymbolKind::Variable),
             Binding::Expr(_, _)

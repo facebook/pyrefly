@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::file_kind::ConfigFileKind;
+use pyrefly_config::migration::run::MigrationSource;
 use pyrefly_config::migration::run::config_migration;
 use pyrefly_config::pyproject::PyProject;
 use pyrefly_util::absolutize::Absolutize as _;
@@ -43,6 +44,10 @@ pub struct InitArgs {
     /// Useful for CI, scripted workflows, or running init before check in automated pipelines.
     #[arg(long)]
     non_interactive: bool,
+    /// Which type checker config to migrate from when multiple are present.
+    /// When set to "auto" (the default), tries mypy first, then pyright.
+    #[arg(long, value_enum, default_value_t = MigrationSource::Auto)]
+    migrate_from: MigrationSource,
 }
 
 impl InitArgs {
@@ -50,6 +55,7 @@ impl InitArgs {
         Self {
             path,
             non_interactive: false,
+            migrate_from: MigrationSource::Auto,
         }
     }
 
@@ -57,6 +63,7 @@ impl InitArgs {
         Self {
             path,
             non_interactive: false,
+            migrate_from: MigrationSource::Auto,
         }
     }
 
@@ -205,7 +212,10 @@ impl InitArgs {
         // 2. Migrate existing configuration to Pyrefly configuration
         if found_mypy || found_pyright {
             info!("Found an existing type checking configuration - setting up pyrefly ...");
-            return Ok((CommandExitStatus::Success, Some(config_migration(&path)?)));
+            return Ok((
+                CommandExitStatus::Success,
+                Some(config_migration(&path, self.migrate_from)?),
+            ));
         }
 
         // Generate a basic config with a couple sensible defaults.
@@ -298,6 +308,7 @@ mod test {
         let args = InitArgs {
             path: dir.path().to_path_buf(),
             non_interactive: true,
+            migrate_from: MigrationSource::Auto,
         };
         args.run(None)
     }
@@ -652,5 +663,35 @@ k = [\"v\"]
         let status = run_init_non_interactive(&tmp)?;
         assert_user_error(status);
         Ok(())
+    }
+
+    #[test]
+    fn test_migrate_from_pyright_picks_pyright_over_mypy() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        create_file_in(
+            tmp.path(),
+            "pyproject.toml",
+            Some(
+                b"\
+[tool.pyright]
+include = [\"from_pyright.py\"]
+
+[tool.mypy]
+files = [\"from_mypy.py\"]
+",
+            ),
+        )?;
+        let args = InitArgs {
+            path: tmp.path().to_path_buf(),
+            non_interactive: true,
+            migrate_from: MigrationSource::Pyright,
+        };
+        let status = args.run(None)?;
+        assert_success(status);
+        check_file_in(
+            tmp.path(),
+            "pyproject.toml",
+            &["tool.pyrefly", "project-includes = [\"from_pyright.py\"]"],
+        )
     }
 }

@@ -179,19 +179,15 @@ class TestAssertTypeRuntime(unittest.TestCase):
     from __future__ import annotations does NOT postpone its evaluation."""
 
     def test_assert_type_concrete(self):
-        """assert_type(x, Tensor[3, 4]) — Tensor subscript in assert_type."""
+        """assert_type(x, Tensor[3, 4]) — works after torch_shapes patch."""
         t = torch.randn(3, 4)
-        with self.assertRaisesRegex(TypeError, r"type 'Tensor' is not subscriptable"):
-            assert_type(t, torch.Tensor[3, 4])
+        assert_type(t, torch.Tensor[3, 4])
 
     def test_assert_type_typevar(self):
-        """assert_type(result, Tensor[N, 3]) — TypeVar in assert_type."""
+        """assert_type(result, Tensor[N, 3]) — works after torch_shapes patch."""
 
         def f[N](x: torch.Tensor[N, 3]) -> torch.Tensor[N, 3]:
-            with self.assertRaisesRegex(
-                TypeError, r"type 'Tensor' is not subscriptable"
-            ):
-                assert_type(x, torch.Tensor[N, 3])
+            assert_type(x, torch.Tensor[N, 3])
             return x
 
         f(torch.randn(4, 3))

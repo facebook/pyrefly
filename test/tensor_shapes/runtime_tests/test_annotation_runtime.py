@@ -23,21 +23,28 @@ from torch_shapes import Dim
 
 
 class TestSubscriptRuntime(unittest.TestCase):
-    """torch.Tensor is not subscriptable at runtime."""
+    """torch.Tensor subscripting behavior at runtime.
+
+    torch.Tensor is not natively subscriptable, but importing torch_shapes
+    patches __class_getitem__ so that Tensor[3, 4] evaluates to Tensor
+    (a no-op) instead of crashing.
+    """
 
     def test_concrete_subscript(self):
-        """Tensor[3, 4] — concrete integer dims, no TypeVars."""
-        with self.assertRaisesRegex(TypeError, "type 'Tensor' is not subscriptable"):
+        """Tensor[3, 4] — works after torch_shapes patches __class_getitem__."""
 
-            def f(x: torch.Tensor[3, 4]) -> torch.Tensor[3, 4]:
-                return x
+        def f(x: torch.Tensor[3, 4]) -> torch.Tensor[3, 4]:
+            return x
+
+        self.assertTrue(callable(f))
 
     def test_typevar_subscript(self):
-        """Tensor[N, 3] — TypeVar in subscript, no arithmetic."""
-        with self.assertRaisesRegex(TypeError, "type 'Tensor' is not subscriptable"):
+        """Tensor[N, 3] — TypeVar in subscript, works after patch."""
 
-            def f[N](x: torch.Tensor[N, 3]) -> torch.Tensor[N, 3]:
-                return x
+        def f[N](x: torch.Tensor[N, 3]) -> torch.Tensor[N, 3]:
+            return x
+
+        self.assertTrue(callable(f))
 
 
 class TestTypeVarArithmetic(unittest.TestCase):
@@ -113,26 +120,31 @@ class TestClassAnnotationRuntime(unittest.TestCase):
     """Classes with class-level and method-level TypeVars."""
 
     def test_class_concrete_subscript(self):
-        """Class method with Tensor[3, 4] — concrete dims."""
-        with self.assertRaisesRegex(TypeError, "type 'Tensor' is not subscriptable"):
+        """Class method with Tensor[3, 4] — works after torch_shapes patch."""
 
-            class Layer:
-                def forward(self, x: torch.Tensor[3, 4]) -> torch.Tensor[3, 4]:
-                    return x
+        class Layer:
+            def forward(self, x: torch.Tensor[3, 4]) -> torch.Tensor[3, 4]:
+                return x
+
+        self.assertTrue(hasattr(Layer, "forward"))
 
     def test_class_typevars_no_arithmetic(self):
-        """Class-level (N, M) and method-level (B) TypeVars, no arithmetic."""
-        with self.assertRaisesRegex(TypeError, "type 'Tensor' is not subscriptable"):
+        """Class-level (N, M) and method-level (B) TypeVars — works after patch."""
 
-            class Layer[N, M]:
-                def forward[B](self, x: torch.Tensor[B, N]) -> torch.Tensor[B, M]:
-                    return x  # type: ignore[return-value]
+        class Layer[N, M]:
+            def forward[B](self, x: torch.Tensor[B, N]) -> torch.Tensor[B, M]:
+                return x  # type: ignore[return-value]
+
+        self.assertTrue(hasattr(Layer, "forward"))
 
     def test_class_typevar_arithmetic(self):
         """Class-level TypeVar with arithmetic in method annotation.
-        The param annotation Tensor[N, 3] is evaluated first, so the
-        error is 'not subscriptable' (arithmetic in return is never reached)."""
-        with self.assertRaisesRegex(TypeError, "type 'Tensor' is not subscriptable"):
+        Tensor[N, 3] works after patch, but N+1 still crashes because
+        PEP 695 TypeVar doesn't support arithmetic."""
+        with self.assertRaisesRegex(
+            TypeError,
+            r"unsupported operand type\(s\) for \+: 'typing.TypeVar' and 'int'",
+        ):
 
             class PadLayer[N]:
                 def forward(self, x: torch.Tensor[N, 3]) -> torch.Tensor[N + 1, 3]:

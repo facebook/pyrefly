@@ -106,6 +106,10 @@ pub struct Definition {
     /// If the first statement in a definition (class, function) is a string literal, PEP 257 convention
     /// states that is the docstring.
     pub docstring_range: Option<TextRange>,
+    /// The range of the textually last assignment site. When there is only one
+    /// definition, this equals `range`. Used to determine if a variable is
+    /// reassigned after a given point (e.g. after a nested function definition).
+    pub last_range: TextRange,
 }
 
 impl Definition {
@@ -122,6 +126,10 @@ impl Definition {
         if other < self.style {
             self.style = other;
             self.range = range;
+        }
+        // Track the textually last assignment site.
+        if range.start() > self.last_range.start() {
+            self.last_range = range;
         }
         // If we've merged a Definition, then there are multiple definition sites.
         //
@@ -343,6 +351,7 @@ impl Definitions {
                     style: DefinitionStyle::ImplicitGlobal,
                     needs_anywhere: false,
                     docstring_range: None,
+                    last_range: TextRange::default(),
                 },
             );
         }
@@ -427,6 +436,7 @@ impl<'a> DefinitionsBuilder<'a> {
                     style,
                     needs_anywhere: false,
                     docstring_range: body.and_then(Docstring::range_from_stmts),
+                    last_range: range,
                 });
             }
         }

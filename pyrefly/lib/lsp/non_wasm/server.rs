@@ -801,6 +801,8 @@ pub struct Server {
     /// An external source which may be included to assist in finding global references
     #[expect(dead_code)]
     external_references: Arc<dyn ExternalReferences>,
+    /// The time at which the server was started, for telemetry.
+    server_start_time: Instant,
 }
 
 pub fn shutdown_finish(sender: &Sender<Message>, reader: &mut MessageReader, id: RequestId) {
@@ -2285,6 +2287,7 @@ impl Server {
             path_remapper,
             pending_watched_file_changes: Mutex::new(Vec::new()),
             external_references,
+            server_start_time: Instant::now(),
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
@@ -2312,6 +2315,7 @@ impl Server {
             has_sourcedb: self.workspaces.sourcedb_available(),
             id: self.id,
             surface: self.surface.clone(),
+            server_start_time: self.server_start_time,
         }
     }
 

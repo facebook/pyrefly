@@ -411,6 +411,58 @@ async def test() -> None:
 );
 
 testcase!(
+    test_async_generator_yield_in_if_false,
+    r#"
+from collections.abc import AsyncGenerator
+from typing import assert_type
+
+class BaseBlock:
+    async def run(self, data: dict[str, str]) -> AsyncGenerator[tuple[str, str], None]:
+        if False:
+            yield ("name", "value")
+        raise NotImplementedError
+
+    async def run_once(self, data: dict[str, str]) -> str:
+        async for name, value in self.run(data):
+            if name == "output":
+                return value
+        raise ValueError("No output produced")
+
+assert_type(BaseBlock().run({}), AsyncGenerator[tuple[str, str], None])
+"#,
+);
+
+testcase!(
+    test_sync_generator_yield_in_if_false,
+    r#"
+from typing import Generator, assert_type
+
+def gen() -> Generator[int, None, None]:
+    if False:
+        yield 1
+    raise NotImplementedError
+
+assert_type(gen(), Generator[int, None, None])
+for x in gen():
+    assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_async_generator_yield_in_if_false_simple,
+    r#"
+from typing import AsyncGenerator, assert_type
+
+async def gen() -> AsyncGenerator[int, None]:
+    if False:
+        yield 1
+    raise NotImplementedError
+
+assert_type(gen(), AsyncGenerator[int, None])
+"#,
+);
+
+testcase!(
     test_async_generator_comprehension_with_await,
     r#"
 from typing import AsyncIterable, AsyncGenerator, assert_type

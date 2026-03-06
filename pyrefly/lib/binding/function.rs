@@ -394,8 +394,7 @@ impl<'a> BindingsBuilder<'a> {
         should_infer_return_type: bool,
         stub_or_impl: FunctionStubOrImpl,
     ) {
-        let is_generator =
-            !(yields_and_returns.yields.is_empty() && yields_and_returns.yield_froms.is_empty());
+        let is_generator = yields_and_returns.is_generator;
         let return_ann = return_ann_with_range.as_ref().map(|(_, key)| *key);
 
         // Collect the keys of explicit returns.
@@ -452,7 +451,7 @@ impl<'a> BindingsBuilder<'a> {
                         range,
                         annotation,
                         implicit_return,
-                        is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
+                        is_generator,
                         has_explicit_return: !return_keys.is_empty(),
                     }
                 }
@@ -463,7 +462,7 @@ impl<'a> BindingsBuilder<'a> {
                     ReturnTypeKind::ShouldTrustAnnotation {
                         annotation,
                         range,
-                        is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
+                        is_generator,
                     }
                 }
                 (None, Some(implicit_return), _) if should_infer_return_type => {
@@ -479,7 +478,7 @@ impl<'a> BindingsBuilder<'a> {
                     // We don't have an explicit return annotation, or we don't want to infer return type.
                     // Just treat the return type as `Any`.
                     ReturnTypeKind::ShouldReturnAny {
-                        is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
+                        is_generator,
                     }
                 }
             };

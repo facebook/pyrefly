@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::config::base::SccMode;
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -628,5 +629,227 @@ testcase!(
     r#"
 from gen import Struct
 x = Struct().serialize()
+"#,
+);
+
+// ---- Iterative SCC solving tests ----
+//
+// Tests that verify SCC solving behavior under iterative fixpoint mode.
+// These exercise the LoopPhi cold-start bypass and iterative convergence.
+
+/// Build a TestEnv configured for iterative fixpoint SCC solving.
+fn iterative_env() -> TestEnv {
+    TestEnv::new().with_scc_mode(SccMode::IterativeFixpoint)
+}
+
+// Verify that a simple loop variable whose type is stable across iterations
+// is correctly inferred. The LoopPhi cold-start bypass resolves the prior
+// value (x = 0, type int) during iteration 1, and the warm-start iteration
+// confirms convergence.
+testcase!(
+    iterative_loop_phi_simple,
+    iterative_env(),
+    r#"
+from typing import assert_type
+
+def f(cond: bool):
+    x = 0
+    while cond:
+        x = x + 1
+    assert_type(x, int)
+"#,
+);
+
+// Verify that multiple loop variables modified in the same loop are all
+// correctly inferred. Each variable produces its own LoopPhi node in the
+// SCC; the cold-start bypass must handle all of them independently, and
+// the warm-start iteration must confirm convergence for every variable.
+testcase!(
+    iterative_loop_phi_multi_var,
+    iterative_env(),
+    r#"
+from typing import assert_type
+
+def f(cond: bool):
+    x = 0
+    y = 1.5
+    z: list[int] = []
+    while cond:
+        x = x + 1
+        y = y * 2.0
+        z = z + [x]
+    assert_type(x, int)
+    assert_type(y, float)
+    assert_type(z, list[int])
+"#,
+);
+
+// Verify that a loop variable whose type widens across iterations converges
+// correctly under iterative fixpoint solving. The variable `x` starts as
+// `int` but may be reassigned to `None` inside the loop, so the LoopPhi
+// must converge to `int | None`.
+testcase!(
+    iterative_loop_phi_increment,
+    iterative_env(),
+    r#"
+from typing import assert_type
+
+def f(cond: bool):
+    x: int | None = 0
+    while cond:
+        assert_type(x, int | None)
+        if cond:
+            x = None
+        else:
+            x = 1
+    assert_type(x, int | None)
+"#,
+);
+
+// Verify that mutually recursive functions (a true SCC, not just a LoopPhi)
+// converge correctly under iterative fixpoint solving. Functions `f` and `g`
+// each call the other, creating a cycle in the binding graph. The cold-start
+// iteration uses placeholders for the unknown return types; the warm-start
+// iteration substitutes the previous answers and should converge to the
+// annotated return types.
+testcase!(
+    iterative_warm_start_mutual_recursion,
+    iterative_env(),
+    r#"
+from typing import assert_type
+
+def f(x: int) -> str:
+    if x <= 0:
+        return "done"
+    return g(x - 1)
+
+def g(x: int) -> str:
+    return f(x)
+
+assert_type(f(1), str)
+assert_type(g(1), str)
+"#,
+);
+
+// Verify that spurious errors from cold-start iteration 1 (which uses
+// placeholders via `error_swallower()`) do not leak into the final output.
+// A clean mutual recursion cycle with fully annotated signatures should
+// produce NO errors: the cold-start may temporarily see placeholder types
+// that look like mismatches, but those errors are swallowed. The warm-start
+// iterations use `error_collector()` and should see converged, correct types
+// that produce no errors.
+testcase!(
+    iterative_error_suppression_no_spurious_errors,
+    iterative_env(),
+    r#"
+from typing import assert_type
+
+def f(x: int) -> int:
+    return g(x)
+
+def g(x: int) -> int:
+    return f(x)
+
+assert_type(f(1), int)
+assert_type(g(1), int)
+"#,
+);
+
+// Verify that real type errors ARE reported after convergence in iterative
+// mode. While cold-start (iteration 1) errors are suppressed, errors from
+// iteration >= 2 are collected and committed. Here `g` has a return type
+// annotation of `str` but returns `x` (an `int`), which is a genuine
+// incompatible-return-type error that must survive across iterations.
+testcase!(
+    iterative_error_suppression_real_errors_reported,
+    iterative_env(),
+    r#"
+from typing import assert_type
+
+def f(x: int) -> str:
+    if x <= 0:
+        return "done"
+    return g(x - 1)
+
+def g(x: int) -> str:
+    return x  # E: Returned type `int` is not assignable to declared return type `str`
+
+assert_type(f(1), str)
+assert_type(g(1), str)
+"#,
+);
+
+// Verify that the iterative solver handles SCCs spanning multiple modules.
+// Module `a` defines `f` which calls `g` from module `b`, and module `b`
+// defines `g` which calls `f` from module `a`. This creates a cross-module
+// cycle that exercises `solve_idx_erased` plumbing: the iterative solver
+// must detect the cross-module SCC and converge to the annotated return
+// types via cold-start placeholders followed by warm-start iterations.
+
+fn env_iterative_cross_module_cycle() -> TestEnv {
+    let mut env = iterative_env();
+    env.add(
+        "a",
+        r#"
+from b import g
+
+def f(x: int) -> int:
+    return g(x)
+"#,
+    );
+    env.add(
+        "b",
+        r#"
+from a import f
+
+def g(x: int) -> int:
+    return f(x)
+"#,
+    );
+    env
+}
+
+testcase!(
+    iterative_cross_module_scc_cycle,
+    env_iterative_cross_module_cycle(),
+    r#"
+from typing import assert_type
+from a import f
+from b import g
+assert_type(f(1), int)
+assert_type(g(1), int)
+"#,
+);
+
+// Verify that two disjoint SCCs (no edges between them) solve independently
+// and correctly. When the iterative solver discovers a disjoint SCC during
+// iteration, it should solve that SCC to completion, commit its results,
+// and return without disturbing the iteration state of the other SCC.
+// Here SCC1 = {f, g} (int -> int) and SCC2 = {h, k} (str -> str) are
+// completely independent mutual-recursion pairs.
+testcase!(
+    iterative_disjoint_scc_independence,
+    iterative_env(),
+    r#"
+from typing import assert_type
+
+# SCC 1: f and g call each other
+def f(x: int) -> int:
+    return g(x)
+
+def g(x: int) -> int:
+    return f(x)
+
+# SCC 2: h and k call each other (completely independent of f/g)
+def h(x: str) -> str:
+    return k(x)
+
+def k(x: str) -> str:
+    return h(x)
+
+assert_type(f(1), int)
+assert_type(g(1), int)
+assert_type(h("a"), str)
+assert_type(k("a"), str)
 "#,
 );
