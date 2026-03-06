@@ -3602,6 +3602,155 @@ class Outer:
     }
 }
 
+mod encapsulate_field_tests {
+    use pretty_assertions::assert_eq;
+
+    use super::Module;
+    use super::ModuleInfo;
+    use super::Require;
+    use super::TextRange;
+    use super::apply_refactor_edits_for_module;
+    use super::cursor_selection;
+    use super::mk_multi_file_state_assert_no_errors;
+
+    fn compute_encapsulate_field_actions(
+        code: &str,
+    ) -> (
+        ModuleInfo,
+        Vec<Vec<(Module, TextRange, String)>>,
+        Vec<String>,
+    ) {
+        let (handles, state) =
+            mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+        let handle = handles.get("main").unwrap();
+        let transaction = state.transaction();
+        let module_info = transaction.get_module_info(handle).unwrap();
+        let selection = cursor_selection(code);
+        let actions = transaction
+            .encapsulate_field_code_actions(handle, selection)
+            .unwrap_or_default();
+        let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+            actions.iter().map(|action| action.edits.clone()).collect();
+        let titles = actions.iter().map(|action| action.title.clone()).collect();
+        (module_info, edit_sets, titles)
+    }
+
+    fn apply_first_encapsulate_field_action(code: &str) -> Option<String> {
+        let (module_info, actions, _) = compute_encapsulate_field_actions(code);
+        let edits = actions.first()?;
+        Some(apply_refactor_edits_for_module(&module_info, edits))
+    }
+
+    fn assert_no_encapsulate_field_action(code: &str) {
+        let (_, actions, _) = compute_encapsulate_field_actions(code);
+        assert!(
+            actions.is_empty(),
+            "expected no encapsulate-field actions, found {}",
+            actions.len()
+        );
+    }
+
+    #[test]
+    fn encapsulate_field_rewrites_reads_and_writes() {
+        let code = r#"
+class Counter:
+    def __init__(self, value):
+        self.value = value
+
+    def increment(self):
+        self.value += 1
+
+    def reset(self, value):
+        self.value = value
+
+    def current(self):
+        return self.value
+#                   ^
+
+def read(counter: Counter):
+    return counter.value
+"#;
+        let updated =
+            apply_first_encapsulate_field_action(code).expect("expected encapsulate field action");
+        let expected = r#"
+class Counter:
+    def __init__(self, value):
+        self.value = value
+
+    def increment(self):
+        self.set_value(self.get_value() + 1)
+
+    def reset(self, value):
+        self.set_value(value)
+
+    def current(self):
+        return self.get_value()
+
+    def get_value(self):
+        return self.value
+
+    def set_value(self, value):
+        self.value = value
+#                   ^
+
+def read(counter: Counter):
+    return counter.get_value()
+"#;
+        assert_eq!(expected.trim(), updated.trim());
+    }
+
+    #[test]
+    fn encapsulate_field_uses_unique_method_names() {
+        let code = r#"
+class Counter:
+    def __init__(self, value):
+        self.value = value
+
+    def get_value(self):
+        return -1
+
+    def current(self):
+        return self.value
+#                   ^
+"#;
+        let updated =
+            apply_first_encapsulate_field_action(code).expect("expected encapsulate field action");
+        let expected = r#"
+class Counter:
+    def __init__(self, value):
+        self.value = value
+
+    def get_value(self):
+        return -1
+
+    def current(self):
+        return self.get_value_1()
+
+    def get_value_1(self):
+        return self.value
+
+    def set_value(self, value):
+        self.value = value
+#                   ^
+"#;
+        assert_eq!(expected.trim(), updated.trim());
+    }
+
+    #[test]
+    fn encapsulate_field_rejects_tuple_assignment_targets() {
+        let code = r#"
+class Counter:
+    def __init__(self, value):
+        self.value = value
+
+    def replace(self, other):
+        self.value, other.value = other.value, self.value
+#            ^
+"#;
+        assert_no_encapsulate_field_action(code);
+    }
+}
+
 #[test]
 fn extract_function_staticmethod_falls_back_to_helper() {
     let code = r#"
