@@ -667,7 +667,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 )?;
                 Ok(())
             }
-            _ => Err(SubsetError::Other),
+            // Resolve Vars inside Unbounded tuples and re-dispatch.
+            (Tuple::Unbounded(box Type::Var(v)), Tuple::Concrete(_)) => {
+                let resolved = self.solver.expand_vars(Type::Var(*v));
+                if matches!(resolved, Type::Var(_)) {
+                    Err(SubsetError::Other)
+                } else {
+                    self.is_subset_tuple(&Tuple::Unbounded(Box::new(resolved)), want)
+                }
+            }
+            (Tuple::Unbounded(_), Tuple::Concrete(_)) => Err(SubsetError::Other),
         }
     }
 

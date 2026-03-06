@@ -531,3 +531,59 @@ x = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 2
 assert_type(x, tuple[Any, ...])
 "#,
 );
+
+testcase!(
+    test_assign_unknown_tuple_to_concrete_tuple,
+    r#"
+def f(x):
+    y: tuple[float, float] = tuple(x)
+    "#,
+);
+
+testcase!(
+    test_assign_varlength_tuple_to_concrete_tuple_error,
+    r#"
+from typing import Any, Iterable
+def f(x: Iterable[float]):
+    y: tuple[float, float] = tuple(x)  # E: `tuple[float, ...]` is not assignable to `tuple[float, float]`
+    "#,
+);
+
+testcase!(
+    test_tuple_iterable_mismatch,
+    r#"
+from typing import Iterable
+def f(x: tuple[str, ...]): ...
+def g(x: Iterable[int]):
+    f(tuple(x))  # E: `Iterable[int]` is not assignable to parameter `iterable` with type `Iterable[str]`
+    "#,
+);
+
+testcase!(
+    test_tuple_constraint_mismatch,
+    r#"
+def f[T: (int, str)](x: tuple[T, ...], y: tuple[T, T]):
+    pass
+f((1, 2), ("", ""))  # E: `tuple[Literal[''], Literal['']]` is not assignable to parameter `y` with type `tuple[int, int]`
+    "#,
+);
+
+testcase!(
+    test_hint_influences_tuple_type,
+    r#"
+from typing import Literal
+CONSTS = ("a", "b")
+x: tuple[Literal["a", "b"], ...] = tuple(CONSTS)
+
+    "#,
+);
+
+testcase!(
+    test_callable_tuple_mismatch,
+    r#"
+from typing import Callable
+def make_tuple[T](x: T) -> tuple[T, ...]:
+    return (x,)
+f: Callable[[int], tuple[int, str]] = make_tuple  # E: `[T](x: T) -> tuple[T, ...]` is not assignable to `(int) -> tuple[int, str]`
+    "#,
+);
