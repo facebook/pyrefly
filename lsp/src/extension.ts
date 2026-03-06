@@ -121,6 +121,24 @@ export async function activate(context: ExtensionContext) {
   const configuredArgs: string[] = requireSetting('pyrefly.lspArguments');
   const args: string[] = configuredArgs.length > 0 ? configuredArgs : ['lsp'];
   const overrideCodeLensProvider = new OverrideCodeLensProvider();
+  let codeLensRefreshTimeout: NodeJS.Timeout | undefined;
+  const scheduleCodeLensRefresh = () => {
+    if (codeLensRefreshTimeout) {
+      clearTimeout(codeLensRefreshTimeout);
+    }
+    codeLensRefreshTimeout = setTimeout(() => {
+      codeLensRefreshTimeout = undefined;
+      overrideCodeLensProvider.refresh();
+    }, 150);
+  };
+
+  context.subscriptions.push(
+    new vscode.Disposable(() => {
+      if (codeLensRefreshTimeout) {
+        clearTimeout(codeLensRefreshTimeout);
+      }
+    }),
+  );
 
   const bundledPyreflyPath = vscode.Uri.joinPath(
     context.extensionUri,
@@ -237,7 +255,7 @@ export async function activate(context: ExtensionContext) {
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(async () => {
-      overrideCodeLensProvider.refresh();
+      scheduleCodeLensRefresh();
       await updateStatusBar(client);
     }),
   );
@@ -260,7 +278,7 @@ export async function activate(context: ExtensionContext) {
         client.sendNotification(DidChangeConfigurationNotification.type, {
           settings: {},
         });
-        overrideCodeLensProvider.refresh();
+        scheduleCodeLensRefresh();
       }
       await updateStatusBar(client);
     }),
@@ -268,8 +286,11 @@ export async function activate(context: ExtensionContext) {
 
   context.subscriptions.push(
     workspace.onDidChangeTextDocument(event => {
-      if (event.document.languageId === 'python') {
-        overrideCodeLensProvider.refresh();
+      if (
+        event.document.languageId === 'python' &&
+        event.document === vscode.window.activeTextEditor?.document
+      ) {
+        scheduleCodeLensRefresh();
       }
     }),
   );
@@ -287,6 +308,7 @@ export async function activate(context: ExtensionContext) {
         clientOptions,
       );
       await client.start();
+      scheduleCodeLensRefresh();
     }),
   );
 
@@ -386,7 +408,7 @@ export async function activate(context: ExtensionContext) {
 
   // Start the client. This will also launch the server
   await client.start();
-  overrideCodeLensProvider.refresh();
+  scheduleCodeLensRefresh();
 
   await updateStatusBar(client);
   const statusBarItem = getStatusBarItem();
