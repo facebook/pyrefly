@@ -384,6 +384,43 @@ fn assert_no_introduce_parameter_action(code: &str) {
     );
 }
 
+fn compute_introduce_factory_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(module_info.contents());
+    let actions = transaction
+        .introduce_factory_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn apply_first_introduce_factory_action(code: &str) -> Option<String> {
+    let (module_info, actions, _) = compute_introduce_factory_actions(code);
+    let edits = actions.first()?;
+    Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
+fn assert_no_introduce_factory_action(code: &str) {
+    let (_, actions, _) = compute_introduce_factory_actions(code);
+    assert!(
+        actions.is_empty(),
+        "expected no introduce-factory actions, found {}",
+        actions.len()
+    );
+}
+
 fn assert_no_extract_variable_action(code: &str) {
     let (_, actions, _) = compute_extract_variable_actions(code);
     assert!(
@@ -3440,6 +3477,134 @@ def caller():
     accept(**values)
 "#;
     assert_no_introduce_parameter_action(code);
+}
+
+#[test]
+fn introduce_factory_basic_refactor() {
+    let code = r#"
+class Service:
+#     ^
+    def __init__(self, value):
+        self.value = value
+
+def build():
+    return Service(1)
+"#;
+    let updated =
+        apply_first_introduce_factory_action(code).expect("expected introduce-factory action");
+    let expected = r#"
+class Service:
+#     ^
+    def __init__(self, value):
+        self.value = value
+
+    @staticmethod
+    def create(*args, **kwargs):
+        return Service(*args, **kwargs)
+
+def build():
+    return Service.create(1)
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn introduce_factory_uses_unique_name() {
+    let code = r#"
+class Service:
+#     ^
+    create = 0
+
+    def __init__(self, value):
+        self.value = value
+
+def build():
+    return Service(1)
+"#;
+    let updated =
+        apply_first_introduce_factory_action(code).expect("expected introduce-factory action");
+    let expected = r#"
+class Service:
+#     ^
+    create = 0
+
+    def __init__(self, value):
+        self.value = value
+
+    @staticmethod
+    def create_1(*args, **kwargs):
+        return Service(*args, **kwargs)
+
+def build():
+    return Service.create_1(1)
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn introduce_factory_updates_other_modules() {
+    let class_code = r#"
+class Service:
+#     ^
+    def __init__(self, value):
+        self.value = value
+"#;
+    let consumer_code = r#"
+from main import Service
+
+service = Service(1)
+"#;
+    let (handles, state) = mk_multi_file_state_assert_no_errors(
+        &[("main", class_code), ("consumer", consumer_code)],
+        Require::Everything,
+    );
+    let main_handle = handles.get("main").unwrap();
+    let consumer_handle = handles.get("consumer").unwrap();
+    let transaction = state.transaction();
+    let main_info = transaction.get_module_info(main_handle).unwrap();
+    let consumer_info = transaction.get_module_info(consumer_handle).unwrap();
+    let selection = cursor_selection(main_info.contents());
+    let actions = transaction
+        .introduce_factory_code_actions(main_handle, selection)
+        .unwrap_or_default();
+    let edits = &actions[0].edits;
+
+    let updated_main = apply_refactor_edits_for_module(&main_info, edits);
+    let updated_consumer = apply_refactor_edits_for_module(&consumer_info, edits);
+    let expected_main = r#"
+class Service:
+#     ^
+    def __init__(self, value):
+        self.value = value
+
+    @staticmethod
+    def create(*args, **kwargs):
+        return Service(*args, **kwargs)
+"#;
+    let expected_consumer = r#"
+from main import Service
+
+service = Service.create(1)
+"#;
+
+    assert_eq!(expected_main, updated_main);
+    assert_eq!(expected_consumer, updated_consumer);
+}
+
+#[test]
+fn introduce_factory_rejects_unsupported_subscript_calls() {
+    let code = r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Box(Generic[T]):
+#     ^
+    pass
+
+value = Box[int]()
+"#;
+    assert_no_introduce_factory_action(code);
 }
 
 mod extract_field_tests {
