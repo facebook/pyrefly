@@ -398,6 +398,8 @@ pub struct FuncFlags {
     /// `dataclass_transform` call. See
     /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
     pub dataclass_transform_metadata: Option<DataclassTransformMetadata>,
+    /// The attrs field name for a method decorated with `@field.default`.
+    pub attrs_default_field: Option<Name>,
 }
 
 /// The index of a function definition (`def ..():` statement) within the module,

@@ -603,6 +603,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let decorator = Decorator {
             ty: callee.clone(),
             deprecation: None,
+            attrs_default_field: None,
         };
         let special_decorator = self.get_special_decorator(&decorator)?;
         // Does this call have a single positional argument?
