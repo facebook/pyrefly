@@ -334,3 +334,19 @@ class C:
         return type(self)()
 "#,
 );
+
+testcase!(
+    bug = "Mypy allows this but Pyright doesn't, we should support it since enums are effectively final classes",
+    test_self_in_enum_classmethod,
+    r#"
+from typing import Self
+from enum import Enum
+
+class E(Enum):
+    A = 1
+
+    @classmethod
+    def f(cls) -> Self:
+        return cls.A # E: Returned type `Literal[E.A]` is not assignable to declared return type `Self@E`
+"#,
+);
