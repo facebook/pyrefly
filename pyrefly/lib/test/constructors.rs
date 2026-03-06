@@ -606,6 +606,29 @@ assert_type(C(False), C[B])
 );
 
 testcase!(
+    test_init_bad_receiver_annotation,
+    r#"
+from typing import Literal, assert_type, overload
+
+class A: ...
+class B: ...
+class D:
+    def __init__(self: A): pass # E: `__init__` method self type `A` is not a superclass of class `D`
+class E(A):
+    def __init__(self: A): pass
+
+class C[T]:
+    @overload
+    def __init__(self: A, x: Literal[True]) -> None: ...  # E: `__init__` method self type `A` is not a superclass of class `C`
+    @overload
+    def __init__(self: B, x: Literal[False]) -> None: ...  # E: `__init__` method self type `B` is not a superclass of class `C`
+    def __init__(self, x):
+        pass
+
+    "#,
+);
+
+testcase!(
     test_generic_in_generic,
     r#"
 from typing import Literal, assert_type, overload
