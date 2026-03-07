@@ -180,6 +180,7 @@ impl<'a> BindingsBuilder<'a> {
                                     members,
                                     &mut call.arguments.keywords,
                                     false,
+                                    None,
                                 ))
                             } else {
                                 None
@@ -195,6 +196,7 @@ impl<'a> BindingsBuilder<'a> {
                                     &mut call.func,
                                     members,
                                     false,
+                                    None,
                                 ))
                             } else {
                                 None
@@ -1084,6 +1086,33 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
+    /// Apply `__new__.__defaults__` override to the defaults vector.
+    /// Follows Python's right-alignment: a tuple of N values makes the last N fields optional.
+    /// `None` clears all defaults. Non-tuple/non-None values should not reach here
+    /// (filtered by extract_adjacent_new_defaults).
+    fn apply_adjacent_defaults(
+        defaults_expr: &Expr,
+        n_members: usize,
+        defaults: &mut Vec<Option<Expr>>,
+    ) {
+        match defaults_expr {
+            Expr::NoneLiteral(_) => {
+                defaults.iter_mut().for_each(|d| *d = None);
+            }
+            Expr::Tuple(tuple) => {
+                let elts = &tuple.elts;
+                defaults.iter_mut().for_each(|d| *d = None);
+                let n_defaults = elts.len().min(n_members);
+                // Right-align: skip leading elements if more defaults than fields
+                let start = elts.len() - n_defaults;
+                for (i, elt) in elts[start..].iter().enumerate() {
+                    defaults[n_members - n_defaults + i] = Some(elt.clone());
+                }
+            }
+            _ => unreachable!("extract_adjacent_new_defaults only matches Tuple and NoneLiteral"),
+        }
+    }
+
     // This functional form supports renaming illegal identifiers and specifying defaults
     // but cannot specify the type of each element
     pub fn synthesize_collections_named_tuple_def(
@@ -1094,6 +1123,7 @@ impl<'a> BindingsBuilder<'a> {
         members: &mut [Expr],
         keywords: &mut [Keyword],
         bind_to_name: bool,
+        adjacent_defaults: Option<Expr>,
     ) -> Idx<KeyClass> {
         let (mut class_object, class_indices) = if bind_to_name {
             self.class_object_and_indices(&class_name)
@@ -1147,6 +1177,12 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
         }
+        // Apply adjacent __new__.__defaults__ override.
+        // This replaces any defaults= kwarg, matching runtime semantics where
+        // assigning __new__.__defaults__ replaces the prior defaults tuple.
+        if let Some(ref defaults_expr) = adjacent_defaults {
+            Self::apply_adjacent_defaults(defaults_expr, n_members, &mut defaults);
+        }
         let member_definitions_with_defaults: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> =
             member_definitions
                 .into_iter()
@@ -1172,6 +1208,7 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     // This functional form allows specifying types for each element, but not default values
+    // (unless adjacent __new__.__defaults__ is present)
     pub fn synthesize_typing_named_tuple_def(
         &mut self,
         class_name: Identifier,
@@ -1179,6 +1216,7 @@ impl<'a> BindingsBuilder<'a> {
         func: &mut Expr,
         members: &[Expr],
         bind_to_name: bool,
+        adjacent_defaults: Option<Expr>,
     ) -> Idx<KeyClass> {
         let (mut class_object, class_indices) = if bind_to_name {
             self.class_object_and_indices(&class_name)
@@ -1186,19 +1224,26 @@ impl<'a> BindingsBuilder<'a> {
             self.anon_class_object_and_indices(&class_name)
         };
         self.ensure_expr(func, class_object.usage());
-        let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> = self
-            .parse_typing_namedtuple_fields(members, class_name.range)
-            .0
-            .into_iter()
-            .map(|(name, range, annotation)| {
-                if let Some(mut ann) = annotation {
-                    self.ensure_type(&mut ann, &mut None);
-                    (name, range, Some(ann), None)
-                } else {
-                    (name, range, None, None)
-                }
-            })
-            .collect();
+        let (parsed_fields, _has_dynamic) =
+            self.parse_typing_namedtuple_fields(members, class_name.range);
+        let n_members = parsed_fields.len();
+        let mut defaults: Vec<Option<Expr>> = vec![None; n_members];
+        if let Some(ref defaults_expr) = adjacent_defaults {
+            Self::apply_adjacent_defaults(defaults_expr, n_members, &mut defaults);
+        }
+        let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> =
+            parsed_fields
+                .into_iter()
+                .zip(defaults)
+                .map(|((name, range, annotation), default)| {
+                    if let Some(mut ann) = annotation {
+                        self.ensure_type(&mut ann, &mut None);
+                        (name, range, Some(ann), default)
+                    } else {
+                        (name, range, None, default)
+                    }
+                })
+                .collect();
         self.synthesize_class_def(
             class_name,
             class_object,
