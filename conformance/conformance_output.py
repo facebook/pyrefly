@@ -5,6 +5,7 @@
 
 # pyre-strict
 
+from __future__ import annotations
 
 import argparse
 import difflib
@@ -217,12 +218,17 @@ def get_conformance_output(
             if file.endswith(".py") and not is_excluded(file):
                 files_to_check.append(os.path.join(root, file))
     outputs: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp_file:
+    # delete_on_close was added in Python 3.12; use delete=False + manual unlink for 3.9 compat.
+    # For more changes see: https://docs.python.org/3/library/tempfile.html#tempfile.SpooledTemporaryFile
+    tmp_file = tempfile.NamedTemporaryFile(delete=False)
+    tmp_name = tmp_file.name
+    tmp_file.close()
+    try:
         cmd = (
             get_pyrefly_command(executable)
             + [
                 "--output",
-                tmp_file.name,
+                tmp_name,
                 "--output-format=json",
                 "--search-path",
                 directory,
@@ -234,8 +240,8 @@ def get_conformance_output(
         stderr = result.stderr.decode()
         try:
             # lint-ignore: NoUnsafeFilesystemRule
-            with open(tmp_file.name, "r") as tmp_file:
-                errors = json.load(tmp_file)
+            with open(tmp_name, "r") as f:
+                errors = json.load(f)
                 for error in errors["errors"]:
                     path = error["path"]
                     del error["path"]
@@ -243,6 +249,8 @@ def get_conformance_output(
                     outputs[relative_normalized_path].append(error)
         except Exception:
             logger.exception("Failed to get conformance output\n{}\n".format(stderr))
+    finally:
+        os.unlink(tmp_name)
     return outputs
 
 
@@ -260,12 +268,16 @@ def get_conformance_output_separate(
                 files_to_check.append(os.path.join(root, file))
     outputs = defaultdict(lambda: [])
     for file in files_to_check:
-        with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp_file:
+        # delete_on_close was added in Python 3.12; use delete=False + manual unlink for 3.9 compat.
+        tmp_file = tempfile.NamedTemporaryFile(delete=False)
+        tmp_name = tmp_file.name
+        tmp_file.close()
+        try:
             cmd = (
                 get_pyrefly_command(executable)
                 + [
                     "--output",
-                    tmp_file.name,
+                    tmp_name,
                 ]
                 + [file]
             )
@@ -274,8 +286,8 @@ def get_conformance_output_separate(
             stderr = result.stderr.decode()
             try:
                 # lint-ignore: NoUnsafeFilesystemRule
-                with open(tmp_file.name, "r") as tmp_file:
-                    errors = json.load(tmp_file)
+                with open(tmp_name, "r") as f:
+                    errors = json.load(f)
                     for error in errors["errors"]:
                         path = error["path"]
                         del error["path"]
@@ -287,6 +299,8 @@ def get_conformance_output_separate(
                 logger.error(
                     "Failed to get conformance output for {}\n{}\n".format(file, stderr)
                 )
+        finally:
+            os.unlink(tmp_name)
     return outputs
 
 
