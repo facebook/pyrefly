@@ -1222,3 +1222,39 @@ result = [x for x in x if x in [1]]
         "Second 'in' should show __contains__ hover, got: {report}"
     );
 }
+
+#[test]
+fn hover_shows_float_default_value() {
+    let code = r#"
+def f(y: int = 2, x: float = 3.14) -> None:
+    pass
+
+f(y=1, x=1.0)
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("x: float = 3.14"),
+        "Expected hover to show float default value '3.14', got: {report}"
+    );
+    assert!(
+        report.contains("y: int = 2"),
+        "Expected hover to show int default value '2', got: {report}"
+    );
+}
+
+#[test]
+fn hover_shows_negative_float_default_value() {
+    let code = r#"
+def f(x: float = -1.5) -> None:
+    pass
+
+f(x=1.0)
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("x: float = -1.5"),
+        "Expected hover to show negative float default '-1.5', got: {report}"
+    );
+}
