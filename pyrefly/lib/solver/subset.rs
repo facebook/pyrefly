@@ -1897,6 +1897,72 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 )
             }
             (_, Type::Forall(forall)) => self.is_subset_eq(got, &forall.body.clone().as_type()),
+            (Type::TypeVar(l), Type::TypeVar(u)) => {
+                // Two raw, unreplaced type variables being compared to each other should not happen
+                // in error-free code. But if we encounter it, we might as well do the right thing.
+                if l == u {
+                    Ok(())
+                } else {
+                    Err(SubsetError::Other)
+                }
+            }
+            (Type::TypeVar(_), _) => {
+                self.is_subset_eq(&self.type_order.stdlib().type_var().clone().to_type(), want)
+            }
+            (_, Type::TypeVar(_)) => {
+                self.is_subset_eq(got, &self.type_order.stdlib().type_var().clone().to_type())
+            }
+            (Type::ParamSpec(l), Type::ParamSpec(u)) => {
+                // Two raw, unreplaced type variables being compared to each other should not happen
+                // in error-free code. But if we encounter it, we might as well do the right thing.
+                if l == u {
+                    Ok(())
+                } else {
+                    Err(SubsetError::Other)
+                }
+            }
+            (Type::ParamSpec(_), _) => self.is_subset_eq(
+                &self.type_order.stdlib().param_spec().clone().to_type(),
+                want,
+            ),
+            (_, Type::ParamSpec(_)) => self.is_subset_eq(
+                got,
+                &self.type_order.stdlib().param_spec().clone().to_type(),
+            ),
+            (Type::TypeVarTuple(l), Type::TypeVarTuple(u)) => {
+                // Two raw, unreplaced type variables being compared to each other should not happen
+                // in error-free code. But if we encounter it, we might as well do the right thing.
+                if l == u {
+                    Ok(())
+                } else {
+                    Err(SubsetError::Other)
+                }
+            }
+            (Type::TypeVarTuple(_), _) => self.is_subset_eq(
+                &self.type_order.stdlib().type_var_tuple().clone().to_type(),
+                want,
+            ),
+            (_, Type::TypeVarTuple(_)) => self.is_subset_eq(
+                got,
+                &self.type_order.stdlib().type_var_tuple().clone().to_type(),
+            ),
+            (Type::QuantifiedValue(l), Type::QuantifiedValue(u)) => {
+                // Two raw, unreplaced type variables being compared to each other should not happen
+                // in error-free code. But if we encounter it, we might as well do the right thing.
+                if l == u {
+                    Ok(())
+                } else {
+                    Err(SubsetError::Other)
+                }
+            }
+            (Type::QuantifiedValue(q), _) => self.is_subset_eq(
+                &q.class_type(self.type_order.stdlib()).clone().to_type(),
+                want,
+            ),
+            (_, Type::QuantifiedValue(q)) => self.is_subset_eq(
+                got,
+                &q.class_type(self.type_order.stdlib()).clone().to_type(),
+            ),
             _ => Err(SubsetError::Other),
         }
     }
