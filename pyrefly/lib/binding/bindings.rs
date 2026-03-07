@@ -257,6 +257,9 @@ pub struct BindingsBuilder<'a> {
     lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
     /// See `BindingsInner::subsequently_initialized`.
     subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
+    /// Temporary storage for adjacent __new__.__defaults__ expression detected by stmts().
+    /// Set before calling stmt() for a namedtuple assignment, drained by the NamedTuple arms.
+    pub(super) adjacent_namedtuple_defaults: Option<Expr>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -512,6 +515,7 @@ impl Bindings {
             deferred_bound_names: Vec::new(),
             lambda_yield_keys: Vec::new(),
             subsequently_initialized: SmallSet::new(),
+            adjacent_namedtuple_defaults: None,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -738,6 +742,24 @@ impl CurrentIdx {
     }
 }
 
+/// Check if a statement is `name.__new__.__defaults__ = <tuple|None>` and return the RHS.
+/// Only matches tuple literals and None — other RHS forms are left for normal type checking.
+fn extract_adjacent_new_defaults(stmt: &Stmt, name: &str) -> Option<Expr> {
+    if let Stmt::Assign(assign) = stmt
+        && let [Expr::Attribute(outer)] = assign.targets.as_slice()
+        && outer.attr.id == "__defaults__"
+        && let Expr::Attribute(inner) = outer.value.as_ref()
+        && inner.attr.id == "__new__"
+        && let Expr::Name(target_name) = inner.value.as_ref()
+        && target_name.id == name
+        && matches!(*assign.value, Expr::Tuple(_) | Expr::NoneLiteral(_))
+    {
+        Some((*assign.value).clone())
+    } else {
+        None
+    }
+}
+
 impl<'a> BindingsBuilder<'a> {
     /// Whether to infer empty container types and unsolved type variables based on first use.
     pub fn infer_with_first_use(&self) -> bool {
@@ -940,8 +962,30 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn stmts(&mut self, xs: Vec<Stmt>, parent: &NestingContext) {
-        for x in xs {
+        let mut iter = xs.into_iter().peekable();
+        while let Some(x) = iter.next() {
+            // Check if this is a functional namedtuple followed by __new__.__defaults__.
+            // Guard order is intentional: the cheap peek at the next statement comes before
+            // the expensive as_special_export scope lookup, so we only pay that cost when
+            // the adjacent __new__.__defaults__ pattern is actually present (very rare).
+            if let Stmt::Assign(assign) = &x
+                && let [Expr::Name(name)] = assign.targets.as_slice()
+                && let Expr::Call(call) = assign.value.as_ref()
+                && let Some(defaults_expr) = iter
+                    .peek()
+                    .and_then(|next| extract_adjacent_new_defaults(next, &name.id))
+                && let Some(special) = self.as_special_export(&call.func)
+                && matches!(
+                    special,
+                    SpecialExport::TypingNamedTuple | SpecialExport::CollectionsNamedTuple
+                )
+            {
+                iter.next(); // consume the __new__.__defaults__ statement
+                self.adjacent_namedtuple_defaults = Some(defaults_expr);
+            }
             self.stmt(x, parent);
+            // Clear unconsumed defaults (safety — should already be drained by NamedTuple arms)
+            self.adjacent_namedtuple_defaults = None;
         }
     }
 
