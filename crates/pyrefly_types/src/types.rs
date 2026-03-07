@@ -1749,7 +1749,8 @@ impl Type {
     }
 
     pub fn materialize(&self) -> Self {
-        self.clone().transform(&mut |ty| {
+        let mut ty = self.clone();
+        ty.transform_types_in_type_variable_positions(&mut |ty| {
             if ty.is_any() {
                 *ty = Type::Materialization;
             }
@@ -1757,8 +1758,9 @@ impl Type {
                 if matches!(callable.params, Params::Ellipsis) {
                     callable.params = Params::Materialization;
                 }
-            })
-        })
+            });
+        });
+        ty
     }
 
     /// Creates a union from the provided types without simplifying
