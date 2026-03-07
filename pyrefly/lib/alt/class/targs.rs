@@ -248,6 +248,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         (tparams, tuple_ty)
     }
 
+    pub fn instantiate_unbounded_tuple(&self) -> (TParams, Type) {
+        let quantified = Quantified::new(
+            self.uniques.fresh(),
+            Name::new_static("T"),
+            QuantifiedKind::TypeVar,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Covariant,
+        );
+        let tparams = TParams::new(vec![quantified.clone()]);
+        let tuple_ty = self.heap.mk_tuple(Tuple::Unbounded(Box::new(
+            self.heap.mk_quantified(quantified),
+        )));
+        (tparams, tuple_ty)
+    }
+
     /// Gets this Class as a ClassType with its tparams as the arguments. For non-TypedDict
     /// classes, this is the type of an instance of this class. Unless you specifically need the
     /// ClassType inside the Type and know you don't have a TypedDict, you should instead use
