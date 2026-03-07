@@ -1973,6 +1973,9 @@ pub struct NameAssign {
     /// The Definition idx for this NameAssign, if infer_with_first_use is enabled.
     /// Used at solve time for inline first-use pinning and partial answer storage.
     pub def_idx: Option<Idx<Key>>,
+    /// If a standalone string literal immediately follows this assignment (PEP 257-style
+    /// variable docstring), this holds its range.
+    pub docstring_range: Option<TextRange>,
 }
 
 /// Data for a type alias binding.
