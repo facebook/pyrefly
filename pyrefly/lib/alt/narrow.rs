@@ -244,7 +244,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
             res.push(self.distribute_over_union(left, |l| {
-                if let Some((tparams, right)) = self.unwrap_class_object_silently(&right) {
+                // When narrowing isinstance(X, `tuple`)
+                // If we know that X can be a heterogeneous tuple (it's a tuple, NamedTuple, or class that extends tuple)
+                // then we narrow it by creating and solving a TypeVarTuple.
+                // Otherwise we narrow it to a homogeneous, unbounded tuple
+                let right_is_tuple = match &right {
+                    Type::Type(box Type::Tuple(_)) => true,
+                    Type::ClassDef(cls) => cls.is_builtin("tuple"),
+                    _ => false,
+                };
+                let narrow_heterogeneous_tuple = right_is_tuple
+                    && match left {
+                        Type::Tuple(_) => true,
+                        Type::ClassType(cls) => self.as_tuple(cls).is_some(),
+                        _ => false,
+                    };
+                let unwrapped = if narrow_heterogeneous_tuple {
+                    Some(self.instantiate_type_var_tuple())
+                } else {
+                    self.unwrap_class_object_silently(&right)
+                };
+                if let Some((tparams, right)) = unwrapped {
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
