@@ -948,7 +948,7 @@ impl Type {
                     visit(targ, f);
                 }
             };
-            // IMPORTANT: keep this match in sync with `transform_raw_legacy_type_variables`
+            // IMPORTANT: keep this match in sync with `transform_types_in_type_variable_positions`
             match ty {
                 // In `A[X]`, we only check `X` for a couple reasons:
                 // * If we were to blindly visit the entire ClassType, we would find Quantifieds in
@@ -1018,15 +1018,9 @@ impl Type {
         self.visit_type_variables(&mut f)
     }
 
-    /// Transform unreplaced references to legacy type variables. Note that references to in-scope
-    /// legacy type variables in functions and classes are replaced with Quantified, so unreplaced
-    /// references only appear in cases like a TypeVar definition or an out-of-scope type variable.
-    pub fn transform_raw_legacy_type_variables(&mut self, f: &mut dyn FnMut(&mut Type)) {
+    fn transform_types_in_type_variable_positions(&mut self, f: &mut dyn FnMut(&mut Type)) {
         fn visit(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
-            if ty.is_raw_legacy_type_variable() {
-                f(ty);
-                return;
-            }
+            f(ty);
             let mut recurse_targs = |targs: &mut TArgs| {
                 for targ in targs.as_mut().iter_mut() {
                     visit(targ, f);
@@ -1044,6 +1038,17 @@ impl Type {
             }
         }
         visit(self, f)
+    }
+
+    /// Transform unreplaced references to legacy type variables. Note that references to in-scope
+    /// legacy type variables in functions and classes are replaced with Quantified, so unreplaced
+    /// references only appear in cases like a TypeVar definition or an out-of-scope type variable.
+    pub fn transform_raw_legacy_type_variables(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        self.transform_types_in_type_variable_positions(&mut |ty| {
+            if ty.is_raw_legacy_type_variable() {
+                f(ty);
+            }
+        })
     }
 
     /// Check if the type contains a Var that may have been instantiated from a Quantified.
