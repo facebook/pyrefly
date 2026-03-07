@@ -580,6 +580,19 @@ def test(cond: bool):
 );
 
 testcase!(
+    test_reading_maybe_uninitialized_name_initializes_surviving_flow,
+    r#"
+def f(cond: bool) -> None:
+    if cond:
+        x: int
+    else:
+        x = 1
+    print(x)  # E: `x` may be uninitialized
+    print(x)
+"#,
+);
+
+testcase!(
     test_local_defined_by_mutation_no_shadowing,
     r#"
 def f() -> None:

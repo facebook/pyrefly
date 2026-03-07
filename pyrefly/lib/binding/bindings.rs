@@ -1159,6 +1159,8 @@ impl<'a> BindingsBuilder<'a> {
     /// First-use detection happens later in `process_deferred_bound_names`
     /// when all phi nodes are populated.
     pub fn lookup_name(&mut self, name: Hashed<&Name>, usage: &mut Usage) -> NameLookupResult {
+        let may_prove_initialized =
+            !matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs);
         let name_read_info = self.scopes.look_up_name_for_read(name, usage);
         match name_read_info {
             NameReadInfo::Flow { idx, initialized } => {
@@ -1166,16 +1168,36 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.mark_parameter_used(name.key());
                 self.scopes.mark_import_used(name.key());
                 self.scopes.mark_variable_used(name.key());
+                if may_prove_initialized
+                    && matches!(
+                        initialized,
+                        InitializedInFlow::Conditionally | InitializedInFlow::DeferredCheck(_)
+                    )
+                {
+                    let style = self
+                        .scopes
+                        .flow_style_for_name(name.key())
+                        .map(FlowStyle::assume_initialized)
+                        .unwrap_or(FlowStyle::Other);
+                    self.scopes.define_in_current_flow(name, idx, style);
+                }
                 NameLookupResult::Found { idx, initialized }
             }
             NameReadInfo::Anywhere { key, initialized } => {
                 self.scopes.mark_parameter_used(name.key());
                 self.scopes.mark_import_used(name.key());
                 self.scopes.mark_variable_used(name.key());
-                NameLookupResult::Found {
-                    idx: self.idx_for_promise(key),
-                    initialized,
+                let idx = self.idx_for_promise(key);
+                if may_prove_initialized
+                    && matches!(
+                        initialized,
+                        InitializedInFlow::Conditionally | InitializedInFlow::DeferredCheck(_)
+                    )
+                {
+                    self.scopes
+                        .define_in_current_flow(name, idx, FlowStyle::Other);
                 }
+                NameLookupResult::Found { idx, initialized }
             }
             NameReadInfo::NotFound => NameLookupResult::NotFound,
         }
