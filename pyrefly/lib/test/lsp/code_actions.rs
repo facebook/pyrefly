@@ -3542,6 +3542,47 @@ def build():
 }
 
 #[test]
+fn introduce_factory_ignores_non_constructor_class_calls() {
+    let code = r#"
+class Service:
+#     ^
+    @classmethod
+    def create(cls):
+        return cls(0)
+
+    def __init__(self, value):
+        self.value = value
+
+def build():
+    existing = Service.create()
+    direct = Service(1)
+    return existing, direct
+"#;
+    let updated =
+        apply_first_introduce_factory_action(code).expect("expected introduce-factory action");
+    let expected = r#"
+class Service:
+#     ^
+    @classmethod
+    def create(cls):
+        return cls(0)
+
+    def __init__(self, value):
+        self.value = value
+
+    @staticmethod
+    def create_1(*args, **kwargs):
+        return Service(*args, **kwargs)
+
+def build():
+    existing = Service.create()
+    direct = Service.create_1(1)
+    return existing, direct
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
 fn introduce_factory_updates_other_modules() {
     let class_code = r#"
 class Service:
