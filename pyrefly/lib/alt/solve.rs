@@ -429,6 +429,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .is_ok()
     }
 
+    pub fn is_equivalent(&self, got: &Type, want: &Type) -> bool {
+        self.solver()
+            .is_equivalent(got, want, self.type_order())
+            .is_ok()
+    }
+
     pub fn expr_class_keyword(&self, x: &Expr, errors: &ErrorCollector) -> Annotation {
         // For now, we happen to know that ReadOnly is the only qualifier we support here, so we can
         // make some simplifying assumptions about what patterns we need to match. We swallow
