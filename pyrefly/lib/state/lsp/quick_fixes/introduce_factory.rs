@@ -154,14 +154,18 @@ fn build_constructor_callsite_edits(
             let Expr::Call(call) = expr else {
                 return;
             };
-            if !call_matches_reference(call, &ref_set) {
-                return;
+            match constructor_call_kind(call, &ref_set) {
+                ConstructorCallKind::Unrelated => {}
+                ConstructorCallKind::Unsupported => failed = true,
+                ConstructorCallKind::Rewritable => {
+                    let Some((range, text)) = build_factory_call_edit(call, &ref_set, factory_name)
+                    else {
+                        failed = true;
+                        return;
+                    };
+                    module_edits.push((module_info.dupe(), range, text));
+                }
             }
-            let Some((range, text)) = build_factory_call_edit(call, &ref_set, factory_name) else {
-                failed = true;
-                return;
-            };
-            module_edits.push((module_info.dupe(), range, text));
         });
         if failed {
             return None;
@@ -171,10 +175,29 @@ fn build_constructor_callsite_edits(
     Some(edits)
 }
 
-fn call_matches_reference(call: &ExprCall, ref_set: &HashSet<TextRange>) -> bool {
-    ref_set
-        .iter()
-        .any(|range| call.func.range().contains(range.start()))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConstructorCallKind {
+    Unrelated,
+    Rewritable,
+    Unsupported,
+}
+
+fn constructor_call_kind(call: &ExprCall, ref_set: &HashSet<TextRange>) -> ConstructorCallKind {
+    match call.func.as_ref() {
+        Expr::Name(name) => ref_set
+            .contains(&name.range())
+            .then_some(ConstructorCallKind::Rewritable)
+            .unwrap_or(ConstructorCallKind::Unrelated),
+        Expr::Attribute(attribute) => ref_set
+            .contains(&attribute.attr.range())
+            .then_some(ConstructorCallKind::Rewritable)
+            .unwrap_or(ConstructorCallKind::Unrelated),
+        _ => ref_set
+            .iter()
+            .any(|range| call.func.range().contains(range.start()))
+            .then_some(ConstructorCallKind::Unsupported)
+            .unwrap_or(ConstructorCallKind::Unrelated),
+    }
 }
 
 fn build_factory_call_edit(
