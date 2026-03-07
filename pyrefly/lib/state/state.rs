@@ -35,6 +35,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_python::sys_info::module_platform_guard;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
@@ -366,6 +367,7 @@ impl ModuleDeps {
 struct ModuleData {
     handle: Handle,
     config: ArcId<ConfigFile>,
+    effective_sys_info: SysInfo,
     state: ModuleState,
     imports: HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>,
     deps: HashMap<Handle, ModuleDeps>,
@@ -376,6 +378,7 @@ struct ModuleData {
 struct ModuleDataMut {
     handle: Handle,
     config: RwLock<ArcId<ConfigFile>>,
+    effective_sys_info: RwLock<SysInfo>,
     state: ModuleStateMut,
     /// Import resolution cache: module names from import statements → resolved paths.
     /// Only contains deps that were resolved via `find_import`.
@@ -390,12 +393,21 @@ struct ModuleDataMut {
     rdeps: Mutex<HashSet<Handle>>,
 }
 
+fn module_sys_info_override(
+    sys_info: &SysInfo,
+    ast: Option<&ruff_python_ast::ModModule>,
+) -> Option<SysInfo> {
+    let ast = ast?;
+    module_platform_guard(&ast.body).map(|platform| sys_info.with_platform(platform))
+}
+
 impl ModuleData {
     /// Make a copy of the data that can be mutated.
     fn clone_for_mutation(&self) -> ModuleDataMut {
         ModuleDataMut {
             handle: self.handle.dupe(),
             config: RwLock::new(self.config.dupe()),
+            effective_sys_info: RwLock::new(self.effective_sys_info.dupe()),
             state: self.state.clone_for_mutation(),
             imports: RwLock::new(self.imports.clone()),
             deps: RwLock::new(self.deps.clone()),
@@ -406,9 +418,11 @@ impl ModuleData {
 
 impl ModuleDataMut {
     fn new(handle: Handle, require: Require, config: ArcId<ConfigFile>, now: Epoch) -> Self {
+        let effective_sys_info = handle.sys_info().dupe();
         Self {
             handle,
             config: RwLock::new(config),
+            effective_sys_info: RwLock::new(effective_sys_info),
             state: ModuleStateMut::new(require, now),
             imports: Default::default(),
             deps: Default::default(),
@@ -422,6 +436,7 @@ impl ModuleDataMut {
         let ModuleDataMut {
             handle,
             config,
+            effective_sys_info,
             state,
             imports,
             deps,
@@ -434,10 +449,23 @@ impl ModuleDataMut {
         ModuleData {
             handle: handle.dupe(),
             config: config.read().dupe(),
+            effective_sys_info: effective_sys_info.read().dupe(),
             state,
             imports,
             deps,
             rdeps,
+        }
+    }
+
+    fn effective_sys_info(&self) -> SysInfo {
+        if let Some(ast) = self.state.get_ast().as_deref() {
+            let base = self.handle.sys_info();
+            let effective =
+                module_sys_info_override(base, Some(ast)).unwrap_or_else(|| base.dupe());
+            *self.effective_sys_info.write() = effective.dupe();
+            effective
+        } else {
+            self.effective_sys_info.read().dupe()
         }
     }
 
@@ -1056,11 +1084,12 @@ impl<'a> Transaction<'a> {
             let require = guard.require();
             let stdlib = self.get_stdlib(&module_data.handle);
             let config = module_data.config.read();
+            let sys_info = module_data.effective_sys_info();
             let ctx = Context {
                 require,
                 module: module_data.handle.module(),
                 path: module_data.handle.path(),
-                sys_info: module_data.handle.sys_info(),
+                sys_info: &sys_info,
                 memory: &self.memory_lookup(),
                 uniques: &self.data.state.uniques,
                 stdlib: &stdlib,
@@ -1443,13 +1472,17 @@ impl<'a> Transaction<'a> {
             .dupe()
     }
 
-    pub fn get_stdlib(&self, handle: &Handle) -> Arc<Stdlib> {
+    pub fn get_stdlib_for_sys_info(&self, sys_info: &SysInfo) -> Arc<Stdlib> {
         if self.data.stdlib.len() == 1 {
             // Since we know our one must exist, we can shortcut
             return self.data.stdlib.first().unwrap().1.dupe();
         }
 
-        self.data.stdlib.get(handle.sys_info()).unwrap().dupe()
+        self.data.stdlib.get(sys_info).unwrap().dupe()
+    }
+
+    pub fn get_stdlib(&self, handle: &Handle) -> Arc<Stdlib> {
+        self.get_stdlib_for_sys_info(handle.sys_info())
     }
 
     /// Compute the `Stdlib` for each requested `SysInfo`.
@@ -2086,14 +2119,11 @@ impl<'a> TransactionHandle<'a> {
         path: Option<&ModulePath>,
         dep: ModuleDep,
     ) -> FindingOrError<ArcId<ModuleDataMut>> {
+        let sys_info = self.module_data.effective_sys_info();
         let handle = match path {
             Some(path) => {
                 // Explicit path — already resolved. Bypass imports entirely.
-                FindingOrError::new_finding(Handle::new(
-                    module,
-                    path.dupe(),
-                    self.module_data.handle.sys_info().dupe(),
-                ))
+                FindingOrError::new_finding(Handle::new(module, path.dupe(), sys_info.dupe()))
             }
             None => {
                 // No path — needs find_import. Check imports cache first.
@@ -2113,13 +2143,7 @@ impl<'a> TransactionHandle<'a> {
                         finding
                     }
                 };
-                path.map(|path| {
-                    Handle::new(
-                        module,
-                        path.dupe(),
-                        self.module_data.handle.sys_info().dupe(),
-                    )
-                })
+                path.map(|path| Handle::new(module, path.dupe(), sys_info.dupe()))
             }
         };
 

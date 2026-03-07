@@ -26,9 +26,11 @@ use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprList;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSet;
 use ruff_python_ast::ExprSlice;
+use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtIf;
@@ -266,6 +268,14 @@ impl SysInfo {
 
     pub fn type_checking(&self) -> bool {
         self.0.key().type_checking
+    }
+
+    pub fn with_platform(&self, platform: PythonPlatform) -> Self {
+        if self.type_checking() {
+            SysInfo::new(self.version(), platform)
+        } else {
+            SysInfo::new_without_type_checking(self.version(), platform)
+        }
     }
 }
 
@@ -694,6 +704,83 @@ impl SysInfo {
             .filter(|x| x.0 != Some(false))
             .map(|x| (x.1, x.2))
             .take_while_inclusive(|x| x.0.is_some())
+    }
+}
+
+pub fn module_platform_guard(body: &[Stmt]) -> Option<PythonPlatform> {
+    body.iter().find_map(platform_guard_from_stmt)
+}
+
+fn platform_guard_from_stmt(stmt: &Stmt) -> Option<PythonPlatform> {
+    match stmt {
+        Stmt::Assert(x) => platform_guard_from_assert(&x.test),
+        Stmt::If(x) if x.elif_else_clauses.is_empty() && body_is_unconditional_raise(&x.body) => {
+            platform_guard_from_not_eq(&x.test)
+        }
+        _ => None,
+    }
+}
+
+fn body_is_unconditional_raise(body: &[Stmt]) -> bool {
+    matches!(body, [Stmt::Raise(_)])
+}
+
+fn platform_guard_from_assert(test: &Expr) -> Option<PythonPlatform> {
+    let (op, platform) = platform_compare(test)?;
+    match op {
+        CmpOp::Eq => Some(PythonPlatform::new(&platform)),
+        _ => None,
+    }
+}
+
+fn platform_guard_from_not_eq(test: &Expr) -> Option<PythonPlatform> {
+    let (op, platform) = platform_compare(test)?;
+    match op {
+        CmpOp::NotEq => Some(PythonPlatform::new(&platform)),
+        _ => None,
+    }
+}
+
+fn platform_compare(test: &Expr) -> Option<(CmpOp, String)> {
+    let Expr::Compare(compare) = test else {
+        return None;
+    };
+    if compare.ops.len() != 1 || compare.comparators.len() != 1 {
+        return None;
+    }
+    let op = compare.ops[0];
+    if !matches!(op, CmpOp::Eq | CmpOp::NotEq) {
+        return None;
+    }
+    let left = &compare.left;
+    let right = &compare.comparators[0];
+    let platform = extract_platform_literal(left, right)?;
+    Some((op, platform))
+}
+
+fn extract_platform_literal(left: &Expr, right: &Expr) -> Option<String> {
+    if is_sys_platform(left) {
+        string_literal(right)
+    } else if is_sys_platform(right) {
+        string_literal(left)
+    } else {
+        None
+    }
+}
+
+fn is_sys_platform(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Attribute(ExprAttribute { value, attr, .. })
+            if matches!(&**value, Expr::Name(ExprName { id, .. }) if id == "sys")
+                && attr.as_str() == "platform"
+    )
+}
+
+fn string_literal(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::StringLiteral(ExprStringLiteral { value, .. }) => Some(value.to_str().to_owned()),
+        _ => None,
     }
 }
 
