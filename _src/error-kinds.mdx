@@ -460,13 +460,24 @@ x = []  # error: infers list[Any]
 
 ## implicit-import
 
-A module exists, but was not imported. At runtime, if something has made this import
-before your code, it will work. But relies on whatever did the import to continue doing it.
+This error is emitted when a submodule is accessed through a parent package without being explicitly imported in the current file.
+
+While Python’s global module cache (`sys.modules`) might allow this to work if another part of your program performed the import earlier, relying on this side effect is fragile. If that external code is refactored or removed, your code will crash at runtime with an `AttributeError`.
+
+To fix this, always use an explicit import for the submodule you want to access.
 
 ```python
-import importlib
-importlib.util.find_spec("os")  # error, `importlib.util` was not imported
+import urllib
+# error: 'urllib' has no attribute 'request' (unless imported elsewhere)
+urllib.request.urlopen(...)
+
+# Fix:
+import urllib.request
+urllib.request.urlopen(...)
+
 ```
+
+The default severity of this diagnostic is `warn`.
 
 ## implicitly-defined-attribute
 
