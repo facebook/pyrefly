@@ -281,10 +281,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
 
                 // Step 3: perform argument type expansion.
+                // Per the spec, step 3 runs ONLY when step 2 fails. However, when step 2
+                // succeeds with a union argument, the result may be imprecise: e.g.,
+                // `round(int | float, 4)` may resolve to `float` (since `int <: float`
+                // satisfies the overload constraint), whereas the precise result is
+                // `int | float` (each union member independently picks its overload).
+                //
+                // To improve precision, we also run step 3 even when step 2 already matched.
+                // If step 3 succeeds AND produces a different (more specific) type, we
+                // prefer step 3's union-of-results over the second step single result.
+
                 let mut args_expander = ArgsExpander::new(args.clone(), keywords.clone(), self);
                 let owner = Owner::new();
-                'outer: while !matched && let Some(arg_lists) = args_expander.expand(errors, &owner)
-                {
+                'outer: while let Some(arg_lists) = args_expander.expand(errors, &owner) {
                     // Expand by one argument (for example, try splitting up union types), and try the call with each
                     // resulting arguments list.
                     // - If all expanded lists match, we union all return types together and declare a successful match
@@ -304,17 +313,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             &ctor_targs,
                         );
                         if !cur_matched {
+                            // This expansion didn't work; try the next splittable argument.
+                            // If step 2 already matched, we simply keep the step-2 result.
                             continue 'outer;
                         }
                         matched_overloads.push(cur_closest);
                     }
-                    if let Some(first_overload) = matched_overloads.first() {
-                        closest_overload = CalledOverload {
-                            func: first_overload.func.clone(),
-                            ctor_targs: first_overload.ctor_targs.clone(),
-                            res: self.unions(matched_overloads.into_map(|o| o.res)),
-                            call_errors: self.error_collector(),
-                        };
+                    if !matched_overloads.is_empty() {
+                        let first_func = matched_overloads[0].func.clone();
+                        let first_ctor_targs = matched_overloads[0].ctor_targs.clone();
+                        let step3_res = self.unions(matched_overloads.into_map(|o| o.res));
+                        if !matched || step3_res != closest_overload.res {
+                            // case where either step 2 failed (so we must use step 3), or step 3
+                            // produced a more precise result (e.g. `int | float` instead
+                            // of `float`) => Prefer step 3.
+                            closest_overload = CalledOverload {
+                                func: first_func,
+                                ctor_targs: first_ctor_targs,
+                                res: step3_res,
+                                call_errors: self.error_collector(),
+                            };
+                        }
                         matched = true;
                         break;
                     }
@@ -645,9 +664,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // We want to use our hint to contextually type the arguments, but errors resulting
         // from the hint should not influence overload selection. If there are call errors, we
         // try again without a hint in case we can still match this overload.
+        //
+        // Additionally, if the hint-based call succeeds but the hint may have caused the
+        // return type to be artificially broadened (e.g. pinning a type variable to the
+        // full hint type rather than the arg-constrained type), we also try without the
+        // hint. If the no-hint call also succeeds, we prefer the no-hint result as it
+        // reflects the actual argument types more precisely.
         let (call_errors, res) = try_call(hint);
-        let (call_errors, res) = if tparams.is_some() && hint.is_some() && !call_errors.is_empty() {
-            try_call(None)
+        let (call_errors, res) = if tparams.is_some() && hint.is_some() {
+            if !call_errors.is_empty() {
+                // Hint caused errors; retry without hint.
+                try_call(None)
+            } else {
+                // Hint succeeded. Also try without hint to get a more precise type.
+                // If the no-hint call succeeds with a different (potentially more specific)
+                // result, prefer it over the hint-influenced result.
+                let (no_hint_errors, no_hint_res) = try_call(None);
+                if no_hint_errors.is_empty() && no_hint_res != res {
+                    (no_hint_errors, no_hint_res)
+                } else {
+                    (call_errors, res)
+                }
+            }
         } else {
             (call_errors, res)
         };

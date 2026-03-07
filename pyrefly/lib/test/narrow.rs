@@ -2828,3 +2828,42 @@ def example(variable: str | None) -> str:
     return variable
 "#,
 );
+
+// Regression test: narrowing should be preserved after reassignment via overloaded function
+// See issue: https://github.com/facebook/pyrefly/issues/2592
+testcase!(
+    test_narrowing_preserved_after_reassign_with_overloaded_return,
+    r#"
+from typing import assert_type, reveal_type
+
+def test_simple_assign(value: int | float | None) -> None:
+    if value is None:
+        return
+
+    reveal_type(value)  # E: revealed type: float | int
+
+    value = round(value, 4)
+
+    reveal_type(value)  # E: revealed type: float | int
+
+def test_fresh_name(value: int | float | None) -> None:
+    if value is None:
+        return
+
+    rounded = round(value, 4)
+
+    reveal_type(rounded)  # E: revealed type: float | int
+
+def test_explicit(value: int | float) -> None:
+    rounded = round(value, 4)
+    reveal_type(rounded)  # E: revealed type: float | int
+
+def test_int_only(value: int) -> None:
+    rounded = round(value, 4)
+    reveal_type(rounded)  # E: revealed type: int
+
+def test_float_only(value: float) -> None:
+    rounded = round(value, 4)
+    reveal_type(rounded)  # E: revealed type: float
+"#,
+);
