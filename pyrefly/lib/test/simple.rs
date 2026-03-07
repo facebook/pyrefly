@@ -59,6 +59,16 @@ def f(x: type[int] | type[str], y: type[int | str]) -> None:
 );
 
 testcase!(
+    test_distribute_type_assignability,
+    r#"
+def f(x: type[int] | type[str]) -> None:
+    pass
+def g(x: type[int | str]) -> None:
+    f(x)
+    "#,
+);
+
+testcase!(
     test_simple_call,
     r#"
 from typing import assert_type

@@ -1279,6 +1279,16 @@ impl Solver {
         subset.is_consistent(got, want)
     }
 
+    pub fn is_equivalent<Ans: LookupAnswer>(
+        &self,
+        got: &Type,
+        want: &Type,
+        type_order: TypeOrder<Ans>,
+    ) -> Result<(), SubsetError> {
+        let mut subset = self.subset(type_order);
+        subset.is_equivalent(got, want)
+    }
+
     fn subset<'a, Ans: LookupAnswer>(&'a self, type_order: TypeOrder<'a, Ans>) -> Subset<'a, Ans> {
         Subset {
             solver: self,
@@ -1541,6 +1551,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     pub fn is_consistent(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         self.is_subset_eq(got, want)?;
         self.is_subset_eq(want, got)
+    }
+
+    pub fn is_equivalent(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
+        self.is_consistent(&got.materialize(), want)?;
+        self.is_consistent(got, &want.materialize())
     }
 
     pub fn is_subset_eq(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {

@@ -377,8 +377,8 @@ from typing import Callable, assert_type
 def f[**P, R](f: Callable[P, R], g: Callable[P, R]) -> Callable[P, R]: ...
 def g1(x: int, *args: int): ...
 def g2(x: int, **kwargs: str): ...
-x1 = f(g1, lambda x, *args: assert_type(args, tuple[int, ...])) # E: assert_type(Any, tuple[int, ...]) failed
-x2 = f(g2, lambda x, **kwargs: assert_type(kwargs, dict[str, str])) # E: assert_type(Any, dict[str, str]) failed
+x1 = f(g1, lambda x, *args: assert_type(args, tuple[int, ...])) # E: assert_type(Unknown, tuple[int, ...]) failed
+x2 = f(g2, lambda x, **kwargs: assert_type(kwargs, dict[str, str])) # E: assert_type(Unknown, dict[str, str]) failed
     "#,
 );
 
@@ -622,8 +622,8 @@ testcase!(
 from typing import Protocol, assert_type, Any
 class Identity(Protocol):
     def __call__(self, *args: int, **kwargs: int) -> Any: ...
-x: Identity = lambda *args, **kwargs: assert_type(args, tuple[int, ...]) # E: assert_type(Any, tuple[int, ...]) failed
-y: Identity = lambda *args, **kwargs: assert_type(kwargs, dict[str, int]) # E: assert_type(Any, dict[str, int]) failed
+x: Identity = lambda *args, **kwargs: assert_type(args, tuple[int, ...]) # E: assert_type(Unknown, tuple[int, ...]) failed
+y: Identity = lambda *args, **kwargs: assert_type(kwargs, dict[str, int]) # E: assert_type(Unknown, dict[str, int]) failed
     "#,
 );
 
