@@ -15,6 +15,7 @@ pub(crate) mod generate_code;
 pub(crate) mod inline_method;
 pub(crate) mod inline_parameter;
 pub(crate) mod inline_variable;
+pub(crate) mod introduce_factory;
 pub(crate) mod introduce_parameter;
 pub(crate) mod invert_boolean;
 pub(crate) mod move_members;
