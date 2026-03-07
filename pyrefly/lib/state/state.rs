@@ -37,6 +37,8 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::editable_install::clear_editable_source_paths_cache;
+use pyrefly_util::editable_install::is_editable_metadata_file;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lock::Mutex;
@@ -1768,6 +1770,10 @@ impl<'a> Transaction<'a> {
 
     /// Invalidate based on what a watcher told you.
     pub fn invalidate_events(&mut self, events: &CategorizedEvents) {
+        if events.iter().any(|path| is_editable_metadata_file(path)) {
+            clear_editable_source_paths_cache();
+        }
+
         // If any files were added or removed, we need to invalidate the find step.
         if !events.created.is_empty() || !events.removed.is_empty() || !events.unknown.is_empty() {
             self.invalidate_find();
