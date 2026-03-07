@@ -1614,8 +1614,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type(Any, int) failed",
-      "description": "assert_type(Any, int) failed",
+      "concise_description": "assert_type(Unknown, int) failed",
+      "description": "assert_type(Unknown, int) failed",
       "line": 96,
       "name": "assert-type",
       "severity": "error",
@@ -3688,8 +3688,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type(Class8[Any], Class8[str]) failed",
-      "description": "assert_type(Class8[Any], Class8[str]) failed",
+      "concise_description": "assert_type(Class8[Unknown], Class8[str]) failed",
+      "description": "assert_type(Class8[Unknown], Class8[str]) failed",
       "line": 185,
       "name": "assert-type",
       "severity": "error",
@@ -5189,8 +5189,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type(int, Any) failed",
-      "description": "assert_type(int, Any) failed",
+      "concise_description": "assert_type(int, Unknown) failed",
+      "description": "assert_type(int, Unknown) failed",
       "line": 116,
       "name": "assert-type",
       "severity": "error",
@@ -5222,8 +5222,8 @@
     {
       "code": -2,
       "column": 20,
-      "concise_description": "assert_type(int, Any) failed",
-      "description": "assert_type(int, Any) failed",
+      "concise_description": "assert_type(int, Unknown) failed",
+      "description": "assert_type(int, Unknown) failed",
       "line": 129,
       "name": "assert-type",
       "severity": "error",

@@ -684,3 +684,14 @@ b = A(1).f()
 assert_type(b, A[int])
 "#,
 );
+
+testcase!(
+    test_typevar_type,
+    r#"
+from typing import TypeVar
+T = TypeVar("T")
+def f(x: TypeVar):
+    pass
+f(T)
+    "#,
+);
