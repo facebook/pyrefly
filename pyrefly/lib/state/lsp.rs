@@ -2094,10 +2094,22 @@ impl<'a> Transaction<'a> {
         let mut import_actions = Vec::new();
         let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
+        let mut other_action_keys: HashSet<(String, TextRange, String)> = HashSet::new();
         for error in errors {
+            let error_range = error.range();
+            if error_range.contains_range(range)
+                && let Some(action) = quick_fixes::pyrefly_ignore::add_pyrefly_ignore_code_action(
+                    &module_info,
+                    &error,
+                )
+            {
+                let key = (action.0.clone(), action.2, action.3.clone());
+                if other_action_keys.insert(key) {
+                    other_actions.push(action);
+                }
+            }
             match error.error_kind() {
                 ErrorKind::UnknownName => {
-                    let error_range = error.range();
                     if error_range.contains_range(range) {
                         let unknown_name = module_info.code_at(error_range);
                         for (handle_to_import_from, export) in self
@@ -2170,7 +2182,6 @@ impl<'a> Transaction<'a> {
                     }
                 }
                 ErrorKind::RedundantCast => {
-                    let error_range = error.range();
                     if let Some(action) = quick_fixes::redundant_cast::redundant_cast_code_action(
                         &module_info,
                         &ast,
