@@ -1274,6 +1274,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Union(box Union { members: ls, .. }), u) => {
                 all(ls.iter(), |l| self.is_subset_eq(l, u))
             }
+            (Type::Type(box Type::Union(box Union { members: ls, .. })), u) => {
+                all(ls.iter(), |l| {
+                    self.is_subset_eq(&Type::type_form(l.clone()), u)
+                })
+            }
             // Size <: Size - expand bound Vars, canonicalize, and compare for structural equality
             (Type::Size(s1), Type::Size(s2)) => {
                 // Expand any bound Vars in both expressions
