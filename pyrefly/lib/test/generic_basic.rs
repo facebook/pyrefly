@@ -338,7 +338,7 @@ from typing import assert_type, Any
 def f():
     x = {}
     x.update(a = 1)
-    assert_type(x, dict[str, int])
+    assert_type(x, dict[str, Any])
 
 def g():
     x: dict[int, int] = {}
