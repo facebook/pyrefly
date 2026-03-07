@@ -948,6 +948,7 @@ impl Type {
                     visit(targ, f);
                 }
             };
+            // IMPORTANT: keep this match in sync with `transform_raw_legacy_type_variables`
             match ty {
                 // In `A[X]`, we only check `X` for a couple reasons:
                 // * If we were to blindly visit the entire ClassType, we would find Quantifieds in
@@ -961,6 +962,8 @@ impl Type {
                 // `Self` is a keyword, not a user-written type variable reference, so we don't
                 // recurse into it when looking for type variable references.
                 Type::SelfType(_) => {}
+                // Enum literals contain `ClassType`s that we shouldn't visit.
+                Type::Literal(_) => {}
                 _ => ty.recurse(&mut |ty| visit(ty, f)),
             }
         }
@@ -1029,11 +1032,14 @@ impl Type {
                     visit(targ, f);
                 }
             };
+            // IMPORTANT: keep this match in sync with `visit_type_variables`
             match ty {
                 Type::ClassType(cls) => recurse_targs(cls.targs_mut()),
                 Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs_mut()),
                 // `Self` is a keyword, not a user-written type variable reference.
                 Type::SelfType(_) => {}
+                // Enum literals contain `ClassType`s that we shouldn't visit.
+                Type::Literal(_) => {}
                 _ => ty.recurse_mut(&mut |ty| visit(ty, f)),
             }
         }
