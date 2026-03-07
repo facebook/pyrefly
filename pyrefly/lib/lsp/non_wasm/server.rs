@@ -4122,6 +4122,10 @@ impl Server {
                 transaction.extract_function_code_actions(&handle, range)
             );
             timed_refactor_action!(
+                "use_function",
+                transaction.use_function_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "extract_superclass",
                 transaction.extract_superclass_code_actions(&handle, range)
             );
@@ -4170,14 +4174,14 @@ impl Server {
             {
                 actions.push(action);
             }
-        }
-        if let Some(action) = safe_delete_file_code_action(
-            &self.initialize_params.capabilities,
-            &self.state,
-            transaction,
-            uri,
-        ) {
-            actions.push(action);
+            if let Some(action) = safe_delete_file_code_action(
+                &self.initialize_params.capabilities,
+                &self.state,
+                transaction,
+                uri,
+            ) {
+                actions.push(action);
+            }
         }
         (!actions.is_empty()).then_some(actions)
     }
