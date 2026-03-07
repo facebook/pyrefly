@@ -544,6 +544,7 @@ impl<'a> BindingsBuilder<'a> {
                 is_in_function_scope: self.scopes.in_function_scope(),
                 first_use: FirstUse::Undetermined,
                 def_idx: if uses_first_use { Some(def_idx) } else { None },
+                docstring_range: self.pending_var_docstring,
             }))
         };
         self.insert_binding_idx(def_idx, binding);

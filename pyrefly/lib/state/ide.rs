@@ -222,6 +222,16 @@ fn create_intermediate_definition_from(
                     special_export: None,
                 }));
             }
+            Binding::NameAssign(x) => {
+                return Some(IntermediateDefinition::Local(Export {
+                    location: def_key.range(),
+                    symbol_kind: current_binding.symbol_kind(),
+                    docstring_range: x.docstring_range,
+                    deprecation: None,
+                    is_final: false,
+                    special_export: None,
+                }));
+            }
             _ => {
                 return Some(IntermediateDefinition::Local(Export {
                     location: def_key.range(),

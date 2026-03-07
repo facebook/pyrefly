@@ -414,8 +414,37 @@ impl Definitions {
 
 impl<'a> DefinitionsBuilder<'a> {
     fn stmts(&mut self, xs: &[Stmt]) {
-        for x in xs {
+        for (i, x) in xs.iter().enumerate() {
             self.stmt(x);
+            // PEP 257-style variable docstrings: a standalone string literal expression
+            // immediately following an assignment statement is treated as the variable's docstring.
+            if let Stmt::Assign(_) | Stmt::AnnAssign(_) = x
+                && let Some(Stmt::Expr(e)) = xs.get(i + 1)
+                && let Expr::StringLiteral(_) = e.value.as_ref()
+            {
+                self.set_var_docstring(x, e.range());
+            }
+        }
+    }
+
+    /// Set `docstring_range` on all names defined by `assign_stmt`.
+    fn set_var_docstring(&mut self, assign_stmt: &Stmt, docstring_range: TextRange) {
+        let mut names = Vec::new();
+        match assign_stmt {
+            Stmt::Assign(x) => {
+                for t in &x.targets {
+                    Ast::expr_lvalue(t, &mut |n: &ExprName| names.push(n.id.clone()));
+                }
+            }
+            Stmt::AnnAssign(x) => {
+                Ast::expr_lvalue(&x.target, &mut |n: &ExprName| names.push(n.id.clone()));
+            }
+            _ => {}
+        }
+        for name in names {
+            if let Some(def) = self.inner.definitions.get_mut(&name) {
+                def.docstring_range = Some(docstring_range);
+            }
         }
     }
 
