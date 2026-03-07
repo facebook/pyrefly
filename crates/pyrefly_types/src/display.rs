@@ -1120,6 +1120,7 @@ pub mod tests {
 
     use super::*;
     use crate::callable::Callable;
+    use crate::callable::DefaultValue;
     use crate::callable::FuncMetadata;
     use crate::callable::Function;
     use crate::callable::Param;
@@ -1693,12 +1694,12 @@ pub mod tests {
         let param2 = Param::Pos(
             Name::new_static("y"),
             Type::any_explicit(),
-            Required::Optional(Some(Lit::Bool(true).to_implicit_type())),
+            Required::Optional(Some(DefaultValue::new(Lit::Bool(true).to_implicit_type()))),
         );
         let param3 = Param::Pos(
             Name::new_static("z"),
             Type::any_explicit(),
-            Required::Optional(Some(Type::None)),
+            Required::Optional(Some(DefaultValue::new(Type::None))),
         );
         let callable = Callable::list(ParamList::new(vec![param1, param2, param3]), Type::None);
         let callable_type = Type::Callable(Box::new(callable));
