@@ -59,6 +59,54 @@ def f(x: type[int] | type[str], y: type[int | str]) -> None:
 );
 
 testcase!(
+    test_distribute_type_assignability,
+    r#"
+def f() -> type[int | str]: ...
+def g() -> type[int] | type[str]: ...
+x: type[int] | type[str] = f()
+y: type[int | str] = g()
+    "#,
+);
+
+testcase!(
+    test_type_of_union_matches_type_param,
+    r#"
+from typing import assert_type
+def f[T](x: type[T]) -> T: ...
+assert_type(f(int | None), int | None)
+    "#,
+);
+
+testcase!(
+    test_type_of_union_matches_type_param_or_none,
+    r#"
+from typing import assert_type
+def f[T](x: type[T] | None) -> T: ...
+assert_type(f(int | str), int | str)
+    "#,
+);
+
+testcase!(
+    test_type_of_union_partially_matches_type_param,
+    r#"
+from typing import assert_type
+def f[T](x: type[T] | type[int]) -> T: ...
+def g(x: type[int | str]):
+    assert_type(f(x), str)
+    "#,
+);
+
+testcase!(
+    test_union_of_type_matches_type_param,
+    r#"
+from typing import assert_type
+def f[T](x: type[T]) -> T: ...
+def g(x: type[int] | type[str]):
+    assert_type(f(x), int | str)
+    "#,
+);
+
+testcase!(
     test_simple_call,
     r#"
 from typing import assert_type
