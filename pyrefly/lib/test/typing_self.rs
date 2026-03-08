@@ -350,3 +350,14 @@ class E(Enum):
         return cls.A # E: Returned type `Literal[E.A]` is not assignable to declared return type `Self@E`
 "#,
 );
+
+// This pattern exists in the open source codebase but is technically incorrect
+testcase!(
+    test_cls_new_with_concrete_class,
+    r#"
+class C:
+    @classmethod
+    def create(cls) -> C:
+        return cls.__new__(C) # E: Argument `type[C]` is not assignable to parameter `cls` with type `type[Self@C]` in function `object.__new__`
+"#,
+);
