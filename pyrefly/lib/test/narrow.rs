@@ -1941,6 +1941,35 @@ def non_literal_arg(x: int | str) -> None:
 );
 
 testcase!(
+    test_narrow_in_typed_collections,
+    r#"
+from typing import Literal, assert_type
+
+LitA = Literal["a"]
+lit_dict: dict[LitA, int] = {"a": 1}
+lit_tuple: tuple[LitA] = ("a",)
+lit_list: list[LitA] = ["a"]
+lit_set: set[LitA] = {"a"}
+lit_frozenset: frozenset[LitA] = frozenset(("a",))
+
+def test(key: str) -> None:
+    if key in lit_dict:
+        assert_type(key, LitA)
+        assert_type(lit_dict[key], int)
+    if key in lit_tuple:
+        assert_type(key, LitA)
+    if key in lit_list:
+        assert_type(key, LitA)
+    if key in lit_set:
+        assert_type(key, LitA)
+    if key in lit_frozenset:
+        assert_type(key, LitA)
+    if key in frozenset(("a",)):
+        assert_type(key, LitA)
+"#,
+);
+
+testcase!(
     test_narrow_len,
     r#"
 from typing import assert_type, Never, NamedTuple
