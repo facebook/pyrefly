@@ -1881,7 +1881,18 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                     Variable::PartialContained(_) => {
                         drop(v1_ref);
-                        variables.update(*v1, Variable::Answer(t2.clone()));
+                        // When an empty container's element is pinned to None, widen to
+                        // None | Any. A bare None in the first use almost always means the
+                        // container will later hold some other (unknown) type, analogous
+                        // to how `self.x = None` is inferred as `None | Any` for attributes.
+                        let answer = if t2.is_none() {
+                            self.solver
+                                .heap
+                                .mk_union(vec![t2.clone(), Type::any_implicit()])
+                        } else {
+                            t2.clone()
+                        };
+                        variables.update(*v1, Variable::Answer(answer));
                         Ok(())
                     }
                     Variable::Unwrap | Variable::Recursive => {
@@ -2006,7 +2017,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             .clone()
                             .promote_implicit_literals(self.type_order.stdlib());
                         drop(v2_ref);
-                        variables.update(*v2, Variable::Answer(t1_p));
+                        // Widen None to None | Any (see comment at the other
+                        // PartialContained pinning site above).
+                        let answer = if t1_p.is_none() {
+                            self.solver.heap.mk_union(vec![t1_p, Type::any_implicit()])
+                        } else {
+                            t1_p
+                        };
+                        variables.update(*v2, Variable::Answer(answer));
                         Ok(())
                     }
                     Variable::Unwrap | Variable::Recursive => {
