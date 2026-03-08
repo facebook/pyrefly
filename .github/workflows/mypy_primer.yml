@@ -62,8 +62,8 @@ jobs:
           NEW_DIR=$BASE_DIR/pyrefly_new
           mkdir -p $NEW_DIR
           cd pyrefly_to_test && git checkout $GITHUB_SHA
-          CARGO_TARGET_DIR=$NEW_DIR/target cargo build --manifest-path pyrefly/Cargo.toml
-          BINARY_DIR=$NEW_DIR/target/debug
+          CARGO_TARGET_DIR=$NEW_DIR/target cargo build --release --manifest-path pyrefly/Cargo.toml
+          BINARY_DIR=$NEW_DIR/target/release
           mv $BINARY_DIR/pyrefly $BINARY_DIR/pyrefly-real
           cp scripts/pyrefly_primer_wrapper.sh $BINARY_DIR/pyrefly
           chmod +x $BINARY_DIR/pyrefly
@@ -72,8 +72,8 @@ jobs:
           OLD_DIR=$BASE_DIR/pyrefly_old
           mkdir -p $OLD_DIR
           git checkout base_commit
-          CARGO_TARGET_DIR=$OLD_DIR/target cargo build --manifest-path pyrefly/Cargo.toml
-          BINARY_DIR=$OLD_DIR/target/debug
+          CARGO_TARGET_DIR=$OLD_DIR/target cargo build --release --manifest-path pyrefly/Cargo.toml
+          BINARY_DIR=$OLD_DIR/target/release
           mv $BINARY_DIR/pyrefly $BINARY_DIR/pyrefly-real
           # Use the wrapper from the new commit (old commit may not have it)
           git checkout $GITHUB_SHA -- scripts/pyrefly_primer_wrapper.sh
@@ -86,7 +86,7 @@ jobs:
             MYPY_PRIMER_NO_REBUILD=1 mypy_primer \
             --repo pyrefly_to_test \
             --base-dir $BASE_DIR \
-            --cargo-profile dev \
+            --cargo-profile release \
             --new $GITHUB_SHA --old base_commit \
             --num-shards 10 --shard-index ${{ matrix.shard-index }} \
             --debug \
