@@ -932,6 +932,40 @@ def f(x: int | str) -> int | str:
 f(1.0)
 ```
 
+## non-convergent-recursion
+
+Some Python code has type analysis that is recursive. Consider, for example:
+```
+def f(): return g()
+def g(): return [f()]
+```
+Here, return-type inference for `f` depends on the return type of `g`, and vice versa
+so we get a cycle. Similarly, in
+```
+x = 1
+while some_condition():
+  x = [x]
+```
+the type of `x` at the end of the loop body depends on the type of `x` at the beginning,
+and this forms a cycle (and in this case the type doesn't converge to any closed form;
+the true type is a recursive type but Pyrefly will not infer an anonymous recursive type).
+
+Many more cycles are possible, sometimes involving harder-to-visualize problems like
+classes whose type parameters have constraints that are recursive, or class fields
+whose inferred types depend on one another.
+
+Pyrefly will attempt to resolve all such recursion using a *fixpoint*, where we
+repeatedly analyze the related entities in type inference. But because the results
+do not always converge (like `x = [x]` above), we have to limit the number of
+iterations, which means sometimes we cannot ensure that the inferred result
+is correct.
+
+In these cases, Pyrefly will produce a `non-convergent-recursion` error that
+warns you our fixpoint did not converge, and tells you the result we inferred
+based on the last iteration. In some cases, the error message will recommend
+that by adding more annotations you may be able to help Pyrefly determine the
+correct type.
+
 ## non-exhaustive-match
 
 Pyrefly warns when a `match` statement over an `Enum` attempts to enumerate the members
