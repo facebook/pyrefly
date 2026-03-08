@@ -71,6 +71,105 @@ use crate::types::types::Type;
 const NARROW_ENUM_LIMIT: usize = 100;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Membership narrowing only stays precise when the RHS describes a finite set of values.
+    fn membership_narrow_type(&self, ty: &Type) -> Option<Type> {
+        match ty {
+            Type::Literal(_) | Type::None => Some(ty.clone()),
+            Type::ClassDef(cls) => Some(Type::type_form(self.promote_silently(cls))),
+            Type::Type(box Type::ClassType(_)) => Some(ty.clone()),
+            Type::Union(union) => {
+                let members: Option<Vec<_>> = union
+                    .members
+                    .iter()
+                    .map(|member| self.membership_narrow_type(member))
+                    .collect();
+                Some(self.unions(members?))
+            }
+            _ => None,
+        }
+    }
+
+    fn membership_narrow_exprs(&self, expr: &Expr) -> Option<Vec<Expr>> {
+        match expr {
+            Expr::List(list) => Some(list.elts.clone()),
+            Expr::Tuple(tuple) => Some(tuple.elts.clone()),
+            Expr::Set(set) => Some(set.elts.clone()),
+            Expr::Call(call)
+                if call.arguments.keywords.is_empty()
+                    && call.arguments.args.len() == 1
+                    && matches!(call.func.as_ref(), Expr::Name(name) if name.id.as_str() == "frozenset") =>
+            {
+                self.membership_narrow_exprs(&call.arguments.args[0])
+            }
+            _ => None,
+        }
+    }
+
+    fn membership_narrow_tuple_type(&self, tuple: &Tuple) -> Option<Type> {
+        match tuple {
+            Tuple::Concrete(elts) => {
+                let members: Option<Vec<_>> = elts
+                    .iter()
+                    .map(|elt| self.membership_narrow_type(elt))
+                    .collect();
+                Some(self.unions(members?))
+            }
+            Tuple::Unbounded(box elt) => self.membership_narrow_type(elt),
+            Tuple::Unpacked(box (prefix, middle, suffix)) => {
+                let members: Option<Vec<_>> = prefix
+                    .iter()
+                    .chain(std::iter::once(middle))
+                    .chain(suffix.iter())
+                    .map(|elt| self.membership_narrow_type(elt))
+                    .collect();
+                Some(self.unions(members?))
+            }
+        }
+    }
+
+    fn membership_narrow_container_type(&self, ty: &Type) -> Option<Type> {
+        match ty {
+            Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
+                self.membership_narrow_container_type(&self.solver().force_var(*v))
+            }
+            Type::Union(union) => {
+                let members: Option<Vec<_>> = union
+                    .members
+                    .iter()
+                    .map(|member| self.membership_narrow_container_type(member))
+                    .collect();
+                Some(self.unions(members?))
+            }
+            Type::TypedDict(typed_dict) => {
+                let fields = self.typed_dict_fields(typed_dict);
+                if fields.is_empty() {
+                    Some(self.heap.mk_never())
+                } else {
+                    let key_types: Vec<Type> = fields
+                        .keys()
+                        .map(|name| Lit::Str(name.as_str().into()).to_implicit_type())
+                        .collect();
+                    Some(self.unions(key_types))
+                }
+            }
+            Type::Tuple(tuple) => self.membership_narrow_tuple_type(tuple),
+            Type::ClassType(class) => {
+                if let Some(tuple) = self.as_tuple(class) {
+                    return self.membership_narrow_tuple_type(&tuple);
+                }
+                match (
+                    class.class_object().name().as_str(),
+                    class.targs().as_slice(),
+                ) {
+                    ("list" | "set" | "frozenset", [elt]) => self.membership_narrow_type(elt),
+                    ("dict", [key, _]) => self.membership_narrow_type(key),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     // Get the union of all members of an enum, minus the specified member
     fn subtract_enum_member(&self, cls: &ClassType, name: &Name) -> Type {
         if cls.class_object().fields().len() > NARROW_ENUM_LIMIT {
@@ -848,13 +947,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AtomicNarrowOp::In(v) => {
                 // First, check for List, Tuple, and Set literal expressions (syntactic check,
                 // avoids type inference on the container itself)
-                let exprs = match v {
-                    Expr::List(list) => Some(list.elts.clone()),
-                    Expr::Tuple(tuple) => Some(tuple.elts.clone()),
-                    Expr::Set(set) => Some(set.elts.clone()),
-                    _ => None,
-                };
-                if let Some(exprs) = exprs {
+                if let Some(exprs) = self.membership_narrow_exprs(v) {
                     // Bail out if any element is a starred expression (e.g., `x in [*y, 1]`).
                     // We can't know all values at compile time when unpacking occurs.
                     if exprs.iter().any(|e| matches!(e, Expr::Starred(_))) {
@@ -862,43 +955,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     let mut literal_types = Vec::new();
                     for expr in exprs {
-                        let expr_ty = self.expr_infer(&expr, errors);
-                        match expr_ty {
-                            Type::Literal(_) | Type::None => {
-                                literal_types.push(expr_ty);
-                            }
-                            // Bare class names (e.g., `int`) infer to ClassDef.
-                            // Convert to type[...] so `x in (int, float)` can
-                            // narrow x to type[int] | type[float].
-                            Type::ClassDef(cls) => {
-                                literal_types.push(Type::type_form(self.promote_silently(&cls)));
-                            }
-                            // Already-wrapped type[X] expressions pass through.
-                            Type::Type(box Type::ClassType(_)) => {
-                                literal_types.push(expr_ty);
-                            }
-                            _ => {
-                                return ty.clone();
-                            }
-                        }
+                        let Some(expr_ty) =
+                            self.membership_narrow_type(&self.expr_infer(&expr, errors))
+                        else {
+                            return ty.clone();
+                        };
+                        literal_types.push(expr_ty);
                     }
                     return self.intersect(ty, &self.unions(literal_types));
                 }
 
-                // Check if the right operand is a TypedDict.
-                // If so, we can narrow the left operand to the union of the TypedDict's keys.
                 let right_ty = self.expr_infer(v, errors);
-                if let Type::TypedDict(typed_dict) = &right_ty {
-                    let fields = self.typed_dict_fields(typed_dict);
-                    if fields.is_empty() {
-                        // Empty TypedDict - the `in` check is always false
-                        return self.heap.mk_never();
-                    }
-                    let key_types: Vec<Type> = fields
-                        .keys()
-                        .map(|name| Lit::Str(name.as_str().into()).to_implicit_type())
-                        .collect();
-                    return self.intersect(ty, &self.unions(key_types));
+                if let Some(container_ty) = self.membership_narrow_container_type(&right_ty) {
+                    return self.intersect(ty, &container_ty);
                 }
 
                 // Check if the right operand is a mapping (e.g. dict[str, int]).
@@ -906,21 +975,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if !self.behaves_like_any(&right_ty)
                     && let Some((key_ty, _)) = self.unwrap_mapping(&right_ty)
                 {
-                    self.intersect(ty, &key_ty)
-                } else {
-                    ty.clone()
+                    return self.intersect(ty, &key_ty);
                 }
+
+                if !self.behaves_like_any(&right_ty)
+                    && let Some(iter_ty) = self.unwrap_iterable(&right_ty)
+                    && let Some(iter_ty) = self.membership_narrow_type(&iter_ty)
+                {
+                    return self.intersect(ty, &iter_ty);
+                }
+
+                ty.clone()
             }
             AtomicNarrowOp::NotIn(v) => {
                 // First, check for List, Tuple, and Set literal expressions (syntactic check,
                 // avoids type inference on the container itself)
-                let exprs = match v {
-                    Expr::List(list) => Some(list.elts.clone()),
-                    Expr::Tuple(tuple) => Some(tuple.elts.clone()),
-                    Expr::Set(set) => Some(set.elts.clone()),
-                    _ => None,
-                };
-                if let Some(exprs) = exprs {
+                if let Some(exprs) = self.membership_narrow_exprs(v) {
                     // Bail out if any element is a starred expression (e.g., `x not in [*y, 1]`).
                     // We can't know all values at compile time when unpacking occurs.
                     if exprs.iter().any(|e| matches!(e, Expr::Starred(_))) {
@@ -928,27 +998,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     let mut literal_types = Vec::new();
                     for expr in exprs {
-                        let expr_ty = self.expr_infer(&expr, errors);
-                        match expr_ty {
-                            Type::Literal(_) | Type::None => {
-                                literal_types.push(expr_ty);
-                            }
-                            // Accept class objects so they don't trigger the
-                            // bail-out below — this allows mixed containers
-                            // like `(int, None)` to still narrow the non-class
-                            // elements. Class objects themselves are not
-                            // subtracted in the `not in` case (see comment in
-                            // distribute_over_union below).
-                            Type::ClassDef(cls) => {
-                                literal_types.push(Type::type_form(self.promote_silently(&cls)));
-                            }
-                            Type::Type(box Type::ClassType(_)) => {
-                                literal_types.push(expr_ty);
-                            }
-                            _ => {
-                                return ty.clone();
-                            }
-                        }
+                        let Some(expr_ty) =
+                            self.membership_narrow_type(&self.expr_infer(&expr, errors))
+                        else {
+                            return ty.clone();
+                        };
+                        literal_types.push(expr_ty);
                     }
                     return self.distribute_over_union(ty, |t| {
                         let mut result = t.clone();
