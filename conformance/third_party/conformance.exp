@@ -4049,6 +4049,28 @@
     },
     {
       "code": -2,
+      "column": 14,
+      "concise_description": "Object of class `DC2` has no attribute `y` (not declared in `__slots__`)",
+      "description": "Object of class `DC2` has no attribute `y` (not declared in `__slots__`)",
+      "line": 25,
+      "name": "missing-attribute",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 25
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Object of class `DC3` has no attribute `y` (not declared in `__slots__`)",
+      "description": "Object of class `DC3` has no attribute `y` (not declared in `__slots__`)",
+      "line": 38,
+      "name": "missing-attribute",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 38
+    },
+    {
+      "code": -2,
       "column": 1,
       "concise_description": "Class `DC6` has no class attribute `__slots__`",
       "description": "Class `DC6` has no class attribute `__slots__`",

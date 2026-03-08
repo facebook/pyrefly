@@ -943,6 +943,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             should_narrow = false;
         }
         for not_found in lookup_not_found {
+            // Check __slots__ enforcement before falling through to __setattr__.
+            // If the class has concrete slots and the attribute is not among them,
+            // report a slots-specific error instead of falling through to __setattr__.
+            if let NotFoundOn::ClassInstance(ref cls, _) = not_found
+                && let Some(allowed_slots) = self.effective_slots_for_instance_write(cls)
+                && !allowed_slots.contains(attr_name)
+            {
+                let class_name = cls.name();
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::new(ErrorKind::MissingAttribute, context),
+                    format!(
+                        "Object of class `{class_name}` has no attribute `{attr_name}` \
+                         (not declared in `__slots__`)"
+                    ),
+                );
+                should_narrow = false;
+                continue;
+            }
             self.check_setattr(
                 attr_base.clone(),
                 attr_name,
@@ -960,6 +980,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // If the attribute is not found, we fall back to `__setattr__`
                 Attribute::GetAttr(not_found, _, _)
                 | Attribute::ModuleFallback(not_found, _, _) => {
+                    // Check __slots__ enforcement before falling through to __setattr__.
+                    if let NotFoundOn::ClassInstance(ref cls, _) = not_found
+                        && let Some(allowed_slots) = self.effective_slots_for_instance_write(cls)
+                        && !allowed_slots.contains(attr_name)
+                    {
+                        let class_name = cls.name();
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::new(ErrorKind::MissingAttribute, context),
+                            format!(
+                                "Object of class `{class_name}` has no attribute \
+                                 `{attr_name}` (not declared in `__slots__`)"
+                            ),
+                        );
+                        should_narrow = false;
+                        continue;
+                    }
                     self.check_setattr(
                         attr_base.clone(),
                         attr_name,
@@ -984,6 +1022,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 Attribute::ClassAttribute(class_attr) => {
+                    // Check __slots__ enforcement for instance writes on non-descriptor
+                    // class attributes. Properties and descriptors operate at the class
+                    // level and are not subject to slot restrictions.
+                    if let AttributeBase1::ClassInstance(cls) = &found_on
+                        && !matches!(
+                            class_attr,
+                            ClassAttribute::Property(..) | ClassAttribute::Descriptor(..)
+                        )
+                        && let Some(allowed_slots) =
+                            self.effective_slots_for_instance_write(cls.class_object())
+                        && !allowed_slots.contains(attr_name)
+                    {
+                        let class_name = cls.class_object().name();
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::new(ErrorKind::MissingAttribute, context),
+                            format!(
+                                "Object of class `{class_name}` has no attribute \
+                                 `{attr_name}` (not declared in `__slots__`)"
+                            ),
+                        );
+                        should_narrow = false;
+                        continue;
+                    }
                     // If we are writing to an instance, we may need access to
                     // the class to special-case dataclass converters.
                     let instance_class = match &found_on {
@@ -1049,6 +1112,168 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if should_narrow {
             narrowed_types.push(ty);
         }
+    }
+
+    /// Extract slot names from a single class's `__slots__` definition.
+    /// Returns `Some(names)` if slots are concrete, `None` if unslotted or dynamic.
+    /// Returns `Some` with `has_dict=true` flag when `__dict__` is in slots.
+    fn extract_local_slot_names(&self, cls: &Class) -> Option<(SmallSet<Name>, bool)> {
+        // Check for @dataclass(slots=True) first
+        let metadata = self.get_metadata_for_class(cls);
+        if let Some(dc) = metadata.dataclass_metadata()
+            && dc.kws.slots
+        {
+            let mut names = SmallSet::new();
+            let mut has_dict = false;
+            for name in dc.fields.iter() {
+                if name.as_str() == "__dict__" {
+                    has_dict = true;
+                }
+                names.insert(name.clone());
+            }
+            return Some((names, has_dict));
+        }
+
+        // Check for manual __slots__
+        if !cls.contains(&dunder::SLOTS) {
+            return None;
+        }
+
+        let field = self.get_field_from_current_class_only(cls, &dunder::SLOTS)?;
+        let ty = field.ty();
+        let mut names = SmallSet::new();
+        let mut has_dict = false;
+
+        match &ty {
+            // Single string literal: __slots__ = "x"
+            Type::Literal(lit) if let Lit::Str(s) = &lit.value => {
+                let name = Name::new(s.as_str());
+                if name.as_str() == "__dict__" {
+                    has_dict = true;
+                }
+                names.insert(name);
+            }
+            // Tuple of string literals: __slots__ = ("x", "y")
+            Type::Tuple(Tuple::Concrete(elements)) => {
+                for elem in elements {
+                    match elem {
+                        Type::Literal(lit) if let Lit::Str(s) = &lit.value => {
+                            let name = Name::new(s.as_str());
+                            if name.as_str() == "__dict__" {
+                                has_dict = true;
+                            }
+                            names.insert(name);
+                        }
+                        // Non-literal element means we can't determine slots statically
+                        _ => return None,
+                    }
+                }
+            }
+            // For other types (e.g., list[str] where literals are widened),
+            // fall back to inspecting the binding expression.
+            _ => {
+                return self.extract_slot_names_from_binding_expr(cls);
+            }
+        }
+        Some((names, has_dict))
+    }
+
+    /// Fallback: extract slot names directly from the binding expression for `__slots__`.
+    /// Handles list literals like `__slots__ = ["x", "y"]` where the type loses literal info.
+    fn extract_slot_names_from_binding_expr(&self, cls: &Class) -> Option<(SmallSet<Name>, bool)> {
+        use ruff_python_ast::Expr;
+        use starlark_map::Hashed;
+
+        use crate::binding::binding::ClassFieldDefinition;
+        use crate::binding::binding::KeyClassField;
+
+        let key = KeyClassField(cls.index(), dunder::SLOTS.clone());
+        let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        let binding = self.bindings().get::<KeyClassField>(idx);
+        let expr = match &binding.definition {
+            ClassFieldDefinition::AssignedInBody { value, .. } => match value.as_ref() {
+                ExprOrBinding::Expr(expr) => expr,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        match expr {
+            Expr::List(list_expr) => {
+                let mut names = SmallSet::new();
+                let mut has_dict = false;
+                for elt in &list_expr.elts {
+                    match elt {
+                        Expr::StringLiteral(s) => {
+                            let name = Name::new(s.value.to_str());
+                            if name.as_str() == "__dict__" {
+                                has_dict = true;
+                            }
+                            names.insert(name);
+                        }
+                        _ => return None,
+                    }
+                }
+                Some((names, has_dict))
+            }
+            _ => None,
+        }
+    }
+
+    /// Compute the effective slots policy for a class instance write.
+    /// Returns `Some(allowed_names)` if slots enforcement should apply,
+    /// `None` if slots enforcement is disabled.
+    pub(crate) fn effective_slots_for_instance_write(&self, cls: &Class) -> Option<SmallSet<Name>> {
+        let mut all_slot_names = SmallSet::new();
+
+        // Check the class itself
+        match self.extract_local_slot_names(cls) {
+            None => return None,            // Unslotted → no enforcement
+            Some((_, true)) => return None, // __dict__ → no enforcement
+            Some((names, false)) => {
+                for name in names {
+                    all_slot_names.insert(name);
+                }
+            }
+        }
+
+        // Walk MRO ancestors (excluding object)
+        let mro = self.get_mro_for_class(cls);
+        for ancestor in mro.ancestors_no_object() {
+            let ancestor_cls = ancestor.class_object();
+            match self.extract_local_slot_names(ancestor_cls) {
+                None => return None,            // Any unslotted ancestor → no enforcement
+                Some((_, true)) => return None, // __dict__ in any ancestor → no enforcement
+                Some((names, false)) => {
+                    for name in names {
+                        all_slot_names.insert(name);
+                    }
+                }
+            }
+        }
+
+        // Check if the class or any ancestor defines a custom __setattr__.
+        // If so, skip slots enforcement to avoid false positives with frameworks.
+        if self.has_custom_setattr(cls) {
+            return None;
+        }
+
+        Some(all_slot_names)
+    }
+
+    /// Check if a class or any of its non-object ancestors defines a custom `__setattr__`.
+    fn has_custom_setattr(&self, cls: &Class) -> bool {
+        // Check the class itself for a directly defined __setattr__
+        if cls.contains(&dunder::SETATTR) {
+            return true;
+        }
+        // Check MRO ancestors (excluding object, which always defines __setattr__)
+        let mro = self.get_mro_for_class(cls);
+        for ancestor in mro.ancestors_no_object() {
+            if ancestor.class_object().contains(&dunder::SETATTR) {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn check_attr_delete(
