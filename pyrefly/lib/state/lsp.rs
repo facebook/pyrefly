@@ -70,6 +70,8 @@ use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::rename::comment_and_string_content_ranges;
+use crate::lsp::rename::find_word_occurrences_in_ranges;
 use crate::lsp::wasm::completion::CompletionOptions;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::common_alias_target_module;
@@ -2470,7 +2472,7 @@ impl<'a> Transaction<'a> {
     /// site-packages directories (e.g., `site-packages/`, `dist-packages/`).
     /// Modules in editable install source paths are NOT considered third-party,
     /// even if they appear in sys.path.
-    fn is_third_party_module(&self, module: &Module, handle: &Handle) -> bool {
+    pub(crate) fn is_third_party_module(&self, module: &Module, handle: &Handle) -> bool {
         let config = self.get_config(handle);
         let module_path = module.path();
 
@@ -2485,7 +2487,7 @@ impl<'a> Transaction<'a> {
         false
     }
 
-    fn is_source_file(&self, module: &Module, handle: &Handle) -> bool {
+    pub(crate) fn is_source_file(&self, module: &Module, handle: &Handle) -> bool {
         let config = self.get_config(handle);
         let module_path = module.path();
 
@@ -3101,6 +3103,16 @@ impl<'a> Transaction<'a> {
         }
 
         ranges
+    }
+
+    pub fn text_occurrences_in_comments_and_strings(
+        &self,
+        module: &ModuleInfo,
+        name: &str,
+    ) -> Vec<TextRange> {
+        let source = module.contents();
+        let ranges = comment_and_string_content_ranges(source);
+        find_word_occurrences_in_ranges(source, name, &ranges)
     }
 
     fn export_from_location(
