@@ -905,3 +905,17 @@ for part in ['a', 'b', 'c', 'd']:
         lineStart = lineno
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2522
+testcase!(
+    test_optional_narrowing_in_nested_loop,
+    r#"
+def sum_matrix(matrix: list[list[int]]) -> int:
+    total: int | None = None
+    for row in matrix:
+        total = 0
+        for val in row:
+            total += val
+    return total or 0
+"#,
+);

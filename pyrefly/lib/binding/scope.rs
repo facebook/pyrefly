@@ -3330,7 +3330,18 @@ impl<'a> BindingsBuilder<'a> {
     /// variables that are unconditionally reassigned in `for` loop headers
     pub fn setup_loop(&mut self, range: TextRange, loop_header_targets: &SmallSet<Name>) {
         let finally_depth = self.scopes.finally_depth();
-        let base = mem::take(&mut self.scopes.current_mut().flow);
+        let mut base = mem::take(&mut self.scopes.current_mut().flow);
+        // When entering a nested loop, update loop_prior to the current value idx.
+        // This ensures the inner loop's LoopPhi uses the type at the inner loop's
+        // entry point (after assignments between the outer loop head and this point),
+        // rather than the type before the outermost enclosing loop.
+        if self.scopes.loop_depth() > 0 {
+            for (_, info) in base.info.iter_mut() {
+                if let Some(value) = &info.value {
+                    info.loop_prior = value.idx;
+                }
+            }
+        }
         // To account for possible assignments to existing names in a loop, we
         // speculatively insert phi keys upfront.
         self.scopes.current_mut().flow =
