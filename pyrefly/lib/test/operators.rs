@@ -416,6 +416,29 @@ def f2(x: int | Any):
 );
 
 testcase!(
+    test_compare_on_any,
+    r#"
+from typing import Any, assert_type
+
+def test1(x: Any) -> None:
+    assert_type(x == 1, Any)
+    assert_type(1 == x, Any)
+    assert_type(x != 1, Any)
+    assert_type(x is None, Any)
+    assert_type(x is not None, Any)
+    assert_type(x in [1, 2], Any)
+    assert_type(1 in x, Any)
+
+def test2(x: float, y: Any) -> None:
+    any( x == y )
+    assert_type(x==y, Any)
+    assert_type(y==x, Any)
+    assert_type(x!=y, Any)
+    assert_type(y!=x, Any)
+    "#,
+);
+
+testcase!(
     test_binop_type_var,
     r#"
 from typing import TypeVar, reveal_type

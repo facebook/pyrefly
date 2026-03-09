@@ -472,6 +472,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             let result = self.distribute_over_union(&current_left, |left| {
                 self.distribute_over_union(&right, |right| {
+                    // If either operand is Any, the comparison result is Any.
+                    // This mirrors the same check in binop_infer.
+                    if let Type::Any(style) = &left {
+                        return style.propagate();
+                    }
+                    if let Type::Any(style) = &right {
+                        return style.propagate();
+                    }
                     let context = || {
                         ErrorContext::BinaryOp(
                             op.as_str().to_owned(),
