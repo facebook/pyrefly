@@ -121,7 +121,7 @@ pub struct InferArgs {
 }
 
 impl ParameterAnnotation {
-    fn to_inlay_hint(self) -> Option<(TextSize, Type, AnnotationKind)> {
+    pub(crate) fn to_inlay_hint(self) -> Option<(TextSize, Type, AnnotationKind)> {
         if let Some(ty) = self.ty {
             if ty.is_any() || self.has_annotation {
                 return None;

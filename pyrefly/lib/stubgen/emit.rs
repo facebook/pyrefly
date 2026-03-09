@@ -11,8 +11,11 @@
 //! output `String` buffer. Source annotations are preserved verbatim
 //! by slicing the original source at AST node ranges.
 
+use std::collections::HashSet;
+
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::Operator;
 use ruff_python_ast::ParameterWithDefault;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
@@ -20,13 +23,72 @@ use ruff_python_ast::StmtFunctionDef;
 use ruff_text_size::Ranged;
 
 use crate::export::definitions::Definitions;
-use crate::stubgen::visibility::VisibilityFilter;
 use crate::stubgen::StubgenOptions;
+use crate::stubgen::visibility::VisibilityFilter;
 
 /// Extract the source text for an AST node's range.
 fn source_at<'a>(source: &'a str, node: &impl Ranged) -> &'a str {
     let range = node.range();
     &source[range.start().to_usize()..range.end().to_usize()]
+}
+
+/// Returns `true` when `value` is a call to a type-variable constructor
+/// (`TypeVar`, `ParamSpec`, `TypeVarTuple`, `NewType`, `NamedTuple`,
+/// `TypedDict`). These assignments are preserved verbatim in stubs.
+fn is_type_var_call(value: &Expr) -> bool {
+    if let Expr::Call(call) = value
+        && let Expr::Name(name) = &*call.func
+    {
+        return matches!(
+            name.id.as_str(),
+            "TypeVar" | "ParamSpec" | "TypeVarTuple" | "NewType" | "NamedTuple" | "TypedDict"
+        );
+    }
+    false
+}
+
+/// Returns `true` when `value` looks like an old-style type alias RHS --
+/// a subscript (`List[int]`) or a union pipe (`int | str`). These are
+/// emitted verbatim rather than collapsed to `Any`.
+fn is_type_alias_value(value: &Expr) -> bool {
+    match value {
+        Expr::Subscript(_) => true,
+        Expr::BinOp(op) if op.op == Operator::BitOr => true,
+        _ => false,
+    }
+}
+
+fn has_overload_decorator(func: &StmtFunctionDef) -> bool {
+    func.decorator_list.iter().any(|d| {
+        matches!(
+            &d.expression,
+            Expr::Name(ExprName { id, .. }) if id.as_str() == "overload"
+        )
+    })
+}
+
+/// Collect the names of all functions that have at least one `@overload`
+/// variant in `stmts`. Used to drop the non-overloaded implementation.
+pub(crate) fn collect_overloaded_names(stmts: &[Stmt]) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for stmt in stmts {
+        if let Stmt::FunctionDef(func) = stmt
+            && has_overload_decorator(func)
+        {
+            names.insert(func.name.to_string());
+        }
+    }
+    names
+}
+
+/// Returns `true` if `stmt` is the non-overloaded implementation of an
+/// overloaded function (i.e. it should be dropped from the stub).
+pub(crate) fn is_overload_impl(stmt: &Stmt, overloaded: &HashSet<String>) -> bool {
+    if let Stmt::FunctionDef(func) = stmt {
+        overloaded.contains(func.name.as_str()) && !has_overload_decorator(func)
+    } else {
+        false
+    }
 }
 
 /// Emit a single top-level (or class-body) statement into the output buffer.
@@ -82,9 +144,12 @@ pub(crate) fn emit_stmt(
         }
         Stmt::Assign(assign) => {
             if let [Expr::Name(ExprName { id, .. })] = assign.targets.as_slice() {
-                // __all__ assignments are always included -- stub consumers need
-                // them regardless of the visibility filter.
-                if id.as_str() == "__all__" {
+                // __all__, TypeVar calls, and type aliases are type-level
+                // declarations that stubs always need regardless of visibility.
+                if id.as_str() == "__all__"
+                    || is_type_var_call(&assign.value)
+                    || is_type_alias_value(&assign.value)
+                {
                     out.push_str(indent);
                     out.push_str(source_at(source, stmt));
                     out.push('\n');
@@ -270,12 +335,24 @@ fn emit_class(
 
     let child_indent = format!("{indent}    ");
     let mut has_body = false;
+    let overloaded = collect_overloaded_names(&class.body);
 
     for stmt in &class.body {
+        if is_overload_impl(stmt, &overloaded) {
+            continue;
+        }
         // Inside a class, we don't filter by module-level __all__ -- all
         // class members are part of the class's stub.
         let class_filter = VisibilityFilter::Inferred;
-        if emit_stmt(source, stmt, &class_filter, options, out, &child_indent, defs) {
+        if emit_stmt(
+            source,
+            stmt,
+            &class_filter,
+            options,
+            out,
+            &child_indent,
+            defs,
+        ) {
             has_body = true;
         }
     }
@@ -286,34 +363,25 @@ fn emit_class(
     }
 }
 
-/// Check whether a statement will produce `Any` in its stub output, so
-/// we know to add `from typing import Any` at the top.
+/// Check whether a statement will produce a literal `Any` token in its
+/// stub output, so we know to add `from typing import Any` at the top.
+///
+/// Only unannotated `Assign` statements produce `x: Any = ...`; functions
+/// with missing annotations are emitted without `Any` (parameters are left
+/// bare, return types are omitted).
 pub(crate) fn stmt_uses_any(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::FunctionDef(func) => {
-            if func.returns.is_none() {
-                return true;
-            }
-            for p in func
-                .parameters
-                .posonlyargs
-                .iter()
-                .chain(&func.parameters.args)
-                .chain(&func.parameters.kwonlyargs)
-            {
-                let name = p.parameter.name.as_str();
-                if name == "self" || name == "cls" {
-                    continue;
-                }
-                if p.parameter.annotation.is_none() {
-                    return true;
-                }
-            }
-            false
-        }
         Stmt::Assign(assign) => {
             if let [Expr::Name(ExprName { id, .. })] = assign.targets.as_slice() {
-                id.as_str() != "__all__"
+                if id.as_str() == "__all__" {
+                    return false;
+                }
+                // TypeVar calls and type-alias subscripts are emitted verbatim
+                // and don't need the `Any` import.
+                if is_type_var_call(&assign.value) || is_type_alias_value(&assign.value) {
+                    return false;
+                }
+                true
             } else {
                 false
             }
