@@ -492,7 +492,7 @@ class MyTypedDict(TypedDict):
 
     assert_eq!(
         PysaType::new(
-            "type[test.A] | type[test.B]".to_owned(),
+            "type[test.A | test.B]".to_owned(),
             ClassNamesFromType::from_classes(
                 vec![
                     get_class_ref("test", "A", &context),
