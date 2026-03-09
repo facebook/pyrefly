@@ -774,3 +774,44 @@ def handle(o: object) -> int:
     return 1
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/1896
+testcase!(
+    test_match_as_binding_with_early_return,
+    r#"
+from typing import assert_type
+
+class Error:
+    message: str
+class Success:
+    value: int
+class Pending:
+    pass
+
+def handle_error(e: Error) -> None: ...
+
+def process(result: Error | Success | Pending) -> None:
+    match result:
+        case Success():
+            return
+        case Pending():
+            return
+        case Error() as err:
+            assert_type(err, Error)
+            handle_error(err)
+
+def process2(result: Error | Success) -> str:
+    match result:
+        case Success():
+            return str(result.value)
+        case Error():
+            return result.message
+
+def process3(result: Error | Success) -> str:
+    match result:
+        case Success() as s:
+            return str(s.value)
+        case Error() as e:
+            return e.message
+"#,
+);

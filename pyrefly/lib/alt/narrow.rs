@@ -1648,12 +1648,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.is_dict_like(&base_ty)
     }
 
-    fn is_flag_enum(&self, cls: &ClassType) -> bool {
-        self.get_metadata_for_class(cls.class_object())
-            .enum_metadata()
-            .is_some_and(|meta| meta.is_flag)
-    }
-
     pub(crate) fn with_type_for_exhaustiveness_check(&self, info: Arc<TypeInfo>) -> TypeInfo {
         info.arc_clone().map_ty(|mut ty| {
             self.expand_vars_mut(&mut ty);
@@ -1665,24 +1659,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Determines if a type should be checked for match exhaustiveness.
-    /// We check exhaustiveness when the type has a finite, known set of possible values.
     pub(crate) fn should_check_exhaustiveness(&self, ty: &Type) -> bool {
         match ty {
             Type::ClassType(cls) => {
-                // Final classes can't have subclasses, so they are exhaustible, with the exception
-                // of Flag enums, whose members can be combined into new members via bitwise ops
-                !self.is_flag_enum(cls) && self.is_final(cls.class_object())
-                    // bool is effectively Literal[True] | Literal[False]
-                    || cls.is_builtin("bool")
+                let metadata = self.get_metadata_for_class(cls.class_object());
+                !metadata.is_protocol() && !metadata.is_typed_dict()
             }
-
-            // Literal types have explicit values
             Type::Literal(_) => true,
-
-            // None is a singleton
             Type::None => true,
-
-            // Unions are exhaustible if all members are exhaustible types
             Type::Union(union) => {
                 !union.members.is_empty()
                     && union
@@ -1690,7 +1674,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .iter()
                         .all(|m| self.should_check_exhaustiveness(m))
             }
-
             _ => false,
         }
     }
