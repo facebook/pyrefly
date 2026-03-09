@@ -882,13 +882,11 @@ assert_type(x, list[int])
 );
 
 testcase!(
-    bug = "TODO",
     test_type_of_type,
     r#"
 class C:
     pass
 c1: type[C] = C
-# TODO(stroxler): Handle `type[Any]` correctly here.
 c2: type[C, C] = C  # E: Expected 1 type argument for `type`, got 2
     "#,
 );
