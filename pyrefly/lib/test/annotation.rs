@@ -19,7 +19,7 @@ class D:
     def int(self) -> None:
         ...
     x: "int" = 0  # E: Expected a type form
-assert_type(D.x, int)  # E: assert_type(Any, int) failed
+assert_type(D.x, int)  # E: assert_type(Unknown, int) failed
 "#,
 );
 

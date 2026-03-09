@@ -1418,7 +1418,7 @@ class Class8(Generic[T]):
 
 r8 = accepts_callable(Class8)
 # pyrefly incorrectly errors on this - should be OK
-assert_type(r8([""], [""]), Class8[str])  # E: assert_type(Class8[Any], Class8[str]) failed
+assert_type(r8([""], [""]), Class8[str])  # E: assert_type(Class8[Unknown], Class8[str]) failed
 "#,
 );
 

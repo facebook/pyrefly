@@ -16,7 +16,7 @@
   "annotations_coroutines.py": [],
   "annotations_forward_refs.py": [
     "Line 87: Unexpected errors ['Expected a type form, got instance of `(self: Self@ClassD) -> None`']",
-    "Line 96: Unexpected errors ['assert_type(Any, int) failed']"
+    "Line 96: Unexpected errors ['assert_type(Unknown, int) failed']"
   ],
   "annotations_generators.py": [
     "Line 140: Unexpected errors ['This `yield` expression is unreachable']",
@@ -42,7 +42,7 @@
     "Line 186: Expected 1 errors",
     "Line 197: Expected 1 errors",
     "Line 167: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
-    "Line 185: Unexpected errors ['assert_type(Class8[Any], Class8[str]) failed']"
+    "Line 185: Unexpected errors ['assert_type(Class8[Unknown], Class8[str]) failed']"
   ],
   "constructors_consistency.py": [],
   "dataclasses_descriptors.py": [
