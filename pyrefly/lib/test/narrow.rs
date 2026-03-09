@@ -2396,6 +2396,21 @@ def f(x: int):
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/1592
+testcase!(
+    test_disjoint_bases_subclasses,
+    r#"
+from typing import assert_never
+class A(str):
+    pass
+class B(int):
+    pass
+def f(a: A):
+    if isinstance(a, B):
+        assert_never(a)
+"#,
+);
+
 testcase!(
     test_literals_are_disjoint,
     r#"

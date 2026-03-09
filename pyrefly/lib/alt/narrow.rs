@@ -97,17 +97,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    pub fn disjoint_base<'b>(&'b self, t: &'b Type) -> &'b Class {
-        // TODO: Implement the full disjoint base spec: https://peps.python.org/pep-0800/#specification.
+    /// Return the most specific disjoint base for a type per PEP 800.
+    /// Walks the MRO to find the first ancestor marked `@disjoint_base`.
+    /// TODO: handle multiple incompatible disjoint bases
+    pub fn disjoint_base(&self, t: &Type) -> Class {
         match t {
-            Type::ClassType(cls)
-                if let cls = cls.class_object()
-                    && self.get_metadata_for_class(cls).is_disjoint_base() =>
-            {
-                cls
+            Type::ClassType(cls) => {
+                let class = cls.class_object();
+                // Check the class itself first.
+                if self.get_metadata_for_class(class).is_disjoint_base() {
+                    return class.clone();
+                }
+                // Walk the MRO to find the most specific disjoint base ancestor.
+                let mro = self.get_mro_for_class(class);
+                for ancestor in mro.ancestors_no_object() {
+                    if self
+                        .get_metadata_for_class(ancestor.class_object())
+                        .is_disjoint_base()
+                    {
+                        return ancestor.class_object().clone();
+                    }
+                }
+                // Fall back to object (which is never disjoint with anything).
+                self.stdlib.object().class_object().clone()
             }
-            Type::Tuple(_) => self.stdlib.tuple_object(),
-            _ => self.stdlib.object().class_object(),
+            Type::Tuple(_) => self.stdlib.tuple_object().clone(),
+            _ => self.stdlib.object().class_object().clone(),
         }
     }
 
@@ -157,8 +172,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 let left_base = self.disjoint_base(left);
                 let right_base = self.disjoint_base(right);
-                if self.has_superclass(left_base, right_base)
-                    || self.has_superclass(right_base, left_base)
+                if self.has_superclass(&left_base, &right_base)
+                    || self.has_superclass(&right_base, &left_base)
                 {
                     intersect(vec![left.clone(), right.clone()], fallback, self.heap)
                 } else {
