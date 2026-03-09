@@ -622,3 +622,128 @@ Point = collections.namedtuple("Point", ["x", "y"])
 p = Point(x=1, y=2)
     "#,
 );
+
+// Basic: adjacent __new__.__defaults__ makes trailing field optional
+testcase!(
+    test_namedtuple_adjacent_defaults_basic,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+Point.__new__.__defaults__ = (0,)
+p = Point(1, 2)  # should succeed — z defaults to 0
+"#,
+);
+
+// typing.NamedTuple form
+testcase!(
+    test_typing_namedtuple_adjacent_defaults,
+    r#"
+from typing import NamedTuple
+Point = NamedTuple("Point", [("x", int), ("y", int), ("z", int)])
+Point.__new__.__defaults__ = (0,)
+p = Point(1, 2)  # should succeed — z defaults to 0
+"#,
+);
+
+// Multiple defaults
+testcase!(
+    test_namedtuple_adjacent_defaults_multiple,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+Point.__new__.__defaults__ = (0, 0)
+p = Point(1)  # should succeed — y and z default
+"#,
+);
+
+// None RHS means no defaults (all required)
+testcase!(
+    test_namedtuple_adjacent_defaults_none,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+Point.__new__.__defaults__ = None
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+// Tuple longer than field count clamps to all-optional
+testcase!(
+    test_namedtuple_adjacent_defaults_overflow,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y"])
+Point.__new__.__defaults__ = (0, 0, 0)
+p = Point()  # should succeed — all fields optional when defaults >= fields
+"#,
+);
+
+// Non-adjacent: intervening statement breaks the pattern
+testcase!(
+    test_namedtuple_defaults_non_adjacent,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+x = 1
+Point.__new__.__defaults__ = (0,)
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+// Class-syntax namedtuple is unaffected
+testcase!(
+    test_class_namedtuple_unaffected,
+    r#"
+from typing import NamedTuple
+class Point(NamedTuple):
+    x: int
+    y: int
+    z: int
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+// Non-literal RHS is not consumed (variable reference falls through to normal type checking)
+testcase!(
+    test_namedtuple_defaults_non_literal_rhs,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+defs = (0,)
+Point.__new__.__defaults__ = defs
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+// __new__.__defaults__ replaces defaults= kwarg entirely (not merging)
+testcase!(
+    test_namedtuple_defaults_replaces_kwarg,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"], defaults=(1,))
+Point.__new__.__defaults__ = (2, 3)
+p = Point(1)  # should succeed — y and z now have defaults from __new__.__defaults__
+"#,
+);
+
+// Empty tuple means no defaults (all required)
+testcase!(
+    test_namedtuple_adjacent_defaults_empty_tuple,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+Point.__new__.__defaults__ = ()
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+// None overrides existing defaults= kwarg (clears all defaults)
+testcase!(
+    test_namedtuple_none_overrides_kwarg,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"], defaults=(1,))
+Point.__new__.__defaults__ = None
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
