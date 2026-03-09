@@ -19,6 +19,7 @@ use crate::commands::infer::InferArgs;
 use crate::commands::init::InitArgs;
 use crate::commands::lsp::LspArgs;
 use crate::commands::report::ReportArgs;
+use crate::commands::stubgen::StubgenArgs;
 use crate::commands::suppress::SuppressArgs;
 use crate::commands::tsp::TspArgs;
 use crate::commands::util::CommandExitStatus;
@@ -53,6 +54,8 @@ pub enum Command {
     Infer(InferArgs),
     /// Generate reports from pyrefly type checking results.
     Report(ReportArgs),
+    /// Generate PEP 484 `.pyi` stub files from Python source.
+    Stubgen(StubgenArgs),
     /// Suppress type errors by adding ignore comments, or remove unused ignores.
     Suppress(SuppressArgs),
 }
@@ -80,6 +83,7 @@ impl Command {
             Command::Infer(args) => args.run(config_configurer_wrapper),
             Command::DumpConfig(args) => args.run(config_configurer_wrapper),
             Command::Report(args) => args.run(config_configurer_wrapper),
+            Command::Stubgen(args) => args.run(config_configurer_wrapper),
             Command::Suppress(args) => args.run(config_configurer_wrapper),
         }
     }
