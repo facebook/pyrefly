@@ -6,6 +6,7 @@ on:
     paths:
     - 'pyrefly/lib/**'
     - 'pyrefly/third_party/**'
+    - '.github/workflows/mypy_primer.yml'
 
 permissions:
   contents: read
