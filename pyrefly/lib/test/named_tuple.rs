@@ -622,3 +622,23 @@ Point = collections.namedtuple("Point", ["x", "y"])
 p = Point(x=1, y=2)
     "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/2455
+testcase!(
+    test_named_tuple_typevar_bound,
+    r#"
+from typing import TypeVar, NamedTuple, assert_type
+
+MyCustomModelT = TypeVar(name="MyCustomModelT", bound=NamedTuple)
+
+class ImplementedModel(NamedTuple):
+    name: str
+    age: int
+
+def arbitrary_method(_name: str, _age: int, _model: type[MyCustomModelT]) -> MyCustomModelT:
+    return _model(name=_name, age=_age)  # E: Unexpected keyword argument `name` in function `tuple.__new__`  # E: Unexpected keyword argument `age` in function `tuple.__new__`
+
+o = arbitrary_method("a", 2, ImplementedModel)
+assert_type(o, ImplementedModel)
+"#,
+);

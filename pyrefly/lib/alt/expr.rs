@@ -1411,6 +1411,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .mk_type_form(self.heap.mk_type_form(self.heap.mk_any_implicit()));
                 } else if cls.has_toplevel_qname("typing", "Any") {
                     *ty = self.heap.mk_type_form(self.heap.mk_any_explicit())
+                } else if cls.has_toplevel_qname("typing", "NamedTuple") {
+                    // When `NamedTuple` is used as a type annotation (e.g. TypeVar bound),
+                    // resolve to `NamedTupleFallback` — the class that actually appears in
+                    // the MRO of user-defined NamedTuple subclasses.
+                    *ty = self.heap.mk_type_form(
+                        self.heap
+                            .mk_class_type(self.stdlib.named_tuple_fallback().clone()),
+                    );
                 } else {
                     // All other classes (including Tensor) get promoted and wrapped in type_form
                     *ty = self.heap.mk_type_form(self.promote(cls, range, errors));
