@@ -234,6 +234,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(box Type::ClassType(cls)) => CallTargetLookup::Ok(Box::new(
                 CallTarget::Class(cls, ConstructorKind::TypeOfClass, None),
             )),
+            // `type[A | B]` is equivalent to `type[A] | type[B]` for call target resolution.
+            // Distribute `type[...]` over union members and resolve as a union.
+            Type::Type(box Type::Union(box Union { members: xs, .. })) => {
+                let union_of_types = self
+                    .heap
+                    .mk_union(xs.into_iter().map(|x| self.heap.mk_type_form(x)).collect());
+                self.as_call_target_impl(union_of_types, quantified)
+            }
             Type::Type(box Type::SelfType(cls)) => CallTargetLookup::Ok(Box::new(
                 CallTarget::Class(cls, ConstructorKind::TypeOfSelf, None),
             )),
@@ -326,7 +334,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Any(style) => CallTargetLookup::Ok(Box::new(CallTarget::Any(style))),
             Type::TypeAlias(ta) => {
-                self.as_call_target_impl(self.get_type_alias(&ta).as_value(self.stdlib), quantified)
+                let body = self.get_type_alias(&ta).as_value(self.stdlib);
+                match body {
+                    // This comes from an expression like `int | str`, which is not callable.
+                    Type::Type(box Type::Union(_)) => CallTargetLookup::Error(vec![]),
+                    _ => self.as_call_target_impl(body, quantified),
+                }
             }
             Type::ClassType(cls) => {
                 let maybe_dunder_call = if let Some(quantified) = &quantified {

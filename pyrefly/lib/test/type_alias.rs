@@ -1262,3 +1262,12 @@ def f3(x: C) -> None:
     assert_type(x, list[int])
     "#,
 );
+
+testcase!(
+    test_union_is_not_callable,
+    r#"
+from typing import TypeAlias
+X: TypeAlias = int | str
+X()  # E: Expected a callable
+    "#,
+);
