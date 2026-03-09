@@ -2431,10 +2431,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return ty;
         }
         let class_tparams = self.get_class_tparams(class);
+        // Exclude quantifieds bound by Forall nodes within the type
+        // (e.g. generic functions assigned to attributes have their own
+        // type parameters that should not trigger invalid-type-var errors).
+        let mut forall_bound: SmallSet<&Quantified> = SmallSet::new();
+        fn collect_forall_tparams<'a>(ty: &'a Type, acc: &mut SmallSet<&'a Quantified>) {
+            match ty {
+                Type::Forall(forall) => {
+                    for q in forall.tparams.iter() {
+                        acc.insert(q);
+                    }
+                }
+                Type::BoundMethod(bm) => {
+                    if let BoundMethodType::Forall(forall) = &bm.func {
+                        for q in forall.tparams.iter() {
+                            acc.insert(q);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            ty.recurse(&mut |inner| collect_forall_tparams(inner, acc));
+        }
+        collect_forall_tparams(&ty, &mut forall_bound);
+        let allowed: SmallSet<&Quantified> = class_tparams
+            .iter()
+            .chain(forall_bound.iter().copied())
+            .collect();
         let qs_owner = Owner::new();
         let ts = Owner::new();
         let gradual_fallbacks = qs
-            .difference(&class_tparams.iter().collect())
+            .difference(&allowed)
             .map(|q| {
                 self.error(
                     errors,
@@ -2451,6 +2478,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
             .collect::<SmallMap<_, _>>();
         drop(qs);
+        drop(allowed);
+        drop(forall_bound);
         ty.subst(&gradual_fallbacks)
     }
 

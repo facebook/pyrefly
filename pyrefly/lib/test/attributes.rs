@@ -1107,6 +1107,33 @@ class C2[R]:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2204
+testcase!(
+    test_generic_function_assigned_to_attribute,
+    r#"
+from typing import reveal_type, assert_type
+def f[T](x: T) -> T:
+    return x
+
+class C:
+    def m[U](self, x: U) -> U:
+        return x
+
+class D:
+    def __init__(self, c: C):
+        self.f = f
+        self.g = c.m
+        self.h = C.m
+
+def test(o: D):
+    reveal_type(o.f) # E: [T](x: T) -> T
+    assert_type(o.f(1), int)
+
+    reveal_type(o.g) # E: [U](self: C, x: U) -> U
+    assert_type(o.g(1), int)
+"#,
+);
+
 testcase!(
     test_attr_unknown,
     r#"
