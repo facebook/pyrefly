@@ -45,6 +45,7 @@ mod report;
 mod solver;
 #[doc(hidden)]
 pub mod state;
+pub mod stubgen;
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tsp;
