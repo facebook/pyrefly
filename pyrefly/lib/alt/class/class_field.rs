@@ -1979,6 +1979,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
 
+        // __slots__ enforcement: reject instance attributes not declared in __slots__.
+        if matches!(
+            field_definition,
+            ClassFieldDefinition::DefinedInMethod { .. }
+        ) && name != &dunder::SLOTS
+            && let Some(allowed_slots) = self.effective_slots_for_instance_write(class)
+            && !allowed_slots.contains::<Name>(name)
+        {
+            let class_name = class.name();
+            self.error(
+                errors,
+                range,
+                ErrorInfo::new(
+                    ErrorKind::MissingAttribute,
+                    None::<&dyn Fn() -> ErrorContext>,
+                ),
+                format!(
+                    "Object of class `{class_name}` has no attribute `{name}` \
+                     (not declared in `__slots__`)"
+                ),
+            );
+        }
+
         class_field
     }
 
