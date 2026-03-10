@@ -966,6 +966,11 @@ based on the last iteration. In some cases, the error message will recommend
 that by adding more annotations you may be able to help Pyrefly determine the
 correct type.
 
+If you're filing a bug report for this error, set the environment variable
+`PYREFLY_FIXPOINT_DETAILS=1` when running Pyrefly and include additional
+diagnostic information in the issue that will help the Pyrefly team root cause
+the non-convergence.
+
 ## non-exhaustive-match
 
 Pyrefly warns when a `match` statement over an `Enum` attempts to enumerate the members

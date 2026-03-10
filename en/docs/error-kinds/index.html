@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.2ccc2416.css">
-<script src="/assets/js/runtime~main.0ab25ddf.js" defer="defer"></script>
-<script src="/assets/js/main.556ad453.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.6680cc0b.js" defer="defer"></script>
+<script src="/assets/js/main.cead38bd.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -348,6 +348,10 @@ warns you our fixpoint did not converge, and tells you the result we inferred
 based on the last iteration. In some cases, the error message will recommend
 that by adding more annotations you may be able to help Pyrefly determine the
 correct type.</p>
+<p>If you&#x27;re filing a bug report for this error, set the environment variable
+<code>PYREFLY_FIXPOINT_DETAILS=1</code> when running Pyrefly and include additional
+diagnostic information in the issue that will help the Pyrefly team root cause
+the non-convergence.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="non-exhaustive-match">non-exhaustive-match<a href="#non-exhaustive-match" class="hash-link" aria-label="Direct link to non-exhaustive-match" title="Direct link to non-exhaustive-match">​</a></h2>
 <p>Pyrefly warns when a <code>match</code> statement over an <code>Enum</code> attempts to enumerate the members
 but forgets at least one case. Add the missing members or a default arm.</p>
