@@ -615,6 +615,23 @@ impl<'a> BindingsBuilder<'a> {
             {
                 Vec::new()
             }
+            // namedtuple('Point', [*BasePoint._fields, 'z'])
+            [Expr::List(ExprList { elts, .. }) | Expr::Tuple(ExprTuple { elts, .. })]
+                if elts.iter().any(|elt| matches!(elt, Expr::Starred(_))) =>
+            {
+                match self.extract_namedtuple_fields_with_unpacking(elts) {
+                    Some(fields) => fields,
+                    None => {
+                        self.error(
+                            error_range,
+                            ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                            "Expected valid functional named tuple definition".to_owned(),
+                        );
+                        has_dynamic_fields = true;
+                        Vec::new()
+                    }
+                }
+            }
             // namedtuple('Point', ['x', 'y'])
             [Expr::List(ExprList { elts, .. })]
                 if matches!(elts.as_slice(), [Expr::StringLiteral(_), ..]) =>
@@ -638,6 +655,76 @@ impl<'a> BindingsBuilder<'a> {
             }
         };
         (fields, has_dynamic_fields)
+    }
+
+    fn extract_namedtuple_fields_with_unpacking(
+        &self,
+        items: &[Expr],
+    ) -> Option<Vec<(String, TextRange, Option<Expr>)>> {
+        let mut fields = Vec::new();
+        for item in items {
+            match item {
+                Expr::StringLiteral(x) => fields.push((x.value.to_string(), x.range(), None)),
+                Expr::Starred(starred) => fields
+                    .extend(self.resolve_namedtuple_field_unpacking(&starred.value, item.range())?),
+                _ => return None,
+            }
+        }
+        Some(fields)
+    }
+
+    fn resolve_namedtuple_field_unpacking(
+        &self,
+        expr: &Expr,
+        range: TextRange,
+    ) -> Option<Vec<(String, TextRange, Option<Expr>)>> {
+        let Expr::Attribute(attr) = expr else {
+            return None;
+        };
+        if attr.attr.as_str() != "_fields" {
+            return None;
+        }
+        let Expr::Name(base_name) = attr.value.as_ref() else {
+            return None;
+        };
+        let (mut binding_idx, _) = self.scopes.binding_idx_for_name(&base_name.id)?;
+        for _ in 0..16 {
+            match self.idx_to_binding(binding_idx)? {
+                Binding::Forward(inner) | Binding::ForwardToFirstUse(inner) => binding_idx = *inner,
+                Binding::ClassDef(class_idx, _) => {
+                    return self.namedtuple_fields_for_class(*class_idx, range);
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    fn namedtuple_fields_for_class(
+        &self,
+        class_idx: Idx<KeyClass>,
+        range: TextRange,
+    ) -> Option<Vec<(String, TextRange, Option<Expr>)>> {
+        let BindingClass::FunctionalClassDef(def_index, _, _, fields) =
+            self.idx_to_binding(class_idx)?
+        else {
+            return None;
+        };
+        let metadata_idx = self.key_to_idx_opt(&KeyClassMetadata(*def_index))?;
+        let metadata = self.idx_to_binding(metadata_idx)?;
+        if !metadata
+            .bases
+            .iter()
+            .any(|base| matches!(base, BaseClass::NamedTuple(_, _)))
+        {
+            return None;
+        }
+        Some(
+            fields
+                .keys()
+                .map(|name| (name.as_str().to_owned(), range, None))
+                .collect(),
+        )
     }
 
     /// Parse fields for `typing.NamedTuple`: list/tuple of (name, type) pairs.
