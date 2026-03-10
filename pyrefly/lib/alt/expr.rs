@@ -2044,13 +2044,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // TODO(stroxler): Add a new API, similar to `type_of_attr_get` but returning a
                         // LookupResult or an Optional type, that we could use here to avoid the double lookup.
                         if self.has_attr(&class_ty, &dunder::CLASS_GETITEM) {
-                            let cls_value = self.promote_silently(&cls);
-                            let call_args = [CallArg::ty(&cls_value, range), CallArg::expr(slice)];
                             Some(self.call_method_or_error(
                                 &class_ty,
                                 &dunder::CLASS_GETITEM,
                                 range,
-                                &call_args,
+                                &[CallArg::expr(slice)],
                                 &[],
                                 errors,
                                 Some(&|| ErrorContext::Index(self.for_display(class_ty.clone()))),

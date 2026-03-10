@@ -415,11 +415,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .as_ref()
             .map(|cls| self.heap.mk_self_type(self.as_class_type_unchecked(cls)));
 
-        // __new__ is an implicit staticmethod, __init_subclass__ is an implicit classmethod
-        // __new__, unlike decorated staticmethods, uses Self
+        // __new__ is an implicit staticmethod; __init_subclass__ and __class_getitem__ are
+        // implicit classmethods. __new__, unlike decorated staticmethods, uses Self.
         let is_dunder_new = defining_cls.is_some() && def.name.as_str() == dunder::NEW;
-        let is_dunder_init_subclass =
-            defining_cls.is_some() && def.name.as_str() == dunder::INIT_SUBCLASS;
+        let is_dunder_init_subclass = defining_cls.is_some()
+            && (def.name.as_str() == dunder::INIT_SUBCLASS
+                || def.name.as_str() == dunder::CLASS_GETITEM);
 
         let mut flags = FuncFlags {
             is_staticmethod: is_dunder_new,
