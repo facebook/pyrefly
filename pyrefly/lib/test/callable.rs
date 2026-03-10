@@ -30,13 +30,13 @@ testcase!(
     r#"
 from typing import reveal_type
 f = lambda x, y=1: x + y
-reveal_type(f)  # E: revealed type: (x: Unknown, y: Unknown = ...) -> Unknown
+reveal_type(f)  # E: revealed type: (x: @_, y: @_ = ...) -> @_
 f(1)  # OK, y has default
 f(1, 2)  # OK
 f()  # E: Missing argument `x`
 
 g = lambda x, y="hello", z=None: (x, y, z)
-reveal_type(g)  # E: revealed type: (x: Unknown, y: Unknown = ..., z: Unknown = ...) -> tuple[Unknown, Unknown, Unknown]
+reveal_type(g)  # E: revealed type: (x: @_, y: @_ = ..., z: @_ = ...) -> tuple[@_, @_, @_]
 g(1)  # OK
 g(1, "world")  # OK
 g(1, "world", True)  # OK
