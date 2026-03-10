@@ -1847,11 +1847,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.lookup_attr_from_attribute_base1(b.clone(), attr_name, &mut acc_candidate);
                     if acc_candidate.not_found.is_empty() && acc_candidate.internal_error.is_empty()
                     {
-                        candidates.push(acc_candidate.found);
+                        candidates.push((b, acc_candidate.found));
                     }
                 }
                 if candidates.len() == 1 {
-                    acc.found.extend(candidates.into_iter().next().unwrap());
+                    acc.found.extend(candidates.into_iter().next().unwrap().1);
+                } else if is_dunder(attr_name) {
+                    // `type[C]` wrappers can intersect the runtime `GenericAlias` API with the
+                    // underlying class object. When both succeed on a dunder lookup, prefer the
+                    // class object candidate so explicit calls like `ty.__str__(obj)` keep the
+                    // unbound method shape instead of exposing `GenericAlias.__str__`.
+                    let mut non_generic_alias_candidates =
+                        candidates.into_iter().filter(|(base, _)| {
+                            !matches!(
+                                base,
+                                AttributeBase1::ClassInstance(class)
+                                    if class.class_object()
+                                        == self.stdlib.generic_alias().class_object()
+                            )
+                        });
+                    if let Some((_, found)) = non_generic_alias_candidates.next()
+                        && non_generic_alias_candidates.next().is_none()
+                    {
+                        acc.found.extend(found);
+                    } else {
+                        // TODO: Intersect the candidates instead of using the fallback.
+                        for b in fallback {
+                            self.lookup_attr_from_attribute_base1(b.clone(), attr_name, acc);
+                        }
+                    }
                 } else {
                     // TODO: Intersect the candidates instead of using the fallback.
                     for b in fallback {
