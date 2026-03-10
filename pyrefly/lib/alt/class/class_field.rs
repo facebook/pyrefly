@@ -3811,7 +3811,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         member: &WithDefiningClass<Arc<ClassField>>,
     ) -> Option<NoAccessReason> {
-        if member.value.is_abstract() {
+        let lacks_runtime_impl = member
+            .value
+            .ty()
+            .visit_toplevel_func_metadata::<bool>(&|meta| {
+                meta.flags.lacks_implementation && !meta.flags.defined_in_stub_file
+            });
+        if member.value.is_abstract() && lacks_runtime_impl {
             return Some(NoAccessReason::SuperMethodNeedsImplementation(
                 member.defining_class.dupe(),
             ));

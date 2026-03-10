@@ -346,6 +346,22 @@ c = Child()
 );
 
 testcase!(
+    test_super_abstract_call_with_body,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def method(self) -> int:
+        return 0
+
+class Child(Base):
+    def method(self) -> int:
+        return super().method() + 1
+"#,
+);
+
+testcase!(
     test_abstract_property,
     TestEnv::new().enable_implicit_abstract_class_error(),
     r#"
