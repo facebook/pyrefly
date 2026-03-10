@@ -558,7 +558,7 @@ testcase!(
 def f(x: str) -> str:
     return x
 
-x = f"abc{f(1)}def"
+x = f"abc{f(1)}def"  # E: Argument `Literal[1]` is not assignable to parameter `x` with type `str` in function `f`
 "#,
 );
 

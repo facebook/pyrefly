@@ -13,6 +13,7 @@ use std::sync::LazyLock;
 use anyhow::anyhow;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::ignore::find_comment_start;
 use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::module::GENERATED_TOKEN;
 use pyrefly_python::module_path::ModulePathDetails;
@@ -246,11 +247,18 @@ fn add_suppressions(
 
         // Pre-scan to find existing suppressions and merge with new error codes
         let lines: Vec<&str> = file.lines().collect();
+        let mut line_starts_in_triple_quoted_string = vec![false; lines.len()];
 
         // Build a map of lines that have existing suppressions
         let mut existing_suppressions: SmallMap<usize, Vec<String>> = SmallMap::new();
+        let mut in_triple_quote = None;
         for (idx, line) in lines.iter().enumerate() {
-            if let Some(codes) = parse_ignore_comment(line) {
+            line_starts_in_triple_quoted_string[idx] = in_triple_quote.is_some();
+            let (_, new_state) = find_comment_start(line, in_triple_quote);
+            in_triple_quote = new_state;
+            if !line_starts_in_triple_quoted_string[idx]
+                && let Some(codes) = parse_ignore_comment(line)
+            {
                 existing_suppressions.insert(idx, codes);
             }
         }
@@ -285,6 +293,12 @@ fn add_suppressions(
         for (idx, line) in lines.iter().enumerate() {
             // Skip old standalone suppression lines that are being replaced
             if lines_to_skip.contains(&idx) {
+                continue;
+            }
+
+            if line_starts_in_triple_quoted_string[idx] {
+                buf.push_str(line);
+                buf.push_str(line_ending);
                 continue;
             }
 
@@ -1377,8 +1391,8 @@ x: int = """hello"""
 
     #[test]
     fn test_suppress_multiline_fstring_error_on_opening_line() {
-        // Errors inside f-string interpolations are swallowed (no valid place
-        // for a suppression comment), so no suppression comment is added.
+        // Errors on the opening line can be suppressed above the statement,
+        // since that comment still lives outside the string literal.
         let input = r#"
 def foo() -> str:
     return f"""{1 + "a"}
@@ -1389,6 +1403,7 @@ rest
             input,
             r#"
 def foo() -> str:
+    # pyrefly: ignore [unsupported-operation]
     return f"""{1 + "a"}
 rest
 """
@@ -1398,14 +1413,15 @@ rest
 
     #[test]
     fn test_suppress_single_line_triple_quoted_fstring() {
-        // Errors inside f-string interpolations are swallowed (no valid place
-        // for a suppression comment), so no suppression comment is added.
+        // Single-line triple-quoted f-strings can also be suppressed above
+        // the assignment without editing inside the string literal.
         let input = r#"
 x: str = f"""{1 + "a"}"""
 "#;
         assert_suppress_errors(
             input,
             r#"
+# pyrefly: ignore [unsupported-operation]
 x: str = f"""{1 + "a"}"""
 "#,
         );
