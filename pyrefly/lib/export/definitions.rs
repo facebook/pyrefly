@@ -659,11 +659,18 @@ impl DefinitionsBuilder {
             Stmt::AugAssign(x) => {
                 self.named_in_expr(&x.value);
                 if DunderAllEntry::is_all(&x.target) && x.op == Operator::Add {
-                    self.inner.dunder_all.kind = DunderAllKind::Specified;
-                    self.inner
-                        .dunder_all
-                        .entries
-                        .extend(DunderAllEntry::as_list(&x.value).unwrap_or_default());
+                    match DunderAllEntry::as_list(&x.value) {
+                        Some(entries) => {
+                            self.inner.dunder_all.kind = DunderAllKind::Specified;
+                            self.inner.dunder_all.entries.extend(entries);
+                        }
+                        None => {
+                            self.inner.dunder_all = DunderAll {
+                                kind: DunderAllKind::Unresolvable(x.value.range()),
+                                entries: Vec::new(),
+                            };
+                        }
+                    }
                 }
                 if let Expr::Name(name) = &*x.target {
                     self.add_name(
@@ -696,14 +703,24 @@ impl DefinitionsBuilder {
                 {
                     self.inner.dunder_all.kind = DunderAllKind::Specified;
                     match attr.as_str() {
-                        "extend" => self.inner.dunder_all.entries.extend(
-                            DunderAllEntry::as_list(&arguments.args[0]).unwrap_or_default(),
-                        ),
-                        "append" => self
-                            .inner
-                            .dunder_all
-                            .entries
-                            .extend(DunderAllEntry::as_item(&arguments.args[0])),
+                        "extend" => match DunderAllEntry::as_list(&arguments.args[0]) {
+                            Some(entries) => self.inner.dunder_all.entries.extend(entries),
+                            None => {
+                                self.inner.dunder_all = DunderAll {
+                                    kind: DunderAllKind::Unresolvable(arguments.args[0].range()),
+                                    entries: Vec::new(),
+                                };
+                            }
+                        },
+                        "append" => match DunderAllEntry::as_item(&arguments.args[0]) {
+                            Some(entry) => self.inner.dunder_all.entries.push(entry),
+                            None => {
+                                self.inner.dunder_all = DunderAll {
+                                    kind: DunderAllKind::Unresolvable(arguments.args[0].range()),
+                                    entries: Vec::new(),
+                                };
+                            }
+                        },
                         "remove" => {
                             if let Some(DunderAllEntry::Name(range, remove)) =
                                 DunderAllEntry::as_item(&arguments.args[0])
