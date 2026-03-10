@@ -675,7 +675,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let class_metadata = self.get_metadata_for_class(cls.class_object());
         if let Some(ret) =
             self.call_metaclass(&cls, arguments_range, args, keywords, errors, context, hint)
-            && !self.is_compatible_constructor_return(&ret, cls.class_object())
         {
             if let Some(metaclass_dunder_call) = self.get_metaclass_dunder_call(&cls) {
                 if let Some(callee_range) = callee_range
@@ -689,14 +688,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 self.record_resolved_trace(arguments_range, metaclass_dunder_call);
             }
-            // Got something other than an instance of the class under construction.
-            if let Err(e) = self
-                .solver()
-                .finish_quantified(vs, self.solver().infer_with_first_use)
-            {
-                self.add_specialization_errors(e, arguments_range, errors, context);
+            // Enum construction is routed through EnumMeta.__call__, which performs
+            // member lookup by value. A custom enum __new__ is used for member creation
+            // during class definition and should not be re-applied at call sites.
+            if class_metadata.is_enum() {
+                if let Err(e) = self
+                    .solver()
+                    .finish_quantified(vs, self.solver().infer_with_first_use)
+                {
+                    self.add_specialization_errors(e, arguments_range, errors, context);
+                }
+                return ret;
             }
-            return ret;
+            if !self.is_compatible_constructor_return(&ret, cls.class_object()) {
+                // Got something other than an instance of the class under construction.
+                if let Err(e) = self
+                    .solver()
+                    .finish_quantified(vs, self.solver().infer_with_first_use)
+                {
+                    self.add_specialization_errors(e, arguments_range, errors, context);
+                }
+                return ret;
+            }
         }
         let mut dunder_new_ret = None;
         let (overrides_new, dunder_new_has_errors) =
@@ -1319,6 +1332,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .callable_return_type(self.heap)
                 .is_some_and(|ret| !self.is_compatible_constructor_return(&ret, cls.class_object()))
             {
+                return metaclass_call_attr_ty;
+            }
+            if self.get_metadata_for_class(cls.class_object()).is_enum() {
                 return metaclass_call_attr_ty;
             }
         }
