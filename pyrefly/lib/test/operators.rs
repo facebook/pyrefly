@@ -287,6 +287,25 @@ assert_type(y6, Literal[True])
 );
 
 testcase!(
+    test_unary_bool_literals,
+    r#"
+from typing import Literal, assert_type
+
+def invert_literal_false(x: Literal[False]) -> None:
+    assert_type(~x, Literal[-1])
+
+def invert_literal_true(x: Literal[True]) -> None:
+    assert_type(~x, Literal[-2])
+
+def negate_literal_false(x: Literal[False]) -> None:
+    assert_type(-x, Literal[0])
+
+def negate_literal_true(x: Literal[True]) -> None:
+    assert_type(-x, Literal[-1])
+    "#,
+);
+
+testcase!(
     test_unary_dunders,
     r#"
 from typing import Literal, assert_type
