@@ -660,17 +660,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
     ) -> Type {
         // Based on https://typing.readthedocs.io/en/latest/spec/constructors.html.
-        let vs = if let Some(hint) = hint {
-            let vs = self
-                .solver()
-                .freshen_class_targs(cls.targs_mut(), self.uniques);
-
-            self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), hint.ty());
-            self.solver().generalize_class_targs(cls.targs_mut());
-            vs
+        let vs = if hint.is_some() {
+            self.solver()
+                .freshen_class_targs(cls.targs_mut(), self.uniques)
         } else {
             QuantifiedHandle::empty()
         };
+        if let Some(hint) = hint
+            && !hint.ty().any(|ty| match ty {
+                Type::ClassType(cls) | Type::SelfType(cls) => self
+                    .get_metadata_for_class(cls.class_object())
+                    .is_protocol(),
+                _ => false,
+            })
+        {
+            self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), hint.ty());
+            self.solver().generalize_class_targs(cls.targs_mut());
+        }
         let hint = None; // discard hint
         let class_metadata = self.get_metadata_for_class(cls.class_object());
         if let Some(ret) =
@@ -799,6 +805,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             );
         }
+        self.solver().generalize_class_targs(cls.targs_mut());
         self.solver()
             .finish_class_targs(cls.targs_mut(), self.uniques);
         if let Err(e) = self
