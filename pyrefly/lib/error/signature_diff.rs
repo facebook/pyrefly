@@ -56,41 +56,49 @@ fn signature_parts(sig: &str) -> Option<(Range<usize>, Range<usize>)> {
     Some((params, ret_start..ret_end))
 }
 
-/// Find the byte ranges where two strings differ, using longest common
-/// prefix and suffix. Returns `None` if the strings are equal.
+/// Find the UTF-8-safe byte ranges where two strings differ, using longest
+/// common prefix and suffix. Returns `None` if the strings are equal.
 ///
 /// The returned ranges highlight the "differing middle" of each string.
 /// When one string is a strict prefix/suffix of the other, a minimal
-/// single-byte range is returned to ensure there's always something to annotate.
-///
-/// Note: operates on raw bytes, which is correct for ASCII type names but
-/// could produce ranges that split multi-byte UTF-8 characters for non-ASCII
-/// identifiers.
+/// single-character range is returned to ensure there's always something to
+/// annotate.
 fn diff_ranges(expected: &str, found: &str) -> Option<(Range<usize>, Range<usize>)> {
     if expected == found {
         return None;
     }
-    let expected_bytes = expected.as_bytes();
-    let found_bytes = found.as_bytes();
+    let expected_chars = expected.chars().collect::<Vec<_>>();
+    let found_chars = found.chars().collect::<Vec<_>>();
+    let expected_boundaries = expected
+        .char_indices()
+        .map(|(idx, _)| idx)
+        .chain(std::iter::once(expected.len()))
+        .collect::<Vec<_>>();
+    let found_boundaries = found
+        .char_indices()
+        .map(|(idx, _)| idx)
+        .chain(std::iter::once(found.len()))
+        .collect::<Vec<_>>();
+
     let mut lcp = 0;
-    while lcp < expected_bytes.len()
-        && lcp < found_bytes.len()
-        && expected_bytes[lcp] == found_bytes[lcp]
+    while lcp < expected_chars.len()
+        && lcp < found_chars.len()
+        && expected_chars[lcp] == found_chars[lcp]
     {
         lcp += 1;
     }
     let mut lcs = 0;
-    while expected_bytes.len() > lcp + lcs
-        && found_bytes.len() > lcp + lcs
-        && expected_bytes[expected_bytes.len() - 1 - lcs]
-            == found_bytes[found_bytes.len() - 1 - lcs]
+    while expected_chars.len() > lcp + lcs
+        && found_chars.len() > lcp + lcs
+        && expected_chars[expected_chars.len() - 1 - lcs]
+            == found_chars[found_chars.len() - 1 - lcs]
     {
         lcs += 1;
     }
-    let expected_end = expected_bytes.len().saturating_sub(lcs);
-    let found_end = found_bytes.len().saturating_sub(lcs);
+    let expected_end = expected_chars.len().saturating_sub(lcs);
+    let found_end = found_chars.len().saturating_sub(lcs);
     let expected_span = if expected_end > lcp {
-        lcp..expected_end
+        expected_boundaries[lcp]..expected_boundaries[expected_end]
     } else {
         // The expected params are a prefix of the found params (or vice versa).
         // Point at the first character after the shared prefix, which in the
@@ -98,12 +106,14 @@ fn diff_ranges(expected: &str, found: &str) -> Option<(Range<usize>, Range<usize
         // parameters are missing or extra. Clamp to the string length to avoid
         // producing an out-of-bounds range when the entire string is a prefix
         // (e.g., for Callable types whose return type ends at the string boundary).
-        lcp..(lcp + 1).min(expected_bytes.len())
+        let next = (lcp + 1).min(expected_chars.len());
+        expected_boundaries[lcp]..expected_boundaries[next]
     };
     let found_span = if found_end > lcp {
-        lcp..found_end
+        found_boundaries[lcp]..found_boundaries[found_end]
     } else {
-        lcp..(lcp + 1).min(found_bytes.len())
+        let next = (lcp + 1).min(found_chars.len());
+        found_boundaries[lcp]..found_boundaries[next]
     };
     Some((expected_span, found_span))
 }
@@ -473,6 +483,20 @@ class B(A):
         assert!(
             result.is_some(),
             "Expected a signature diff for differing return types"
+        );
+    }
+
+    #[test]
+    fn test_render_signature_diff_unicode_literal_return_type() {
+        use super::render_signature_diff;
+
+        let expected = "def _money_desc(cls: type[PensionAsset]) -> Literal['累计可领(元)']: ...";
+        let found = "def _money_desc(cls: type[PensionAsset]) -> Literal['90岁累计可领(元)']: ...";
+
+        let result = render_signature_diff(expected, found);
+        assert!(
+            result.is_some(),
+            "Expected a signature diff for differing Unicode return types"
         );
     }
 }
