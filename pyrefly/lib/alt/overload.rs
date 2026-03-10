@@ -507,37 +507,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If there are multiple overloads, use steps 4-6 here to select one:
             // https://typing.python.org/en/latest/spec/overload.html#overload-call-evaluation.
             if matched_overloads.len() > 1 {
-                // Step 4: if any arguments supply an unknown number of args and at least one
-                // overload has a corresponding variadic parameter, eliminate overloads without
-                // this parameter.
+                // Step 4:
+                // * (spec-compliant): if any arguments supply an unknown number of args and at least one overload
+                //   has a corresponding variadic parameter, eliminate overloads without this parameter, and
+                // * (non-spec-compliant): if a fixed number of positional or keyword arguments is supplied and at least one
+                //   overload does not have a corresponding variadic parameter, eliminate overloads with this parameter.
                 let nargs_unknown = args.iter().any(|arg| match arg {
                     CallArg::Arg(_) => false,
                     CallArg::Star(val, _) => {
                         !matches!(val.infer(self, errors), Type::Tuple(Tuple::Concrete(_)))
                     }
                 });
-                if nargs_unknown {
-                    let has_varargs = |o: &CalledOverload| {
-                        matches!(
-                            &o.func.1.signature.params, Params::List(params)
-                            if params.items().iter().any(|p| matches!(p, Param::VarArg(..))))
-                    };
-                    if matched_overloads.iter().any(has_varargs) {
-                        matched_overloads.retain(has_varargs);
-                    }
+                let varargs_compatible = |o: &CalledOverload| {
+                    matches!(
+                        &o.func.1.signature.params, Params::List(params)
+                        if params.items().iter().any(|p| matches!(p, Param::VarArg(..))))
+                        == nargs_unknown
+                };
+                if matched_overloads.iter().any(varargs_compatible) {
+                    matched_overloads.retain(varargs_compatible);
                 }
                 let nkeywords_unknown = keywords.iter().any(|kw| {
                     kw.arg.is_none() && !matches!(kw.value.infer(self, errors), Type::TypedDict(_))
                 });
-                if nkeywords_unknown {
-                    let has_kwargs = |o: &CalledOverload| {
-                        matches!(
+                let kwargs_compatible = |o: &CalledOverload| {
+                    matches!(
                             &o.func.1.signature.params, Params::List(params)
                             if params.items().iter().any(|p| matches!(p, Param::Kwargs(..))))
-                    };
-                    if matched_overloads.iter().any(has_kwargs) {
-                        matched_overloads.retain(has_kwargs);
-                    }
+                        == nkeywords_unknown
+                };
+                if matched_overloads.iter().any(kwargs_compatible) {
+                    matched_overloads.retain(kwargs_compatible);
                 }
             }
             if matched_overloads.len() > 1 {
