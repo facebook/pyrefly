@@ -1050,7 +1050,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 None => {
-                    let ty = self.expr_infer(&x.value, errors);
+                    let ty = self.infer_unpack_mapping_expr(&x.value, errors);
                     // If the unpacked value is an anonymous typed dict, merge its fields.
                     // Later fields override earlier ones with the same name.
                     if can_create_anonymous_typed_dict

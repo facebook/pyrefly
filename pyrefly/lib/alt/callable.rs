@@ -983,7 +983,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for kw in keywords {
             match kw.arg {
                 None => {
-                    let ty = kw.value.infer(self, arg_errors);
+                    let ty = match kw.value {
+                        TypeOrExpr::Expr(expr) => self.infer_unpack_mapping_expr(expr, arg_errors),
+                        TypeOrExpr::Type(ty, _) => ty.clone(),
+                    };
                     if let Type::TypedDict(typed_dict) = ty {
                         for (name, field) in self.typed_dict_fields(&typed_dict).into_iter() {
                             let name = name_owner.push(name);
