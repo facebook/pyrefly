@@ -485,6 +485,38 @@ impl DefinitionsBuilder {
         });
     }
 
+    /// Resolve bare module names in `DunderAllEntry::Module` entries to their
+    /// fully qualified names using import definitions in scope.
+    ///
+    /// When `as_list` sees `foo.__all__`, it creates `ModuleName::from_name("foo")`
+    /// which is a bare unqualified name. If `foo` was imported via a relative import
+    /// (e.g. `from . import foo`), the actual module is fully qualified (e.g. `pkg.foo`).
+    /// This method resolves such bare names using the definitions already collected.
+    fn resolve_module_entries(&self, entries: &mut [DunderAllEntry]) {
+        for entry in entries.iter_mut() {
+            if let DunderAllEntry::Module(_, module_name) = entry {
+                let key = Name::new(module_name.as_str());
+                if let Some(def) = self.inner.definitions.get(&key) {
+                    match &def.style {
+                        DefinitionStyle::Import(base) | DefinitionStyle::ImportAsEq(base) => {
+                            *module_name = base.append(&key);
+                        }
+                        DefinitionStyle::ImportAs(base, original) => {
+                            if ModuleName::from_name(original) == *base {
+                                // `import X as Y` — base is already the full module path
+                                *module_name = *base;
+                            } else {
+                                // `from X import Y as Z` — base is the source module
+                                *module_name = base.append(original);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
     fn stmt(&mut self, x: &Stmt) {
         match x {
             Stmt::Import(x) => {
@@ -600,7 +632,8 @@ impl DefinitionsBuilder {
                     self.expr_lvalue(t);
                     if DunderAllEntry::is_all(t) {
                         match DunderAllEntry::as_list(&x.value) {
-                            Some(entries) => {
+                            Some(mut entries) => {
+                                self.resolve_module_entries(&mut entries);
                                 self.inner.dunder_all = DunderAll {
                                     kind: DunderAllKind::Specified,
                                     entries,
@@ -624,7 +657,8 @@ impl DefinitionsBuilder {
                     && DunderAllEntry::is_all(&x.target)
                 {
                     match DunderAllEntry::as_list(v.as_ref()) {
-                        Some(entries) => {
+                        Some(mut entries) => {
+                            self.resolve_module_entries(&mut entries);
                             self.inner.dunder_all = DunderAll {
                                 kind: DunderAllKind::Specified,
                                 entries,
@@ -660,7 +694,8 @@ impl DefinitionsBuilder {
                 self.named_in_expr(&x.value);
                 if DunderAllEntry::is_all(&x.target) && x.op == Operator::Add {
                     match DunderAllEntry::as_list(&x.value) {
-                        Some(entries) => {
+                        Some(mut entries) => {
+                            self.resolve_module_entries(&mut entries);
                             self.inner.dunder_all.kind = DunderAllKind::Specified;
                             self.inner.dunder_all.entries.extend(entries);
                         }
@@ -704,7 +739,10 @@ impl DefinitionsBuilder {
                     self.inner.dunder_all.kind = DunderAllKind::Specified;
                     match attr.as_str() {
                         "extend" => match DunderAllEntry::as_list(&arguments.args[0]) {
-                            Some(entries) => self.inner.dunder_all.entries.extend(entries),
+                            Some(mut entries) => {
+                                self.resolve_module_entries(&mut entries);
+                                self.inner.dunder_all.entries.extend(entries);
+                            }
                             None => {
                                 self.inner.dunder_all = DunderAll {
                                     kind: DunderAllKind::Unresolvable(arguments.args[0].range()),

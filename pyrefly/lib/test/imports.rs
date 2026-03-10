@@ -1343,6 +1343,48 @@ assert_type(y, str)
 "#,
 );
 
+fn env_all_relative_module_ref() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "pkg",
+        "pkg/__init__.py",
+        r#"
+from .sub import *
+"#,
+    );
+    t.add_with_path(
+        "pkg.sub",
+        "pkg/sub/__init__.py",
+        r#"
+from . import _api
+from ._api import *
+__all__ = _api.__all__
+"#,
+    );
+    t.add_with_path(
+        "pkg.sub._api",
+        "pkg/sub/_api.py",
+        r#"
+__all__ = ["convolve", "medfilt"]
+def convolve(x: list[float]) -> list[float]: return x
+def medfilt(x: list[float]) -> list[float]: return x
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_all_relative_module_ref,
+    env_all_relative_module_ref(),
+    r#"
+from typing import assert_type
+import pkg
+# __all__ = _api.__all__ should resolve _api to pkg.sub._api
+assert_type(pkg.convolve([1.0]), list[float])
+assert_type(pkg.medfilt([1.0]), list[float])
+"#,
+);
+
 fn env_relative_import_in_subdirectory() -> TestEnv {
     let mut t = TestEnv::new();
     t.add_with_path("test.foo", "test/foo.py", "from .foo2 import bar");
