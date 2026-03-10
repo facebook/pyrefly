@@ -3468,7 +3468,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::Tuple(tup) => tup
                 .elts
                 .iter()
-                .map(|e| check_exception_type(self.expr_infer(e, errors), e.range()))
+                .flat_map(|e| match e {
+                    Expr::Starred(starred) => self.decompose_except_types(
+                        self.expr_infer(&starred.value, errors),
+                        e.range(),
+                        &check_exception_type,
+                    ),
+                    _ => vec![check_exception_type(self.expr_infer(e, errors), e.range())],
+                })
                 .collect(),
             _ => {
                 let exception_types = self.expr_infer(ann, errors);

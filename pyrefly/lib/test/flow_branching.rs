@@ -349,6 +349,21 @@ def handle(
 );
 
 testcase!(
+    test_exception_handler_star_unpacking,
+    r#"
+import sys
+from typing import assert_type
+
+EXTRA_ERRORS: tuple[type[Exception], ...] = (RuntimeError,) if sys.version_info < (3, 13) else ()
+
+try:
+    pass
+except (ValueError, *EXTRA_ERRORS) as e:
+    assert_type(e, ValueError | Exception)
+"#,
+);
+
+testcase!(
     test_exception_group_handler,
     r#"
 from typing import reveal_type
