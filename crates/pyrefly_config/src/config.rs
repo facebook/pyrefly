@@ -78,6 +78,56 @@ pub struct SubConfig {
     pub settings: ConfigBase,
 }
 
+#[cfg(feature = "jsonschema")]
+impl schemars::JsonSchema for SubConfig {
+    fn schema_name() -> String {
+        "SubConfig".to_owned()
+    }
+
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        use schemars::schema::*;
+
+        // Use T::json_schema(generator) directly instead of generator.subschema_for::<T>()
+        // to get the inline schema rather than a $ref, so we can merge properties.
+        let config_base_schema = <ConfigBase as schemars::JsonSchema>::json_schema(generator);
+        let mut schema_obj = match config_base_schema {
+            schemars::schema::Schema::Object(obj) => obj,
+            _ => SchemaObject::default(),
+        };
+
+        // Ensure we have an object validation to add properties to
+        if schema_obj.object.is_none() {
+            schema_obj.object = Some(Box::new(ObjectValidation::default()));
+        }
+
+        // Add the "matches" property
+        if let Some(ref mut obj) = schema_obj.object {
+            obj.properties.insert(
+                "matches".to_owned(),
+                generator.subschema_for::<Glob>(),
+            );
+            obj.required.insert("matches".to_owned());
+        }
+
+        if let Some(ref mut metadata) = schema_obj.metadata {
+            metadata.description = Some(
+                "Sub-configuration that overrides settings for files matching a glob pattern."
+                    .to_owned(),
+            );
+        } else {
+            schema_obj.metadata = Some(Box::new(Metadata {
+                description: Some(
+                    "Sub-configuration that overrides settings for files matching a glob pattern."
+                        .to_owned(),
+                ),
+                ..Default::default()
+            }));
+        }
+
+        schema_obj.into()
+    }
+}
+
 impl SubConfig {
     fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
         self.matches = self.matches.clone().from_root(config_root);
@@ -520,6 +570,266 @@ pub struct ConfigFile {
     /// may speed up LSP operations on large projects.
     #[serde(default, skip_serializing_if = "crate::util::skip_default_false")]
     pub skip_lsp_config_indexing: bool,
+}
+
+#[cfg(feature = "jsonschema")]
+impl schemars::JsonSchema for ConfigFile {
+    fn schema_name() -> String {
+        "ConfigFile".to_owned()
+    }
+
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        use schemars::schema::*;
+
+        let mut properties = schemars::Map::new();
+        let required = std::collections::BTreeSet::new();
+
+        // --- Direct fields ---
+
+        properties.insert(
+            "project-includes".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::Array.into()),
+                array: Some(Box::new(ArrayValidation {
+                    items: Some(SingleOrVec::Single(Box::new(
+                        generator.subschema_for::<String>(),
+                    ))),
+                    ..Default::default()
+                })),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "Files that should be counted as sources (e.g. user-space code).".to_owned(),
+                    ),
+                    default: Some(serde_json::json!(["**/*.py", "**/*.pyi"])),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        properties.insert(
+            "project-excludes".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::Array.into()),
+                array: Some(Box::new(ArrayValidation {
+                    items: Some(SingleOrVec::Single(Box::new(
+                        generator.subschema_for::<String>(),
+                    ))),
+                    ..Default::default()
+                })),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "Files that should be excluded as sources. Takes precedence over project-includes."
+                            .to_owned(),
+                    ),
+                    default: Some(serde_json::json!([])),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        properties.insert(
+            "disable-project-excludes-heuristics".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::Boolean.into()),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "Whether to filter out the required excludes or filter things in your site package path."
+                            .to_owned(),
+                    ),
+                    default: Some(serde_json::json!(false)),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        properties.insert(
+            "search-path".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::Array.into()),
+                array: Some(Box::new(ArrayValidation {
+                    items: Some(SingleOrVec::Single(Box::new(
+                        generator.subschema_for::<String>(),
+                    ))),
+                    ..Default::default()
+                })),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "The list of directories where imports are imported from.".to_owned(),
+                    ),
+                    default: Some(serde_json::json!([])),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        properties.insert(
+            "disable-search-path-heuristics".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::Boolean.into()),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "Disable Pyrefly default heuristics around constructing a modified search path."
+                            .to_owned(),
+                    ),
+                    default: Some(serde_json::json!(false)),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        properties.insert(
+            "typeshed-path".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::String.into()),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "Override the bundled typeshed with a custom path.".to_owned(),
+                    ),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        properties.insert(
+            "baseline".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::String.into()),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "Path to baseline file for comparing type errors. Errors matching the baseline are suppressed."
+                            .to_owned(),
+                    ),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        properties.insert(
+            "sub-config".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::Array.into()),
+                array: Some(Box::new(ArrayValidation {
+                    items: Some(SingleOrVec::Single(Box::new(
+                        generator.subschema_for::<SubConfig>(),
+                    ))),
+                    ..Default::default()
+                })),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "Sub-configs that can override specific settings based on path matching."
+                            .to_owned(),
+                    ),
+                    default: Some(serde_json::json!([])),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        properties.insert(
+            "use-ignore-files".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::Boolean.into()),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "Whether to respect ignore files (.gitignore, .ignore, .git/exclude)."
+                            .to_owned(),
+                    ),
+                    default: Some(serde_json::json!(true)),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        properties.insert(
+            "build-system".to_owned(),
+            generator.subschema_for::<BuildSystem>(),
+        );
+
+        properties.insert(
+            "skip-lsp-config-indexing".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::Boolean.into()),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "Whether to let Pyrefly try to index the project's files. Disabling may speed up LSP operations on large projects."
+                            .to_owned(),
+                    ),
+                    default: Some(serde_json::json!(false)),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        // --- Flattened structs: merge their properties ---
+
+        fn merge_schema_properties(
+            properties: &mut schemars::Map<String, schemars::schema::Schema>,
+            schema: schemars::schema::Schema,
+        ) {
+            if let schemars::schema::Schema::Object(obj) = schema {
+                if let Some(obj_validation) = obj.object {
+                    for (key, val) in obj_validation.properties {
+                        properties.insert(key, val);
+                    }
+                }
+            }
+        }
+
+        // Use T::json_schema(generator) directly instead of generator.subschema_for::<T>()
+        // to get the inline schema rather than a $ref, so we can merge flattened properties.
+        merge_schema_properties(
+            &mut properties,
+            <Interpreters as schemars::JsonSchema>::json_schema(generator),
+        );
+        merge_schema_properties(
+            &mut properties,
+            <PythonEnvironment as schemars::JsonSchema>::json_schema(generator),
+        );
+        merge_schema_properties(
+            &mut properties,
+            <ConfigBase as schemars::JsonSchema>::json_schema(generator),
+        );
+
+        SchemaObject {
+            instance_type: Some(InstanceType::Object.into()),
+            object: Some(Box::new(ObjectValidation {
+                properties,
+                required,
+                additional_properties: Some(Box::new(Schema::Bool(true))),
+                ..Default::default()
+            })),
+            metadata: Some(Box::new(Metadata {
+                title: Some("Pyrefly configuration".to_owned()),
+                description: Some(
+                    "Configuration file schema for Pyrefly, a fast Python type checker."
+                        .to_owned(),
+                ),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .into()
+    }
 }
 
 impl Default for ConfigFile {

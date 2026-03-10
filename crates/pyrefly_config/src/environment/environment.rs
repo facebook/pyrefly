@@ -78,6 +78,62 @@ pub struct PythonEnvironment {
     pub interpreter_stdlib_path: Vec<PathBuf>,
 }
 
+#[cfg(feature = "jsonschema")]
+impl schemars::JsonSchema for PythonEnvironment {
+    fn schema_name() -> String {
+        "PythonEnvironment".to_owned()
+    }
+
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        use schemars::schema::*;
+
+        let mut properties = schemars::Map::new();
+
+        properties.insert(
+            "python-platform".to_owned(),
+            generator.subschema_for::<Option<PythonPlatform>>(),
+        );
+        properties.insert(
+            "python-version".to_owned(),
+            generator.subschema_for::<Option<PythonVersion>>(),
+        );
+        properties.insert(
+            "site-package-path".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::Array.into()),
+                array: Some(Box::new(ArrayValidation {
+                    items: Some(SingleOrVec::Single(Box::new(
+                        generator.subschema_for::<String>(),
+                    ))),
+                    ..Default::default()
+                })),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "A list of directory paths describing roots from which imports should be found and imported from."
+                            .to_owned(),
+                    ),
+                    default: Some(serde_json::json!([])),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        // interpreter_site_package_path and interpreter_stdlib_path are serde(skip)
+
+        SchemaObject {
+            instance_type: Some(InstanceType::Object.into()),
+            object: Some(Box::new(ObjectValidation {
+                properties,
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .into()
+    }
+}
+
 impl PythonEnvironment {
     fn pyrefly_default() -> Self {
         let mut env = Self::default();
