@@ -89,6 +89,20 @@ fn has_any_args_and_kwargs(args: &[Param]) -> bool {
     has_vararg_any && has_kwargs_any
 }
 
+fn params_have_any_args_and_kwargs(params: &Params) -> bool {
+    match params {
+        Params::List(args) => has_any_args_and_kwargs(args.items()),
+        Params::Ellipsis | Params::Materialization => false,
+        Params::ParamSpec(prefix, pspec) => {
+            prefix.is_empty()
+                && matches!(
+                    pspec,
+                    Type::ParamSpecValue(args) if has_any_args_and_kwargs(args.items())
+                )
+        }
+    }
+}
+
 fn all<T>(
     it: impl Iterator<Item = T>,
     mut check: impl FnMut(T) -> Result<(), SubsetError>,
@@ -436,7 +450,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         l_params: &Params,
         u_params: &Params,
     ) -> Result<(), SubsetError> {
-        match (l_params, u_params) {
+        let result = match (l_params, u_params) {
             (Params::Ellipsis, Params::ParamSpec(_, pspec)) => {
                 self.is_subset_eq(&Type::Ellipsis, pspec)
             }
@@ -460,6 +474,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (_, Params::Materialization) => {
                 self.is_subset_params(l_params, &Params::List(ParamList::everything()))
             }
+        };
+        match result {
+            Err(_)
+                if !self.solver.strict_callable_subtyping
+                    && (params_have_any_args_and_kwargs(l_params)
+                        || params_have_any_args_and_kwargs(u_params)) =>
+            {
+                Ok(())
+            }
+            _ => result,
         }
     }
 

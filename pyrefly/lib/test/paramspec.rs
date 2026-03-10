@@ -530,6 +530,22 @@ def test[**P](v: Callable[P, None]):
 );
 
 testcase!(
+    test_functools_partial_reassignment_paramspec,
+    r#"
+import functools
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+def run_sync(func: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    func = functools.partial(func, *args, **kwargs)
+    return func()
+"#,
+);
+
+testcase!(
     test_param_spec_empty,
     r#"
 def foo[**P](x: int = 0, *args: P.args, **kwargs: P.kwargs):

@@ -1354,7 +1354,6 @@ def g():
 );
 
 testcase!(
-    bug = "conformance: Protocol with ParamSpec[...] should be compatible with Protocol using *args: Any, **kwargs: Any",
     test_protocol_paramspec_ellipsis,
     r#"
 from typing import Any, Protocol, ParamSpec
@@ -1375,8 +1374,8 @@ class Proto7(Protocol):
     def __call__(self, a: float, /, b: int, *, k: str, m: str) -> None: ...
 
 def test(p4: Proto4[...], p7: Proto7):
-    # Both should be OK per conformance spec - pyrefly incorrectly errors
-    ok10: Proto3 = p4  # E: `Proto4[Ellipsis]` is not assignable to `Proto3`
+    # Both should be OK per conformance spec.
+    ok10: Proto3 = p4
     ok11: Proto6 = p7
 "#,
 );

@@ -1270,7 +1270,7 @@ def f3(x: Callable[[], None]) -> str: ...
 def f3(x: Any) -> int | str: ...
 
 def g(x: Callable[..., None], y: Callable[[Callable[..., None]], None]):
-    assert_type(f1(x), Any)
+    assert_type(f1(x), int)
     assert_type(f2(y), int)
     assert_type(f3(x), int)
     "#,
