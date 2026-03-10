@@ -2220,3 +2220,26 @@ def g(x: float) -> float:
     return max(0, x)  # E: No matching overload
     "#,
 );
+
+testcase!(
+    test_index_into_sequence_of_str,
+    r#"
+from typing import assert_type, Sequence
+def f(x: Sequence[str], idx):
+    # idx may be a slice
+    assert_type(x[idx], Sequence[str])
+    "#,
+);
+
+testcase!(
+    test_bool_and_unknown,
+    r#"
+from typing import assert_type
+def f(x):
+    y = True
+    y &= x
+    # The result is either a bool or an int depending on whether x is a bool or an int,
+    # and bool is a subtype of int.
+    assert_type(y, int)
+    "#,
+);

@@ -1547,7 +1547,7 @@ def ndim(shape: tuple[int, ...]) -> int:
     return len(shape)
 
 def demo_gradual(s: tuple[Any, ...]):
-    assert_type(ndim(s), Any)
+    assert_type(ndim(s), int)
 
 def demo_one(s: tuple[int]):
     assert_type(ndim(s), Literal[1])
@@ -1597,7 +1597,7 @@ def test(x: A[None], y: A[Any]) -> None:
     assert_type(op(x, x), A[None])
     assert_type(op(x, y), A[None])
     assert_type(op(y, x), A[None])
-    assert_type(op(y, y), Any)
+    assert_type(op(y, y), A[Any])
     "#,
 );
 

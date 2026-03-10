@@ -583,40 +583,74 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let _ = matched_overloads.split_off(split_point);
                 }
             }
-            // Step 5, part 2: are all remaining return types equivalent to one another?
-            // If not, the call is ambiguous.
-            let mut matched_overloads = matched_overloads.into_iter();
-            let first_overload = matched_overloads.next().unwrap();
-            if matched_overloads.any(|o| !self.is_equivalent(&first_overload.res, &o.res)) {
-                return (
-                    CalledOverload {
-                        res: self.heap.mk_any_implicit(),
-                        ..first_overload
-                    },
-                    true,
-                );
+            // The spec now says to do the following:
+            //   Step 5, part 2: are all remaining return types equivalent to one another?
+            //                   If not, the call is ambiguous. Return Any.
+            //   Step 6: if there are still multiple matches, pick the first one.
+            // However, neither mypy nor pyright follows this part of the spec. When the call is
+            // ambiguous, mypy does an approximate join of the return types, while pyright picks
+            // the first match. In practice, these often lead to the same return type, and many
+            // third-party libraries have come to rely on the intersection of mypy and pyright's
+            // behavior. So we do the following for ecosystem compatibility:
+            //
+            // Step 6 (non-spec-compliant): does there exist a return type such that all
+            // materializations of every other return type are assignable to it? If so, use this
+            // return type. Else, return Any.
+            //
+            // We check materializations rather than assignability so that we end up with the most
+            // "general" return type. E.g., if the candidates are `A[None]` and `A[Any]`, we want
+            // to select `A[Any]`.
+            //
+            // First, find a candidate return type.
+            let mut candidate = 0;
+            for (i, o) in matched_overloads.iter().enumerate().skip(1) {
+                if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
+                    candidate = i;
+                }
             }
-            // Step 6: if there are still multiple matches, pick the first one.
-            // Now that we've selected an overload, use the hint to contextually type the arguments.
-            let contextual_overload = self.call_overload(
-                &first_overload.func,
-                metadata,
-                self_obj,
-                args,
-                keywords,
-                arguments_range,
-                &self.error_collector(),
-                hint,
-                ctor_targs,
-            );
-            (
+            // We've already checked every return type after the candidate.
+            // Check every return type before the candidate.
+            for o in matched_overloads.iter().take(candidate) {
+                if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
+                    // Candidate is no good, return Any. Arbitrarily use the first overload as the matched one.
+                    let first_overload = matched_overloads
+                        .into_iter()
+                        .next()
+                        .expect("Expected at least one overload");
+                    return (
+                        CalledOverload {
+                            res: self.heap.mk_any_implicit(),
+                            ..first_overload
+                        },
+                        true,
+                    );
+                }
+            }
+            // Candidate is good, use it.
+            let selected_overload = {
+                let overload = matched_overloads
+                    .into_iter()
+                    .nth(candidate)
+                    .expect("Could not find selected overload");
+                // Now that we've selected an overload, use the hint to contextually type the arguments.
+                let contextual_overload = self.call_overload(
+                    &overload.func,
+                    metadata,
+                    self_obj,
+                    args,
+                    keywords,
+                    arguments_range,
+                    &self.error_collector(),
+                    hint,
+                    ctor_targs,
+                );
                 if contextual_overload.call_errors.is_empty() {
                     contextual_overload
                 } else {
-                    first_overload
-                },
-                true,
-            )
+                    overload
+                }
+            };
+            (selected_overload, true)
         }
     }
 
