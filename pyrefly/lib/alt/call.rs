@@ -797,8 +797,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .solver()
                 .freshen_class_targs(cls.targs_mut(), self.uniques);
 
-            let matched_hint = self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), hint);
-            self.solver().generalize_class_targs(cls.targs_mut());
+            let matched_hint = if hint.any(|ty| match ty {
+                Type::ClassType(cls) | Type::SelfType(cls) => {
+                    self.get_metadata_for_class(cls.class_object()).is_protocol()
+                }
+                _ => false,
+            }) {
+                false
+            } else {
+                let matched_hint = self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), hint);
+                self.solver().generalize_class_targs(cls.targs_mut());
+                matched_hint
+            };
             (vs, matched_hint)
         } else {
             (QuantifiedHandle::empty(), false)
@@ -974,6 +984,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &errors,
             );
         }
+        self.solver().generalize_class_targs(cls.targs_mut());
         self.solver()
             .finish_class_targs(cls.targs_mut(), self.uniques);
         let specialization_errors = self
