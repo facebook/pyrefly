@@ -2004,6 +2004,24 @@ assert_type(Foo[0], str)
 );
 
 testcase!(
+    test_class_getitem_classmethod_does_not_double_bind_cls,
+    r#"
+from types import GenericAlias
+from typing import assert_type
+
+class SparseBase:
+    @classmethod
+    def __class_getitem__(cls, arg: object, /) -> GenericAlias:
+        return GenericAlias(cls, arg)
+
+class SparseMatrix(SparseBase):
+    pass
+
+assert_type(SparseMatrix[int], GenericAlias)
+"#,
+);
+
+testcase!(
     test_class_metaclass_getitem,
     r#"
 from typing import assert_type

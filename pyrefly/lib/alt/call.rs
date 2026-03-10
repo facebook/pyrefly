@@ -500,7 +500,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn make_call_target_and_call(
+    pub(crate) fn make_call_target_and_call(
         &self,
         callee_ty: Type,
         method_name: &Name,
