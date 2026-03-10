@@ -640,6 +640,7 @@ impl<'a> BindingsBuilder<'a> {
                                     self.synthesize_typing_new_type(
                                         name,
                                         parent,
+                                        &mut call.func,
                                         new_type_name,
                                         base,
                                     );

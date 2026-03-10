@@ -1221,11 +1221,13 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         name: &ExprName,
         parent: &NestingContext,
+        func: &mut Expr,
         new_type_name: &mut Expr,
         base: &mut Expr,
     ) {
         let class_name = Ast::expr_name_identifier(name.clone());
         let (mut class_object, class_indices) = self.class_object_and_indices(&class_name);
+        self.ensure_expr(func, class_object.usage());
         self.ensure_expr(new_type_name, class_object.usage());
         self.check_functional_definition_name(&name.id, new_type_name);
         self.ensure_type(base, &mut None);
