@@ -373,8 +373,7 @@ def f(x1: list[str], x2: list[LiteralString]):
     x3 = []
     assert_type(", ".join(x1), str)
     assert_type(", ".join(x2), LiteralString)
-    # This is wrong: we should not assume `join`'s `LiteralString` overload is matched.
-    reveal_type(", ".join(x3))  # E: revealed type: LiteralString
+    reveal_type(", ".join(x3))  # E: revealed type: Unknown
     "#,
 );
 
