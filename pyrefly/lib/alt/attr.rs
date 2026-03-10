@@ -24,8 +24,10 @@ use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_types::types::Var;
 use pyrefly_util::suggest::best_suggestion;
+use ruff_python_ast::Expr;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
@@ -35,6 +37,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
+use crate::alt::class::class_field::DescriptorBase;
 use crate::alt::expr::TypeOrExpr;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyExport;
@@ -564,6 +567,67 @@ impl ClassBase {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn descriptor_base_for_unpacking(attr_base: AttributeBase1) -> Option<DescriptorBase> {
+        match attr_base {
+            AttributeBase1::ClassInstance(cls)
+            | AttributeBase1::Quantified(_, cls)
+            | AttributeBase1::SelfType(cls)
+            | AttributeBase1::SuperInstance(cls, _) => Some(DescriptorBase::Instance(cls)),
+            AttributeBase1::ClassObject(cls) => {
+                Some(DescriptorBase::ClassDef(cls.class_object().dupe()))
+            }
+            AttributeBase1::TensorInstance(tensor) => {
+                Some(DescriptorBase::Instance(tensor.base_class))
+            }
+            _ => None,
+        }
+    }
+
+    /// Infer the type to use for `**expr` mapping checks.
+    ///
+    /// Normal attribute reads intentionally do not treat annotation-only fields with descriptor
+    /// types as descriptors. For unpacking, that leads to false positives for ORM-style fields
+    /// whose runtime value is produced by `__get__`. When the unpacked expression is an
+    /// attribute access and its raw field type defines `__get__`, use the descriptor getter
+    /// result if it behaves like a mapping.
+    pub fn infer_unpack_mapping_expr(&self, x: &Expr, errors: &ErrorCollector) -> Type {
+        let ty = self.expr_infer(x, errors);
+        if matches!(ty, Type::TypedDict(_)) || self.unwrap_mapping(&ty).is_some() {
+            return ty;
+        }
+        let Expr::Attribute(attr) = x else {
+            return ty;
+        };
+        let base_ty = self.expr_infer(&attr.value, errors);
+        let mut descriptor_tys = Vec::new();
+        for (found, on) in self.lookup_attr(&base_ty, &attr.attr.id).found {
+            let Some(base) = Self::descriptor_base_for_unpacking(on) else {
+                continue;
+            };
+            let raw_ty = match found {
+                Attribute::ClassAttribute(ClassAttribute::ReadWrite(raw_ty))
+                | Attribute::ClassAttribute(ClassAttribute::ReadOnly(raw_ty, _)) => raw_ty,
+                _ => continue,
+            };
+            if let Some(descriptor_ty) = self.resolve_descriptor_get_from_raw_type(
+                &attr.attr.id,
+                &raw_ty,
+                base,
+                x.range(),
+                errors,
+            ) && (matches!(descriptor_ty, Type::TypedDict(_))
+                || self.unwrap_mapping(&descriptor_ty).is_some())
+            {
+                descriptor_tys.push(descriptor_ty);
+            }
+        }
+        if descriptor_tys.is_empty() {
+            ty
+        } else {
+            self.unions(descriptor_tys)
+        }
+    }
+
     /// Compute the get (i.e. read) type of an attribute. If the attribute cannot be found or read,
     /// error and return `Any`. Use this to infer the type of a direct attribute fetch.
     pub fn type_of_attr_get(
