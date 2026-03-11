@@ -48,6 +48,7 @@ use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
@@ -140,6 +141,7 @@ use crate::state::loader::FindingOrError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::Callable;
+use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
@@ -5244,16 +5246,52 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.solve_function_binding(def, &mut pred, class_meta.as_ref(), errors)
             }
             Binding::Import(x) => self.solve_import(x, errors),
-            Binding::ClassDef(x, _decorators) => match &self.get_idx(*x).0 {
+            Binding::ClassDef(x, decorators) => match &self.get_idx(*x).0 {
                 None => self.heap.mk_any_implicit(),
                 Some(cls) => {
-                    // TODO: analyze the class decorators. At the moment, we don't actually support any type-level
-                    // analysis of class decorators (the decorators we do support like dataclass-related ones are
-                    // handled via custom bindings).
-                    //
-                    // Note that all decorators have their own binding so they are still type checked for errors
-                    // *inside* the decorator, we just don't analyze the application.
-                    self.heap.mk_class_def(cls.dupe())
+                    let mut ty = self.heap.mk_class_def(cls.dupe());
+                    if !self.module().path().is_interface() {
+                        for decorator_key in decorators.iter().rev() {
+                            let decorator = self.get_idx(*decorator_key);
+                            if decorator.ty.dataclass_transform_metadata().is_some()
+                                || matches!(
+                                    &decorator.ty,
+                                    Type::KwCall(call)
+                                        if call.has_function_kind(FunctionKind::DataclassTransform)
+                                            || call
+                                                .func_metadata
+                                                .flags
+                                                .dataclass_transform_metadata
+                                                .is_some()
+                                )
+                            {
+                                continue;
+                            }
+                            let range = self.bindings().idx_to_key(*decorator_key).range();
+                            let call_target = self.as_call_target_or_error(
+                                decorator.ty.clone(),
+                                CallStyle::FreeForm,
+                                range,
+                                errors,
+                                None,
+                            );
+                            let arg = CallArg::ty(&ty, range);
+                            ty = self.call_infer(
+                                call_target,
+                                &[arg],
+                                &[],
+                                range,
+                                errors,
+                                None,
+                                None,
+                                None,
+                            );
+                            if self.untype_opt(ty.clone(), range, errors).is_some() {
+                                ty = self.heap.mk_class_def(cls.dupe());
+                            }
+                        }
+                    }
+                    ty
                 }
             },
             Binding::AnnotatedType(ann, val) => {
@@ -5706,6 +5744,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Some(aliased_type)
             }
+            Type::KwCall(call) => self.untype_opt(call.return_ty, range, errors),
             // `as_type_alias` untypes a type alias in order to validate that it is a legal type.
             // If we hit a recursive reference to the alias while untyping it, delay the untyping
             // to avoid a cycle.
@@ -6107,6 +6146,77 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                     .collect();
                 Type::ParamSpecValue(ParamList::new(elts))
+            }
+            // Special case: integer literals in type argument or TypeVar default context with
+            // native tensor shapes. These can be used for Dim-bounded parameters
+            // (e.g., LinearLayer[6, 9]) or TypeVar defaults (e.g., class Conv2d[..., S = 1]).
+            // We convert them directly to Type::Size to distinguish from Literal[6].
+            Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral { value, .. })
+                if matches!(
+                    type_form_context,
+                    TypeFormContext::TypeArgument | TypeFormContext::TypeVarDefault
+                ) && self.solver().tensor_shapes =>
+            {
+                match value {
+                    ruff_python_ast::Number::Int(i) => {
+                        if let Some(n) = i.as_i64() {
+                            Type::Size(SizeExpr::Literal(n))
+                        } else {
+                            // Integer too large to fit in i64, fall back to error
+                            let inferred_ty = self.expr_infer(x, errors);
+                            self.untype(inferred_ty, x.range(), errors)
+                        }
+                    }
+                    _ => {
+                        // For non-integer numbers (float, complex), fall through to the generic path
+                        let inferred_ty = self.expr_infer(x, errors);
+                        self.untype(inferred_ty, x.range(), errors)
+                    }
+                }
+            }
+            Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => {
+                let key = Key::BoundName(ShortIdentifier::expr_name(name));
+                let inferred_ty = if let Some(idx) =
+                    self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))
+                {
+                    let mut binding = self.bindings().get(idx);
+                    while let Binding::Forward(next) | Binding::ForwardToFirstUse(next) = binding {
+                        binding = self.bindings().get(*next);
+                    }
+                    if let Binding::ClassDef(class_idx, _) = binding
+                        && let Some(cls) = &self.get_idx(*class_idx).0
+                    {
+                        self.heap.mk_class_def(cls.dupe())
+                    } else if let Binding::PossibleLegacyTParam(key, _) = binding
+                        && let LegacyTypeParameterLookup::NotParameter(ty) = &*self.get_idx(*key)
+                        && matches!(ty, Type::KwCall(_))
+                    {
+                        ty.clone()
+                    } else {
+                        self.expr_infer(x, errors)
+                    }
+                } else {
+                    self.expr_infer(x, errors)
+                };
+                if type_form_context == TypeFormContext::BaseClassList
+                    && let Type::TypeAlias(ta) = &inferred_ty
+                    && let ta = self.get_type_alias(ta)
+                    && ta.style == TypeAliasStyle::Scoped
+                {
+                    return self.error(
+                        errors,
+                        x.range(),
+                        ErrorKind::InvalidInheritance,
+                        format!(
+                            "Cannot use scoped type alias `{}` as a base class. Use a legacy type alias instead: `{}: TypeAlias = {}`",
+                            ta.name,
+                            ta.name,
+                            self.for_display(ta.as_type())
+                        ),
+                    );
+                } else {
+                    self.untype(inferred_ty, x.range(), errors)
+                }
             }
             _ => {
                 let inferred_ty = self.expr_infer(x, errors);
