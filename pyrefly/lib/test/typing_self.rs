@@ -361,3 +361,15 @@ class C:
         return cls.__new__(C) # E: Argument `type[C]` is not assignable to parameter `cls` with type `type[Self@C]` in function `object.__new__`
 "#,
 );
+
+// This is technically correct(?) but confusing to users, due to early pinning on the Self type.
+testcase!(
+    test_self_in_container_pinning,
+    r#"
+class C:
+    def foo(self, other: C) -> list:
+        xs = [self]
+        xs.append(other) # E: Argument `C` is not assignable to parameter `object` with type `Self@C` in function `list.append`
+        return xs
+"#,
+);
