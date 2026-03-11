@@ -418,28 +418,30 @@ impl<'a> DefinitionsBuilder<'a> {
             self.stmt(x);
             // PEP 257-style variable docstrings: a standalone string literal expression
             // immediately following an assignment statement is treated as the variable's docstring.
-            if let Stmt::Assign(_) | Stmt::AnnAssign(_) = x
-                && let Some(Stmt::Expr(e)) = xs.get(i + 1)
+            if let Some(Stmt::Expr(e)) = xs.get(i + 1)
                 && let Expr::StringLiteral(_) = e.value.as_ref()
             {
-                self.set_var_docstring(x, e.range());
+                match x {
+                    Stmt::Assign(assign) => {
+                        self.set_var_docstring(assign.targets.iter(), e.range())
+                    }
+                    Stmt::AnnAssign(assign) => {
+                        self.set_var_docstring([assign.target.as_ref()], e.range())
+                    }
+                    _ => {}
+                }
             }
         }
     }
 
-    /// Set `docstring_range` on all names defined by `assign_stmt`.
-    fn set_var_docstring(&mut self, assign_stmt: &Stmt, docstring_range: TextRange) {
+    /// Set `docstring_range` on all names defined by the given assignment targets.
+    fn set_var_docstring<'b, I>(&mut self, targets: I, docstring_range: TextRange)
+    where
+        I: IntoIterator<Item = &'b Expr>,
+    {
         let mut names = Vec::new();
-        match assign_stmt {
-            Stmt::Assign(x) => {
-                for t in &x.targets {
-                    Ast::expr_lvalue(t, &mut |n: &ExprName| names.push(n.id.clone()));
-                }
-            }
-            Stmt::AnnAssign(x) => {
-                Ast::expr_lvalue(&x.target, &mut |n: &ExprName| names.push(n.id.clone()));
-            }
-            _ => {}
+        for target in targets {
+            Ast::expr_lvalue(target, &mut |n: &ExprName| names.push(n.id.clone()));
         }
         for name in names {
             if let Some(def) = self.inner.definitions.get_mut(&name) {
