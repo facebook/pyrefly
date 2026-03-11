@@ -509,7 +509,7 @@ impl<'a> BindingsBuilder<'a> {
 
     /// Evaluate the statements and update the bindings.
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
-    pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
+    pub fn stmt(&mut self, x: Stmt, parent: &NestingContext, var_docstring: Option<TextRange>) {
         self.with_semantic_checker(|semantic, context| semantic.visit_stmt(&x, context));
 
         // Clear last_stmt_expr at the start - will be set again if this is a StmtExpr
@@ -653,6 +653,7 @@ impl<'a> BindingsBuilder<'a> {
                         &Ast::expr_name_identifier(name.clone()),
                         x.value,
                         None,
+                        var_docstring,
                     );
                 } else {
                     self.bind_targets_with_value(&mut x.targets, &mut x.value);
@@ -690,6 +691,7 @@ impl<'a> BindingsBuilder<'a> {
                             &name,
                             value,
                             Some((&x.annotation, ann_idx)),
+                            var_docstring,
                         ),
                         None => self.bind_definition(
                             &name,
@@ -778,6 +780,7 @@ impl<'a> BindingsBuilder<'a> {
                                 value,
                             }),
                             parent,
+                            var_docstring,
                         ),
                         None => {
                             self.bind_target_no_expr(&mut target, &|_| {

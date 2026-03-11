@@ -257,10 +257,6 @@ pub struct BindingsBuilder<'a> {
     lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
     /// See `BindingsInner::subsequently_initialized`.
     subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
-    /// The range of a PEP 257-style variable docstring (a standalone string literal
-    /// immediately following the current assignment statement), if any. Set by `stmts`
-    /// with look-ahead before calling `stmt`, consumed by `bind_single_name_assign`.
-    pub pending_var_docstring: Option<TextRange>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -516,7 +512,6 @@ impl Bindings {
             deferred_bound_names: Vec::new(),
             lambda_yield_keys: Vec::new(),
             subsequently_initialized: SmallSet::new(),
-            pending_var_docstring: None,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -948,17 +943,17 @@ impl<'a> BindingsBuilder<'a> {
         let mut iter = xs.into_iter().peekable();
         while let Some(x) = iter.next() {
             // PEP 257-style variable docstrings: a standalone string literal immediately
-            // following an assignment is the variable's docstring. Set it before `stmt`
-            // so `bind_single_name_assign` can read it; clear it after.
-            if let Stmt::Assign(_) | Stmt::AnnAssign(_) = x
+            // following an assignment is the variable's docstring.
+            let var_docstring = if matches!(x, Stmt::Assign(_) | Stmt::AnnAssign(_))
                 && let Some(Stmt::Expr(e)) = iter.peek()
                 && let Expr::StringLiteral(_) = e.value.as_ref()
             {
-                self.pending_var_docstring = Some(e.range());
-            }
+                Some(e.range())
+            } else {
+                None
+            };
 
-            self.stmt(x, parent);
-            self.pending_var_docstring = None;
+            self.stmt(x, parent, var_docstring);
         }
     }
 
