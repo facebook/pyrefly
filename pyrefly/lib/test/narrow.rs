@@ -1885,6 +1885,23 @@ def test(x: Literal["a", "b", "c", "d"]) -> None:
 );
 
 testcase!(
+    test_narrow_in_frozenset_literal_iterable,
+    r#"
+from typing import TypedDict
+
+VALUES = dict(
+    autoremove="The following packages will be REMOVED",
+    autoclean="Del ",
+)
+
+def cleanup(operation: str | None = None) -> bool:
+    if operation not in frozenset(["autoremove", "autoclean"]):
+        raise AssertionError(f"Bad operation: {operation}")
+    return VALUES[operation] in "some output"
+"#,
+);
+
+testcase!(
     test_narrow_len,
     r#"
 from typing import assert_type, Never, NamedTuple

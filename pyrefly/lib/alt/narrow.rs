@@ -27,6 +27,7 @@ use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
+use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::Int;
 use ruff_python_ast::Number;
@@ -252,6 +253,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(AtomicNarrowOp::TypeGuard(func_ty.clone(), args.clone()))
         } else {
             None
+        }
+    }
+
+    fn literal_membership_exprs(&self, expr: &Expr, errors: &ErrorCollector) -> Option<Vec<Expr>> {
+        match expr {
+            Expr::List(list) => Some(list.elts.clone()),
+            Expr::Tuple(tuple) => Some(tuple.elts.clone()),
+            Expr::Set(set) => Some(set.elts.clone()),
+            Expr::Call(call) => self.frozenset_literal_membership_exprs(call, errors),
+            _ => None,
+        }
+    }
+
+    fn frozenset_literal_membership_exprs(
+        &self,
+        call: &ExprCall,
+        errors: &ErrorCollector,
+    ) -> Option<Vec<Expr>> {
+        if !call.arguments.keywords.is_empty() {
+            return None;
+        }
+        let is_builtin_frozenset = match self.expr_infer(&call.func, errors) {
+            Type::ClassDef(cls) => cls.has_toplevel_qname("builtins", "frozenset"),
+            Type::Type(box Type::ClassType(cls)) => cls.has_qname("builtins", "frozenset"),
+            _ => false,
+        };
+        if !is_builtin_frozenset {
+            return None;
+        }
+        match &*call.arguments.args {
+            [] => Some(Vec::new()),
+            [expr] => self.literal_membership_exprs(expr, errors),
+            _ => None,
         }
     }
 
@@ -861,14 +895,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.is_not_type_for_pattern(ty, |t| self.is_subset_eq(t, &mapping))
             }
             AtomicNarrowOp::In(v) => {
-                // First, check for List, Tuple, and Set literal expressions (syntactic check,
-                // avoids type inference on the container itself)
-                let exprs = match v {
-                    Expr::List(list) => Some(list.elts.clone()),
-                    Expr::Tuple(tuple) => Some(tuple.elts.clone()),
-                    Expr::Set(set) => Some(set.elts.clone()),
-                    _ => None,
-                };
+                // First, check for literal containers. We also unwrap builtin
+                // `frozenset(...)` calls when their argument is itself a literal container.
+                let exprs = self.literal_membership_exprs(v, errors);
                 if let Some(exprs) = exprs {
                     // Bail out if any element is a starred expression (e.g., `x in [*y, 1]`).
                     // We can't know all values at compile time when unpacking occurs.
@@ -927,14 +956,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             AtomicNarrowOp::NotIn(v) => {
-                // First, check for List, Tuple, and Set literal expressions (syntactic check,
-                // avoids type inference on the container itself)
-                let exprs = match v {
-                    Expr::List(list) => Some(list.elts.clone()),
-                    Expr::Tuple(tuple) => Some(tuple.elts.clone()),
-                    Expr::Set(set) => Some(set.elts.clone()),
-                    _ => None,
-                };
+                // First, check for literal containers. We also unwrap builtin
+                // `frozenset(...)` calls when their argument is itself a literal container.
+                let exprs = self.literal_membership_exprs(v, errors);
                 if let Some(exprs) = exprs {
                     // Bail out if any element is a starred expression (e.g., `x not in [*y, 1]`).
                     // We can't know all values at compile time when unpacking occurs.
