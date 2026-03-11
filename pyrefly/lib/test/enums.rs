@@ -175,7 +175,7 @@ class MyEnum(Enum):
     X = 1
     Y = "foo"
 def test(e: MyEnum):
-    # the inferred type use promoted types, for performance reasons
+    # the inferred type of `e.value` is the Literal union of all member values
     assert_type(e.value, Literal['foo', 1])
 "#,
 );
