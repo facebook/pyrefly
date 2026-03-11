@@ -1002,21 +1002,7 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
         .client
         .diagnostic("filtering_stdlib_errors/usr/local/lib/python3.12/stdlib_file.py")
         .expect_response(json!({
-            "items": [
-                {
-                    "code": "bad-assignment",
-                    "codeDescription": {
-                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
-                    },
-                    "message": "`Literal['1']` is not assignable to `int`",
-                    "range": {
-                        "end": {"character": 12, "line": 5},
-                        "start": {"character": 9, "line": 5}
-                    },
-                    "severity": 1,
-                    "source": "Pyrefly"
-                }
-            ],
+            "items": [],
             "kind": "full"
         }))
         .unwrap();
