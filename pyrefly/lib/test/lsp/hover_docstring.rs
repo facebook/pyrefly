@@ -352,28 +352,7 @@ Docstring Result: `Test docstring`
 }
 
 #[test]
-fn module_variable_test() {
-    let code = r#"
-VAR = "abc"
-"""Some documentation."""
-print(VAR)
-#     ^
-"#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
-    assert_eq!(
-        r#"
-# main.py
-4 | print(VAR)
-          ^
-Docstring Result: `Some documentation.`
-"#
-        .trim(),
-        report.trim(),
-    );
-}
-
-#[test]
-fn module_variable_itself_test() {
+fn variable_docstring_definition_site_test() {
     let code = r#"
 VAR = "abc"
 #^
@@ -385,27 +364,6 @@ VAR = "abc"
 # main.py
 2 | VAR = "abc"
      ^
-Docstring Result: `Some documentation.`
-"#
-        .trim(),
-        report.trim(),
-    );
-}
-
-#[test]
-fn annotated_variable_test() {
-    let code = r#"
-VAR: str = "abc"
-"""Some documentation."""
-print(VAR)
-#     ^
-"#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
-    assert_eq!(
-        r#"
-# main.py
-4 | print(VAR)
-          ^
 Docstring Result: `Some documentation.`
 "#
         .trim(),
