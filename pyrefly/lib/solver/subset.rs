@@ -689,18 +689,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         if got.len() < want_ts.len() {
             return Err(SubsetError::Other);
         }
-        let (pre, post) = got.items().split_at(want_ts.len());
-        for (got_param, (want_ty, want_req)) in pre.iter().zip(want_ts.iter()) {
-            match got_param {
-                Param::PosOnly(_, got_ty, got_req) | Param::Pos(_, got_ty, got_req)
-                    if *want_req == Required::Required
-                        || matches!(got_req, Required::Optional(_)) =>
-                {
-                    self.is_subset_eq(want_ty, got_ty)?;
-                }
-                _ => return Err(SubsetError::Other),
-            }
-        }
+        let args = ParamList::new_types(want_ts.to_owned());
+        let (pre, post) = got.items().split_at(args.len());
+        self.is_subset_param_list(pre, args.items())?;
         self.is_subset_eq(
             &self
                 .solver
@@ -719,18 +710,20 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         if want.len() < got_ts.len() {
             return Err(SubsetError::Other);
         }
-        let (pre, post) = want.items().split_at(got_ts.len());
-        for ((got_ty, got_req), want_param) in got_ts.iter().zip(pre.iter()) {
-            match want_param {
-                Param::PosOnly(_, want_ty, want_req) | Param::Pos(_, want_ty, want_req)
-                    if *want_req == Required::Required
-                        || matches!(got_req, Required::Optional(_)) =>
-                {
-                    self.is_subset_eq(want_ty, got_ty)?;
-                }
-                _ => return Err(SubsetError::Other),
-            }
-        }
+        let args = ParamList::new_types(got_ts.to_owned());
+        let (pre, post) = want.items().split_at(args.len());
+        // Concatenate stores only the prefix types, so there are no names to compare here.
+        let normalized_prefix = ParamList::new(
+            pre.iter()
+                .map(|param| match param {
+                    Param::PosOnly(_, ty, required) | Param::Pos(_, ty, required) => {
+                        Param::PosOnly(None, ty.clone(), required.clone())
+                    }
+                    _ => param.clone(),
+                })
+                .collect(),
+        );
+        self.is_subset_param_list(args.items(), normalized_prefix.items())?;
         self.is_subset_eq(
             got_pspec,
             &self

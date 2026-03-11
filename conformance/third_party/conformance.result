@@ -98,9 +98,7 @@
   "generics_paramspec_components.py": [
     "Line 30: Expected 1 errors"
   ],
-  "generics_paramspec_semantics.py": [
-    "Line 142: Unexpected errors ['Argument `(*args: int) -> int` is not assignable to parameter `x` with type `(int, ParamSpec(@_)) -> int` in function `expects_int_first`']"
-  ],
+  "generics_paramspec_semantics.py": [],
   "generics_paramspec_specialization.py": [],
   "generics_scoping.py": [
     "Line 86: Expected 1 errors",

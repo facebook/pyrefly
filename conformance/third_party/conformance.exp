@@ -6183,17 +6183,6 @@
       "severity": "error",
       "stop_column": 19,
       "stop_line": 137
-    },
-    {
-      "code": -2,
-      "column": 1,
-      "concise_description": "Argument `(*args: int) -> int` is not assignable to parameter `x` with type `(int, ParamSpec(@_)) -> int` in function `expects_int_first`",
-      "description": "Argument `(*args: int) -> int` is not assignable to parameter `x` with type `(int, ParamSpec(@_)) -> int` in function `expects_int_first`",
-      "line": 142,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 19,
-      "stop_line": 142
     }
   ],
   "generics_paramspec_specialization.py": [
