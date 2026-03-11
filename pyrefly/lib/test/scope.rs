@@ -1181,6 +1181,37 @@ def f(rows: list[int]) -> int:
 );
 
 testcase!(
+    // #2739: reassignment before nested function definition should preserve the reassigned type
+    test_narrow_capture_reassigned_before_nested_def,
+    r#"
+from typing import Callable
+from typing_extensions import assert_type
+
+class Connection:
+    def __init__(self, host: str) -> None:
+        self.host = host
+
+    def clone(self) -> "Connection":
+        return Connection(self.host)
+
+def get_connection() -> Connection | None:
+    return Connection("localhost")
+
+def make_query_func() -> Callable[[], str]:
+    conn = get_connection()
+    assert conn is not None
+    conn = conn.clone()
+    assert_type(conn, Connection)
+
+    def query() -> str:
+        assert_type(conn, Connection)
+        return conn.host
+
+    return query
+"#,
+);
+
+testcase!(
     // #2408: isinstance narrowing with derived variable
     test_narrow_capture_isinstance_derived,
     r#"

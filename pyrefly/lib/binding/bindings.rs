@@ -1120,9 +1120,10 @@ impl<'a> BindingsBuilder<'a> {
     /// For names that are read but not locally-defined (implicit captures),
     /// this method creates flow entries pointing to the outer scope's binding.
     ///
-    /// When the outer scope has an active narrow for the captured variable and
-    /// the variable is not reassigned after this function definition, we use
-    /// the narrowed type in the nested scope.
+    /// When the outer scope has a current value binding for the captured
+    /// variable and the variable is not reassigned after this function
+    /// definition, we seed the nested scope from that value. If the outer scope
+    /// also has an active type-guard narrow, we layer that narrow on top.
     pub fn seed_captured_variables(&mut self) {
         let captures = self.scopes.implicit_capture_names();
         let inner_fn_range = self.scopes.current_scope_range();
@@ -1132,7 +1133,10 @@ impl<'a> BindingsBuilder<'a> {
                 .scopes
                 .look_up_name_for_read(hashed_name, &Usage::Narrowing(None));
             if let NameReadInfo::Anywhere { key, .. } = name_read_info {
-                let idx = self.idx_for_promise(key);
+                let idx = self
+                    .scopes
+                    .outer_capture_value_idx(hashed_name, inner_fn_range)
+                    .unwrap_or_else(|| self.idx_for_promise(key));
                 let style = self
                     .scopes
                     .flow_style_for_name(&name)

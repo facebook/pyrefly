@@ -1309,6 +1309,52 @@ impl Scopes {
         self.current().range
     }
 
+    fn outer_capture_not_reassigned_after(
+        scope: &Scope,
+        name: Hashed<&Name>,
+        inner_fn_range: TextRange,
+    ) -> bool {
+        scope
+            .stat
+            .0
+            .get_hashed(name)
+            .map(|s| s.last_range.start() < inner_fn_range.start())
+            .unwrap_or(true)
+    }
+
+    /// Get the outer local scope's current value idx for a captured variable,
+    /// if the variable is not reassigned after the function definition.
+    ///
+    /// This preserves value rebindings like `x = x.clone()` that happen before
+    /// a nested function definition, while still refusing to propagate values
+    /// when a later assignment could change what the closure observes. Module
+    /// scopes continue to use the static binding so conditional top-level
+    /// shadowing keeps its existing behavior.
+    pub fn outer_capture_value_idx(
+        &self,
+        name: Hashed<&Name>,
+        inner_fn_range: TextRange,
+    ) -> Option<Idx<Key>> {
+        for scope in self.iter_rev().skip(1) {
+            match scope.kind {
+                ScopeKind::Class(_) => continue,
+                ScopeKind::Module => return None,
+                _ => {}
+            }
+            if let Some(flow_info) = scope.flow.get_info_hashed(name) {
+                if Self::outer_capture_not_reassigned_after(scope, name, inner_fn_range) {
+                    return flow_info.value().map(|value| value.idx);
+                }
+                return None;
+            }
+            // Name is in stat but not flow — possibly uninitialized, don't propagate.
+            if scope.stat.0.get_hashed(name).is_some() {
+                return None;
+            }
+        }
+        None
+    }
+
     /// Get the outer scope's narrow idx for a captured variable, if the outer
     /// scope has an active narrow and the variable is not reassigned after the
     /// function definition.
@@ -1333,13 +1379,7 @@ impl Scopes {
             if let Some(flow_info) = scope.flow.get_info_hashed(name) {
                 // Only propagate when the outer scope has an active narrow.
                 flow_info.narrow.as_ref()?;
-                let not_reassigned_after = scope
-                    .stat
-                    .0
-                    .get_hashed(name)
-                    .map(|s| s.last_range.start() < inner_fn_range.start())
-                    .unwrap_or(true);
-                if not_reassigned_after {
+                if Self::outer_capture_not_reassigned_after(scope, name, inner_fn_range) {
                     return Some(flow_info.idx());
                 }
                 return None;
