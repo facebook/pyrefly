@@ -246,9 +246,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// - Check whether the field is a member (which depends only on its type and name)
     /// - Validate that a member should not have an annotation, and should respect any explicit annotation on `_value_`
     ///
-    /// TODO(stroxler, yangdanny): We currently operate on promoted types, which means we do not infer `Literal[...]`
-    /// types for the `.value` / `._value_` attributes of literals. This is permitted in the spec although not optimal
-    /// for most cases; we are handling it this way in part because generic enum behavior is not yet well-specified.
+    /// We preserve the original inferred member value type here so enum `.value` lookups on the
+    /// class can recover unions of member literals instead of only their promoted base classes.
     ///
     /// We currently skip the check for `_value_` if the class defines `__new__`, since that can
     /// change the value of the enum member. https://docs.python.org/3/howto/enum.html#when-to-use-new-vs-init
@@ -257,6 +256,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class: &Class,
         name: &Name,
         direct_annotation: Option<&Annotation>,
+        value_ty: &Type,
         ty: &Type,
         field_definition: &ClassFieldDefinition,
         is_descriptor: bool,
@@ -286,9 +286,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && !self
                     .get_class_fields(class)
                     .is_some_and(|f| f.contains(&dunder::NEW))
-                && (!matches!(ty, Type::Ellipsis) || !self.module().path().is_interface())
+                && (!matches!(value_ty, Type::Ellipsis) || !self.module().path().is_interface())
             {
-                self.check_enum_value_annotation(ty, &enum_value_ty, name, range, errors);
+                self.check_enum_value_annotation(value_ty, &enum_value_ty, name, range, errors);
             }
             // If this field is an alias (value is a simple name referring to another field),
             // look up the aliased member and return its type instead of creating a new enum literal.
@@ -301,7 +301,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Lit::Enum(Box::new(LitEnum {
                     class: enum_.cls.clone(),
                     member: name.clone(),
-                    ty: ty.clone(),
+                    ty: value_ty.clone(),
                 }))
                 .to_implicit_type(),
             )

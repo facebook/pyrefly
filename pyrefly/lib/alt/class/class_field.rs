@@ -1737,13 +1737,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.determine_read_only_reason(name, annotation.as_ref(), &metadata, field_definition);
 
         // Determine the final type, promoting literals when appropriate.
+        let original_value_ty = value_ty.clone();
         // Skip literal promotion for NNModule types: their fields are captured
         // constructor args that must preserve literal types for shape inference.
         let ty = if matches!(value_ty, Type::NNModule(_)) {
             value_ty
         } else {
             let mut has_implicit_literal = value_ty.is_implicit_literal();
-            if !has_implicit_literal && matches!(initialization, ClassFieldInitialization::Method) {
+            if !has_implicit_literal && matches!(initialization, ClassFieldInitialization::Method)
+            {
                 value_ty.universe(&mut |current_type_node| {
                     has_implicit_literal |= current_type_node.is_implicit_literal();
                 });
@@ -1825,6 +1827,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             class,
             name,
             direct_annotation.as_ref(),
+            &original_value_ty,
             &ty,
             field_definition,
             descriptor.is_some(),
@@ -2066,6 +2069,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class: &Class,
         name: &Name,
         direct_annotation: Option<&Annotation>,
+        value_ty: &Type,
         ty: &Type,
         field_definition: &ClassFieldDefinition,
         is_descriptor: bool,
@@ -2076,6 +2080,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             class,
             name,
             direct_annotation,
+            value_ty,
             ty,
             field_definition,
             is_descriptor,

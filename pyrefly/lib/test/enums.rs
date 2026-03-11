@@ -258,6 +258,22 @@ def f(e: Literal[E.X, E.Y]) -> int:
 );
 
 testcase!(
+    test_value_of_enum_is_union_of_member_literals,
+    r#"
+from enum import Enum
+from typing import Literal
+
+class Priority(Enum):
+    LOW = 1
+    MEDIUM = 2
+    HIGH = 3
+
+def get_priority_level(p: Priority) -> Literal[1, 2, 3]:
+    return p.value
+    "#,
+);
+
+testcase!(
     test_enum_union_simplification,
     r#"
 from typing import assert_type, Literal
