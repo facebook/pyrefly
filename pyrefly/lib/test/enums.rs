@@ -50,7 +50,7 @@ assert_type(MyEnum["X"], Literal[MyEnum.X])
 assert_type(MyEnum.__PRIVATE, int)  # E: Private attribute `__PRIVATE` cannot be accessed outside of its defining class
 assert_type(MyEnum.X.name, Literal["X"])
 assert_type(MyEnum.X._name_, Literal["X"])
-assert_type(MyEnum.X.value, int)
+assert_type(MyEnum.X.value, Literal[1])
 assert_type(MyEnum.X._value_, int)
 
 MyEnum["FOO"]  # E: Enum `MyEnum` does not have a member named `FOO`
@@ -63,8 +63,8 @@ def bar(member: int) -> None:
 
 def foo(member: MyEnum) -> None:
     assert_type(member.name, str)
-    assert_type(member.value, int)
-    assert_type(member._value_, int)
+    assert_type(member.value, Literal[1, 2])
+    assert_type(member._value_, Literal[1, 2])
 "#,
 );
 
@@ -147,13 +147,14 @@ testcase!(
     test_value_annotation,
     r#"
 from enum import Enum, member, auto
+from typing import Literal
 
 class MyEnum(Enum):
     _value_: int
     V = member(1)
     W = auto()
     X = 1
-    Y = "FOO"  # E: Enum member `Y` has type `str`, must match the `_value_` attribute annotation of `int`
+    Y = "FOO"  # E: Enum member `Y` has type `Literal['FOO']`, must match the `_value_` attribute annotation of `int`
     Z = member("FOO")  # E: Enum member `Z` has type `str`, must match the `_value_` attribute annotation of `int`
 
     def get_value(self) -> int:
@@ -168,14 +169,14 @@ testcase!(
     test_infer_value,
     r#"
 from enum import Enum
-from typing import assert_type
+from typing import assert_type, Literal
 
 class MyEnum(Enum):
     X = 1
     Y = "foo"
 def test(e: MyEnum):
     # the inferred type use promoted types, for performance reasons
-    assert_type(e.value, int | str)
+    assert_type(e.value, Literal['foo', 1])
 "#,
 );
 
@@ -191,7 +192,7 @@ class MyEnumUnannotated(Enum):
 def mutate(ea: MyEnumAnnotated, eu: MyEnumUnannotated) -> None:
     ea._value_ = 2  # Allowed for now, because it must be permitted in `__init__`
     ea.value = 2  # E: Cannot set field `value`
-    eu._value_ = 2  # Allowed for now, because it must be permitted in `__init__`
+    eu._value_ = 2  # `Literal[2]` is not assignable to attribute `_value_` with type `Literal[1]`
     eu.value = 2  # E: Cannot set field `value`
 "#,
 );
@@ -336,7 +337,7 @@ def foo(f: MyFlag) -> None:
 testcase!(
     test_enum_instance_only_attr,
     r#"
-from typing import assert_type, Any
+from typing import assert_type, Any, Literal
 from enum import Enum
 
 class MyEnum(Enum):
@@ -347,7 +348,7 @@ class MyEnum(Enum):
 assert_type(MyEnum.Y, int)
 
 for x in MyEnum:
-    assert_type(x.value, str)  # Y is not an enum member
+    assert_type(x.value, Literal['bar', 'foo'])  # Y is not an enum member
 "#,
 );
 
@@ -532,18 +533,20 @@ fn env_enum_dots() -> TestEnv {
     let mut env = TestEnv::new();
     env.add_with_path("py", "py.py", r#"
 from enum import IntEnum
+from typing import Literal
 
 class Color(IntEnum):
     RED = ... # E: Enum member `RED` has type `Ellipsis`, must match the `_value_` attribute annotation of `int`
-    GREEN = "wrong" # E: Enum member `GREEN` has type `str`, must match the `_value_` attribute annotation of `int`
+    GREEN = "wrong" # E: Enum member `GREEN` has type `Literal['wrong']`, must match the `_value_` attribute annotation of `int`
 "#
     );
     env.add_with_path("pyi", "pyi.pyi", r#"
 from enum import IntEnum
+from typing import Literal
 
 class Color(IntEnum):
     RED = ...
-    GREEN = "wrong" # E: Enum member `GREEN` has type `str`, must match the `_value_` attribute annotation of `int`
+    GREEN = "wrong" # E: Enum member `GREEN` has type `Literal['wrong']`, must match the `_value_` attribute annotation of `int`
 "#
     );
     env
@@ -671,12 +674,12 @@ testcase!(
     test_override_value_prop,
     r#"
 from enum import Enum
-from typing import assert_type
+from typing import assert_type, Literal
 class E(Enum):
     X = 1
     @property
     def value(self) -> str: ...
-assert_type(E.X._value_, int)
+assert_type(E.X._value_, Literal[1])
 assert_type(E.X.value, str)
     "#,
 );
