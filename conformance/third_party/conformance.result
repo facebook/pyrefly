@@ -22,8 +22,7 @@
   "annotations_methods.py": [],
   "annotations_typeexpr.py": [],
   "callables_annotation.py": [
-    "Line 159: Expected 1 errors",
-    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`\\n  `Proto4[Ellipsis].__call__` has type `(Proto4[Ellipsis], int, ...) -> None`, which is not assignable to `(self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None`, the type of `Proto3.__call__`']"
+    "Line 159: Expected 1 errors"
   ],
   "callables_kwargs.py": [],
   "callables_protocol.py": [],
@@ -99,7 +98,9 @@
   "generics_paramspec_components.py": [
     "Line 30: Expected 1 errors"
   ],
-  "generics_paramspec_semantics.py": [],
+  "generics_paramspec_semantics.py": [
+    "Line 142: Unexpected errors ['Argument `(*args: int) -> int` is not assignable to parameter `x` with type `(int, ParamSpec(@_)) -> int` in function `expects_int_first`']"
+  ],
   "generics_paramspec_specialization.py": [],
   "generics_scoping.py": [
     "Line 86: Expected 1 errors",
