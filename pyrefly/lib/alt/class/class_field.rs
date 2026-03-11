@@ -1744,8 +1744,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             value_ty
         } else {
             let mut has_implicit_literal = value_ty.is_implicit_literal();
-            if !has_implicit_literal && matches!(initialization, ClassFieldInitialization::Method)
-            {
+            if !has_implicit_literal && matches!(initialization, ClassFieldInitialization::Method) {
                 value_ty.universe(&mut |current_type_node| {
                     has_implicit_literal |= current_type_node.is_implicit_literal();
                 });

@@ -51,7 +51,7 @@ assert_type(MyEnum.__PRIVATE, int)  # E: Private attribute `__PRIVATE` cannot be
 assert_type(MyEnum.X.name, Literal["X"])
 assert_type(MyEnum.X._name_, Literal["X"])
 assert_type(MyEnum.X.value, Literal[1])
-assert_type(MyEnum.X._value_, int)
+assert_type(MyEnum.X._value_, Literal[1])
 
 MyEnum["FOO"]  # E: Enum `MyEnum` does not have a member named `FOO`
 
