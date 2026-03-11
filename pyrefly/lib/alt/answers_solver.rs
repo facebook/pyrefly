@@ -9,6 +9,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -303,6 +304,7 @@ impl CalcStack {
                             BindingAction::Calculate
                         }
                         IterationNodeStateKind::InProgressWithPreviousAnswer => {
+                            self.mark_recursion_break(&current);
                             let answer = self.get_previous_answer(&current).expect(
                                 "InProgressWithPreviousAnswer but no previous answer found",
                             );
@@ -349,6 +351,7 @@ impl CalcStack {
                         BindingAction::Calculate
                     }
                     IterationNodeStateKind::InProgressWithPreviousAnswer => {
+                        self.mark_recursion_break(&current);
                         let answer = self
                             .get_previous_answer(&current)
                             .expect("InProgressWithPreviousAnswer but no previous answer found");
@@ -405,6 +408,7 @@ impl CalcStack {
                 }
                 IterationNodeStateKind::InProgressWithPreviousAnswer => {
                     // Back-edge with a warm-start answer from prior iteration.
+                    self.mark_recursion_break(&current);
                     let answer = self
                         .get_previous_answer(&current)
                         .expect("InProgressWithPreviousAnswer but no previous answer found");
@@ -1088,6 +1092,24 @@ impl CalcStack {
         iter_state.has_changed = true;
     }
 
+    /// Record `target` as a recursion break point in the top SCC's iteration state.
+    ///
+    /// Called when a back-edge hits `InProgressWithPreviousAnswer` — i.e., when
+    /// the cycle is broken by returning the previous-iteration answer. These
+    /// break points are where non-convergence errors should be reported, since
+    /// other non-converging members are downstream consequences.
+    ///
+    /// Panics if the top SCC is not iterating.
+    fn mark_recursion_break(&self, target: &CalcId) {
+        let mut scc_stack = self.scc_stack.borrow_mut();
+        let top_scc = scc_stack.last_mut().expect("no SCC on the stack");
+        let iter_state = top_scc
+            .iterative
+            .as_mut()
+            .expect("top SCC is not iterating");
+        iter_state.recursion_breaks.insert(target.dupe());
+    }
+
     /// Look up the previous-iteration answer for a target in the top SCC.
     ///
     /// Returns `None` if the top SCC is not iterating or there is no
@@ -1409,6 +1431,11 @@ pub struct SccIterationState {
     /// the loop completes, ensuring each member is visited at most once
     /// per iteration regardless of how many merges occur.
     pub merge_happened: bool,
+    /// Members whose cycle was broken by returning a previous-iteration answer
+    /// (i.e., hit `InProgressWithPreviousAnswer`). These are the actual recursion
+    /// break points; other non-converging members are downstream consequences.
+    /// Used to limit non-convergence error reporting to only the break points.
+    pub recursion_breaks: BTreeSet<CalcId>,
 }
 
 /// Tracks the state of a node within a single iteration of iterative SCC solving.
@@ -1773,6 +1800,7 @@ impl Scc {
                     demoted: false,
                     has_changed: false,
                     merge_happened: true,
+                    recursion_breaks: BTreeSet::new(),
                 })
             }
         };
@@ -1874,6 +1902,7 @@ impl Scc {
             demoted: false,
             has_changed: false,
             merge_happened: false,
+            recursion_breaks: BTreeSet::new(),
         });
     }
 }
@@ -2998,9 +3027,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             iteration += 1;
         }
 
-        // Report per-member errors for non-converging SCC members.
-        // Each member uses its own module's bindings and error collector
-        // because SCCs can span modules.
+        // Report non-convergence errors only at the recursion break points —
+        // the bindings where `InProgressWithPreviousAnswer` was hit, i.e., where
+        // the cycle was broken by returning a previous-iteration answer. Other
+        // non-converging members are downstream consequences and would produce
+        // noisy duplicate errors.
         let non_convergent_members: Vec<(
             CalcId,
             Arc<dyn Any + Send + Sync>,
@@ -3013,12 +3044,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .node_states
                 .iter()
                 .filter_map(|(calc_id, node_state)| match node_state {
-                    IterationNodeState::Done { answer, .. } => Some((
-                        calc_id.dupe(),
-                        answer.dupe(),
-                        iter_state.previous_answers.get(calc_id).cloned(),
-                    )),
-                    IterationNodeState::Fresh | IterationNodeState::InProgress { .. } => None,
+                    IterationNodeState::Done { answer, .. }
+                        if iter_state.recursion_breaks.contains(calc_id) =>
+                    {
+                        Some((
+                            calc_id.dupe(),
+                            answer.dupe(),
+                            iter_state.previous_answers.get(calc_id).cloned(),
+                        ))
+                    }
+                    _ => None,
                 })
                 .collect()
         } else {
@@ -4061,6 +4096,7 @@ mod scc_tests {
                     demoted: false,
                     has_changed: false,
                     merge_happened: false,
+                    recursion_breaks: BTreeSet::new(),
                 }),
             }
         };
@@ -4089,6 +4125,7 @@ mod scc_tests {
                     demoted: false,
                     has_changed: false,
                     merge_happened: false,
+                    recursion_breaks: BTreeSet::new(),
                 }),
             }
         };
@@ -4245,6 +4282,7 @@ mod scc_tests {
                     demoted: false,
                     has_changed: false,
                     merge_happened: false,
+                    recursion_breaks: BTreeSet::new(),
                 }),
             }
         };
@@ -4273,6 +4311,7 @@ mod scc_tests {
                     demoted: false,
                     has_changed: false,
                     merge_happened: false,
+                    recursion_breaks: BTreeSet::new(),
                 }),
             }
         };

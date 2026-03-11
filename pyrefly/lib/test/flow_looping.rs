@@ -82,21 +82,13 @@ def main():
 );
 
 testcase!(
-    bug = "Analysis is correct, but UX is poor on a loop that does not converge",
     test_while_creates_recursive_type,
     r#"
 from typing import assert_type, Any, Literal
 def f(condition) -> None:
     x = 1
-    # The problem with this analysis is that when we have a non-convergent loop, we wind
-    # up with many bindings (the LoopPh and everything downstream) *all* failing to converge.
-    # So we get multiple errors, and one of them is on the top of the loop (in other words
-    # not even at an `x` here).
-    #
-    # The error message may not be great, but the really ugly thing is the duplication and
-    # poor location. Nontheless, the analysis itself is correct, this is a UX problem.
     while condition():  # E: Fixpoint iteration did not converge. Inferred type `Literal[1] | list[int | list[int | list[int | list[int]]]]`. Adding annotations may help
-        x = [x]  # E: Fixpoint iteration did not converge.  # E: Fixpoint iteration did not converge.
+        x = [x]
     "#,
 );
 
