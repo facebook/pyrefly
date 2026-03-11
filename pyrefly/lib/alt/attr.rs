@@ -1847,35 +1847,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.lookup_attr_from_attribute_base1(b.clone(), attr_name, &mut acc_candidate);
                     if acc_candidate.not_found.is_empty() && acc_candidate.internal_error.is_empty()
                     {
-                        candidates.push((b, acc_candidate.found));
+                        candidates.push(acc_candidate.found);
                     }
                 }
                 if candidates.len() == 1 {
-                    acc.found.extend(candidates.into_iter().next().unwrap().1);
-                } else if is_dunder(attr_name) {
-                    // `type[C]` wrappers can intersect the runtime `GenericAlias` API with the
-                    // underlying class object. When both succeed on a dunder lookup, prefer the
-                    // class object candidate so explicit calls like `ty.__str__(obj)` keep the
-                    // unbound method shape instead of exposing `GenericAlias.__str__`.
-                    let mut non_generic_alias_candidates =
-                        candidates.into_iter().filter(|(base, _)| {
-                            !matches!(
-                                base,
-                                AttributeBase1::ClassInstance(class)
-                                    if class.class_object()
-                                        == self.stdlib.generic_alias().class_object()
-                            )
-                        });
-                    if let Some((_, found)) = non_generic_alias_candidates.next()
-                        && non_generic_alias_candidates.next().is_none()
-                    {
-                        acc.found.extend(found);
-                    } else {
-                        // TODO: Intersect the candidates instead of using the fallback.
-                        for b in fallback {
-                            self.lookup_attr_from_attribute_base1(b.clone(), attr_name, acc);
-                        }
-                    }
+                    acc.found.extend(candidates.into_iter().next().unwrap());
                 } else {
                     // TODO: Intersect the candidates instead of using the fallback.
                     for b in fallback {
@@ -2196,8 +2172,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
             Type::Type(box Type::ClassType(class)) => {
                 let class_base = AttributeBase1::ClassObject(ClassBase::ClassType(class.clone()));
-                if !class.targs().is_empty() {
-                    // If the class type has type arguments, at runtime it's also a GenericAlias
+                let bare_tuple_still_uses_generic_alias =
+                    class.class_object().is_builtin("tuple") && !class.targs().is_empty();
+                let has_explicit_runtime_targs = !class.targs().is_empty()
+                    && !class
+                        .targs()
+                        .as_slice()
+                        .iter()
+                        .all(|ty| matches!(ty, Type::Any(AnyStyle::Implicit)));
+                if has_explicit_runtime_targs || bare_tuple_still_uses_generic_alias {
+                    // Only class types with non-implicit runtime specializations behave like
+                    // GenericAlias values. Bare generic classes such as `list` or `dict` may carry
+                    // implicit `Any` arguments internally, but they are still ordinary class objects.
+                    // We keep the historical tuple behavior because several attribute-narrowing cases
+                    // rely on the `_fields` surface that currently comes from GenericAlias modeling.
 
                     // FIXME:
                     // If `C` is a generic class, then the type of the expression `C` is `type[C]`.
