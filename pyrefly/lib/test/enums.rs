@@ -192,7 +192,7 @@ class MyEnumUnannotated(Enum):
 def mutate(ea: MyEnumAnnotated, eu: MyEnumUnannotated) -> None:
     ea._value_ = 2  # Allowed for now, because it must be permitted in `__init__`
     ea.value = 2  # E: Cannot set field `value`
-    eu._value_ = 2  # `Literal[2]` is not assignable to attribute `_value_` with type `Literal[1]`
+    eu._value_ = 2  # E: `Literal[2]` is not assignable to attribute `_value_` with type `Literal[1]`
     eu.value = 2  # E: Cannot set field `value`
 "#,
 );
