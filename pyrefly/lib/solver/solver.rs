@@ -357,6 +357,7 @@ pub struct Solver {
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
     pub spec_compliant_overloads: bool,
+    pub infer_pytest_fixture_types: bool,
 }
 
 impl Display for Solver {
@@ -387,6 +388,7 @@ impl Solver {
         tensor_shapes: bool,
         strict_callable_subtyping: bool,
         spec_compliant_overloads: bool,
+        infer_pytest_fixture_types: bool,
     ) -> Self {
         Self {
             variables: Default::default(),
@@ -397,6 +399,7 @@ impl Solver {
             tensor_shapes,
             strict_callable_subtyping,
             spec_compliant_overloads,
+            infer_pytest_fixture_types,
         }
     }
 

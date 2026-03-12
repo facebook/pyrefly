@@ -60,6 +60,7 @@ pub struct Context<'a, Lookup> {
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
     pub spec_compliant_overloads: bool,
+    pub infer_pytest_fixture_types: bool,
     pub recursion_limit_config: Option<RecursionLimitConfig>,
     /// Pysa context for building PysaSolutions during the Solutions step.
     pub pysa_context: Option<PysaContext<'a>>,
@@ -421,6 +422,7 @@ impl Step {
             ctx.tensor_shapes,
             ctx.strict_callable_subtyping,
             ctx.spec_compliant_overloads,
+            ctx.infer_pytest_fixture_types,
         );
         let enable_index = ctx.require.keep_index();
         let enable_trace =

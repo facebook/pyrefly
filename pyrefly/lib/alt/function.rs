@@ -62,6 +62,7 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
+use crate::binding::bindings::PytestFixtureParamHint;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
@@ -1026,18 +1027,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let fixture_hint = |name: &Identifier| {
             self.bindings()
                 .pytest_fixture_param_hint(def, class_key, name)
-                .map(|key| {
-                    let return_ty = self.get(&Key::ReturnType(key)).arc_clone_ty();
-                    if let Some((yield_ty, _, _)) = self.unwrap_generator(&return_ty) {
-                        yield_ty
-                    } else if let Some((yield_ty, _)) = self.decompose_async_generator(&return_ty) {
-                        yield_ty
-                    } else if let Some((_, _, coroutine_return_ty)) =
-                        self.unwrap_coroutine(&return_ty)
-                    {
-                        coroutine_return_ty
-                    } else {
-                        return_ty
+                .map(|hint| match hint {
+                    PytestFixtureParamHint::Any => Type::any_explicit(),
+                    PytestFixtureParamHint::ReturnType(key) => {
+                        let return_ty = self.get(&Key::ReturnType(key)).arc_clone_ty();
+                        if let Some((yield_ty, _, _)) = self.unwrap_generator(&return_ty) {
+                            yield_ty
+                        } else if let Some((yield_ty, _)) =
+                            self.decompose_async_generator(&return_ty)
+                        {
+                            yield_ty
+                        } else if let Some((_, _, coroutine_return_ty)) =
+                            self.unwrap_coroutine(&return_ty)
+                        {
+                            coroutine_return_ty
+                        } else {
+                            return_ty
+                        }
                     }
                 })
         };
