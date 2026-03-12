@@ -19,6 +19,7 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use clap::ValueEnum;
 use derivative::Derivative;
 use dupe::Dupe as _;
 use itertools::Itertools;
@@ -103,6 +104,32 @@ pub enum ConfigSource {
     Marker(PathBuf),
     #[default]
     Synthetic,
+}
+
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Deserialize,
+    Serialize,
+    Clone,
+    Copy,
+    Default,
+    ValueEnum
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutputFormat {
+    /// Minimal text output, one line per error
+    MinText,
+    #[default]
+    /// Full, verbose text output
+    FullText,
+    /// JSON output
+    Json,
+    /// Emit GitHub Actions workflow commands
+    Github,
+    /// Only show error count, omitting individual errors
+    OmitErrors,
 }
 
 impl ConfigSource {
@@ -479,6 +506,10 @@ pub struct ConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<PathBuf>,
 
+    /// Default error output format for CLI checks when `--output-format` is not set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<OutputFormat>,
+
     /// Pyrefly's configurations around interpreter querying/finding.
     #[serde(flatten)]
     pub interpreters: Interpreters,
@@ -563,6 +594,7 @@ impl Default for ConfigFile {
             typeshed_path: None,
             baseline: None,
             min_severity: None,
+            output_format: None,
             skip_lsp_config_indexing: false,
         }
     }
@@ -1407,6 +1439,7 @@ mod tests {
              python-version = "1.2.3"
              site-package-path = ["venv/lib/python1.2.3/site-packages"]
              python-interpreter = "venv/my/python"
+             output-format = "min-text"
              replace-imports-with-any = ["fibonacci"]
              ignore-missing-imports = ["sprout"]
              ignore-errors-in-generated-code = true
@@ -1448,6 +1481,7 @@ mod tests {
                 import_root: None,
                 build_system: Default::default(),
                 use_ignore_files: true,
+                output_format: Some(OutputFormat::MinText),
                 fallback_search_path: Default::default(),
                 python_environment: PythonEnvironment {
                     python_platform: Some(PythonPlatform::mac()),
@@ -1599,10 +1633,11 @@ mod tests {
     #[test]
     fn deserialize_pyproject_toml() {
         let config_str = r#"
-             [tool.pyrefly]
+            [tool.pyrefly]
              project_includes = ["./tests", "./implementation"]
                  python_platform = "darwin"
                  python_version = "1.2.3"
+                 output-format = "json"
                  "#;
         let config = ConfigFile::parse_pyproject_toml(config_str)
             .unwrap()
@@ -1629,6 +1664,7 @@ mod tests {
                         .interpreter_stdlib_path
                         .clone(),
                 },
+                output_format: Some(OutputFormat::Json),
                 ..Default::default()
             }
         );
@@ -1737,6 +1773,7 @@ mod tests {
             disable_project_excludes_heuristics: false,
             import_root: None,
             use_ignore_files: true,
+            output_format: Some(OutputFormat::Json),
             fallback_search_path: Default::default(),
             python_environment: python_environment.clone(),
             interpreters: Interpreters {
@@ -1804,6 +1841,7 @@ mod tests {
             disable_search_path_heuristics: false,
             disable_project_excludes_heuristics: false,
             use_ignore_files: true,
+            output_format: Some(OutputFormat::Json),
             import_root: None,
             fallback_search_path: Default::default(),
             python_environment,
@@ -1851,6 +1889,15 @@ baseline = "baseline.json"
 "#;
         let config = ConfigFile::parse_config(config_str).unwrap();
         assert_eq!(config.baseline, Some(PathBuf::from("baseline.json")));
+    }
+
+    #[test]
+    fn test_output_format_config_parsing() {
+        let config_str = r#"
+output-format = "omit-errors"
+"#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        assert_eq!(config.output_format, Some(OutputFormat::OmitErrors));
     }
 
     #[test]

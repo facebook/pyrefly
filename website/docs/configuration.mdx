@@ -481,6 +481,18 @@ min-severity = "warn"
       are currently open in the editor, regardless of this setting.
     - Directives such as [`reveal_type`](../error-kinds#reveal-type) are always
       shown regardless of this threshold.
+### `output-format`
+
+Default format for `pyrefly check` error output when `--output-format` is not
+set on the CLI.
+
+- Type: `"min-text" | "full-text" | "json" | "github" | "omit-errors"`
+- Default: `full-text`
+- Flag equivalent: `--output-format`
+- Notes:
+    - `output-format` is a **project-level setting** and cannot be overridden in
+      [`sub-config`](#sub-configs) sections.
+    - A CLI `--output-format` flag still takes precedence over the config value.
 
 ### `errors`
 
