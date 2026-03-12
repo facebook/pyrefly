@@ -1407,6 +1407,8 @@ impl<'a> Transaction<'a> {
                     .strict_callable_subtyping(module_data.handle.path().as_path()),
                 spec_compliant_overloads: config
                     .spec_compliant_overloads(module_data.handle.path().as_path()),
+                infer_pytest_fixture_types: config
+                    .infer_pytest_fixture_types(module_data.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context,
                 cinderx_enabled: self.data.cinderx_reporter.is_some(),
@@ -2375,6 +2377,8 @@ impl<'a> Transaction<'a> {
                     .strict_callable_subtyping(m.handle.path().as_path()),
                 spec_compliant_overloads: config
                     .spec_compliant_overloads(m.handle.path().as_path()),
+                infer_pytest_fixture_types: config
+                    .infer_pytest_fixture_types(m.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context: None,
                 cinderx_enabled: false,

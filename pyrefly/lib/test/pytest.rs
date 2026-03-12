@@ -25,8 +25,24 @@ def fixture(func: Callable[..., T]) -> Callable[..., T]: ...
 }
 
 testcase!(
-    test_pytest_fixture_injected_parameter_type,
+    test_pytest_fixture_injected_parameter_type_defaults_to_any,
     env_pytest_fixture(),
+    r#"
+import pytest
+from typing import reveal_type
+
+@pytest.fixture
+def my_fixture() -> int:
+    return 42
+
+def test_foo(my_fixture):
+    reveal_type(my_fixture)  # E: revealed type: Any
+"#,
+);
+
+testcase!(
+    test_pytest_fixture_injected_parameter_type,
+    env_pytest_fixture().enable_infer_pytest_fixture_types(),
     r#"
 import pytest
 from typing import reveal_type
@@ -42,7 +58,7 @@ def test_foo(my_fixture):
 
 testcase!(
     test_pytest_fixture_yield_parameter_type,
-    env_pytest_fixture(),
+    env_pytest_fixture().enable_infer_pytest_fixture_types(),
     r#"
 import pytest
 from typing import reveal_type
@@ -68,6 +84,6 @@ async def sample_data() -> int:
     return 42
 
 async def test_data(sample_data):
-    reveal_type(sample_data)  # E: revealed type: int
+    reveal_type(sample_data)  # E: revealed type: Any
 "#,
 );

@@ -178,6 +178,12 @@ impl InitializedInFlow {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PytestFixtureParamHint {
+    Any,
+    ReturnType(ShortIdentifier),
+}
+
 #[derive(Clone, Dupe, Debug)]
 pub struct Bindings(Arc<BindingsInner>);
 
@@ -191,6 +197,7 @@ table! {
 #[derive(Clone, Debug)]
 struct BindingsInner {
     module_info: ModuleInfo,
+    infer_pytest_fixture_types: bool,
     table: BindingTable,
     metadata: Arc<BindingsMetadata>,
     scope_trace: Option<ScopeTrace>,
@@ -341,6 +348,7 @@ impl Bindings {
         let module_info = Module::new(module_name, module_path, contents);
         Self(Arc::new(BindingsInner {
             module_info,
+            infer_pytest_fixture_types: false,
             table: Default::default(),
             metadata: Arc::new(BindingsMetadata::new()),
             scope_trace: None,
@@ -388,7 +396,6 @@ impl Bindings {
     pub fn unused_variables(&self) -> &[UnusedVariable] {
         &self.0.unused_variables
     }
-
 
     pub(crate) fn pytest_info(&self) -> Option<&PytestBindingInfo> {
         self.0.pytest_info.as_ref()
@@ -562,7 +569,7 @@ impl Bindings {
         def: &FunctionDefData,
         class_key: Option<&Idx<KeyClass>>,
         param: &Identifier,
-    ) -> Option<ShortIdentifier> {
+    ) -> Option<PytestFixtureParamHint> {
         let info = self.0.pytest_info.as_ref()?;
         if matches!(param.id.as_str(), "self" | "cls") {
             return None;
@@ -571,6 +578,9 @@ impl Bindings {
             return None;
         }
         let defs = info.fixture_definitions(&param.id)?;
+        if !self.0.infer_pytest_fixture_types {
+            return Some(PytestFixtureParamHint::Any);
+        }
         let selected = match class_key {
             Some(class_key) => defs
                 .iter()
@@ -582,7 +592,7 @@ impl Bindings {
                 .find(|def| def.class_key.is_none())
                 .or_else(|| defs.first()),
         }?;
-        Some(selected.return_type_key)
+        Some(PytestFixtureParamHint::ReturnType(selected.return_type_key))
     }
 
     fn is_pytest_test_or_fixture(
@@ -608,7 +618,7 @@ impl Bindings {
             BindingClass::ClassDef(class_binding) => {
                 class_binding.def.name.id.as_str().starts_with("Test")
             }
-            BindingClass::FunctionalClassDef(_, id, _, _) => id.id.as_str().starts_with("Test"),
+            BindingClass::FunctionalClassDef(_, id, _) => id.id.as_str().starts_with("Test"),
         }
     }
 
@@ -751,6 +761,7 @@ impl Bindings {
         }
         Self(Arc::new(BindingsInner {
             module_info,
+            infer_pytest_fixture_types: solver.infer_pytest_fixture_types,
             table: builder.table,
             metadata: Arc::new(builder.metadata),
             scope_trace: if enable_trace {
