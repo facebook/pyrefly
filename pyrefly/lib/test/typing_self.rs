@@ -374,13 +374,10 @@ class C:
 "#,
 );
 
-// Regression: a decorator that preserves the function signature (fn: _Fn -> _Fn)
-// should not cause Self to be substituted with the defining class. When a subclass
-// inherits the decorated method, the return type should still be Self (the subclass),
-// not the parent class.
+// A decorator that preserves the function signature (fn: _Fn -> _Fn)
+// should not cause Self to be lost. When a subclass inherits the decorated method,
+// the return type should still be Self (the subclass), not the parent class.
 testcase!(
-    bug =
-        "Decorated Self-returning method resolves Self to defining class instead of calling class",
     test_decorated_self_method_in_subclass,
     r#"
 from typing import Self, Callable, TypeVar, Any
@@ -399,6 +396,6 @@ class Child(Parent):
         return 1
 
 def test(c: Child) -> None:
-    c.method().child_method()  # E: Object of class `Parent` has no attribute `child_method`
+    c.method().child_method()
 "#,
 );
