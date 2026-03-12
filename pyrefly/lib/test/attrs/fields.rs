@@ -8,7 +8,7 @@
 use crate::attrs_testcase;
 
 attrs_testcase!(
-    bug = "Correctly recognize field and default decorator",
+    bug = "Default decorator does not populate the synthesized attrs default",
     field_default_decorator,
     r#"
 from attrs import define, field
@@ -17,16 +17,15 @@ from attrs import define, field
 class C:
     a: dict = field()
 
-    @a.default # E: Object of class `dict` has no attribute `default`
+    @a.default
     def _default_a(self):
         return {}
 
-c = C() # E: Missing argument `a` in function `C.__init__`
+c = C()  # E: Missing argument `a` in function `C.__init__`
 "#,
 );
 
 attrs_testcase!(
-    bug = "Recognize validator decorator",
     field_validator_decorator,
     r#"
 from attrs import define, field
@@ -35,7 +34,7 @@ from attrs import define, field
 class C:
     x: int = field()
 
-    @x.validator # E: Object of class `int` has no attribute `validator`
+    @x.validator
     def _check_x(self, attribute, value):
         if value < 0:
             raise ValueError("x must be non-negative")
