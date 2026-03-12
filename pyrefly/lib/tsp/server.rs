@@ -11,22 +11,24 @@ use std::sync::Mutex;
 
 use lsp_server::RequestId;
 use lsp_types::InitializeParams;
-use lsp_types::ServerCapabilities;
+use pyrefly_util::telemetry::QueueName;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
 use tracing::info;
+use tsp_types::GetTypeParams;
 use tsp_types::TSPRequests;
 
 use crate::commands::lsp::IndexingMode;
-use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::LspEvent;
+use crate::lsp::non_wasm::server::InitializeInfo;
+use crate::lsp::non_wasm::server::MessageReader;
 use crate::lsp::non_wasm::server::ProcessEvent;
+use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
-use crate::lsp::non_wasm::server::dispatch_lsp_events;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 
 /// TSP server that delegates to LSP server infrastructure while handling only TSP requests
@@ -48,7 +50,7 @@ impl<T: TspInterface> TspServer<T> {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &impl Telemetry,
+        telemetry: &'a impl Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
@@ -59,7 +61,7 @@ impl<T: TspInterface> TspServer<T> {
             // Increment on DidChange since it affects type checker state via synchronous validation
             LspEvent::DidChangeTextDocument(_) => true,
             // Don't increment on DidChangeWatchedFiles directly since it triggers RecheckFinished
-            // LspEvent::DidChangeWatchedFiles(_) => true,
+            // LspEvent::DidChangeWatchedFiles => true,
             // Don't increment on DidOpen since it triggers RecheckFinished events that will increment
             // LspEvent::DidOpenTextDocument(_) => true,
             _ => false,
@@ -99,7 +101,7 @@ impl<T: TspInterface> TspServer<T> {
 
     fn handle_tsp_request<'a>(
         &'a self,
-        _ide_transaction_manager: &mut TransactionManager<'a>,
+        ide_transaction_manager: &mut TransactionManager<'a>,
         request: &Request,
     ) -> anyhow::Result<bool> {
         // Convert the request into a TSPRequests enum
@@ -116,29 +118,76 @@ impl<T: TspInterface> TspServer<T> {
 
         match msg {
             TSPRequests::GetSupportedProtocolVersionRequest { .. } => {
-                self.inner.send_response(new_response(
-                    request.id.clone(),
-                    Ok(self.get_supported_protocol_version()),
-                ));
+                self.send_ok(request.id.clone(), self.get_supported_protocol_version());
                 Ok(true)
             }
             TSPRequests::GetSnapshotRequest { .. } => {
                 // Get snapshot doesn't need a transaction since it just returns the cached value
-                self.inner
-                    .send_response(new_response(request.id.clone(), Ok(self.get_snapshot())));
+                self.send_ok(request.id.clone(), self.get_snapshot());
                 Ok(true)
             }
-            _ => {
-                // Other TSP requests not yet implemented
-                Ok(false)
+            TSPRequests::ResolveImportRequest { params, .. } => {
+                self.handle_resolve_import(request.id.clone(), params, ide_transaction_manager);
+                Ok(true)
             }
+            TSPRequests::GetPythonSearchPathsRequest { params, .. } => {
+                self.handle_get_python_search_paths(request.id.clone(), params);
+                Ok(true)
+            }
+            TSPRequests::GetDeclaredTypeRequest { params, .. } => {
+                self.dispatch_get_type_request(request.id.clone(), params, |s, p| {
+                    s.handle_get_declared_type(p)
+                });
+                Ok(true)
+            }
+            TSPRequests::GetComputedTypeRequest { params, .. } => {
+                self.dispatch_get_type_request(request.id.clone(), params, |s, p| {
+                    s.handle_get_computed_type(p)
+                });
+                Ok(true)
+            }
+            TSPRequests::GetExpectedTypeRequest { params, .. } => {
+                self.dispatch_get_type_request(request.id.clone(), params, |s, p| {
+                    s.handle_get_expected_type(p)
+                });
+                Ok(true)
+            }
+        }
+    }
+
+    /// Deserialize `serde_json::Value` params into [`GetTypeParams`], call the
+    /// handler, and send the response. Shared by getDeclaredType,
+    /// getComputedType, and getExpectedType.
+    fn dispatch_get_type_request(
+        &self,
+        id: RequestId,
+        raw_params: serde_json::Value,
+        handler: impl FnOnce(
+            &Self,
+            GetTypeParams,
+        ) -> Result<Option<tsp_types::Type>, lsp_server::ResponseError>,
+    ) {
+        let params: GetTypeParams = match serde_json::from_value(raw_params) {
+            Ok(p) => p,
+            Err(e) => {
+                self.send_err(
+                    id,
+                    crate::tsp::validation::invalid_params_error(&e.to_string()),
+                );
+                return;
+            }
+        };
+        match handler(self, params) {
+            Ok(result) => self.send_ok(id, result),
+            Err(err) => self.send_err(id, err),
         }
     }
 }
 
 pub fn tsp_loop(
     lsp_server: impl TspInterface,
-    _initialization_params: InitializeParams,
+    mut reader: MessageReader,
+    _initialization: InitializeInfo,
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     eprintln!("Reading TSP messages");
@@ -149,7 +198,7 @@ pub fn tsp_loop(
         scope.spawn(|| server.inner.run_recheck_queue(telemetry));
 
         scope.spawn(|| {
-            dispatch_lsp_events(server.inner.connection(), server.inner.lsp_queue());
+            server.inner.dispatch_lsp_events(&mut reader);
         });
 
         let mut ide_transaction_manager = TransactionManager::default();
@@ -160,6 +209,7 @@ pub fn tsp_loop(
                 TelemetryEventKind::LspEvent(event.describe()),
                 enqueued_at,
                 server.inner.telemetry_state(),
+                QueueName::LspQueue,
             );
             let event_description = event.describe();
 
@@ -195,7 +245,7 @@ pub fn tsp_loop(
 pub fn tsp_capabilities(
     indexing_mode: IndexingMode,
     initialization_params: &InitializeParams,
-) -> ServerCapabilities {
+) -> ServerCapabilitiesWithTypeHierarchy {
     // Use the same capabilities as LSP - TSP server supports the same features
     // but will only respond to TSP protocol requests
     capabilities(indexing_mode, initialization_params)

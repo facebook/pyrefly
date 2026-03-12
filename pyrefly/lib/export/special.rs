@@ -61,7 +61,6 @@ pub enum SpecialExport {
     TypingList,
     BuiltinsTuple,
     TypingTuple,
-    PytestNoReturn,
     BuiltinsInt,
     BuiltinsStr,
     BuiltinsBytes,
@@ -70,6 +69,7 @@ pub enum SpecialExport {
     BuiltinsFrozenset,
     BuiltinsFloat,
     Deprecated,
+    Final,
     TypingMapping,
 }
 
@@ -123,7 +123,6 @@ impl SpecialExport {
             "List" => Some(Self::TypingList),
             "tuple" => Some(Self::BuiltinsTuple),
             "Tuple" => Some(Self::TypingTuple),
-            "fail" | "xfail" | "skip" => Some(Self::PytestNoReturn),
             "int" => Some(Self::BuiltinsInt),
             "str" => Some(Self::BuiltinsStr),
             "bytes" => Some(Self::BuiltinsBytes),
@@ -132,6 +131,7 @@ impl SpecialExport {
             "frozenset" => Some(Self::BuiltinsFrozenset),
             "float" => Some(Self::BuiltinsFloat),
             "deprecated" => Some(Self::Deprecated),
+            "Final" => Some(Self::Final),
             "Mapping" => Some(Self::TypingMapping),
             _ => None,
         }
@@ -139,10 +139,11 @@ impl SpecialExport {
 
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
+            Self::TypeVar | Self::TypeVarTuple => {
+                matches!(m.as_str(), "typing" | "typing_extensions" | "torch_shapes")
+            }
             Self::TypeAlias
-            | Self::TypeVar
             | Self::ParamSpec
-            | Self::TypeVarTuple
             | Self::Annotated
             | Self::Literal
             | Self::TypedDict
@@ -163,6 +164,7 @@ impl SpecialExport {
             | Self::TypingDict
             | Self::TypingList
             | Self::TypingTuple
+            | Self::Final
             | Self::TypingMapping => {
                 matches!(m.as_str(), "typing" | "typing_extensions")
             }
@@ -198,7 +200,6 @@ impl SpecialExport {
                 m.as_str(),
                 "typing" | "typing_extensions" | "collections.abc"
             ),
-            Self::PytestNoReturn => matches!(m.as_str(), "pytest"),
             Self::Deprecated => matches!(m.as_str(), "warnings" | "typing_extensions"),
         }
     }

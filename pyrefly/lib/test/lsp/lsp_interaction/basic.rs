@@ -10,13 +10,13 @@ use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::request::DocumentDiagnosticRequest;
+use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly::lsp::non_wasm::protocol::Request;
 use serde_json::json;
 
-use crate::lsp::non_wasm::protocol::Message;
-use crate::lsp::non_wasm::protocol::Request;
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 #[allow(deprecated)]
@@ -36,9 +36,10 @@ fn test_initialize_basic() {
             "definitionProvider": true,
             "typeDefinitionProvider": true,
             "codeActionProvider": {
-                "codeActionKinds": ["quickfix", "refactor.extract", "refactor.move"]
+                "codeActionKinds": ["quickfix", "refactor.extract", "refactor.rewrite", "refactor.delete", "refactor.move", "refactor.inline", "source.fixAll"]
             },
             "completionProvider": {
+                "resolveProvider": true,
                 "triggerCharacters": [".", "'", "\""]
             },
             "declarationProvider": true,

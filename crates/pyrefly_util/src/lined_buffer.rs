@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use parse_display::Display;
 use ruff_notebook::Notebook;
+use ruff_python_ast::Expr;
 use ruff_source_file::LineColumn;
 use ruff_source_file::LineIndex;
 use ruff_source_file::OneIndexed;
@@ -107,6 +108,56 @@ impl LinedBuffer {
                 "`range` is invalid, got {range:?}, but file is {} bytes long",
                 self.buffer.len()
             ),
+        }
+    }
+
+    /// Convert an expression's range into a `PythonASTRange`.
+    ///
+    /// Generator expressions receive special handling to match the
+    /// parenthesized range that CPython's `ast` module reports (ruff
+    /// uses the un-parenthesized range for non-parenthesized generators).
+    pub fn python_ast_range_for_expr(
+        &self,
+        original_range: TextRange,
+        expr: &Expr,
+        parent_expr: Option<&Expr>,
+    ) -> PythonASTRange {
+        let expression_range = if let Expr::Generator(e) = expr {
+            if e.parenthesized {
+                original_range
+            } else if let Some(Expr::Call(p)) = parent_expr
+                && p.arguments.len() == 1
+                && p.arguments.inner_range().contains_range(original_range)
+            {
+                TextRange::new(
+                    p.arguments.l_paren_range().start(),
+                    p.arguments.r_paren_range().end(),
+                )
+            } else {
+                original_range
+                    .sub_start(TextSize::new(1))
+                    .add_end(TextSize::new(1))
+            }
+        } else {
+            original_range
+        };
+
+        let start_location = self.lines.source_location(
+            expression_range.start(),
+            &self.buffer,
+            PositionEncoding::Utf8,
+        );
+        let end_location = self.lines.source_location(
+            expression_range.end(),
+            &self.buffer,
+            PositionEncoding::Utf8,
+        );
+
+        PythonASTRange {
+            start_line: LineNumber::new(start_location.line.get() as u32).unwrap(),
+            start_col: start_location.character_offset.to_zero_indexed() as u32,
+            end_line: LineNumber::new(end_location.line.get() as u32).unwrap(),
+            end_col: end_location.character_offset.to_zero_indexed() as u32,
         }
     }
 
@@ -392,6 +443,33 @@ impl LineNumber {
 
     pub fn get(self) -> u32 {
         self.0.get()
+    }
+}
+
+/// Source location in Python AST conventions: 1-indexed lines, 0-indexed columns.
+///
+/// Matches the `lineno`/`col_offset`/`end_lineno`/`end_col_offset` fields that
+/// CPython's `ast` module exposes on expression nodes.
+#[derive(Debug, Clone)]
+pub struct PythonASTRange {
+    pub start_line: LineNumber,
+    pub start_col: u32,
+    pub end_line: LineNumber,
+    pub end_col: u32,
+}
+
+impl Serialize for PythonASTRange {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("PythonASTRange", 4)?;
+        state.serialize_field("start_line", &self.start_line.get())?;
+        state.serialize_field("start_col", &self.start_col)?;
+        state.serialize_field("end_line", &self.end_line.get())?;
+        state.serialize_field("end_col", &self.end_col)?;
+        state.end()
     }
 }
 

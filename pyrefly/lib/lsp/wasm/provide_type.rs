@@ -53,7 +53,7 @@ pub fn provide_type(
     // Check if the file is already loaded in memory. If not, load it.
     let was_loaded = transaction.get_module_info(handle).is_some();
     if !was_loaded {
-        transaction.run(&[handle.dupe()], Require::Everything);
+        transaction.run(&[handle.dupe()], Require::Everything, None);
     }
     let info = transaction.get_module_info(handle)?;
     let mut contents = Vec::new();

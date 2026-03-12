@@ -8,12 +8,14 @@
 #![cfg(test)]
 
 mod abstract_methods;
+mod annotation;
 mod assign;
 mod attribute_narrow;
 mod attributes;
 mod attrs;
 mod callable;
 mod calls;
+mod cinderx;
 mod class_keywords;
 mod class_overrides;
 mod class_subtyping;
@@ -55,11 +57,14 @@ mod perf;
 mod protocol;
 mod pydantic;
 mod pysa;
+mod query;
+mod recursive_alias;
 mod redundant_cast;
 mod returns;
 mod scope;
 mod semantic_syntax_errors;
 mod simple;
+mod slots;
 mod state;
 mod subscript_narrow;
 mod suppression;

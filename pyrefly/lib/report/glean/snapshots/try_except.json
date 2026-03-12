@@ -293,6 +293,21 @@
       {
         "id": 0,
         "key": {
+          "file": {
+            "id": 0,
+            "key": "try_except.py"
+          },
+          "xrefs": []
+        }
+      }
+    ],
+    "predicate": "python.xrefs.XRefsByFile.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
           "id": 0,
           "key": ""
         },
@@ -365,6 +380,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "b7943ae76a8e6adb45598859f7c7b073"
+    "schema_id": "8f24e877367cad77ea2a10942e644b42"
   }
 ]

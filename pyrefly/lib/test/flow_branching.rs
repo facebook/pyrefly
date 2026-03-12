@@ -320,6 +320,50 @@ except x2 as e7:
 );
 
 testcase!(
+    test_exception_handler_dynamic_tuple,
+    r#"
+from typing import assert_type
+
+class Exception1(Exception): pass
+class Exception2(Exception): pass
+
+# Dynamic tuple from tuple() constructor call
+error_list = [Exception1, Exception2]
+dynamic_errors = tuple(error_list)
+try:
+    pass
+except dynamic_errors as e1:
+    assert_type(e1, Exception1 | Exception2)
+
+# Union-typed parameter: single exception class or tuple of exception classes
+def handle(
+    errors: type[Exception] | tuple[type[Exception], ...],
+    value: str,
+) -> int:
+    try:
+        return int(value)
+    except errors as e2:
+        assert_type(e2, Exception)
+        return 0
+"#,
+);
+
+testcase!(
+    test_exception_handler_star_unpacking,
+    r#"
+import sys
+from typing import assert_type
+
+EXTRA_ERRORS: tuple[type[Exception], ...] = (RuntimeError,) if sys.version_info < (3, 13) else ()
+
+try:
+    pass
+except (ValueError, *EXTRA_ERRORS) as e:
+    assert_type(e, ValueError | Exception)
+"#,
+);
+
+testcase!(
     test_exception_group_handler,
     r#"
 from typing import reveal_type
@@ -332,9 +376,9 @@ try:
 except* int as e1:  # E: Invalid exception class
     reveal_type(e1)  # E: revealed type: ExceptionGroup[int]
 except* Exception as e2:
-    reveal_type(e2)  # E: revealed type: ExceptionGroup[Exception]
+    reveal_type(e2)  # E: revealed type: ExceptionGroup
 except* ExceptionGroup as e3:  # E: Exception handler annotation in `except*` clause may not extend `BaseExceptionGroup`
-    reveal_type(e3)  # E: ExceptionGroup[ExceptionGroup[Exception]]
+    reveal_type(e3)  # E: ExceptionGroup[ExceptionGroup]
 except* (Exception1, Exception2) as e4:
     reveal_type(e4)  # E: ExceptionGroup[Exception1 | Exception2]
 except* Exception1 as e5:
@@ -994,7 +1038,6 @@ except as r: # E: Parse error: Expected one or more exception types
 );
 
 testcase!(
-    bug = "We unsoundly merge narrows dropping missing flow. See the incorrect reveal_type(y) result.",
     test_narrows_in_flow_merge_when_not_in_base_flow,
     r#"
 from typing import reveal_type
@@ -1010,10 +1053,8 @@ def f():
     elif isinstance(x, C):
         assert isinstance(y, C)
         pass
-    # We get this case right, but for a brittle reason: we negate the tests in the base flow.
-    reveal_type(x)  # E: revealed type: A | B | C
-    # The negation trick doesn't work here, and we get an incorrect narrow.
-    reveal_type(y)  # E: revealed type: B | C
+    reveal_type(x)  # E: revealed type: A
+    reveal_type(y)  # E: revealed type: A
 "#,
 );
 
@@ -1122,6 +1163,84 @@ def f(v):
         print(value)
     else:
         print(value)  # E: `value` is uninitialized
+    "#,
+);
+
+// Regression tests for https://github.com/facebook/pyrefly/issues/2382
+// Walrus operator in ternary test expression
+
+testcase!(
+    test_walrus_in_ternary_else_branch,
+    r#"
+def f(i: float) -> int:
+    return a if (a := round(i)) - 1 else a + 1
+    "#,
+);
+
+testcase!(
+    test_walrus_in_ternary_only_in_else,
+    r#"
+def f(x: int) -> int:
+    return 0 if (y := x) > 0 else y
+    "#,
+);
+
+// x is narrowed to int in the body (is not None) and
+// the else branch returns 0 (int), so the return type is int. No error.
+testcase!(
+    test_walrus_in_ternary_with_narrowing,
+    r#"
+from typing import assert_type
+def get() -> int | None: ...
+def f() -> int:
+    return x if (x := get()) is not None else 0
+    "#,
+);
+
+testcase!(
+    test_walrus_ternary_truthiness_narrowing,
+    r#"
+from typing import assert_type
+def get() -> str | None: ...
+def f() -> str:
+    return x if (x := get()) else "default"
+    "#,
+);
+
+testcase!(
+    test_walrus_in_ternary_short_circuit,
+    r#"
+def condition() -> bool: ...
+def get() -> int: ...
+def f1() -> int:
+    return x if condition() and (x := get()) else 0  # no error
+# BoolOp merging uses lax handling, so `x` is treated as defined even though
+# `x := get()` may not execute. This is a known false negative from BoolOp laxness.
+def f2() -> int:
+    return x if condition() or (x := get()) else 0  # false negative
+def f3() -> int:
+    return x if condition() and (x := get()) else x  # false negative
+    "#,
+);
+
+// Walrus in outer ternary test: `a` should be visible in both branches.
+// Currently this works because truthiness narrowing on `a` adds it to the
+// else flow, masking the uninitialized status.
+testcase!(
+    test_walrus_in_nested_ternary_outer,
+    r#"
+def f(v: int) -> int:
+    return (a if a > 0 else -a) if (a := v) else -a
+    "#,
+);
+
+testcase!(
+    test_walrus_in_nested_ternary_inner,
+    r#"
+def condition() -> bool: ...
+def get() -> int: ...
+def f() -> int:
+    return (b if (b := get()) > 0 else 0) if condition() else -1
     "#,
 );
 
@@ -1420,7 +1539,6 @@ for _ in []:
 );
 
 testcase!(
-    bug = "Pyrefly doesn't understand termination from NoReturn - see https://github.com/facebook/pyrefly/issues/361",
     test_noreturn_branch_termination,
     r#"
 from typing import NoReturn, assert_type
@@ -1435,18 +1553,369 @@ def f(x: str | bytes | bool) -> str | bytes:
         pass
     else:
         raises()
-    return x  # E: Returned type `bool | bytes | str`
+    return x  # Should be ok - x is str | bytes here
 
 def g(x: str | None) -> str:
     if x is None:
         raises()
-    return x  # E: Returned type `str | None`
+    return x  # Should be ok - x is str here
 
 def h(x: int | str) -> None:
     if isinstance(x, int):
         y = x + 1
     else:
         raises()
-    assert_type(y, int)  # E: `y` may be uninitialized
+    assert_type(y, int)  # y should be int, not str | int
 "#,
+);
+
+testcase!(
+    test_noreturn_nested_branches,
+    r#"
+from typing import NoReturn, assert_type
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: str | int | None) -> str:
+    if x is None:
+        raises()
+    else:
+        if isinstance(x, str):
+            return x
+        else:
+            raises()
+    # Should not be reachable, but if it were, x would be str
+"#,
+);
+
+testcase!(
+    test_noreturn_with_assignment_after,
+    r#"
+from typing import assert_type, NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: str | None):
+    if x is None:
+        raises()
+        y = "unreachable"  # This makes the branch NOT terminate
+    assert_type(x, str | None)
+"#,
+);
+
+testcase!(
+    test_noreturn_all_branches_terminate,
+    r#"
+from typing import assert_type, NoReturn, Never
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: int | str):
+    if isinstance(x, str):
+        raises()
+    else:
+        raises()
+    assert_type(x, Never)
+"#,
+);
+
+testcase!(
+    test_non_noreturn_with_termination_key,
+    r#"
+from typing import assert_type
+
+def maybe_raises() -> None:
+    """Not NoReturn - might return normally."""
+    if True:
+        raise Exception()
+
+def f(cond: bool) -> str:
+    if cond:
+        x = "defined"
+    else:
+        maybe_raises()  # Has termination key, but is NOT NoReturn
+    return x  # E: `x` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_non_noreturn_elif,
+    r#"
+def maybe_raises() -> None:
+    if True:
+        raise Exception()
+
+def f(x: int) -> str:
+    if x == 1:
+        y = "one"
+    elif x == 2:
+        maybe_raises()
+    else:
+        maybe_raises()
+    return y  # E: `y` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_declared_variable_with_noreturn_else_false_positive,
+    r#"
+from typing import NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: int) -> str:
+    y: str
+    if x == 1:
+        y = "one"
+    elif x == 2:
+        y = "two"
+    else:
+        raises()
+    return y
+"#,
+);
+
+testcase!(
+    test_if_elif_enum_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(c: Color) -> str:
+    if c == Color.RED:
+        return "warm"
+    elif c == Color.GREEN:
+        return "natural"
+    elif c == Color.BLUE:
+        return "cool"
+"#,
+);
+
+testcase!(
+    bug = "isinstance exhaustiveness not yet working for all union patterns",
+    test_if_elif_isinstance_exhaustive,
+    r#"
+def f(x: int | str) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if isinstance(x, int):
+        return "int"
+    elif isinstance(x, str):
+        return "str"
+"#,
+);
+
+testcase!(
+    test_if_elif_non_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(c: Color) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if c == Color.RED:
+        return "warm"
+    elif c == Color.GREEN:
+        return "natural"
+    # Missing Color.BLUE case - should always error
+"#,
+);
+
+testcase!(
+    test_if_elif_with_else_trivially_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(c: Color) -> str:
+    if c == Color.RED:
+        return "warm"
+    elif c == Color.GREEN:
+        return "natural"
+    else:
+        return "cool"
+"#,
+);
+
+testcase!(
+    test_if_elif_literal_union_exhaustive,
+    r#"
+from typing import Literal
+
+def f(x: Literal["a", "b", "c"]) -> str:
+    if x == "a":
+        return "first"
+    elif x == "b":
+        return "second"
+    elif x == "c":
+        return "third"
+"#,
+);
+
+testcase!(
+    bug = "mixed is/isinstance narrowing exhaustiveness not yet working",
+    test_if_elif_mixed_narrowing,
+    r#"
+def f(x: int | None) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if x is None:
+        return "none"
+    elif isinstance(x, int):
+        return "int"
+"#,
+);
+
+testcase!(
+    test_if_elif_bool_exhaustive,
+    r#"
+def f(x: bool) -> str:
+    if x:
+        return "true"
+    elif not x:
+        return "false"
+"#,
+);
+
+testcase!(
+    test_if_elif_multiple_subjects,
+    r#"
+def f(x: int | str, y: int | str) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if isinstance(x, int):
+        return "x is int"
+    elif isinstance(y, str):
+        return "y is str"
+    # Different subjects in different branches - cannot determine exhaustiveness
+"#,
+);
+
+// Issue #2406: NoReturn in except block should make variable always initialized
+testcase!(
+    test_noreturn_try_except_simple,
+    r#"
+from typing import NoReturn
+
+def foo() -> NoReturn:
+    raise ValueError('')
+
+def main() -> None:
+    try:
+        node = 1
+    except Exception:
+        foo()
+    print(node)
+"#,
+);
+
+testcase!(
+    test_noreturn_try_except_if_nested,
+    r#"
+from typing import NoReturn
+
+def foo() -> NoReturn:
+    raise ValueError('')
+
+def main(resolve: bool) -> None:
+    try:
+        node = 1
+    except Exception as exc:
+        foo()
+    if resolve:
+        try:
+            node = 2
+        except Exception:
+            foo()
+    print(node)
+"#,
+);
+
+// for https://github.com/facebook/pyrefly/issues/1840
+testcase!(
+    test_exhaustive_flow_no_fall_through,
+    r#"
+import types
+from dataclasses import dataclass
+from typing import Any, TypeIs, assert_never
+
+
+def is_instance_union_aware[T](
+    value: Any, target_type: type[T] | tuple[type[T], ...]
+) -> TypeIs[T]: ...
+
+def test_is_instance_union_aware():
+    @dataclass
+    class C0:
+        f_common: int
+        f_0: int
+
+    @dataclass
+    class C1:
+        f_common: int
+        f_1: int
+
+    @dataclass
+    class C2:
+        f_common: int
+        f_2: int
+
+    def compute_1(obj: C0 | C1 | C2) -> int:
+        if is_instance_union_aware(obj, C0 | C1):
+            return obj.f_common
+        return obj.f_2 + obj.f_common
+
+    def compute_2(obj: C0 | C1 | C2) -> int:
+        if is_instance_union_aware(obj, C0 | C1):
+            return obj.f_common
+        if is_instance_union_aware(obj, C2):
+            return obj.f_2 + obj.f_common
+        assert_never(obj)
+
+    assert compute_1(C1(f_common=1, f_1=2)) == 3
+    assert compute_2(C1(f_common=4, f_1=5)) == 9
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/1896
+testcase!(
+    test_exhaustive_flow_no_early_return_narrow,
+    r#"
+import dataclasses as dc
+from typing import assert_type
+
+@dc.dataclass(frozen=True)
+class Success:
+    value: int
+
+@dc.dataclass(frozen=True)
+class Error:
+    message: str
+
+Result = Success | Error | None
+
+def get_result() -> Result:
+    return Success(value=42)
+
+def use_success(s: Success) -> int:
+    return s.value
+
+def demo_pyre_narrowing_failure() -> int:
+    result = get_result()
+    match result:
+        case Error() as err:
+            return -1
+        case None:
+            return 0
+        case _:
+            success = result
+    assert_type(success, Success)
+    return use_success(success)
+    "#,
 );

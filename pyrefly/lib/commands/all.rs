@@ -5,19 +5,24 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::Arc;
+
 use clap::Subcommand;
 use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::buck_check::BuckCheckArgs;
 use crate::commands::check::FullCheckArgs;
 use crate::commands::check::SnippetCheckArgs;
+use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::dump_config::DumpConfigArgs;
 use crate::commands::infer::InferArgs;
 use crate::commands::init::InitArgs;
 use crate::commands::lsp::LspArgs;
 use crate::commands::report::ReportArgs;
+use crate::commands::suppress::SuppressArgs;
 use crate::commands::tsp::TspArgs;
 use crate::commands::util::CommandExitStatus;
+use crate::lsp::non_wasm::external_provider::NoExternalProvider;
 
 /// Subcommands to run Pyrefly with.
 #[deny(clippy::missing_docs_in_private_items)]
@@ -48,6 +53,8 @@ pub enum Command {
     Infer(InferArgs),
     /// Generate reports from pyrefly type checking results.
     Report(ReportArgs),
+    /// Suppress type errors by adding ignore comments, or remove unused ignores.
+    Suppress(SuppressArgs),
 }
 
 impl Command {
@@ -55,17 +62,25 @@ impl Command {
         self,
         version: &str,
         telemetry: &impl Telemetry,
+        config_configurer_wrapper: Option<ConfigConfigurerWrapper>,
     ) -> anyhow::Result<CommandExitStatus> {
         match self {
-            Command::Check(args) => args.run().await,
-            Command::Snippet(args) => args.run().await,
+            Command::Check(args) => args.run(config_configurer_wrapper).await,
+            Command::Snippet(args) => args.run(config_configurer_wrapper).await,
             Command::BuckCheck(args) => args.run(),
-            Command::Lsp(args) => args.run(version, telemetry),
-            Command::Tsp(args) => args.run(telemetry),
-            Command::Init(args) => args.run(),
-            Command::Infer(args) => args.run(),
-            Command::DumpConfig(args) => args.run(),
-            Command::Report(args) => args.run(),
+            Command::Lsp(args) => args.run(
+                version,
+                None,
+                telemetry,
+                Arc::new(NoExternalProvider),
+                config_configurer_wrapper,
+            ),
+            Command::Tsp(args) => args.run(telemetry, config_configurer_wrapper),
+            Command::Init(args) => args.run(config_configurer_wrapper.clone()),
+            Command::Infer(args) => args.run(config_configurer_wrapper),
+            Command::DumpConfig(args) => args.run(config_configurer_wrapper),
+            Command::Report(args) => args.run(config_configurer_wrapper),
+            Command::Suppress(args) => args.run(config_configurer_wrapper),
         }
     }
 }

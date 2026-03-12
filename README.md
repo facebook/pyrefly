@@ -84,6 +84,8 @@ Pyrefly is split into a number of crates (mostly under `crates/`):
   `Visit`.
 - `pyrefly_python` are Python utilities with no type-checking aspects, such as
   modelling modules or `sys.info`.
+- `pyrefly_graph` provides utilities for indexing values and caching
+  computations that may depend on each other.
 - `pyrefly_bundled` are the third-party
   [typeshed stubs](https://github.com/python/typeshed).
 - `pyrefly_config` defines the Pyrefly configuration, along with support for

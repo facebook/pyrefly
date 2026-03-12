@@ -37,7 +37,7 @@ $ $PYREFLY snippet "import sys; print(sys.version)"
 $ echo "x: int = 5" > $TMPDIR/test.py && \
 > touch $TMPDIR/pyrefly.toml && \
 > $PYREFLY snippet "import test; reveal_type(test.x)" -c $TMPDIR/pyrefly.toml
-ERROR `reveal_type` must be imported from `typing` for runtime usage [unknown-name]
+ERROR `reveal_type` must be imported from `typing` for runtime usage [unimported-directive]
  --> snippet:1:14
   |
 1 | import test; reveal_type(test.x)

@@ -22,9 +22,9 @@ use lsp_types::request::WorkspaceConfiguration;
 use pyrefly_util::fs_anyhow::write;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_did_change_configuration() {
@@ -105,6 +105,9 @@ fn test_pythonpath_change() {
             configuration: Some(Some(
                 json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
             )),
+            initialization_options: Some(json!({
+                "pyrefly": {"streamDiagnostics": false},
+            })),
             ..Default::default()
         })
         .expect("Failed to initialize");
@@ -841,7 +844,7 @@ fn test_parse_pylance_configs() {
             {
                 "pyrefly": {"displayTypeErrors": "force-off"},
                 "analysis": {
-                    "diagnosticMode": "workspace",
+                    "diagnosticMode": "openFilesOnly",
                     "importFormat": "relative",
                     "inlayHints": {
                         "callArgumentNames": "on",

@@ -72,6 +72,10 @@ impl ModuleGlobalVariables {
     pub fn get(&self, short_identifier: ShortIdentifier) -> Option<&GlobalVariableBase> {
         self.0.get(&short_identifier)
     }
+
+    pub fn contains(&self, name: &Name) -> bool {
+        self.0.values().any(|global| global.name == *name)
+    }
 }
 
 impl WholeProgramGlobalVariables {
@@ -95,7 +99,7 @@ impl GlobalVariable {
                 .type_
                 .as_ref()
                 .map(|type_| PysaType::from_type(type_, context)),
-            location: PysaLocation::new(context.module_info.display_range(identifier.range())),
+            location: PysaLocation::from_text_range(identifier.range(), &context.module_info),
         }
     }
 }

@@ -124,6 +124,33 @@ d: list[Any] = ["test"]
 );
 
 testcase!(
+    test_assign_list_concat_with_contextual_hint,
+    r#"
+from typing import assert_type, reveal_type
+
+class Base: ...
+class A(Base): ...
+class B(Base): ...
+
+# List literal with mixed subclasses works with contextual hint
+l1: list[Base] = [A(), B()]
+
+# List concatenation with contextual hint should also work
+l2: list[Base] = [A()] + [B()]
+
+# List concatenation with list comprehension operands
+l3: list[Base] = [A() for _ in range(1)] + [B()]
+
+# Without contextual hint, reveal_type should show the inferred union type
+reveal_type([A()] + [B()])  # E: revealed type: list[A | B]
+
+# Non-fresh operands (variables) should NOT be coerced
+xs: list[A] = [A()]
+l4: list[Base] = xs + [B()]  # E: `list[A | B]` is not assignable to `list[Base]`
+"#,
+);
+
+testcase!(
     test_assign_at_types,
     r#"
 a: int = 3
@@ -386,9 +413,51 @@ testcase!(
     r#"
 from typing import Final
 x: Final   # E: Expected a type argument for `Final`
-y: Final[int]  # OK
+y: Final[int]  # E: Final name must be initialized with a value
 z: Final = 1  # OK
     "#,
+);
+
+testcase!(
+    test_final_stub_no_error,
+    TestEnv::one_with_path(
+        "stub",
+        "stub.pyi",
+        r#"
+from typing import Final
+x: Final[int]
+class C:
+    y: Final[int]
+"#,
+    ),
+    r#"
+from stub import x, C
+"#,
+);
+
+testcase!(
+    test_final_without_assign_should_error,
+    r#"
+from typing import Final
+x: Final[int]  # E: Final name must be initialized with a value
+def f() -> None:
+    y: Final[int]  # E: Final name must be initialized with a value
+class C:
+    z: Final[int]  # E: Final attribute declared in class body must be initialized with a value or in `__init__`
+"#,
+);
+
+testcase!(
+    test_final_alternate_init_forms_no_error,
+    r#"
+from typing import Final, TextIO
+x: Final[int]
+x, _ = 1, 2
+y: Final[int]
+z = (y := 3)
+f: Final[TextIO]
+with open('foo') as f: pass
+"#,
 );
 
 testcase!(

@@ -165,6 +165,12 @@ impl TypeCheckKind {
                 param,
                 ctx.display(want),
             ),
+            Self::OverloadDefault(param) => format!(
+                "Default `{}` from implementation is not assignable to overload parameter `{}` with type `{}`",
+                ctx.display(got),
+                param,
+                ctx.display(want),
+            ),
             Self::TypedDictKey(key) => format!(
                 "`{}` is not assignable to TypedDict key{} with type `{}`",
                 ctx.display(got),
@@ -211,7 +217,7 @@ impl TypeCheckKind {
                 ctx.display(want)
             ),
             Self::CycleBreaking => format!(
-                "`{}` is not assignable to `{}` (caused by inconsistent types when breaking cycles)",
+                "Pyrefly detected conflicting types while breaking a dependency cycle: `{}` is not assignable to `{}`. Adding explicit type annotations might possibly help.",
                 ctx.display(got),
                 ctx.display(want)
             ),
@@ -251,11 +257,17 @@ impl TypeCheckKind {
             }
             Self::TypeVarSpecialization(name) => {
                 format!(
-                    "`{got}` is not assignable to upper bound `{want}` of type variable `{name}`"
+                    "`{}` is not assignable to upper bound `{}` of type variable `{name}`",
+                    ctx.display(got),
+                    ctx.display(want)
                 )
             }
             Self::Container => {
-                format!("`{got}` is not assignable to contained type `{want}`")
+                format!(
+                    "`{}` is not assignable to contained type `{}`",
+                    ctx.display(got),
+                    ctx.display(want)
+                )
             }
         }
     }

@@ -940,7 +940,7 @@ Definition Result:
 10 | def f(x: A[B, Path]) -> None:
                    ^
 Definition Result:
-173 | class Path(PurePath):
+182 | class Path(PurePath):
             ^^^^
 "#
         .trim(),
@@ -1182,13 +1182,13 @@ Definition Result:
 25 | dict["foo"]
             ^
 Definition Result:
-3618 |     def __getitem__(self, key: _KT, /) -> _VT:
+3632 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 
 27 | dict["bar"]
             ^
 Definition Result:
-3618 |     def __getitem__(self, key: _KT, /) -> _VT:
+3632 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 "#
         .trim(),
@@ -1380,7 +1380,6 @@ Definition Result:
     );
 }
 
-// todo(kylei) go-to definition on x should go to the definition
 #[test]
 fn global_keyword() {
     let code = r#"
@@ -1395,7 +1394,33 @@ def test():
 # main.py
 4 |     global x
                ^
-Definition Result: None
+Definition Result:
+2 | x = 5
+    ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn nonlocal_keyword() {
+    let code = r#"
+def outer():
+    x = 5
+    def inner():
+        nonlocal x
+        #        ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 |         nonlocal x
+                     ^
+Definition Result:
+3 |     x = 5
+        ^
 "#
         .trim(),
         report.trim(),
@@ -1428,6 +1453,97 @@ Definition Result:
 
 
 # foo.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dunder_all_entry_definition_test() {
+    let pkg = r#"
+from pkg.bar import Bar
+
+class Baz:
+    pass
+
+__all__ = (
+    "Bar",
+#    ^
+    "Baz",
+#    ^
+)
+"#;
+    let bar = r#"
+class Bar:
+    pass
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("pkg", pkg), ("pkg.bar", bar)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+8 |     "Bar",
+         ^
+Definition Result:
+2 | class Bar:
+          ^^^
+
+10 |     "Baz",
+          ^
+Definition Result:
+4 | class Baz:
+          ^^^
+
+
+# pkg.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn string_literal_not_in_dunder_all() {
+    let pkg = r#"
+class Foo:
+    pass
+
+x = "Foo"
+#    ^
+
+__all__ = ["Foo"]
+"#;
+    let report = get_batched_lsp_operations_report(&[("pkg", pkg)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+5 | x = "Foo"
+         ^
+Definition Result: None
+
+
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dunder_all_nonexistent_symbol() {
+    let pkg = r#"
+__all__ = ["NonExistent"]
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("pkg", pkg)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+2 | __all__ = ["NonExistent"]
+                 ^
+Definition Result: None
+
+
 "#
         .trim(),
         report.trim(),
@@ -1793,87 +1909,6 @@ Definition Result:
 }
 
 #[test]
-fn submodule_access_test() {
-    let code_torch_init = r#"# torch/__init__.py
-"#;
-    let code_autograd_init = r#"# torch/autograd/__init__.py
-class Function:
-    pass
-"#;
-    let code = r#"
-import torch
-torch.autograd.Function
-#     ^
-"#;
-    let report = get_batched_lsp_operations_report_allow_error(
-        &[
-            ("main", code),
-            ("torch", code_torch_init),
-            ("torch.autograd", code_autograd_init),
-        ],
-        get_test_report,
-    );
-    assert_eq!(
-        r#"
-# main.py
-3 | torch.autograd.Function
-          ^
-Definition Result: None
-
-
-# torch.py
-
-# torch.autograd.py
-"#
-        .trim(),
-        report.trim(),
-    );
-}
-
-#[test]
-fn deep_submodule_chain_test() {
-    let code_a_init = r#"# a/__init__.py
-"#;
-    let code_a_b_init = r#"# a/b/__init__.py
-"#;
-    let code_a_b_c = r#"# a/b/c.py
-class D:
-    pass
-"#;
-    let code = r#"
-import a.b.c
-a.b.c.D
-# ^
-"#;
-    let report = get_batched_lsp_operations_report_allow_error(
-        &[
-            ("main", code),
-            ("a", code_a_init),
-            ("a.b", code_a_b_init),
-            ("a.b.c", code_a_b_c),
-        ],
-        get_test_report,
-    );
-    assert_eq!(
-        r#"
-# main.py
-3 | a.b.c.D
-      ^
-Definition Result: None
-
-
-# a.py
-
-# a.b.py
-
-# a.b.c.py
-"#
-        .trim(),
-        report.trim(),
-    );
-}
-
-#[test]
 fn goto_def_on_first_component_of_multi_part_import() {
     let mymod_init = r#"# mymod/__init__.py
 def version() -> str: ...
@@ -2037,5 +2072,168 @@ result = [x for x in it]
     assert!(
         report.contains("__iter__"),
         "Expected definition to jump to __iter__ method in comprehension, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_in_fstring_simple() {
+    let code = r#"
+def f() -> int:
+    return 0
+
+y = f"hello {f()}"
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("def f()"),
+        "Expected definition to jump to function f, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_in_fstring_format_specifier() {
+    // TODO(T253793958): Fix go-to-definition in format string specifiers.
+    let code = r#"
+def f() -> int:
+    return 0
+
+x = 1
+y = f"hello {x:{f()}}"
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Definition Result:") && report.contains("None"),
+        "Expected definition to jump to function f, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_target() {
+    let code = r#"
+items = [1, 2, 3]
+result = [x for x in items]
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 | result = [x for x in items]
+                    ^
+Definition Result:
+3 | result = [x for x in items]
+                    ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_usage() {
+    let code = r#"
+items = [1, 2, 3]
+result = [x for x in items]
+#         ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // Go-to-def on the usage `x` should jump to the target `x` (the iteration variable)
+    assert_eq!(
+        r#"
+# main.py
+3 | result = [x for x in items]
+              ^
+Definition Result:
+3 | result = [x for x in items]
+                    ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_tuple_unpacking_target_x() {
+    let code = r#"
+result = [(y, x) for x, y in [(1, 2)]]
+#                    ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                         ^
+Definition Result:
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                         ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_tuple_unpacking_target_y() {
+    let code = r#"
+result = [(y, x) for x, y in [(1, 2)]]
+#                       ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                            ^
+Definition Result:
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                            ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_tuple_unpacking_usage_y() {
+    let code = r#"
+result = [(y, x) for x, y in [(1, 2)]]
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | result = [(y, x) for x, y in [(1, 2)]]
+               ^
+Definition Result:
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                            ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_tuple_unpacking_usage_x() {
+    let code = r#"
+result = [(y, x) for x, y in [(1, 2)]]
+#             ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                  ^
+Definition Result:
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                         ^
+"#
+        .trim(),
+        report.trim(),
     );
 }

@@ -14,6 +14,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::thread::{self};
 use std::time::Duration;
+use std::time::Instant;
 
 use crossbeam_channel::RecvTimeoutError;
 use lsp_server::RequestId;
@@ -25,7 +26,6 @@ use lsp_types::ConfigurationParams;
 use lsp_types::HoverContents;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::RegistrationParams;
-use lsp_types::UnregistrationParams;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeConfiguration;
 use lsp_types::notification::DidChangeNotebookDocument;
@@ -35,6 +35,7 @@ use lsp_types::notification::DidCloseNotebookDocument;
 use lsp_types::notification::DidCloseTextDocument;
 use lsp_types::notification::DidOpenNotebookDocument;
 use lsp_types::notification::DidOpenTextDocument;
+use lsp_types::notification::DidSaveTextDocument;
 use lsp_types::notification::Exit;
 use lsp_types::notification::Initialized;
 use lsp_types::notification::Notification as _;
@@ -42,6 +43,7 @@ use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::CodeActionRequest;
 use lsp_types::request::Completion;
 use lsp_types::request::DocumentDiagnosticRequest;
+use lsp_types::request::FoldingRangeRequest;
 use lsp_types::request::GotoDefinition;
 use lsp_types::request::GotoImplementation;
 use lsp_types::request::GotoTypeDefinition;
@@ -55,27 +57,27 @@ use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::Shutdown;
 use lsp_types::request::SignatureHelpRequest;
-use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
 use pretty_assertions::assert_eq;
+use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
+use pyrefly::commands::lsp::run_lsp;
+use pyrefly::lsp::non_wasm::external_provider::NoExternalProvider;
+use pyrefly::lsp::non_wasm::protocol::JsonRpcMessage;
+use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly::lsp::non_wasm::protocol::Notification;
+use pyrefly::lsp::non_wasm::protocol::Request;
+use pyrefly::lsp::non_wasm::protocol::Response;
+use pyrefly::lsp::non_wasm::server::Connection;
+use pyrefly::lsp::wasm::provide_type::ProvideType;
 use pyrefly_util::fs_anyhow::read_to_string;
 use pyrefly_util::lock::FinishHandle;
 use pyrefly_util::telemetry::NoTelemetry;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::commands::lsp::IndexingMode;
-use crate::commands::lsp::LspArgs;
-use crate::commands::lsp::run_lsp;
-use crate::lsp::non_wasm::protocol::JsonRpcMessage;
-use crate::lsp::non_wasm::protocol::Message;
-use crate::lsp::non_wasm::protocol::Notification;
-use crate::lsp::non_wasm::protocol::Request;
-use crate::lsp::non_wasm::protocol::Response;
-use crate::lsp::non_wasm::server::Connection;
-use crate::lsp::wasm::provide_type::ProvideType;
-use crate::test::util::init_test;
+use crate::init::init_test;
 
 #[derive(Debug)]
 pub enum LspMessageError {
@@ -121,7 +123,7 @@ pub struct InitializeSettings {
 }
 
 pub struct ClientRequestHandle<'a, R: lsp_types::request::Request> {
-    id: RequestId,
+    pub(crate) id: RequestId,
     client: &'a TestClient,
     _type: PhantomData<R>,
 }
@@ -230,6 +232,8 @@ pub struct TestClient {
     request_idx: AtomicI32,
     /// Handle to wait for the server to exit
     finish_handle: Arc<FinishHandle>,
+    /// Start time for logging elapsed time in messages
+    start_time: Instant,
 }
 
 impl TestClient {
@@ -241,6 +245,7 @@ impl TestClient {
             recv_timeout: Duration::from_secs(50),
             request_idx: AtomicI32::new(0),
             finish_handle,
+            start_time: Instant::now(),
         }
     }
 
@@ -253,6 +258,12 @@ impl TestClient {
     fn next_request_id(&self) -> RequestId {
         let idx = self.request_idx.fetch_add(1, Ordering::SeqCst);
         RequestId::from(idx + 1)
+    }
+
+    /// Returns a formatted string of elapsed time since the client was created.
+    fn elapsed_time(&self) -> String {
+        let elapsed = self.start_time.elapsed();
+        format!("{:>6.3}s", elapsed.as_secs_f64())
     }
 
     pub fn drop_connection(&mut self) {
@@ -282,13 +293,14 @@ impl TestClient {
         self.conn
             .as_ref()
             .unwrap()
-            .receiver
+            .channel_receiver()
             .recv_timeout(self.recv_timeout)
     }
 
     pub fn send_message(&self, msg: Message) {
         eprintln!(
-            "client--->server {}",
+            "[{}] client--->server {}",
+            self.elapsed_time(),
             serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
         );
         if let Err(err) = self.send_timeout(msg) {
@@ -441,6 +453,14 @@ impl TestClient {
         }));
     }
 
+    pub fn edit_file(&self, file: &str, contents: &str) {
+        let path = self.get_root_or_panic().join(file);
+        self.did_change(file, contents);
+        std::fs::write(&path, contents).unwrap();
+        self.file_modified(file);
+        self.did_save(file);
+    }
+
     pub fn did_change(&self, file: &str, contents: &str) {
         let path = self.get_root_or_panic().join(file);
         self.send_notification::<DidChangeTextDocument>(json!({
@@ -452,6 +472,15 @@ impl TestClient {
             "contentChanges": [{
                 "text": contents.to_owned()
             }],
+        }));
+    }
+
+    pub fn did_save(&self, file: &str) {
+        let path = self.get_root_or_panic().join(file);
+        self.send_notification::<DidSaveTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&path).unwrap().to_string(),
+            },
         }));
     }
 
@@ -486,6 +515,18 @@ impl TestClient {
         "textDocument": {
             "uri": Url::from_file_path(&path).unwrap().to_string()
         }}))
+    }
+
+    pub fn folding_range(
+        &self,
+        file: &'static str,
+    ) -> ClientRequestHandle<'_, FoldingRangeRequest> {
+        let path = self.get_root_or_panic().join(file);
+        self.send_request(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&path).unwrap().to_string()
+            }
+        }))
     }
 
     pub fn hover(
@@ -593,6 +634,7 @@ impl TestClient {
     }
 
     /// Send a file creation event notification
+    #[allow(dead_code)]
     pub fn file_created(&self, file: &str) {
         let path = self.get_root_or_panic().join(file);
         self.send_notification::<DidChangeWatchedFiles>(json!({
@@ -615,6 +657,7 @@ impl TestClient {
     }
 
     /// Send a file deletion event notification
+    #[allow(dead_code)]
     pub fn file_deleted(&self, file: &str) {
         let path = self.get_root_or_panic().join(file);
         self.send_notification::<DidChangeWatchedFiles>(json!({
@@ -684,13 +727,14 @@ impl TestClient {
     pub fn expect_message<T>(
         &self,
         description: &str,
-        matcher: impl Fn(Message) -> Option<Result<T, LspMessageError>>,
+        mut matcher: impl FnMut(Message) -> Option<Result<T, LspMessageError>>,
     ) -> Result<T, LspMessageError> {
         loop {
             match self.recv_timeout() {
                 Ok(msg) => {
                     eprintln!(
-                        "client<---server {}",
+                        "[{}] client<---server {}",
+                        self.elapsed_time(),
                         serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
                     );
                     if let Some(actual) = matcher(msg) {
@@ -862,6 +906,36 @@ impl TestClient {
         Ok(())
     }
 
+    /// Wait for a publishDiagnostics notification for the given file path, regardless of error count.
+    #[allow(dead_code)]
+    pub fn expect_publish_diagnostics_for_file(
+        &self,
+        path: PathBuf,
+    ) -> Result<(), LspMessageError> {
+        self.expect_message(
+            &format!(
+                "publishDiagnostics notification for file: {}",
+                path.display()
+            ),
+            |msg| {
+                if let Message::Notification(x) = msg
+                    && x.method == PublishDiagnostics::METHOD
+                {
+                    let params =
+                        serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
+                    if params.uri.to_file_path().unwrap() == path {
+                        Some(Ok(()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+        )?;
+        Ok(())
+    }
+
     /// Wait for a publishDiagnostics notification that has the correct path and count
     pub fn expect_publish_diagnostics_eventual_error_count(
         &self,
@@ -918,6 +992,47 @@ impl TestClient {
                             Some(Err(LspMessageError::Custom {
                                 description: format!(
                                     "Expected next publish diagnostics for file {} to have {count} errors, but got {}",
+                                    path.display(),
+                                    params.diagnostics.len()
+                                ),
+                            }))
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+        )?;
+        Ok(())
+    }
+
+    /// The next publishDiagnostics for that path should have diagnostic count in this inclusive range, otherwise error
+    pub fn expect_publish_diagnostics_must_have_error_count_between(
+        &self,
+        path: PathBuf,
+        min: usize,
+        max: usize,
+    ) -> Result<(), LspMessageError> {
+        self.expect_message(
+            &format!(
+                "Next publishDiagnostics notification for file {} should have {min}-{max} errors",
+                path.display()
+            ),
+            |msg| {
+                if let Message::Notification(x) = msg
+                    && x.method == PublishDiagnostics::METHOD
+                {
+                    let params =
+                        serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
+                    if params.uri.to_file_path().unwrap() == path {
+                        if params.diagnostics.len() >= min && params.diagnostics.len() <= max {
+                            Some(Ok(()))
+                        } else {
+                            Some(Err(LspMessageError::Custom {
+                                description: format!(
+                                    "Expected next publish diagnostics for file {} to have {min}-{max} errors, but got {}",
                                     path.display(),
                                     params.diagnostics.len()
                                 ),
@@ -1007,7 +1122,8 @@ impl TestClient {
         match self.recv_timeout() {
             Ok(msg) => {
                 eprintln!(
-                    "client<---server {}",
+                    "[{}] client<---server {}",
+                    self.elapsed_time(),
                     serde_json::to_string(&JsonRpcMessage::from_message(msg)).unwrap()
                 );
                 Ok(())
@@ -1042,46 +1158,32 @@ impl TestClient {
 
     /// Expect a file watcher registration request.
     /// Validates that the request is specifically registering the file watcher (ID: "FILEWATCHER").
-    pub fn expect_file_watcher_register(&self) -> Result<(), LspMessageError> {
-        let params: RegistrationParams =
+    /// Returns a handle to send the response.
+    pub fn expect_file_watcher_register(
+        &self,
+    ) -> Result<ServerRequestHandle<'_, RegisterCapability>, LspMessageError> {
+        let (id, params): (RequestId, RegistrationParams) =
             self.expect_message(&format!("Request {}", RegisterCapability::METHOD), |msg| {
                 if let Message::Request(x) = msg
                     && x.method == RegisterCapability::METHOD
                 {
-                    Some(Ok(serde_json::from_value(x.params).unwrap()))
+                    Some(Ok((
+                        x.id.clone(),
+                        serde_json::from_value(x.params).unwrap(),
+                    )))
                 } else {
                     None
                 }
             })?;
         assert!(params.registrations.iter().any(|x| x.id == "FILEWATCHER"));
-        Ok(())
+        Ok(ServerRequestHandle {
+            id,
+            client: self,
+            _type: PhantomData,
+        })
     }
 
-    /// Expect a file watcher unregistration request.
-    /// Validates that the request is specifically unregistering the file watcher (ID: "FILEWATCHER").
-    pub fn expect_file_watcher_unregister(&self) -> Result<(), LspMessageError> {
-        let params: UnregistrationParams = self.expect_message(
-            &format!("Request {}", UnregisterCapability::METHOD),
-            |msg| {
-                if let Message::Request(x) = msg
-                    && x.method == UnregisterCapability::METHOD
-                {
-                    Some(Ok(serde_json::from_value(x.params).unwrap()))
-                } else {
-                    None
-                }
-            },
-        )?;
-        assert!(
-            params
-                .unregisterations
-                .iter()
-                .any(|x| x.id == "FILEWATCHER")
-        );
-        Ok(())
-    }
-
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub fn untyped_import_diagnostic_response(
         package_name: &str,
         line: u32,
@@ -1142,7 +1244,7 @@ impl LspInteraction {
     pub fn new_with_indexing_mode(indexing_mode: IndexingMode) -> Self {
         init_test();
 
-        let (conn_client, conn_server) = Connection::memory();
+        let ((conn_client, _client_reader), (conn_server, server_reader)) = Connection::memory();
 
         let finish_handle = Arc::new(FinishHandle::new());
         let finish_server = finish_handle.clone();
@@ -1153,8 +1255,18 @@ impl LspInteraction {
                 indexing_mode,
                 workspace_indexing_limit: 50,
                 build_system_blocking: false,
+                enable_external_references: false,
             };
-            let _ = run_lsp(conn_server, args, None, &NoTelemetry);
+            let _ = run_lsp(
+                conn_server,
+                server_reader,
+                args,
+                None,
+                None,
+                &NoTelemetry,
+                Arc::new(NoExternalProvider),
+                None,
+            );
             finish_server.notify_finished();
         });
 
@@ -1164,16 +1276,32 @@ impl LspInteraction {
     }
 
     pub fn initialize(&self, settings: InitializeSettings) -> Result<(), LspMessageError> {
+        let scope_uris: Vec<Url> = settings
+            .workspace_folders
+            .as_ref()
+            .map(|folders| folders.iter().map(|(_, uri)| uri.clone()).collect())
+            .unwrap_or_default();
+        let file_watch = settings.file_watch;
+
         self.client
             .send_initialize(self.client.get_initialize_params(&settings));
         self.client.expect_any_message()?;
         self.client.send_initialized();
-        if let Some(settings) = settings.configuration {
-            self.client.expect_any_message()?;
-            self.client.send_response::<WorkspaceConfiguration>(
-                RequestId::from(1),
-                settings.unwrap_or(json!([])),
-            );
+
+        // Handle file watcher registration if enabled.
+        // This must come before configuration request handling because the server
+        // sends client/registerCapability before workspace/configuration.
+        if file_watch {
+            self.client
+                .expect_file_watcher_register()?
+                .send_response(json!(null));
+        }
+
+        if let Some(config) = settings.configuration {
+            let scope_uri_refs: Vec<&Url> = scope_uris.iter().collect();
+            self.client
+                .expect_configuration_request(Some(scope_uri_refs))?
+                .send_configuration_response(config.unwrap_or(json!([])));
         }
         Ok(())
     }
@@ -1190,6 +1318,26 @@ impl LspInteraction {
         self.client.root = Some(root);
     }
 
+    pub fn create_notebook_cell(
+        &self,
+        file_name: &str,
+        cell_number: usize,
+        cell_contents: &str,
+    ) -> (Value, Value) {
+        let cell_uri = self.cell_uri(file_name, &format!("cell{}", cell_number + 1));
+        let cell = json!({
+            "kind": 2,
+            "document": cell_uri,
+        });
+        let doc = json!({
+            "uri": cell_uri,
+            "languageId": "python",
+            "version": 1,
+            "text": *cell_contents
+        });
+        (cell, doc)
+    }
+
     /// Opens a notebook document with the given cell contents.
     /// Each string in `cell_contents` becomes a separate code cell in the notebook.
     pub fn open_notebook(&self, file_name: &str, cell_contents: Vec<&str>) {
@@ -1201,17 +1349,9 @@ impl LspInteraction {
         let mut cell_text_documents = Vec::new();
 
         for (i, text) in cell_contents.iter().enumerate() {
-            let cell_uri = self.cell_uri(file_name, &format!("cell{}", i + 1));
-            cells.push(json!({
-                "kind": 2,
-                "document": cell_uri,
-            }));
-            cell_text_documents.push(json!({
-                "uri": cell_uri,
-                "languageId": "python",
-                "version": 1,
-                "text": *text
-            }));
+            let (cell, doc) = self.create_notebook_cell(file_name, i, text);
+            cells.push(cell);
+            cell_text_documents.push(doc);
         }
 
         self.client
@@ -1487,5 +1627,53 @@ impl LspInteraction {
                 "diagnostics": []
             }
         }))
+    }
+
+    /// Testing helper: Sets a flag on the server to prevent the next recheck from committing.
+    /// The recheck queue task will loop without committing the transaction until
+    /// `continue_recheck` is called.
+    pub fn do_not_commit_next_recheck(&self) {
+        let id = self.client.next_request_id();
+        self.client.send_message(Message::Request(Request {
+            id: id.clone(),
+            method: "testing/doNotCommitNextRecheck".to_owned(),
+            params: json!(null),
+            activity_key: None,
+        }));
+        // Wait for the response
+        self.client
+            .expect_message("Response for testing/doNotCommitNextRecheck", |msg| {
+                if let Message::Response(x) = msg
+                    && x.id == id
+                {
+                    Some(Ok(()))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+    }
+
+    /// Testing helper: Unsets the flag on the server, allowing the recheck to commit.
+    pub fn continue_recheck(&self) {
+        let id = self.client.next_request_id();
+        self.client.send_message(Message::Request(Request {
+            id: id.clone(),
+            method: "testing/continueRecheck".to_owned(),
+            params: json!(null),
+            activity_key: None,
+        }));
+        // Wait for the response
+        self.client
+            .expect_message("Response for testing/continueRecheck", |msg| {
+                if let Message::Response(x) = msg
+                    && x.id == id
+                {
+                    Some(Ok(()))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
     }
 }

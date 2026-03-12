@@ -29,6 +29,8 @@ use crate::types::Type;
 
 assert_words!(Lit, 3);
 
+static LITERAL_STR_MAX_SIZE: usize = 4096;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct Literal {
@@ -100,6 +102,8 @@ impl Lit {
     pub fn negate(&self) -> Option<Type> {
         match self {
             Lit::Int(x) => Some(Lit::Int(x.negate()).to_implicit_type()),
+            Lit::Bool(true) => Some(LitInt::new(-1).to_implicit_type()),
+            Lit::Bool(false) => Some(LitInt::new(0).to_implicit_type()),
             _ => None,
         }
     }
@@ -121,12 +125,17 @@ impl Lit {
                 let x = x.invert();
                 Some(Lit::Int(x).to_implicit_type())
             }
+            Lit::Bool(true) => Some(LitInt::new(-2).to_implicit_type()),
+            Lit::Bool(false) => Some(LitInt::new(-1).to_implicit_type()),
             _ => None,
         }
     }
 
-    pub fn from_string_literal(x: &ExprStringLiteral) -> Self {
-        Lit::Str(x.value.to_str().into())
+    pub fn from_string_literal(x: &ExprStringLiteral) -> Option<Self> {
+        if x.value.len() > LITERAL_STR_MAX_SIZE {
+            return None;
+        }
+        Some(Lit::Str(x.value.to_str().into()))
     }
 
     pub fn from_bytes_literal(x: &ExprBytesLiteral) -> Self {

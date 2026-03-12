@@ -200,7 +200,6 @@ assert_type(x, Literal[""])
 );
 
 testcase!(
-    bug = "Should narrow",
     test_boolean_operator_narrow,
     r#"
 from typing import assert_type, Literal
@@ -224,6 +223,24 @@ from typing import assert_type, Literal
 
 def f(x: int, y: str | Literal[False]):
     assert_type(x or y, int | str | Literal[False])
+"#,
+);
+
+// Regression test: generic function calls in `and` expressions should not
+// have the narrowed type from earlier branches used as a hint for type variable
+// inference. The narrowing of `bool` to `Literal[False]` is for the result of
+// the `and` expression, not for contextual typing of later generic calls.
+testcase!(
+    test_boolop_generic_call_hint,
+    r#"
+def f[U](u: U) -> U:
+    return u
+
+def caller(x: bool, y: bool) -> int:
+    if f(x) and f(y):
+        return 1
+    else:
+        return 0
 "#,
 );
 
@@ -265,6 +282,25 @@ assert_type(y5, Literal[False])
 x6 = ""
 y6 = not x6
 assert_type(y6, Literal[True])
+    "#,
+);
+
+testcase!(
+    test_unary_bool_literals,
+    r#"
+from typing import Literal, assert_type
+
+def invert_literal_false(x: Literal[False]) -> None:
+    assert_type(~x, Literal[-1])
+
+def invert_literal_true(x: Literal[True]) -> None:
+    assert_type(~x, Literal[-2])
+
+def negate_literal_false(x: Literal[False]) -> None:
+    assert_type(-x, Literal[0])
+
+def negate_literal_true(x: Literal[True]) -> None:
+    assert_type(-x, Literal[-1])
     "#,
 );
 
@@ -398,6 +434,29 @@ def f2(x: int | Any):
 );
 
 testcase!(
+    test_compare_on_any,
+    r#"
+from typing import Any, assert_type
+
+def test1(x: Any) -> None:
+    assert_type(x == 1, Any)
+    assert_type(1 == x, Any)
+    assert_type(x != 1, Any)
+    assert_type(x is None, Any)
+    assert_type(x is not None, Any)
+    assert_type(x in [1, 2], Any)
+    assert_type(1 in x, Any)
+
+def test2(x: float, y: Any) -> None:
+    any( x == y )
+    assert_type(x==y, Any)
+    assert_type(y==x, Any)
+    assert_type(x!=y, Any)
+    assert_type(y!=x, Any)
+    "#,
+);
+
+testcase!(
     test_binop_type_var,
     r#"
 from typing import TypeVar, reveal_type
@@ -462,6 +521,21 @@ a += B()  # E: `B` is not assignable to parameter `other` with type `Never` in f
 );
 
 testcase!(
+    test_iadd_ignores_getattr,
+    r#"
+from typing import assert_type
+class A:
+    def __add__(self, other: str) -> "A":
+        return self
+    def __getattr__(self, name: str) -> str:
+        return "x"
+a = A()
+a += "hi"
+assert_type(a, A)
+    "#,
+);
+
+testcase!(
     test_custom_eq,
     r#"
 from typing import assert_type
@@ -476,7 +550,7 @@ testcase!(
     test_in_generator,
     r#"
 'x' in (x for x in ['y'])
-42 in (x for x in ['y'])  # E: `in` is not supported between `Literal[42]` and `Generator[str, None, None]`
+42 in (x for x in ['y'])  # E: `in` is not supported between `Literal[42]` and `Generator[str]`
     "#,
 );
 
@@ -733,4 +807,45 @@ def test(a: A, b: B, c: C) -> None:
     a < b < c  # Should be OK: (a < b) and (b < c)
     a < c      # E: `<` is not supported between `A` and `C`
     "#,
+);
+
+testcase!(
+    test_bitor_unknown_operands,
+    r#"
+from typing import assert_type, Any
+
+def f(x: int): ...
+
+def test(x, y):
+    z = x | y
+    # When operands are unknown, the result should be Any, not type[Any]
+    assert_type(z, Any)
+    # This should not produce an error since z is Any
+    f(z)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/972
+testcase!(
+    test_int_pow_inference,
+    r#"
+from typing import assert_type, Any
+
+# Typeshed covers __pow__ for Literal[1..25] (-> int) and
+# Literal[-1..-25] (-> float).
+assert_type(2 ** 25, int)
+assert_type(2 ** -25, float)
+
+# For exponents outside the typeshed range, we special-case int ** int:
+# positive exponent -> int, negative exponent -> float.
+assert_type(2 ** 26, int)
+assert_type(2 ** 100, int)
+assert_type((-2) ** 26, int)
+assert_type(2 ** -26, float)
+assert_type(2 ** -100, float)
+
+# When the exponent sign is unknown, fall back to Any like typeshed.
+def f(x: int, y: int) -> None:
+    assert_type(x ** y, Any)
+"#,
 );

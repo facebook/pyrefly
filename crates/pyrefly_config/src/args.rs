@@ -17,6 +17,7 @@ use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::display;
 
+use crate::base::RecursionOverflowHandler;
 use crate::base::UntypedDefBehavior;
 use crate::config::ConfigFile;
 use crate::config::validate_path;
@@ -168,6 +169,28 @@ pub struct ConfigOverrideArgs {
     /// Force this rule to emit an info-level diagnostic. Can be passed multiple times or as a comma-separated list.
     #[arg(long, hide_possible_values = true, value_delimiter = ',')]
     info: Vec<ErrorKind>,
+    /// Maximum recursion depth before triggering overflow protection.
+    /// Set to 0 to disable (default). This helps detect potential stack overflow situations.
+    #[arg(long)]
+    recursion_depth_limit: Option<u32>,
+    /// How to handle when recursion depth limit is exceeded.
+    #[arg(long)]
+    recursion_overflow_handler: Option<RecursionOverflowHandler>,
+    /// (Experimental) Enable tensor shape type inference.
+    /// Supports both native (Tensor[N, M]) and jaxtyping (Float[Tensor, "batch channels"]) syntax.
+    #[arg(long)]
+    tensor_shapes: Option<bool>,
+    /// Whether to strictly check callable subtyping for signatures with `*args: Any, **kwargs: Any`.
+    /// When false (the default), callables with `*args: Any, **kwargs: Any` are treated as
+    /// compatible with any signature (similar to `...` behavior).
+    /// When true, parameter list compatibility is checked strictly even when `*args: Any, **kwargs: Any` is present.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    strict_callable_subtyping: Option<bool>,
 }
 
 impl ConfigOverrideArgs {
@@ -341,6 +364,18 @@ impl ConfigOverrideArgs {
         if let Some(x) = &self.infer_with_first_use {
             config.root.infer_with_first_use = Some(*x);
         }
+        if let Some(x) = &self.recursion_depth_limit {
+            config.root.recursion_depth_limit = Some(*x);
+        }
+        if let Some(x) = &self.recursion_overflow_handler {
+            config.root.recursion_overflow_handler = Some(*x);
+        }
+        if let Some(x) = &self.tensor_shapes {
+            config.root.tensor_shapes = Some(*x);
+        }
+        if let Some(x) = &self.strict_callable_subtyping {
+            config.root.strict_callable_subtyping = Some(*x);
+        }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
             for error_kind in &self.error {
                 error_config.set_error_severity(*error_kind, Severity::Error);
@@ -367,5 +402,13 @@ impl ConfigOverrideArgs {
 
     pub fn disable_project_excludes_heuristics(&self) -> Option<bool> {
         self.disable_project_excludes_heuristics
+    }
+
+    /// Set the `untyped_def_behavior` override, but only if the user hasn't
+    /// already specified one via the CLI.
+    pub fn set_untyped_def_behavior_if_unset(&mut self, behavior: UntypedDefBehavior) {
+        if self.untyped_def_behavior.is_none() {
+            self.untyped_def_behavior = Some(behavior);
+        }
     }
 }

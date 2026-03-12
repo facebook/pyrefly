@@ -18,16 +18,17 @@ use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprDict;
-use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::Number;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::binding::binding::Key;
+use crate::binding::narrow::int_from_slice;
+use crate::lsp::wasm::completion::RankedCompletion;
+use crate::state::state::Transaction;
 use crate::types::types::Type;
 
 #[derive(Clone)]
@@ -71,7 +72,7 @@ impl DictKeyLiteralContext {
     }
 }
 
-impl<'a> super::Transaction<'a> {
+impl<'a> Transaction<'a> {
     fn type_contains_typed_dict(ty: &Type) -> bool {
         match ty {
             Type::TypedDict(_) | Type::PartialTypedDict(_) => true,
@@ -249,17 +250,12 @@ impl<'a> super::Transaction<'a> {
         loop {
             match current {
                 Expr::Subscript(sub) => {
-                    match sub.slice.as_ref() {
-                        Expr::NumberLiteral(ExprNumberLiteral {
-                            value: Number::Int(idx),
-                            ..
-                        }) if idx.as_usize().is_some() => {
-                            facets.push(FacetKind::Index(idx.as_usize().unwrap()))
-                        }
-                        Expr::StringLiteral(lit) => {
-                            facets.push(FacetKind::Key(lit.value.to_string()))
-                        }
-                        _ => return None,
+                    if let Some(idx) = int_from_slice(sub.slice.as_ref()) {
+                        facets.push(FacetKind::Index(idx));
+                    } else if let Expr::StringLiteral(lit) = sub.slice.as_ref() {
+                        facets.push(FacetKind::Key(lit.value.to_string()));
+                    } else {
+                        return None;
                     }
                     current = sub.value.as_ref();
                 }
@@ -281,7 +277,7 @@ impl<'a> super::Transaction<'a> {
         handle: &Handle,
         base_type: Type,
     ) -> Option<BTreeMap<String, Type>> {
-        self.ad_hoc_solve(handle, |solver| {
+        self.ad_hoc_solve(handle, "typed_dict_keys", |solver| {
             let mut map = BTreeMap::new();
             let mut stack = vec![base_type];
             while let Some(ty) = stack.pop() {
@@ -302,15 +298,19 @@ impl<'a> super::Transaction<'a> {
         })
     }
 
-    pub(super) fn add_dict_key_completions(
+    /// Adds dict key completions for the given position. Returns `true` if this function
+    /// claimed the position (i.e., we are inside a dict/TypedDict key string literal), in
+    /// which case the caller should skip overload-based literal completions to avoid showing
+    /// redundant entries.
+    pub(crate) fn add_dict_key_completions(
         &self,
         handle: &Handle,
         module: &ModModule,
         position: TextSize,
-        completions: &mut Vec<CompletionItem>,
-    ) {
+        completions: &mut Vec<RankedCompletion>,
+    ) -> bool {
         let Some(context) = self.dict_key_literal_context(handle, module, position) else {
-            return;
+            return false;
         };
         let literal_range = context.literal_range();
         // Allow the cursor to sit a few characters before the literal (e.g. between nested
@@ -321,7 +321,7 @@ impl<'a> super::Transaction<'a> {
             .checked_sub(allowance)
             .unwrap_or_else(|| TextSize::new(0));
         if position < lower_bound || position > literal_range.end() {
-            return;
+            return false;
         }
         let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
 
@@ -354,7 +354,7 @@ impl<'a> super::Transaction<'a> {
 
                 if let Some(idx) = idx_opt {
                     let facets_clone = facets.clone();
-                    if let Some(keys) = self.ad_hoc_solve(handle, |solver| {
+                    if let Some(keys) = self.ad_hoc_solve(handle, "dict_key_facets", |solver| {
                         let info = solver.get_idx(idx);
                         info.key_facets_at(&facets_clone)
                     }) {
@@ -380,17 +380,18 @@ impl<'a> super::Transaction<'a> {
         }
 
         if suggestions.is_empty() {
-            return;
+            return false;
         }
 
         for (label, ty_opt) in suggestions {
             let detail = ty_opt.as_ref().map(|ty| ty.to_string());
-            completions.push(CompletionItem {
+            completions.push(RankedCompletion::new(CompletionItem {
                 label,
                 detail,
                 kind: Some(CompletionItemKind::FIELD),
                 ..Default::default()
-            });
+            }));
         }
+        true
     }
 }
