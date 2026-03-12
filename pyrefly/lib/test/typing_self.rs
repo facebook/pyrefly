@@ -399,3 +399,60 @@ def test(c: Child) -> None:
     c.method().child_method()
 "#,
 );
+
+// When a decorated Self-returning method also has an explicit class reference in its
+// parameters, the decorator should preserve Self in the return type without converting
+// the explicit class reference to Self.
+testcase!(
+    test_decorated_self_method_with_explicit_class_param,
+    r#"
+from typing import Self, Callable, TypeVar, Any
+
+_Fn = TypeVar("_Fn", bound=Callable[..., Any])
+def deco(fn: _Fn) -> _Fn:
+    return fn
+
+class Parent:
+    @deco
+    def merge(self, other: Parent) -> Self:
+        return self
+
+class Child(Parent):
+    def child_method(self) -> int:
+        return 1
+
+def test(c: Child, p: Parent) -> None:
+    c.merge(p).child_method()
+    c.merge(c).child_method()
+"#,
+);
+
+// A non-type-preserving decorator that changes the parameters but preserves the return
+// type variable still loses Self, because the overall function type changes.
+// This mirrors altair's @use_signature pattern.
+testcase!(
+    bug = "Non-type-preserving decorator that keeps return type R still loses Self in R",
+    test_non_type_preserving_decorator_self_method,
+    r#"
+from typing import Self, Callable, TypeVar, Any, Concatenate
+
+T = TypeVar("T")
+R = TypeVar("R")
+P = TypeVar("P")
+
+def sig_copy(fn: Callable[Concatenate[T, ...], R]) -> Callable[[T, int], R]:
+    return fn  # type: ignore
+
+class Parent:
+    @sig_copy
+    def method(self, **kwds: Any) -> Self:
+        return self
+
+class Child(Parent):
+    def child_method(self) -> int:
+        return 1
+
+def test(c: Child) -> None:
+    c.method(42).child_method()  # E: Object of class `Parent` has no attribute `child_method`
+"#,
+);
