@@ -1292,81 +1292,71 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Substitute SelfType with the concrete class type so that e.g. `(self: Self@C) -> int`
         // is compatible with a decorator parameter like `Callable[[C], int]`.
         let mut decoratee_arg = decoratee_arg;
-        let self_type_cls = defining_cls.as_ref().and_then(|cls| {
-            if decoratee_arg.any(|t| matches!(t, Type::SelfType(_))) {
-                let cls_type = self.instantiate(cls);
-                decoratee_arg.subst_self_type_mut(&cls_type);
-                // If cls_type is a ClassType, remember it so we can restore SelfType in the result.
-                if let Type::ClassType(ct) = &cls_type {
-                    Some(ct.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        });
+        let had_self_type = if let Some(cls) = defining_cls
+            && decoratee_arg.any(|t| matches!(t, Type::SelfType(_)))
+        {
+            let cls_type = self.instantiate(cls);
+            decoratee_arg.subst_self_type_mut(&cls_type);
+            true
+        } else {
+            false
+        };
         let arg = CallArg::ty(&decoratee_arg, range);
         // Compute the raw return type - this may need tweaks to handle Forall well.
-        let mut inferred_ty =
-            match self.call_infer(call_target, &[arg], &[], range, errors, None, None, None) {
-                Type::Callable(c) => self.heap.mk_function(Function {
-                    signature: *c,
-                    metadata: metadata.clone(),
-                }),
-                Type::Forall(box Forall {
-                    tparams,
-                    body: Forallable::Callable(c),
-                }) => Forallable::Function(Function {
-                    signature: c,
-                    metadata: metadata.clone(),
-                })
-                .forall(tparams),
-                // Callback protocol. We convert it to a function so we can add function metadata.
-                Type::ClassType(cls)
-                    if self
-                        .get_metadata_for_class(cls.class_object())
-                        .is_protocol() =>
-                {
-                    let call_attr = self.instance_as_dunder_call(&cls).and_then(|call_attr| {
-                        if let Type::BoundMethod(m) = call_attr {
-                            Some(
-                                self.bind_boundmethod(&m, &mut |a, b| self.is_subset_eq(a, b))
-                                    .unwrap_or(m.func.as_type()),
-                            )
-                        } else {
-                            None
-                        }
-                    });
-                    if let Some(mut call_attr) = call_attr {
-                        call_attr.transform_toplevel_func_metadata(|m| {
-                            *m = FuncMetadata {
-                                kind: FunctionKind::CallbackProtocol(Box::new(cls.clone())),
-                                flags: metadata.flags.clone(),
-                            };
-                        });
-                        call_attr
+        let raw_result = self.call_infer(call_target, &[arg], &[], range, errors, None, None, None);
+        // If the original decoratee contained SelfType and the decorator preserved the function
+        // type (e.g. `_Fn -> _Fn`), use the original decoratee so Self is not lost. We detect
+        // a type-preserving decorator by checking if the result equals the substituted input.
+        // We can't blindly reverse-substitute the class type back to SelfType because that would
+        // also convert explicit class references (e.g. `other: Foo`) into Self.
+        let inferred_ty = match if had_self_type && raw_result == decoratee_arg {
+            decoratee.clone()
+        } else {
+            raw_result
+        } {
+            Type::Callable(c) => self.heap.mk_function(Function {
+                signature: *c,
+                metadata: metadata.clone(),
+            }),
+            Type::Forall(box Forall {
+                tparams,
+                body: Forallable::Callable(c),
+            }) => Forallable::Function(Function {
+                signature: c,
+                metadata: metadata.clone(),
+            })
+            .forall(tparams),
+            // Callback protocol. We convert it to a function so we can add function metadata.
+            Type::ClassType(cls)
+                if self
+                    .get_metadata_for_class(cls.class_object())
+                    .is_protocol() =>
+            {
+                let call_attr = self.instance_as_dunder_call(&cls).and_then(|call_attr| {
+                    if let Type::BoundMethod(m) = call_attr {
+                        Some(
+                            self.bind_boundmethod(&m, &mut |a, b| self.is_subset_eq(a, b))
+                                .unwrap_or(m.func.as_type()),
+                        )
                     } else {
-                        self.heap.mk_class_type(cls)
+                        None
                     }
+                });
+                if let Some(mut call_attr) = call_attr {
+                    call_attr.transform_toplevel_func_metadata(|m| {
+                        *m = FuncMetadata {
+                            kind: FunctionKind::CallbackProtocol(Box::new(cls.clone())),
+                            flags: metadata.flags.clone(),
+                        };
+                    });
+                    call_attr
+                } else {
+                    self.heap.mk_class_type(cls)
                 }
-                Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped") => decoratee.clone(),
-                returned_ty => returned_ty,
-            };
-
-        // If the original decoratee contained SelfType, restore it in the result.
-        // When a decorator preserves the function signature (e.g. `_Fn -> _Fn`), the result
-        // will contain the concrete class type where SelfType was. We reverse the substitution
-        // so that subclasses inheriting the decorated method still get Self resolved to themselves.
-        if let Some(ct) = &self_type_cls {
-            let cls_type = self.heap.mk_class_type(ct.clone());
-            let self_type = Type::SelfType(ct.clone());
-            inferred_ty.transform_mut(&mut |t| {
-                if *t == cls_type {
-                    *t = self_type.clone();
-                }
-            });
-        }
+            }
+            Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped") => decoratee.clone(),
+            returned_ty => returned_ty,
+        };
 
         // Given the raw `inferred_ty`, which may include `Type::Quantified` type variables coming from a
         // `Forall` in the original decoratee, we need to create the proper output type:
