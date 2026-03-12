@@ -701,6 +701,50 @@ assert_type(f(1), int | str)
     "#,
 );
 
+// Issue #2711: TypeVar defaults in function parameter defaults
+testcase!(
+    test_typevar_default_param_default,
+    r#"
+from typing import assert_type, reveal_type
+class Getter[T]:
+    def get[S=None](self, default: S = None) -> T | S: ...
+
+def test(arg: Getter[str]) -> None:
+    reveal_type(arg.get())  # E: revealed type: str | None
+    assert_type(arg.get(), str | None)
+    "#,
+);
+
+testcase!(
+    test_typevar_default_param_default_no_infer_with_first_use,
+    TestEnv::new_with_infer_with_first_use(false),
+    r#"
+from typing import assert_type, reveal_type
+class Getter[T]:
+    def get[S=None](self, default: S = None) -> T | S: ...
+
+def test(arg: Getter[str]) -> None:
+    reveal_type(arg.get())  # E: revealed type: str | None
+    assert_type(arg.get(), str | None)
+    "#,
+);
+
+testcase!(
+    test_typevar_default_param_default_mismatch,
+    r#"
+def f[S=int](x: S = "hello") -> S: ...  # E: Default `Literal['hello']` is not assignable to parameter `x`
+    "#,
+);
+
+testcase!(
+    test_function_no_typevar_default_unchanged,
+    r#"
+from typing import assert_type
+def f[T](x: T) -> T: ...
+assert_type(f(1), int)
+    "#,
+);
+
 testcase!(
     test_unsolved_typevar_with_constraints,
     r#"
