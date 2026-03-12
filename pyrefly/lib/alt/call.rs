@@ -1378,7 +1378,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 bound
             } else {
                 // Fallback: just set the return type without stripping self.
-                // Convert SelfType to ClassType so that the constructor return type is a concrete class.
                 let ret_type = t
                     .callable_first_param(self.heap)
                     .map(|ty| match ty {

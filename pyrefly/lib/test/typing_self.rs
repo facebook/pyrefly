@@ -320,7 +320,7 @@ class C:
     def bar(cls) -> Self:
         return cls(1)
 
-    def __new__(cls, value: int) -> Self:  # Accepted
+    def __new__(cls, value: int) -> Self:
         return cls(1)
 "#,
 );
@@ -351,7 +351,7 @@ class E(Enum):
 "#,
 );
 
-// This pattern exists in the open source codebase but is technically incorrect
+// Passing a concrete class to `cls.__new__` is incorrect when `cls` could be a subclass.
 testcase!(
     test_cls_new_with_concrete_class,
     r#"
@@ -362,7 +362,7 @@ class C:
 "#,
 );
 
-// This is technically correct(?) but confusing to users, due to early pinning on the Self type.
+// Self is pinned when `[self]` is inferred, so `append(other: C)` fails against `Self@C`.
 testcase!(
     test_self_in_container_pinning,
     r#"
@@ -374,9 +374,7 @@ class C:
 "#,
 );
 
-// A decorator that preserves the function signature (fn: _Fn -> _Fn)
-// should not cause Self to be lost. When a subclass inherits the decorated method,
-// the return type should still be Self (the subclass), not the parent class.
+// A type-preserving decorator (_Fn -> _Fn) should not cause Self to be lost in subclasses.
 testcase!(
     test_decorated_self_method_in_subclass,
     r#"
@@ -400,9 +398,7 @@ def test(c: Child) -> None:
 "#,
 );
 
-// When a decorated Self-returning method also has an explicit class reference in its
-// parameters, the decorator should preserve Self in the return type without converting
-// the explicit class reference to Self.
+// Explicit class references in parameters (e.g. `other: Parent`) must not be converted to Self.
 testcase!(
     test_decorated_self_method_with_explicit_class_param,
     r#"
@@ -427,9 +423,7 @@ def test(c: Child, p: Parent) -> None:
 "#,
 );
 
-// A non-type-preserving decorator that changes the parameters but preserves the return
-// type variable still loses Self, because the overall function type changes.
-// This mirrors altair's @use_signature pattern.
+// Non-type-preserving decorators lose Self even if they preserve the return type variable.
 testcase!(
     bug = "Non-type-preserving decorator that keeps return type R still loses Self in R",
     test_non_type_preserving_decorator_self_method,
