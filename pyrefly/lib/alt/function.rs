@@ -1302,13 +1302,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             false
         };
         let arg = CallArg::ty(&decoratee_arg, range);
-        // Compute the raw return type - this may need tweaks to handle Forall well.
         let raw_result = self.call_infer(call_target, &[arg], &[], range, errors, None, None, None);
-        // If the original decoratee contained SelfType and the decorator preserved the function
-        // type (e.g. `_Fn -> _Fn`), use the original decoratee so Self is not lost. We detect
-        // a type-preserving decorator by checking if the result equals the substituted input.
-        // We can't blindly reverse-substitute the class type back to SelfType because that would
-        // also convert explicit class references (e.g. `other: Foo`) into Self.
+        // If the decorator preserved the function type (e.g. `_Fn -> _Fn`), use the original
+        // decoratee so Self is not lost. We compare result == substituted input rather than
+        // reverse-substituting, which would incorrectly convert explicit class references to Self.
         let inferred_ty = match if had_self_type && raw_result == decoratee_arg {
             decoratee.clone()
         } else {
@@ -1645,10 +1642,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             // Set the return type to `Any` so that we check just the input signature.
             sig.ret = self.heap.mk_any_implicit();
-            // For methods (non-static), skip the self/cls parameter. Checking it
-            // would trigger variance computation on the defining class, which in
-            // turn needs class fields (including this very overloaded method),
-            // causing a cycle.
+            // Skip self/cls to avoid a variance computation cycle with the defining class.
             if has_self_param {
                 let mut owner = Owner::new();
                 if let Some((_, rest)) = sig.split_first_param(&mut owner) {
@@ -1909,7 +1903,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn bind_dunder_init_for_callable(&self, m: &BoundMethod) -> Option<Type> {
         let mut func_type = m.func.clone().as_type();
         // For each callable, set its return type to its first param's type (i.e. `self`).
-        // Convert SelfType to ClassType so that the constructor return type is a concrete class.
         func_type.transform_toplevel_callable(&mut |c: &mut Callable| {
             if let Some(self_type) = c.get_first_param() {
                 c.ret = match self_type {
