@@ -130,6 +130,11 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict_callable_subtyping: Option<bool>,
 
+    /// Whether to infer injected pytest fixture parameter types from fixture definitions.
+    /// When false (the default), injected fixture parameters fall back to `Any` unless explicitly annotated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infer_pytest_fixture_types: Option<bool>,
+
     /// Any unknown config items
     #[serde(default, flatten)]
     pub(crate) extras: ExtraConfigs,
@@ -211,5 +216,9 @@ impl ConfigBase {
 
     pub fn get_strict_callable_subtyping(base: &Self) -> Option<bool> {
         base.strict_callable_subtyping
+    }
+
+    pub fn get_infer_pytest_fixture_types(base: &Self) -> Option<bool> {
+        base.infer_pytest_fixture_types
     }
 }

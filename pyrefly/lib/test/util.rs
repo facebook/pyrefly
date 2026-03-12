@@ -115,6 +115,7 @@ pub struct TestEnv {
     missing_override_decorator_error: bool,
     not_required_key_access_error: bool,
     strict_callable_subtyping: bool,
+    infer_pytest_fixture_types: bool,
     default_require_level: Require,
 }
 
@@ -139,6 +140,7 @@ impl TestEnv {
             missing_override_decorator_error: false,
             not_required_key_access_error: false,
             strict_callable_subtyping: false,
+            infer_pytest_fixture_types: false,
             default_require_level: Require::Exports,
         }
     }
@@ -223,6 +225,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_infer_pytest_fixture_types(mut self) -> Self {
+        self.infer_pytest_fixture_types = true;
+        self
+    }
+
     pub fn with_default_require_level(mut self, level: Require) -> Self {
         self.default_require_level = level;
         self
@@ -295,6 +302,7 @@ impl TestEnv {
         config.root.untyped_def_behavior = Some(self.untyped_def_behavior);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
+        config.root.infer_pytest_fixture_types = Some(self.infer_pytest_fixture_types);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };

@@ -169,6 +169,12 @@ impl InitializedInFlow {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PytestFixtureParamHint {
+    Any,
+    ReturnType(ShortIdentifier),
+}
+
 #[derive(Clone, Dupe, Debug)]
 pub struct Bindings(Arc<BindingsInner>);
 
@@ -182,6 +188,7 @@ table! {
 #[derive(Clone, Debug)]
 struct BindingsInner {
     module_info: ModuleInfo,
+    infer_pytest_fixture_types: bool,
     table: BindingTable,
     scope_trace: Option<ScopeTrace>,
     unused_parameters: Vec<UnusedParameter>,
@@ -308,6 +315,7 @@ impl Bindings {
         let module_info = Module::new(module_name, module_path, contents);
         Self(Arc::new(BindingsInner {
             module_info,
+            infer_pytest_fixture_types: false,
             table: Default::default(),
             scope_trace: None,
             unused_parameters: Vec::new(),
@@ -495,7 +503,7 @@ impl Bindings {
         def: &FunctionDefData,
         class_key: Option<&Idx<KeyClass>>,
         param: &Identifier,
-    ) -> Option<ShortIdentifier> {
+    ) -> Option<PytestFixtureParamHint> {
         let info = self.0.pytest_info.as_ref()?;
         if matches!(param.id.as_str(), "self" | "cls") {
             return None;
@@ -504,6 +512,9 @@ impl Bindings {
             return None;
         }
         let defs = info.fixture_definitions(&param.id)?;
+        if !self.0.infer_pytest_fixture_types {
+            return Some(PytestFixtureParamHint::Any);
+        }
         let selected = match class_key {
             Some(class_key) => defs
                 .iter()
@@ -515,7 +526,7 @@ impl Bindings {
                 .find(|def| def.class_key.is_none())
                 .or_else(|| defs.first()),
         }?;
-        Some(selected.return_type_key)
+        Some(PytestFixtureParamHint::ReturnType(selected.return_type_key))
     }
 
     fn is_pytest_test_or_fixture(
@@ -651,6 +662,7 @@ impl Bindings {
         }
         Self(Arc::new(BindingsInner {
             module_info,
+            infer_pytest_fixture_types: solver.infer_pytest_fixture_types,
             table: builder.table,
             scope_trace: if enable_trace {
                 Some(scope_trace)
