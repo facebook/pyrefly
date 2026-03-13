@@ -29,8 +29,8 @@ fn has_backup_relative_config(interp: &Path) -> bool {
         .is_some_and(|p| p.join(CONFIG_FILE).exists())
 }
 
-pub fn find(project_path: &Path) -> Option<PathBuf> {
-    let interpreters = walk_interpreter(project_path, SEARCH_DEPTH).collect::<Vec<PathBuf>>();
+fn find_in_root(root: &Path) -> Option<PathBuf> {
+    let interpreters = walk_interpreter(root, SEARCH_DEPTH).collect::<Vec<PathBuf>>();
 
     if interpreters.is_empty() {
         return None;
@@ -46,6 +46,10 @@ pub fn find(project_path: &Path) -> Option<PathBuf> {
     interpreters
         .into_iter()
         .find(|i| has_backup_relative_config(i))
+}
+
+pub fn find(project_path: &Path) -> Option<PathBuf> {
+    project_path.ancestors().find_map(find_in_root)
 }
 
 #[cfg(test)]
@@ -154,5 +158,72 @@ mod tests {
         );
 
         assert_eq!(find(root), None);
+    }
+
+    #[test]
+    fn test_find_searches_ancestor_roots() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let interp_name = interp_name("");
+        let project_root = root.join("project");
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    ".venv",
+                    vec![
+                        TestPath::file(CONFIG_FILE),
+                        TestPath::dir("bin", vec![TestPath::file(&interp_name)]),
+                    ],
+                ),
+                TestPath::dir(
+                    "project",
+                    vec![TestPath::dir("src", vec![TestPath::file("main.py")])],
+                ),
+            ],
+        );
+
+        assert_eq!(
+            find(&project_root),
+            Some(root.join(".venv/bin").join(interp_name)),
+        );
+    }
+
+    #[test]
+    fn test_find_prefers_nearest_ancestor_root() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let interp_name = interp_name("");
+        let project_root = root.join("project");
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    ".venv",
+                    vec![
+                        TestPath::file(CONFIG_FILE),
+                        TestPath::dir("bin", vec![TestPath::file(&interp_name)]),
+                    ],
+                ),
+                TestPath::dir(
+                    "project",
+                    vec![
+                        TestPath::dir(
+                            ".venv",
+                            vec![
+                                TestPath::file(CONFIG_FILE),
+                                TestPath::dir("bin", vec![TestPath::file(&interp_name)]),
+                            ],
+                        ),
+                        TestPath::dir("src", vec![TestPath::file("main.py")]),
+                    ],
+                ),
+            ],
+        );
+
+        assert_eq!(
+            find(&project_root),
+            Some(project_root.join(".venv/bin").join(interp_name)),
+        );
     }
 }
