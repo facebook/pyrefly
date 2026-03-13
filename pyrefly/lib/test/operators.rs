@@ -28,6 +28,21 @@ def compare[T: int](x: T, y: T) -> bool:
 );
 
 testcase!(
+    test_constrained_type_var_comparison,
+    r#"
+from typing import Generic, TypeVar, assert_type
+
+N = TypeVar("N", int, float)
+
+class A(Generic[N]):
+    a: N
+
+    def foo(self, b: N) -> None:
+        assert_type(self.a < b, bool)
+"#,
+);
+
+testcase!(
     test_negative_literals,
     r#"
 from typing import Literal

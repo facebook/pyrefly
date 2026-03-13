@@ -16,6 +16,7 @@ use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::tensor::TensorType;
 use pyrefly_types::tensor::broadcast_shapes;
+use pyrefly_types::type_var::Restriction;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
@@ -45,6 +46,104 @@ use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn distribute_over_same_constrained_typevar_pair(
+        &self,
+        left: &Type,
+        right: &Type,
+        f: impl Fn(&Type, &Type) -> Type,
+    ) -> Option<Type> {
+        let (Type::Quantified(left_q), Type::Quantified(right_q)) = (left, right) else {
+            return None;
+        };
+        if left_q != right_q || !left_q.is_type_var() {
+            return None;
+        }
+        let Restriction::Constraints(constraints) = left_q.restriction() else {
+            return None;
+        };
+        Some(
+            self.unions(
+                constraints
+                    .iter()
+                    .map(|constraint| {
+                        let narrowed =
+                            Type::Quantified(Box::new(left_q.clone().with_restriction(
+                                Restriction::Constraints(vec![constraint.clone()]),
+                            )));
+                        f(&narrowed, &narrowed)
+                    })
+                    .collect(),
+            ),
+        )
+    }
+
+    fn compare_pair_infer(
+        &self,
+        op: CmpOp,
+        left: &Type,
+        right: &Type,
+        range: TextRange,
+        current_left_range: TextRange,
+        errors: &ErrorCollector,
+        context: &dyn Fn() -> ErrorContext,
+    ) -> Type {
+        match op {
+            CmpOp::Is | CmpOp::IsNot => {
+                // These comparisons never error.
+                self.heap.mk_class_type(self.stdlib.bool().clone())
+            }
+            CmpOp::In | CmpOp::NotIn => {
+                // See https://docs.python.org/3/reference/expressions.html#membership-test-operations.
+                // `x in y` first tries `y.__contains__(x)`, then checks if `x` matches an element
+                // obtained by iterating over `y`.
+                if let Some(ret) = self.call_magic_dunder_method(
+                    right,
+                    &dunder::CONTAINS,
+                    range,
+                    &[CallArg::ty(left, current_left_range)],
+                    &[],
+                    errors,
+                    Some(context),
+                ) {
+                    ret
+                } else {
+                    let iteration_errors = self.error_collector();
+                    let iterables = self.iterate(right, range, &iteration_errors, Some(context));
+                    if iteration_errors.is_empty() {
+                        // Make sure `x` matches the produced type.
+                        self.check_type(
+                            left,
+                            &self.get_produced_type(iterables),
+                            range,
+                            errors,
+                            &|| TypeCheckContext {
+                                kind: TypeCheckKind::Container,
+                                context: Some(context()),
+                            },
+                        );
+                    } else {
+                        // Iterating `y` failed.
+                        errors.extend(iteration_errors);
+                    }
+                    self.heap.mk_class_type(self.stdlib.bool().clone())
+                }
+            }
+            _ => {
+                // We've handled the other cases above, so we know we have a rich comparison op.
+                let calls_to_try = [
+                    (&dunder::rich_comparison_dunder(op).unwrap(), left, right),
+                    (&dunder::rich_comparison_fallback(op).unwrap(), right, left),
+                ];
+                let ret = self.try_binop_calls(&calls_to_try, range, errors, context);
+                if ret.is_error() {
+                    self.heap.mk_class_type(self.stdlib.bool().clone())
+                } else {
+                    ret
+                }
+            }
+        }
+    }
+
     fn callable_dunder_helper(
         &self,
         method_type: Type,
@@ -521,62 +620,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.for_display(right.clone()),
                         )
                     };
-                    match op {
-                        CmpOp::Is | CmpOp::IsNot => {
-                            // These comparisons never error.
-                            self.heap.mk_class_type(self.stdlib.bool().clone())
-                        }
-                        CmpOp::In | CmpOp::NotIn => {
-                            // See https://docs.python.org/3/reference/expressions.html#membership-test-operations.
-                            // `x in y` first tries `y.__contains__(x)`, then checks if `x` matches an element
-                            // obtained by iterating over `y`.
-                            if let Some(ret) = self.call_magic_dunder_method(
+                    if let Some(ret) = self.distribute_over_same_constrained_typevar_pair(
+                        left,
+                        right,
+                        |left, right| {
+                            self.compare_pair_infer(
+                                *op,
+                                left,
                                 right,
-                                &dunder::CONTAINS,
                                 x.range,
-                                &[CallArg::ty(left, current_left_range)],
-                                &[],
+                                current_left_range,
                                 errors,
-                                Some(&context),
-                            ) {
-                                ret
-                            } else {
-                                let iteration_errors = self.error_collector();
-                                let iterables =
-                                    self.iterate(right, x.range, &iteration_errors, Some(&context));
-                                if iteration_errors.is_empty() {
-                                    // Make sure `x` matches the produced type.
-                                    self.check_type(
-                                        left,
-                                        &self.get_produced_type(iterables),
-                                        x.range,
-                                        errors,
-                                        &|| TypeCheckContext {
-                                            kind: TypeCheckKind::Container,
-                                            context: Some(context()),
-                                        },
-                                    );
-                                } else {
-                                    // Iterating `y` failed.
-                                    errors.extend(iteration_errors);
-                                }
-                                self.heap.mk_class_type(self.stdlib.bool().clone())
-                            }
-                        }
-                        _ => {
-                            // We've handled the other cases above, so we know we have a rich comparison op.
-                            let calls_to_try = [
-                                (&dunder::rich_comparison_dunder(*op).unwrap(), left, right),
-                                (&dunder::rich_comparison_fallback(*op).unwrap(), right, left),
-                            ];
-                            let ret =
-                                self.try_binop_calls(&calls_to_try, x.range, errors, &context);
-                            if ret.is_error() {
-                                self.heap.mk_class_type(self.stdlib.bool().clone())
-                            } else {
-                                ret
-                            }
-                        }
+                                &context,
+                            )
+                        },
+                    ) {
+                        ret
+                    } else {
+                        self.compare_pair_infer(
+                            *op,
+                            left,
+                            right,
+                            x.range,
+                            current_left_range,
+                            errors,
+                            &context,
+                        )
                     }
                 })
             });
