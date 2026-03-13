@@ -2118,9 +2118,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             return Some(ReadOnlyReason::NamedTuple);
         }
+        // ClassVars in dataclasses are class attributes rather than frozen instance fields.
+        let is_classvar = annotation.is_some_and(|ann| ann.has_qualifier(&Qualifier::ClassVar));
         // Frozen dataclass fields (not methods) are read-only
         if let Some(dm) = metadata.dataclass_metadata()
             && dm.kws.frozen
+            && !is_classvar
             && dm.fields.contains(name)
         {
             let reason = if metadata.is_pydantic_model() {

@@ -793,6 +793,21 @@ C()
 );
 
 testcase!(
+    test_frozen_classvar_class_assignment,
+    r#"
+import dataclasses
+from typing import ClassVar
+
+@dataclasses.dataclass(frozen=True)
+class C:
+    x: ClassVar[bool] = True
+
+    def set_x(self) -> None:
+        self.__class__.x = False
+    "#,
+);
+
+testcase!(
     test_hashable,
     r#"
 from typing import Hashable
