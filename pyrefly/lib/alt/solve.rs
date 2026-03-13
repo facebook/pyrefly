@@ -3120,15 +3120,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let hint = annot_ty.as_ref().map(|t| (t, tcc));
                 let expr_ty = if style == &AnnotationStyle::Forwarded
                     && annot_ty.as_ref().is_some_and(|ann| ann.is_union())
+                    && matches!(expr, Expr::Call(_))
                 {
                     // For forwarded assignments (reassignment to an annotated variable),
                     // first try inferring without the annotation hint. The annotation
                     // may be broader than the current narrowed type (e.g. `int | float | None`
                     // when the variable has been narrowed to `int | float`), and using it
                     // as a hint can artificially broaden the inferred type by pre-constraining
-                    // type variables during overload resolution. For more see: https://github.com/facebook/pyrefly/issues/2592.
-                    // strategy:
-                    // 1. Run a single unhinted inference with suppressed errors to get a
+                    // type variables during overload resolution.
+                    // For more see: https://github.com/facebook/pyrefly/issues/2592.
+                    // Strategy:
+                    // 1. Run a single unhinted inference to get a
                     //    candidate type (unhinted_ty).
                     // 2. If that candidate is imprecise (contains Any or unresolved
                     //    quantified/type variables), use the annotation as a hint (and
