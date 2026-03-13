@@ -1289,28 +1289,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Forall(forall) => (Some(forall.tparams.clone()), forall.body.clone().as_type()),
             _ => (None, decoratee.clone()),
         };
-        // Substitute SelfType with the concrete class type so that e.g. `(self: Self@C) -> int`
-        // is compatible with a decorator parameter like `Callable[[C], int]`.
+        // If the decoratee contains SelfType, try calling the decorator with Self intact first.
+        // If it works, Self flows through type variables naturally (e.g. `R` binds to `Self@C`).
+        // If it fails (e.g. contravariance with a non-generic decorator), fall back to
+        // substituting Self with the concrete class type.
         let mut decoratee_arg = decoratee_arg;
-        let had_self_type = if let Some(cls) = defining_cls
+        let base_result = if let Some(cls) = defining_cls
             && decoratee_arg.any(|t| matches!(t, Type::SelfType(_)))
         {
-            let cls_type = self.instantiate(cls);
-            decoratee_arg.subst_self_type_mut(&cls_type);
-            true
+            let self_errors = self.error_collector();
+            let self_arg = CallArg::ty(&decoratee_arg, range);
+            let self_result = self.call_infer(
+                call_target.clone(),
+                &[self_arg],
+                &[],
+                range,
+                &self_errors,
+                None,
+                None,
+                None,
+            );
+            if self_errors.is_empty() {
+                self_result
+            } else {
+                // Self caused errors (e.g., contravariance with non-generic decorator).
+                // Fall back to substituted version.
+                let cls_type = self.instantiate(cls);
+                decoratee_arg.subst_self_type_mut(&cls_type);
+                let arg = CallArg::ty(&decoratee_arg, range);
+                self.call_infer(call_target, &[arg], &[], range, errors, None, None, None)
+            }
         } else {
-            false
+            let arg = CallArg::ty(&decoratee_arg, range);
+            self.call_infer(call_target, &[arg], &[], range, errors, None, None, None)
         };
-        let arg = CallArg::ty(&decoratee_arg, range);
-        let raw_result = self.call_infer(call_target, &[arg], &[], range, errors, None, None, None);
-        // If the decorator preserved the function type (e.g. `_Fn -> _Fn`), use the original
-        // decoratee so Self is not lost. We compare result == substituted input rather than
-        // reverse-substituting, which would incorrectly convert explicit class references to Self.
-        let inferred_ty = match if had_self_type && raw_result == decoratee_arg {
-            decoratee.clone()
-        } else {
-            raw_result
-        } {
+        let inferred_ty = match base_result {
             Type::Callable(c) => self.heap.mk_function(Function {
                 signature: *c,
                 metadata: metadata.clone(),

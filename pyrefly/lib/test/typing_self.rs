@@ -423,9 +423,8 @@ def test(c: Child, p: Parent) -> None:
 "#,
 );
 
-// Non-type-preserving decorators lose Self even if they preserve the return type variable.
+// Non-type-preserving decorators preserve Self when the decorator is generic.
 testcase!(
-    bug = "Non-type-preserving decorator that keeps return type R still loses Self in R",
     test_non_type_preserving_decorator_self_method,
     r#"
 from typing import Self, Callable, TypeVar, Any, Concatenate
@@ -447,6 +446,6 @@ class Child(Parent):
         return 1
 
 def test(c: Child) -> None:
-    c.method(42).child_method()  # E: Object of class `Parent` has no attribute `child_method`
+    c.method(42).child_method()
 "#,
 );
