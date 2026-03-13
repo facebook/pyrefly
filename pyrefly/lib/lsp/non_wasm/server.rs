@@ -4134,6 +4134,10 @@ impl Server {
                 transaction.extract_field_code_actions(&handle, range)
             );
             timed_refactor_action!(
+                "implement_abstract_members",
+                transaction.implement_abstract_members_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "extract_variable",
                 transaction.extract_variable_code_actions(&handle, range)
             );
