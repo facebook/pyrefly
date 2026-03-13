@@ -1,0 +1,5 @@
+[flake8]
+# E203: whitespace before ':' in slices — conflicts with black
+# W503: line break before binary operator — conflicts with black (PEP 8 now prefers this style)
+# E501: line too long — handled by black (long strings in prompts are intentional)
+extend-ignore = E203, W503, E501

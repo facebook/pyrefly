@@ -7,9 +7,9 @@
 
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_notebook_signature_help_basic() {
@@ -32,7 +32,7 @@ fn test_notebook_signature_help_basic() {
         .signature_help_cell("notebook.ipynb", "cell1", 1, 2)
         .expect_response(json!({
             "signatures": [{
-                "label": "def f(\n    a: str,\n    b: int\n) -> None: ...",
+                "label": "def f(a: str, b: int) -> None: ...",
                 "parameters": [
                     {"label": "a: str"},
                     {"label": "b: int"}
@@ -68,7 +68,7 @@ fn test_notebook_signature_help_basic() {
         .signature_help_cell("notebook.ipynb", "cell1", 1, 11)
         .expect_response(json!({
             "signatures": [{
-                "label": "def f(\n    a: str,\n    b: int\n) -> None: ...",
+                "label": "def f(a: str, b: int) -> None: ...",
                 "parameters": [
                     {"label": "a: str"},
                     {"label": "b: int"}

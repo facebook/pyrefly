@@ -22,6 +22,7 @@ pub const MAGIC_METHOD_NAMES: &[&str] = &[
     "__bytes__",
     "__call__",
     "__ceil__",
+    "__class__",
     "__class_getitem__",
     "__complex__",
     "__contains__",
@@ -124,19 +125,22 @@ pub const MAGIC_METHOD_NAMES: &[&str] = &[
     "__xor__",
 ];
 
+pub const ABS: Name = Name::new_static("__abs__");
 pub const AENTER: Name = Name::new_static("__aenter__");
 pub const AEXIT: Name = Name::new_static("__aexit__");
 pub const AITER: Name = Name::new_static("__aiter__");
-pub const ANEXT: Name = Name::new_static("__anext__");
 pub const ALL: Name = Name::new_static("__all__");
+pub const ANEXT: Name = Name::new_static("__anext__");
 pub const ASCII: Name = Name::new_static("__ascii__");
 pub const BOOL: Name = Name::new_static("__bool__");
 pub const CALL: Name = Name::new_static("__call__");
+pub const CLASS: Name = Name::new_static("__class__");
 pub const CLASS_GETITEM: Name = Name::new_static("__class_getitem__");
 pub const CONTAINS: Name = Name::new_static("__contains__");
 pub const DATACLASS_FIELDS: Name = Name::new_static("__dataclass_fields__");
 pub const DELATTR: Name = Name::new_static("__delattr__");
 pub const DELITEM: Name = Name::new_static("__delitem__");
+pub const DICT: Name = Name::new_static("__dict__");
 pub const DOC: Name = Name::new_static("__doc__");
 pub const ENTER: Name = Name::new_static("__enter__");
 pub const EQ: Name = Name::new_static("__eq__");
@@ -162,6 +166,7 @@ pub const NEW: Name = Name::new_static("__new__");
 pub const NEXT: Name = Name::new_static("__next__");
 pub const POS: Name = Name::new_static("__pos__");
 pub const POST_INIT: Name = Name::new_static("__post_init__");
+pub const REPLACE: Name = Name::new_static("__replace__");
 pub const REPR: Name = Name::new_static("__repr__");
 pub const SET: Name = Name::new_static("__set__");
 pub const SETATTR: Name = Name::new_static("__setattr__");

@@ -8,8 +8,10 @@
 //! Unique values produced by a factory.
 //! Typically used to produce fresh variables.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -20,6 +22,10 @@ use dupe::Dupe;
 #[derive(Debug)]
 pub struct UniqueFactory {
     unique: AtomicUsize,
+    /// Global cache for callers that need idempotent Unique allocation.
+    /// Given the same key, `get_or_fresh` always returns the same `Unique`
+    /// regardless of which thread calls it.
+    keyed_cache: Mutex<HashMap<usize, Unique>>,
 }
 
 impl Default for UniqueFactory {
@@ -50,10 +56,18 @@ impl UniqueFactory {
     pub fn new() -> Self {
         Self {
             unique: AtomicUsize::new(1),
+            keyed_cache: Mutex::new(HashMap::new()),
         }
     }
 
     pub fn fresh(&self) -> Unique {
         Unique(self.unique.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Return a cached `Unique` for `key`, allocating a fresh one on first
+    /// access. Thread-safe: all threads see the same `Unique` for a given key.
+    pub fn get_or_fresh(&self, key: usize) -> Unique {
+        let mut cache = self.keyed_cache.lock().unwrap();
+        *cache.entry(key).or_insert_with(|| self.fresh())
     }
 }

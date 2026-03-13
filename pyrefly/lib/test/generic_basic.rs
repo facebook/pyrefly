@@ -11,19 +11,34 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
-    bug =
-        "We should use the bounds/constraints of the type var to determine the callable input type",
     test_tyvar_constructor,
     r#"
 def test[T](cls: type[T]) -> T:
-    cls(1)  # Not OK, we should assume object constructor here
+    cls(1)  # E: Expected 0 positional arguments, got 1
     return cls()
 class A:
     def __init__(self, x: int) -> None: pass
 def test2[T: A](cls: type[T]) -> T:
-    a1: A = cls()  # Not OK
+    a1: A = cls()  # E: Missing argument `x` in function `A.__init__`
     a2: A = cls(1)
-    return cls()
+    return cls(1)
+"#,
+);
+
+testcase!(
+    bug = "When determining callable for type[T] where T is a constrained TypeVar, we should take intersection of constructor of all constraints",
+    test_constrained_typevar_constructor,
+    r#"
+from typing import TypeVar
+class A:
+    def __init__(self, x: int) -> None: pass
+class B:
+    def __init__(self, x: int, y: str = "default") -> None: pass
+T = TypeVar("T", A, B)
+def test(cls: type[T]) -> None:
+    cls(1)
+    cls("hello")  # should error: incorrect type of x
+    cls(1, "hello")  # should error: too many arguments
 "#,
 );
 
@@ -69,6 +84,14 @@ class C[T](Generic[T]):  # E: Redundant
 );
 
 testcase!(
+    test_class_type_params_can_reference_class,
+    r#"
+class C[T: C](set[object]):
+    pass
+    "#,
+);
+
+testcase!(
     test_type_argument_error_default,
     r#"
 from typing import Any, assert_type
@@ -82,7 +105,7 @@ assert_type(classmethod[Any], type[classmethod[Any, ..., Any]])  # E: Expected 3
 # No error if it's a TypeVarTuple w/ nothing after, because a TypeVarTuple can be empty
 class C2[T, *Ts]: pass
 C2_Alias = C2[int]
-assert_type(C2[int], type[C2[int, *tuple[Any, ...]]])
+assert_type(C2[int], type[C2[int, *tuple[()]]])
 "#,
 );
 
@@ -257,7 +280,7 @@ class A[*Ps, *Qs = *Ps]: # E: may not have more than one TypeVarTuple
 testcase!(
     test_specialize_error,
     r#"
-from nowhere import BrokenGeneric, BrokenTypeVar # E: Could not find import of `nowhere`
+from nowhere import BrokenGeneric, BrokenTypeVar # E: Cannot find module `nowhere`
 
 class MyClass(BrokenGeneric[BrokenTypeVar]):
     pass
@@ -287,12 +310,30 @@ class F(Generic[_b]):
 );
 
 testcase!(
-    bug = "Update should know about string arguments",
+    bug = "Operator dispatch does not expand per constraint",
+    test_constrained_typevar_subtype_resolves_to_constraint,
+    r#"
+from typing import TypeVar, assert_type
+
+AnyStr = TypeVar("AnyStr", str, bytes)
+
+def concat(x: AnyStr, y: AnyStr) -> AnyStr:
+    return x + y  # E: `+` is not supported  # E: `+` is not supported
+
+class MyStr(str): ...
+
+def test(m: MyStr, s: str):
+    assert_type(concat(m, m), str)
+    assert_type(concat(m, s), str)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/245
+testcase!(
     test_dict_update,
     r#"
-# From https://github.com/facebook/pyrefly/issues/245
+# update w/ kwargs should pin dict key to str
 from typing import assert_type, Any
-
 def f():
     x = {}
     x.update(a = 1)
@@ -300,7 +341,7 @@ def f():
 
 def g():
     x: dict[int, int] = {}
-    x.update(a = 1) # E: No matching overload
+    x.update(a=1) # E: No matching overload
 "#,
 );
 
@@ -523,5 +564,147 @@ def _to_list[T](
     return kind(to_type(val, Any) for val in value)
 
 def to_type[T](value: Any, kind: TypeForm[T]) -> T: ...
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/1970
+testcase!(
+    test_implicit_any_for_special_forms,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import Callable, Type
+
+def f(
+    x: list,      # E: Cannot determine the type parameter `_T` for generic class `list`
+    y: tuple,     # E: Cannot determine the type parameter for generic class `tuple`
+    z: Callable,  # E: Cannot determine the type parameter for generic class `Callable`
+    w: Type,      # E: Cannot determine the type parameter for generic class `type`
+):
+    pass
+
+# Note: bare builtin `type` annotation doesn't trigger implicit-any yet because
+# the `type` class is not defined as generic in typeshed. `typing.Type` works
+# because it's handled as a special form.
+def g(t: type):
+    pass
+    "#,
+);
+
+testcase!(
+    test_inconsistent_type_var_ordering_in_bases,
+    r#"
+from typing import Generic, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+
+class Grandparent(Generic[T1, T2]): ...
+class Parent(Grandparent[T1, T2]): ...
+class BadChild(Parent[T1, T2], Grandparent[T2, T1]): ...  # E: Class `BadChild` has inconsistent type arguments for base class `Grandparent`: `Grandparent[T1, T2]` and `Grandparent[T2, T1]`
+"#,
+);
+
+testcase!(
+    test_indirect_diamond_inconsistent_targs,
+    r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+
+class A(Generic[T]): ...
+class B(A[int]): ...
+class C(A[str]): ...
+class D(B, C): ...  # E: Class `D` has inconsistent type arguments for base class `A`: `A[int]` and `A[str]`
+
+class F(Generic[T1, T2]): ...
+class G(F[int, str]): ...
+class H(F[str, int]): ...
+class I(G, H): ...  # E: Class `I` has inconsistent type arguments for base class `F`: `F[int, str]` and `F[str, int]`
+"#,
+);
+
+testcase!(
+    test_typevar_union_with_type_of_typevar,
+    r#"
+from typing import TypeVar, assert_type
+
+class Base: ...
+class Sub(Base): ...
+
+T = TypeVar("T", bound=Base)
+
+# type[T] alone works
+def good(x: type[T]) -> T: ...
+assert_type(good(Sub), Sub)
+
+# T | type[T] should also work — pyrefly should check the type[T] branch
+def bad(x: T | type[T]) -> T: ...
+assert_type(bad(Sub), Sub)
+"#,
+);
+
+testcase!(
+    test_generic_alias_fields,
+    r#"
+from typing import assert_type
+
+list.__add__ # This is a method on `list`
+
+# No error for accessing properties on `GenericAlias`
+assert(list[int].__args__, tuple)
+assert(list[int].__parameters__, tuple)
+
+# No error for accessing methods on `list`
+list[int].__add__
+
+# No error for comparing two `GenericAlias`
+list[int] == list[str]
+"#,
+);
+
+testcase!(
+    test_recursively_constrained_typevar,
+    r#"
+from typing import TypeVar, Generic, Any
+
+class Foo:
+    pass
+
+_L = TypeVar("_L", bound="Foo | Bar[Any]")
+class Bar(Generic[_L]):
+    pass
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1137
+testcase!(
+    test_unresolved_typevar_in_union_resolves_to_never,
+    r#"
+from __future__ import annotations
+from typing import assert_type
+
+class A[T]:
+    def __init__(self, value: T) -> None:
+        self.t: T = value
+    def f[Expected](self) -> A[Expected | T]:
+        ...
+
+_: A[object] = A(1).f()
+
+b = A(1).f()
+assert_type(b, A[int])
+"#,
+);
+
+testcase!(
+    test_typevar_type,
+    r#"
+from typing import TypeVar
+T = TypeVar("T")
+def f(x: TypeVar):
+    pass
+f(T)
     "#,
 );

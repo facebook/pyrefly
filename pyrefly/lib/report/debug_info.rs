@@ -117,7 +117,9 @@ impl DebugInfo {
                 let key = bindings.idx_to_key(idx);
                 res.push(Binding {
                     key: module_info.display(key).to_string(),
-                    location: module_info.display_range(key.range()).to_string(),
+                    location: module_info
+                        .display_range(K::range_with(idx, bindings))
+                        .to_string(),
                     binding: bindings.get(idx).display_with(bindings).to_string(),
                     result: match val.get() {
                         None => "None".to_owned(),

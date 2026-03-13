@@ -7,6 +7,7 @@
 
 //! Many of these tests come from <https://typing.readthedocs.io/en/latest/spec/generics.html#paramspec>.
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -88,7 +89,7 @@ def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
 def foo[T](x: T, y: T) -> T:
     return x
 foo2 = identity(foo)
-reveal_type(foo2)  # E: revealed type: (x: @_, y: @_) -> @_
+reveal_type(foo2)  # E: revealed type: (x: Unknown, y: Unknown) -> Unknown
 "#,
 );
 
@@ -284,7 +285,7 @@ reveal_type(transform(bar)) # Should return (a: str, /, *args: bool) -> bool # E
 );
 
 testcase!(
-    bug = "P.args and P.kwargs should only work when P is in scope",
+    bug = "conformance: P.args and P.kwargs should only work when P is in scope",
     test_paramspec_component_usage,
     r#"
 from typing import Callable, ParamSpec
@@ -321,7 +322,7 @@ def puts_p_into_scope(f: Callable[P, int]) -> None:
 testcase!(
     test_paramspec_decorator,
     r#"
-from typing import Callable, ParamSpec, assert_type
+from typing import Callable, ParamSpec, assert_type, Any
 
 P = ParamSpec("P")
 
@@ -330,6 +331,11 @@ def decorator(f: Callable[P, int]) -> Callable[P, None]:
     assert_type(f(*args, **kwargs), int)    # Accepted, should resolve to int
     f(*kwargs, **args)    # Rejected # E: Expected *-unpacked P.args and **-unpacked P.kwargs
     f(1, *args, **kwargs) # Rejected # E: Expected 0 positional arguments, got 1
+
+  # Allow tuple[Any, ...] to match P.args, and dict[str, Any] to match P.kwargs
+  def bar(t1: tuple[Any, ...], t2: tuple[object, ...], d1: dict[str, Any], d2: dict[str, object]) -> None:
+    f(*t1, **d1) # OK
+    f(*t2, **d2) # # E: Expected *-unpacked P.args and **-unpacked P.kwargs
   return foo              # Accepted
 "#,
 );
@@ -525,6 +531,65 @@ def test[**P](v: Callable[P, None]):
 );
 
 testcase!(
+    test_functools_partial_reassignment_paramspec,
+    r#"
+import functools
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar, assert_type
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+def run_sync(func: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    func = functools.partial(func, *args, **kwargs)
+    return func()
+
+def greet(name: str, greeting: str) -> int:
+    return 0
+
+assert_type(run_sync(greet, "Alice", greeting="Hi"), int)
+"#,
+);
+
+testcase!(
+    test_functools_partial_reassignment_paramspec_concatenate,
+    r#"
+import functools
+from collections.abc import Callable
+from typing import Concatenate, ParamSpec, TypeVar, assert_type
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+def run_sync(func: Callable[Concatenate[int, P], T], x: int, *args: P.args, **kwargs: P.kwargs) -> T:
+    func = functools.partial(func, x, *args, **kwargs)
+    return func()
+
+def greet(x: int, name: str) -> str:
+    return ""
+
+assert_type(run_sync(greet, 1, "Alice"), str)
+"#,
+);
+
+testcase!(
+    test_functools_partial_reassignment_paramspec_strict,
+    TestEnv::new().enable_strict_callable_subtyping(),
+    r#"
+import functools
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+def run_sync(func: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    func = functools.partial(func, *args, **kwargs)  # E: `partial[T]` is not assignable to variable `func` with type `(ParamSpec(P)) -> T`
+    return func()  # E: Expected *-unpacked P.args and **-unpacked P.kwargs
+"#,
+);
+
+testcase!(
     test_param_spec_empty,
     r#"
 def foo[**P](x: int = 0, *args: P.args, **kwargs: P.kwargs):
@@ -557,5 +622,21 @@ def caller(
             _ = action(val, *args, **kwargs)
 
 caller([], T.c1)
+"#,
+);
+
+testcase!(
+    test_paramspec_any,
+    r#"
+from typing import Callable, Any, ParamSpec, Generic
+
+P = ParamSpec('P')
+
+class Task(Generic[P]):
+    __call__: Callable[P, None]
+
+# Any should be accepted as a valid ParamSpec argument
+def foo(task: Task[Any]) -> None:
+    pass
 "#,
 );

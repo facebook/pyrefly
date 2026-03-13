@@ -22,6 +22,9 @@ use crate::types::types::Type;
 /// The root cause is `C.__lt__` being called with the wrong type, but the user sees a `<`
 /// comparison. ErrorContext stores this context that the user sees, to make it easier to connect
 /// it back to the root cause.
+///
+/// Note: Types stored in the ErrorContext should be processed through `AnswersSolver::for_display`
+/// otherwise printed type representations may be non-deterministic due to unsolved vars
 #[derive(Clone, Debug)]
 pub enum ErrorContext {
     /// with x: ...
@@ -176,6 +179,8 @@ pub enum TypeCheckKind {
     OverloadReturn,
     /// Consistency check for overload input signature, as (overload_signature, implementation_signature)
     OverloadInput(Callable, Callable),
+    /// Consistency check for overload defaults, as (parameter name).
+    OverloadDefault(Name),
     /// Check that the type a TypeVar is specialized with is compatible with its type restriction.
     TypeVarSpecialization(Name),
     /// An `x in y` check
@@ -222,6 +227,7 @@ impl TypeCheckKind {
             Self::PostInit => ErrorKind::BadFunctionDefinition,
             Self::OverloadReturn => ErrorKind::InconsistentOverload,
             Self::OverloadInput(..) => ErrorKind::InconsistentOverload,
+            Self::OverloadDefault(..) => ErrorKind::InconsistentOverloadDefault,
             Self::TypeVarSpecialization(..) => ErrorKind::BadSpecialization,
             Self::Container => ErrorKind::UnsupportedOperation,
         }

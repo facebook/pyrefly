@@ -14,11 +14,13 @@ use std::sync::Arc;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::Deprecation;
+use pyrefly_types::callable::FuncDefIndex;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
@@ -31,6 +33,7 @@ use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
@@ -38,7 +41,6 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
-use crate::graph::index::Idx;
 use crate::types::callable::FuncMetadata;
 use crate::types::types::Type;
 
@@ -46,6 +48,7 @@ use crate::types::types::Type;
 /// includes information from decorators, like @classmethod.
 #[derive(Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub struct UndecoratedFunction {
+    pub def_index: FuncDefIndex,
     pub identifier: ShortIdentifier,
     pub metadata: FuncMetadata,
     pub decorators: Box<[(Type, TextRange)]>,
@@ -54,6 +57,9 @@ pub struct UndecoratedFunction {
     pub paramspec: Option<Quantified>,
     pub stub_or_impl: FunctionStubOrImpl,
     pub defining_cls: Option<Class>,
+    /// Maps parameter names to their resolved types - used to connect
+    /// FunctionParameter and KeyUndecoratedFunction.
+    pub resolved_param_types: SmallMap<Name, Type>,
 }
 
 /// A value that combines the metadata of a function def and also provides the type of the function
@@ -100,6 +106,7 @@ pub enum SpecialDecorator<'a> {
 impl UndecoratedFunction {
     pub fn recursive() -> Self {
         UndecoratedFunction {
+            def_index: FuncDefIndex(u32::MAX),
             identifier: ShortIdentifier::new(&Identifier::new(
                 Name::default(),
                 TextRange::default(),
@@ -113,6 +120,7 @@ impl UndecoratedFunction {
                     ),
                     cls: None,
                     name: Name::default(),
+                    def_index: None,
                 })),
                 flags: FuncFlags::default(),
             },
@@ -122,6 +130,7 @@ impl UndecoratedFunction {
             paramspec: None,
             stub_or_impl: FunctionStubOrImpl::Stub,
             defining_cls: None,
+            resolved_param_types: SmallMap::new(),
         }
     }
 

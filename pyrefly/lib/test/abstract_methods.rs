@@ -346,6 +346,57 @@ c = Child()
 );
 
 testcase!(
+    test_super_abstract_call_with_body,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def method(self) -> int:
+        return 0
+
+class Child(Base):
+    def method(self) -> int:
+        return super().method() + 1
+"#,
+);
+
+testcase!(
+    test_super_abstract_property_call,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @property
+    @abstractmethod
+    def processor(self) -> bool: pass
+
+class Child(Base):
+    @property
+    def processor(self) -> bool:
+        return super().processor  # E: Method `processor` inherited from class `Base` has no implementation and cannot be accessed via `super()`
+"#,
+);
+
+testcase!(
+    test_super_abstract_property_call_with_body,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @property
+    @abstractmethod
+    def processor(self) -> bool:
+        return True
+
+class Child(Base):
+    @property
+    def processor(self) -> bool:
+        return super().processor
+"#,
+);
+
+testcase!(
     test_abstract_property,
     TestEnv::new().enable_implicit_abstract_class_error(),
     r#"
@@ -415,5 +466,90 @@ class C(ABC):
 class D(C):  # E: Class `D` has unimplemented abstract members: `bar`
     async def foo(self) -> AsyncIterator[int]:
         yield 1
+    "#,
+);
+
+testcase!(
+    test_uninit_classvar_abc,
+    r#"
+# To align with mypy and pyright, we do not consider uninitialized class vars on abstract classes to be abstract
+from abc import ABC
+from typing import ClassVar, final
+@final
+class A(ABC):
+    x: ClassVar[int]
+a = A()
+"#,
+);
+
+testcase!(
+    test_abstract_method_abc,
+    r#"
+from abc import ABC
+
+class A(ABC):
+    def foo(self):
+        raise NotImplementedError()
+
+class B(A):
+    def foo(self):
+        x = 1
+        print(x)
+"#,
+);
+
+testcase!(
+    test_abstract_method_abc_transitive,
+    r#"
+from abc import ABC
+
+class A(ABC):
+    def foo(self):
+        raise NotImplementedError()
+
+class B(A):
+    def bar(self):
+        raise NotImplementedError()
+
+class C(B):
+    def foo(self):
+        pass
+    def bar(self):
+        pass
+"#,
+);
+
+testcase!(
+    test_abstract_method_simple_assignment,
+    r#"
+from abc import ABC, abstractmethod
+
+def concrete_impl(self: "Base") -> int:
+    return 42
+
+class Base(ABC):
+    @abstractmethod
+    def method(self) -> int:
+        pass
+
+class Child(Base):
+    # This assignment should implement the abstract method
+    method = concrete_impl
+
+# This should work - abstract method is implemented via assignment
+x = Child()
+"#,
+);
+
+testcase!(
+    test_implicit_return_in_abstract_method,
+    r#"
+from abc import ABC, abstractmethod
+
+class A(ABC):
+    @abstractmethod
+    def f(self, x: bool) -> int:  # E: one or more paths are missing an explicit `return`
+        if x:
+            return 0
     "#,
 );

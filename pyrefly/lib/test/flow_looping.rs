@@ -9,7 +9,6 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
-    bug = "The results include over-eager pinning of vars in generic solving, see https://github.com/facebook/pyrefly/issues/105",
     test_loop_with_generic_pin,
     r#"
 def condition() -> bool: ...
@@ -83,20 +82,13 @@ def main():
 );
 
 testcase!(
-    bug = "A recursive redefinition in a loop produces a hard-to-follow error message + location",
     test_while_creates_recursive_type,
     r#"
 from typing import assert_type, Any, Literal
 def f(condition) -> None:
     x = 1
-    # It's fine to error here, but ideally we would error at the assignment
-    # rather than the `while`, and ideally we would note that the type is recursive
-    # in a way we don't support.
-    while condition():  # E: `Literal[1] | list[int]` is not assignable to `int`
-        assert_type(x, Literal[1] | list[int])
+    while condition():  # E: Fixpoint iteration did not converge. Inferred type `Literal[1] | list[int | list[int | list[int | list[int]]]]`. Adding annotations may help
         x = [x]
-        assert_type(x, list[int])
-    assert_type(x, Literal[1] | list[int])
     "#,
 );
 
@@ -355,6 +347,28 @@ def test2(match: float) -> float:  # E: Function declared to return `float` but 
 );
 
 testcase!(
+    test_for_else_return_in_body_else_reachable,
+    r#"
+def foo(x: list[int]) -> int:
+    for _ in x:
+        return 1
+    else:
+        return 2  # No error - reachable when x is empty
+"#,
+);
+
+testcase!(
+    test_for_definitely_runs_return_else_unreachable,
+    r#"
+def foo() -> int:
+    for _ in range(3):
+        return 1
+    else:
+        return 2  # E: This `return` statement is unreachable
+"#,
+);
+
+testcase!(
     test_for_with_reassign,
     r#"
 from typing import assert_type, Literal
@@ -580,7 +594,6 @@ def f():
 );
 
 testcase!(
-    bug = "Single-shot analysis cannot handle this - see https://github.com/facebook/pyrefly/issues/1234",
     test_assign_result_of_call_back_to_argument,
     r#"
 class Cursor:
@@ -593,7 +606,7 @@ class Query:
 
 def test(q: Query) -> None:
     cursor = None
-    while not cursor or not cursor.finished():  # E: `Cursor | None` is not assignable to `None` (caused by inconsistent types when breaking cycles)
+    while not cursor or not cursor.finished():
         cursor = q.send(cursor)
 "#,
 );
@@ -650,9 +663,9 @@ while condition():
 assert_type(good, list[int])
 
 bad = [1]
-while condition():  # E: `list[int] | list[str]` is not assignable to `list[int]` (caused by inconsistent types when breaking cycles)
+while condition():
     if condition():
-        bad = [f(bad)]  # E:  Argument `list[int] | list[str]` is not assignable to parameter `x` with type `list[int]` in function `f`
+        bad = [f(bad)]  # E: Argument `list[int] | list[str]` is not assignable to parameter `x` with type `list[int]` in function `f`
     else:
         bad = [""]
 "#,
@@ -720,4 +733,177 @@ def test():
     break # E: `break` outside loop
     continue # E: `continue` outside loop
     "#,
+);
+
+testcase!(
+    test_for_range_nonzero_literal_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in range(3):
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_for_range_one_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in range(1):
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_list_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in [1, 2, 3]:
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_tuple_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in (1, 2, 3):
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_set_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in {1, 2, 3}:
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+// These should still produce errors because the loop may not execute
+testcase!(
+    test_for_range_zero_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in range(0):
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_empty_list_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in []:
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_dynamic_range_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo(n: int):
+    for _ in range(n):
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_dynamic_list_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo(xs: list[int]):
+    for _ in xs:
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_with_break_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo(cond: bool):
+    for _ in range(3):
+        if cond:
+            break
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_while_true_with_break_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo(cond: bool):
+    while True:
+        if cond:
+            break
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` is uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_narrow_unbound_variable,
+    r#"
+from typing import assert_type
+def foo(cond: bool):
+    for _ in range(3):
+        if cond:
+            if x is not None:  # E: `x` is uninitialized
+                pass
+    print(x)  # E: `x` may be uninitialized
+    x: int | None = None
+    assert_type(x, int | None)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/714
+testcase!(
+    test_loop_variable_type_with_cross_branch_reassignment,
+    r#"
+lineStart: int | None = None
+lineno: int = 0
+
+def needsInt(i: int) -> None:
+    ...
+
+for part in ['a', 'b', 'c', 'd']:
+    if part == 'a':
+        ...
+    elif part == 'b':
+        lineno = lineStart if lineStart is not None else 0
+    elif part == 'c':
+        needsInt(lineno)
+    elif part == 'd':
+        lineStart = lineno
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/1561
+testcase!(
+    test_divmod_loop_inference,
+    r#"
+def process(value: int | float):
+    for i in range(2):
+        (v, value) = divmod(value, 7)
+"#,
 );

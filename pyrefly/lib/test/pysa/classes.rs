@@ -218,10 +218,13 @@ class Foo:
                 "Bar".into(),
                 PysaClassField {
                     type_: PysaType::from_type(
-                        &Type::Type(Box::new(Type::ClassType(ClassType::new(
-                            get_class("test", "Bar", context),
-                            Default::default(),
-                        )))),
+                        &context
+                            .answers
+                            .heap()
+                            .mk_type(context.answers.heap().mk_class_type(ClassType::new(
+                                get_class("test", "Bar", context),
+                                Default::default(),
+                            ))),
                         context,
                     ),
                     explicit_annotation: None,
@@ -320,8 +323,14 @@ Point = namedtuple('Point', ['x', 'y'])
                     PysaClassField {
                         type_: PysaType::from_type(
                             &Type::concrete_tuple(vec![
-                                context.stdlib.str().clone().to_type(),
-                                context.stdlib.str().clone().to_type(),
+                                context
+                                    .answers
+                                    .heap()
+                                    .mk_class_type(context.stdlib.str().clone()),
+                                context
+                                    .answers
+                                    .heap()
+                                    .mk_class_type(context.stdlib.str().clone()),
                             ]),
                             context,
                         ),
@@ -511,8 +520,14 @@ class Foo(typing.NamedTuple):
                     PysaClassField {
                         type_: PysaType::from_type(
                             &Type::concrete_tuple(vec![
-                                context.stdlib.str().clone().to_type(),
-                                context.stdlib.str().clone().to_type(),
+                                context
+                                    .answers
+                                    .heap()
+                                    .mk_class_type(context.stdlib.str().clone()),
+                                context
+                                    .answers
+                                    .heap()
+                                    .mk_class_type(context.stdlib.str().clone()),
                             ]),
                             context,
                         ),
@@ -654,10 +669,15 @@ class Foo:
                     "__dataclass_fields__".into(),
                     PysaClassField {
                         type_: PysaType::from_type(
-                            &Type::ClassType(context.stdlib.dict(
-                                context.stdlib.str().clone().to_type(),
-                                Type::any_implicit(),
-                            )),
+                            &context.answers.heap().mk_class_type(
+                                context.stdlib.dict(
+                                    context
+                                        .answers
+                                        .heap()
+                                        .mk_class_type(context.stdlib.str().clone()),
+                                    context.answers.heap().mk_any_implicit(),
+                                ),
+                            ),
                             context,
                         ),
                         explicit_annotation: None,
@@ -670,8 +690,14 @@ class Foo:
                     PysaClassField {
                         type_: PysaType::from_type(
                             &Type::concrete_tuple(vec![
-                                context.stdlib.str().clone().to_type(),
-                                context.stdlib.str().clone().to_type(),
+                                context
+                                    .answers
+                                    .heap()
+                                    .mk_class_type(context.stdlib.str().clone()),
+                                context
+                                    .answers
+                                    .heap()
+                                    .mk_class_type(context.stdlib.str().clone()),
                             ]),
                             context,
                         ),
@@ -767,5 +793,26 @@ class Foo:
                 ),
             ],
         ))
+    },
+);
+
+exported_class_testcase!(
+    test_export_private_attribute,
+    r#"
+import typing
+class Foo:
+    def __init__(self, x: int) -> None:
+        self.__x: int = x
+"#,
+    &|context: &ModuleContext| {
+        create_simple_class("Foo", 0, ScopeParent::TopLevel).with_fields(HashMap::from([(
+            "__x".into(),
+            PysaClassField {
+                type_: PysaType::from_class_type(context.stdlib.int(), context),
+                explicit_annotation: Some("int".to_owned()),
+                location: Some(create_location(5, 14, 5, 17)),
+                declaration_kind: Some(PysaClassFieldDeclaration::DefinedInMethod),
+            },
+        )]))
     },
 );
