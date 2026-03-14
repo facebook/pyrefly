@@ -80,6 +80,34 @@ Point3(1)  # E: Missing argument `y` in function `Point3.__new__`
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2734
+// Starred expressions in field lists can't be fully resolved statically,
+// so the namedtuple has dynamic fields. String literals alongside the
+// starred expression are still extracted as known fields.
+testcase!(
+    test_named_tuple_spread_fields_from_namedtuple,
+    r#"
+import collections
+from typing import assert_type, Any
+
+BaseFieldInfo = collections.namedtuple("BaseFieldInfo", ["name", "type_code", "size"])
+ExtendedFieldInfo = collections.namedtuple(
+    "ExtendedFieldInfo",
+    [*BaseFieldInfo._fields, "extra", "comment"],
+)
+
+# Constructor accepts any args since field positions are unknown
+info = ExtendedFieldInfo("col1", 1, 100, "extra_val", "a comment")
+# Also valid: fewer args, since we can't know which are required
+info2 = ExtendedFieldInfo("col1", 1)
+# Known fields are accessible as attributes
+assert_type(info.extra, Any)
+assert_type(info.comment, Any)
+# Unknown fields are also accessible (dynamic)
+assert_type(info.anything, Any)
+    "#,
+);
+
 testcase!(
     test_named_tuple_functional_rename,
     r#"
@@ -373,7 +401,6 @@ class B(A):
 );
 
 testcase!(
-    bug = "The asserted type is wrong",
     test_custom_iter,
     r#"
 from typing import assert_type, Iterator, NamedTuple
@@ -382,7 +409,7 @@ class NT(NamedTuple):
     def __iter__(self) -> Iterator[str]: ...
 nt = NT(0)
 for x in nt:
-    assert_type(x, str)  # E: assert_type(int, str)
+    assert_type(x, str)
     "#,
 );
 
@@ -507,6 +534,32 @@ class E(NamedTuple("E", 42)):  # E: Expected valid functional named tuple defini
 );
 
 testcase!(
+    test_named_tuple_dynamic_fields,
+    r#"
+from collections import namedtuple
+from typing import assert_type, Any
+
+fields_map = (('x', int), ('y', str))
+foo1 = namedtuple('foo1', (name for name, _ in fields_map))  # E: Expected valid functional named tuple definition
+
+fields = [name for name, _ in fields_map]
+foo2 = namedtuple('foo2', fields)  # E: Expected valid functional named tuple definition
+
+instance1 = foo1()
+instance2 = foo2()
+
+# attribute access
+assert_type(instance1.x, Any)
+assert_type(instance1.anything, Any)
+assert_type(instance2.y, Any)
+
+# indexing
+assert_type(instance1[0], Any)
+assert_type(instance2[1], Any)
+    "#,
+);
+
+testcase!(
     bug = "namedtuple + mixin is valid in CPython but we reject it",
     test_named_tuple_base_class_call_with_mixin,
     r#"
@@ -559,4 +612,61 @@ d = D(1)
 assert_type(d.x, Any)
 assert_type(d.greet(), str)
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/832
+testcase!(
+    test_functional_namedtuple_base_class_with_new,
+    r#"
+from collections import namedtuple
+
+class QConfig(namedtuple("QConfig", ["activation", "weight"])):
+    def __new__(cls, activation, weight):
+        return super().__new__(cls, activation, weight)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2622
+// `import collections.abc` should not break special handling of `collections.namedtuple`.
+testcase!(
+    test_named_tuple_collections_submodule_import,
+    r#"
+import collections
+import collections.abc
+
+Point = collections.namedtuple("Point", ["x", "y"])
+p = Point(x=1, y=2)
+    "#,
+);
+
+// `import collections.abc` alone (without explicit `import collections`) should still
+// allow `collections.namedtuple` to work, since `import X.Y` implicitly imports `X`.
+testcase!(
+    test_named_tuple_collections_submodule_import_only,
+    r#"
+import collections.abc
+
+Point = collections.namedtuple("Point", ["x", "y"])
+p = Point(x=1, y=2)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2455
+testcase!(
+    test_named_tuple_typevar_bound,
+    r#"
+from typing import TypeVar, NamedTuple, assert_type
+
+MyCustomModelT = TypeVar(name="MyCustomModelT", bound=NamedTuple)
+
+class ImplementedModel(NamedTuple):
+    name: str
+    age: int
+
+def arbitrary_method(_name: str, _age: int, _model: type[MyCustomModelT]) -> MyCustomModelT:
+    return _model(name=_name, age=_age)  # E: Unexpected keyword argument `name` in function `tuple.__new__`  # E: Unexpected keyword argument `age` in function `tuple.__new__`
+
+o = arbitrary_method("a", 2, ImplementedModel)
+assert_type(o, ImplementedModel)
+"#,
 );

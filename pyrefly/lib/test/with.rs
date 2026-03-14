@@ -272,11 +272,11 @@ testcase!(
     test_with_contextmanager,
     r#"
 import contextlib
-from typing import Iterator
+from typing import Generator
 
 @contextlib.contextmanager
-def f() -> Iterator[str]:
-    return iter([""])
+def f() -> Generator[str, None, None]:
+    yield ""
 
 def g() -> bool:
     with f():

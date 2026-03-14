@@ -1,0 +1,97 @@
+{
+  "variables": [],
+  "line_count": 15,
+  "functions": [
+    {
+      "name": "test.Base.base_method",
+      "return_annotation": null,
+      "is_return_type_known": false,
+      "parameters": [
+        {
+          "name": "self",
+          "annotation": null,
+          "is_type_known": true,
+          "location": {
+            "line": 8,
+            "column": 21
+          }
+        },
+        {
+          "name": "x",
+          "annotation": null,
+          "is_type_known": false,
+          "location": {
+            "line": 8,
+            "column": 27
+          }
+        }
+      ],
+      "is_type_known": false,
+      "location": {
+        "line": 8,
+        "column": 5
+      }
+    },
+    {
+      "name": "test.Child.child_method",
+      "return_annotation": "bool",
+      "is_return_type_known": true,
+      "parameters": [
+        {
+          "name": "self",
+          "annotation": null,
+          "is_type_known": true,
+          "location": {
+            "line": 13,
+            "column": 22
+          }
+        },
+        {
+          "name": "x",
+          "annotation": "int",
+          "is_type_known": true,
+          "location": {
+            "line": 13,
+            "column": 28
+          }
+        }
+      ],
+      "is_type_known": true,
+      "location": {
+        "line": 13,
+        "column": 5
+      }
+    }
+  ],
+  "classes": [
+    {
+      "name": "test.Base",
+      "incomplete_attributes": [
+        {
+          "name": "base_method",
+          "declared_in": "test.Base"
+        }
+      ],
+      "location": {
+        "line": 7,
+        "column": 1
+      }
+    },
+    {
+      "name": "test.Child",
+      "incomplete_attributes": [
+        {
+          "name": "base_method",
+          "declared_in": "test.Base"
+        }
+      ],
+      "location": {
+        "line": 12,
+        "column": 1
+      }
+    }
+  ],
+  "suppressions": [],
+  "annotation_completeness": 50.0,
+  "type_completeness": 100.0
+}

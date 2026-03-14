@@ -133,6 +133,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         return None;
                     }
                 }
+                // UntypedAlias (from a TypeAliasRef) is opaque at the raw layer;
+                // it will be expanded in wrap_type_alias. Treat it as a valid
+                // middle element like TypeVarTuple.
+                Type::Unpack(ty @ box Type::UntypedAlias(_)) => {
+                    has_unpack = true;
+                    if middle.is_none() {
+                        middle = Some(*ty)
+                    } else {
+                        self.extra_unpack_error(errors, value.range());
+                        return None;
+                    }
+                }
                 Type::Unpack(ty) => {
                     self.error(
                         errors,
@@ -207,6 +219,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 fn is_valid_literal(x: &Type) -> bool {
                     match x {
                         Type::None | Type::Literal(_) | Type::Any(AnyStyle::Error) => true,
+                        Type::Annotated(inner) => is_valid_literal(inner),
                         Type::Union(box Union { members: xs, .. }) => {
                             xs.iter().all(is_valid_literal)
                         }
@@ -509,11 +522,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             ),
             SpecialForm::Unpack if arguments.len() == 1 => {
-                self.heap.mk_type_form(self.heap.mk_unpack(self.expr_untype(
-                    &arguments[0],
-                    TypeFormContext::TypeArgument,
-                    errors,
-                )))
+                let arg = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
+                if matches!(arg, Type::Unpack(_)) {
+                    return self.error(
+                        errors,
+                        arguments[0].range(),
+                        ErrorInfo::Kind(ErrorKind::BadUnpacking),
+                        "`Unpack` cannot be applied to an unpacked argument".to_owned(),
+                    );
+                }
+                self.heap.mk_type_form(self.heap.mk_unpack(arg))
             }
             SpecialForm::Unpack => self.error(
                 errors,
@@ -541,9 +559,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     arguments.len()
                 ),
             ),
-            SpecialForm::Annotated if arguments.len() > 1 => self.heap.mk_type_form(
-                self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors),
-            ),
+            SpecialForm::Annotated if arguments.len() > 1 => {
+                let inner = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
+                Type::Annotated(Box::new(inner))
+            }
             SpecialForm::Annotated => self.error(
                 errors,
                 range,

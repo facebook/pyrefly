@@ -56,7 +56,7 @@ impl FindError {
     ) -> FindError {
         let config_suffix = match config_source {
             ConfigSource::File(p) => format!(" (from config in `{}`)", p.display()),
-            ConfigSource::Marker(p) => {
+            ConfigSource::PythonToolMarker(p) | ConfigSource::Marker(p) => {
                 format!(
                     " (from default config for project root marked by `{}`)",
                     p.display()
@@ -165,7 +165,7 @@ impl<T> FindingOrError<T> {
         }
     }
 
-    pub fn map<T2>(self, f: impl Fn(T) -> T2) -> FindingOrError<T2> {
+    pub fn map<T2>(self, f: impl FnOnce(T) -> T2) -> FindingOrError<T2> {
         match self {
             Self::Finding(Finding { finding, error }) => FindingOrError::Finding(Finding {
                 finding: f(finding),

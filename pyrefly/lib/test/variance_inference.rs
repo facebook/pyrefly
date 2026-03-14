@@ -270,6 +270,21 @@ vinv1_2: ShouldBeInvariant1[int] = ShouldBeInvariant1[float](1.1)  # E:
 );
 
 testcase!(
+    test_protocol_property_invariant,
+    r#"
+from typing import Protocol, TypeVar
+
+TypeT = TypeVar("TypeT")
+
+class HasP(Protocol[TypeT]):
+    @property
+    def p(self) -> TypeT: ...
+    @p.setter
+    def p(self, p: TypeT, /) -> None: ...
+"#,
+);
+
+testcase!(
     test_sequence_inheritance,
     r#"
 from typing import Sequence
@@ -611,6 +626,24 @@ class Contra(Generic[T_contra]): ...
 class Foo(
     Contra[Contra[Contra[T_co]]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
 ): ...
+"#,
+);
+
+testcase!(
+    test_inherited_contravariance_from_parent,
+    r#"
+from typing import Self
+
+class SupportsLT[ComparableT]:  # contravariant
+    def __lt__(self, other: ComparableT, /) -> Self: ...
+
+def upcast_lt(arg: SupportsLT[object]) -> SupportsLT[float]:
+    return arg
+
+class Impl[T](SupportsLT[T]):  ...  # contravariant via inheritance
+
+def upcast(x: Impl[object]) -> Impl[float]:
+    return x
 "#,
 );
 

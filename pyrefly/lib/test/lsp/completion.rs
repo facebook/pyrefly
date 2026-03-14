@@ -90,7 +90,7 @@ fn get_test_report(
             ..
         } in state
             .transaction()
-            .completion(handle, position, import_format, true)
+            .completion(handle, position, import_format, true, None)
         {
             let is_deprecated = if let Some(tags) = tags {
                 tags.contains(&lsp_types::CompletionItemTag::DEPRECATED)
@@ -138,7 +138,7 @@ fn get_test_report(
 }
 
 fn dict_field_labels(txn: &Transaction<'_>, handle: &Handle, position: TextSize) -> Vec<String> {
-    txn.completion(handle, position, ImportFormat::Absolute, true)
+    txn.completion(handle, position, ImportFormat::Absolute, true, None)
         .into_iter()
         .filter(|item| item.kind == Some(CompletionItemKind::FIELD))
         .map(|item| item.label)
@@ -321,7 +321,6 @@ dim.get(key="")
         report.contains(
             r#"
 Completion Results:
-- (Value) 'x': Literal['x'] inserting `x`
 - (Field) x: int
 - (Field) y: int
 - (Field) z: int
@@ -699,18 +698,18 @@ from foo imp
                ^
 Completion Results:
 - (Variable) imperial_guard
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
+- (Constant) __annotations__
+- (Constant) __builtins__
+- (Constant) __cached__
+- (Constant) __debug__
+- (Constant) __dict__
+- (Constant) __doc__
+- (Constant) __file__
+- (Constant) __loader__
+- (Constant) __name__
+- (Constant) __package__
+- (Constant) __path__
+- (Constant) __spec__
 
 
 # foo.py
@@ -778,20 +777,20 @@ Completion Results:
                         ^
 Completion Results:
 - (Variable) deprecated
-- (Variable) func_ok
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
-- (Variable) [DEPRECATED] func_not_ok
+- (Function) func_ok
+- (Constant) __annotations__
+- (Constant) __builtins__
+- (Constant) __cached__
+- (Constant) __debug__
+- (Constant) __dict__
+- (Constant) __doc__
+- (Constant) __file__
+- (Constant) __loader__
+- (Constant) __name__
+- (Constant) __package__
+- (Constant) __path__
+- (Constant) __spec__
+- (Function) [DEPRECATED] func_not_ok
 
 
 # foo.py
@@ -825,18 +824,18 @@ Completion Results:
                            ^
 Completion Results:
 - (Variable) imperial_guard
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
+- (Constant) __annotations__
+- (Constant) __builtins__
+- (Constant) __cached__
+- (Constant) __debug__
+- (Constant) __dict__
+- (Constant) __doc__
+- (Constant) __file__
+- (Constant) __loader__
+- (Constant) __name__
+- (Constant) __package__
+- (Constant) __path__
+- (Constant) __spec__
 
 
 # foo.py
@@ -866,18 +865,18 @@ from .foo import imperial
                             ^
 Completion Results:
 - (Variable) imperial_guard
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
+- (Constant) __annotations__
+- (Constant) __builtins__
+- (Constant) __cached__
+- (Constant) __debug__
+- (Constant) __dict__
+- (Constant) __doc__
+- (Constant) __file__
+- (Constant) __loader__
+- (Constant) __name__
+- (Constant) __package__
+- (Constant) __path__
+- (Constant) __spec__
 
 
 # foo.py
@@ -1550,12 +1549,17 @@ foo(
         ^
 Completion Results:
 - (Variable) x=: int
+- (Variable) y=: bool
 "#
         .trim(),
         report.trim(),
     );
 }
 
+/// When an argument is provided that narrows down the overload,
+/// only params from compatible overloads are shown. Here `1` (int)
+/// is compatible with `x: int` (second overload) but not `y: bool`
+/// (first overload), so only the second overload's params appear.
 #[test]
 fn kwargs_completion_overload_correct() {
     let code = r#"
@@ -1579,6 +1583,67 @@ foo(1,
 Completion Results:
 - (Variable) x=: int
 - (Variable) y=: str
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+/// When overloads share the same first arg and differ on later args,
+/// show params from all overloads (here both overloads accept `x: int`,
+/// so `y=` and `z=` should both appear).
+#[test]
+fn kwargs_completion_overload_shared_first_arg() {
+    let code = r#"
+from typing import overload
+@overload
+def foo(x: int, y: str): ...
+@overload
+def foo(x: int, z: bool): ...
+def foo(x, **kwargs): ...
+foo(1, 
+#      ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+8 | foo(1, 
+           ^
+Completion Results:
+- (Variable) x=: int
+- (Variable) y=: str
+- (Variable) z=: bool
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn kwargs_completion_overload_same_name_different_types() {
+    let code = r#"
+from typing import Any, overload
+@overload
+def foo(x: int) -> int: ...
+@overload
+def foo(x: str) -> str: ...
+def foo(x: Any) -> Any:
+    return x
+foo(
+#   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+9 | foo(
+        ^
+Completion Results:
+- (Variable) x=: int
+- (Variable) x=: str
 "#
         .trim(),
         report.trim(),
@@ -1827,6 +1892,86 @@ Completion Results:
 }
 
 #[test]
+fn autoimport_common_alias_for_module() {
+    let code = r#"
+T = spio
+#       ^
+"#;
+    let files = [("main", code), ("scipy.io", "data = 1\n")];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+    let autoimport = completions
+        .iter()
+        .find(|item| item.label == "spio")
+        .expect("expected spio to be in completions");
+    assert!(
+        autoimport
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.contains("import scipy.io as spio")),
+        "expected alias import detail for spio, got {:?}",
+        autoimport.detail
+    );
+    assert_eq!(autoimport.insert_text.as_deref(), Some("spio"));
+    let label_details = autoimport
+        .label_details
+        .as_ref()
+        .expect("auto import completion should include label details");
+    assert_eq!(
+        label_details.detail.as_deref(),
+        Some(" (import scipy.io as spio)")
+    );
+    assert_eq!(label_details.description.as_deref(), Some("scipy.io"));
+    assert!(
+        !completions.iter().any(|item| item.label == "scipy.io"),
+        "expected alias completion to suppress non-aliased scipy.io module suggestion"
+    );
+}
+
+#[test]
+fn autoimport_common_alias_bypasses_min_char_threshold() {
+    let code = r#"
+T = np
+#     ^
+"#;
+    let files = [("main", code), ("numpy", "data = 1\n")];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+    let autoimport = completions
+        .iter()
+        .find(|item| item.label == "np")
+        .expect("expected np to be in completions");
+    assert!(
+        autoimport
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.contains("import numpy as np")),
+        "expected alias import detail for np, got {:?}",
+        autoimport.detail
+    );
+    assert_eq!(autoimport.insert_text.as_deref(), Some("np"));
+    let label_details = autoimport
+        .label_details
+        .as_ref()
+        .expect("auto import completion should include label details");
+    assert_eq!(
+        label_details.detail.as_deref(),
+        Some(" (import numpy as np)")
+    );
+    assert_eq!(label_details.description.as_deref(), Some("numpy"));
+}
+
+#[test]
 fn autoimport_prefers_public_reexport_for_dotted_private_module() {
     let code = r#"
 T = Thing
@@ -1855,6 +2000,41 @@ Completion Results:
 # _foo_bar.py
 
 # foo.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn autoimport_explicit_reexport_suggests_reexport_path() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("source", "Thing = 1\n"),
+            ("public", "from source import Thing as Thing\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from public import Thing
+
+- (Variable) Thing: from source import Thing
+
+
+
+# source.py
+
+# public.py
 "#
         .trim(),
         report.trim(),
@@ -1911,7 +2091,7 @@ T = foooooo
     let completions =
         state
             .transaction()
-            .completion(handle, position, ImportFormat::Absolute, true);
+            .completion(handle, position, ImportFormat::Absolute, true, None);
     let autoimport = completions
         .into_iter()
         .find(|item| item.label == "foooooo")
@@ -1926,7 +2106,7 @@ T = foooooo
     let completions =
         state
             .transaction()
-            .completion(handle, position, ImportFormat::Absolute, false);
+            .completion(handle, position, ImportFormat::Absolute, false, None);
     completions
         .into_iter()
         .find(|item| item.label == "foooooo")
@@ -2260,20 +2440,20 @@ class Foo: pass
 2 | from lib imp
                ^
 Completion Results:
-- (Variable) Foo
+- (Class) Foo
 - (Keyword) import
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
+- (Constant) __annotations__
+- (Constant) __builtins__
+- (Constant) __cached__
+- (Constant) __debug__
+- (Constant) __dict__
+- (Constant) __doc__
+- (Constant) __file__
+- (Constant) __loader__
+- (Constant) __name__
+- (Constant) __package__
+- (Constant) __path__
+- (Constant) __spec__
 
 
 # lib.py
@@ -2601,7 +2781,8 @@ x = sys.version
     let txn = state.transaction();
 
     // Position 0: inside comment - should return empty
-    let comment_completions = txn.completion(handle, positions[0], ImportFormat::Absolute, true);
+    let comment_completions =
+        txn.completion(handle, positions[0], ImportFormat::Absolute, true, None);
     assert!(
         comment_completions.is_empty(),
         "Expected no completions in comment, but got {} completions",
@@ -2609,7 +2790,8 @@ x = sys.version
     );
 
     // Position 1: normal code - should return completions
-    let normal_completions = txn.completion(handle, positions[1], ImportFormat::Absolute, true);
+    let normal_completions =
+        txn.completion(handle, positions[1], ImportFormat::Absolute, true, None);
     assert!(
         !normal_completions.is_empty(),
         "Expected completions in normal code but got none"
@@ -2643,7 +2825,7 @@ needs_base(val)
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();
-    let completions = txn.completion(handle, position, ImportFormat::Absolute, true);
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
 
     let exact_index = completions
         .iter()
@@ -2733,7 +2915,7 @@ class Constraint:
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();
-    let completions = txn.completion(handle, position, ImportFormat::Absolute, true);
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
 
     let completion_labels: Vec<_> = completions.iter().map(|c| c.label.as_str()).collect();
 
@@ -2745,4 +2927,30 @@ class Constraint:
          Got completions: {:?}",
         completion_labels
     );
+}
+
+#[test]
+fn completion_namedtuple_spread_fields() {
+    let code = r#"
+import collections
+
+BaseFieldInfo = collections.namedtuple("BaseFieldInfo", ["name", "type_code", "size"])
+ExtendedFieldInfo = collections.namedtuple(
+    "ExtendedFieldInfo",
+    [*BaseFieldInfo._fields, "extra", "comment"],
+)
+
+info = ExtendedFieldInfo()
+info.
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let trimmed = report.trim();
+    for expected in ["- (Field) extra", "- (Field) comment"] {
+        assert!(
+            trimmed.contains(expected),
+            "missing {expected} in completions:\n{trimmed}"
+        );
+    }
 }

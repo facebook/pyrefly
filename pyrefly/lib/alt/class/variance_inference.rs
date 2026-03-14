@@ -16,6 +16,7 @@ use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::tensor::TensorShape;
 use pyrefly_types::types::Union;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -98,11 +99,24 @@ pub struct VarianceResult {
     pub violations: Vec<VarianceViolation>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct InferenceStatus {
     inferred_variance: Variance,
     has_variance_inferred: bool,
     specified_variance: Option<Variance>,
+}
+
+impl InferenceStatus {
+    /// Return a fresh status with `inferred_variance` reset to its initial
+    /// value. Used at the start of each fixpoint iteration so that variance
+    /// is recomputed from scratch rather than accumulated across iterations.
+    fn reset(self) -> Self {
+        Self {
+            inferred_variance: self.specified_variance.unwrap_or(Variance::Bivariant),
+            has_variance_inferred: self.specified_variance.is_some(),
+            specified_variance: self.specified_variance,
+        }
+    }
 }
 type InferenceMap = SmallMap<Name, InferenceStatus>;
 
@@ -217,6 +231,28 @@ fn on_type(
                 on_type(variance, inj, &sig.as_type(), on_edge, on_var);
             }
         }
+        Type::Tensor(tensor) => {
+            // Tensor dimensions are invariant - Tensor[2, 3] is not a subtype of Tensor[3, 2]
+            let mut visit_dim = |ty: &Type| {
+                on_type(Variance::Invariant, inj, ty, on_edge, on_var);
+            };
+            match &tensor.shape {
+                TensorShape::Concrete(dims) => {
+                    for dim in dims {
+                        visit_dim(dim);
+                    }
+                }
+                TensorShape::Unpacked(box (prefix, middle, suffix)) => {
+                    for dim in prefix {
+                        visit_dim(dim);
+                    }
+                    visit_dim(middle);
+                    for dim in suffix {
+                        visit_dim(dim);
+                    }
+                }
+            }
+        }
         Type::Callable(t) => {
             // Walk return type covariantly
             on_type(variance, inj, &t.ret, on_edge, on_var);
@@ -321,6 +357,12 @@ fn on_class(
                 Variance::Invariant
             };
         on_type(variance, true, ty, on_edge, on_var);
+
+        // For properties with both a getter and setter, the stored type is the setter function,
+        // but the getter is stored separately. Walk it so its covariant contribution is counted.
+        if let Some(getter) = ty.is_property_setter_with_getter() {
+            on_type(Variance::Covariant, true, &getter, on_edge, on_var);
+        }
     }
 }
 
@@ -551,7 +593,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut new_environment: VarianceEnv = SmallMap::new();
 
             for (my_class, params) in env.iter() {
-                let mut new_params = params.clone();
+                // Recompute variance from scratch each iteration using the latest env.
+                let mut new_params: InferenceMap =
+                    params.iter().map(|(n, s)| (n.clone(), s.reset())).collect();
 
                 let mut on_var = |name: &Name,
                                   variance: Variance,
@@ -560,21 +604,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Some(old_status) = new_params.get_mut(name) {
                         let new_inferred_variance = variance.union(old_status.inferred_variance);
                         // Mark as inferred if:
-                        // 1. It was already marked as inferred, OR
+                        // 1. A previous call to on_var in this iteration already marked it, OR
                         // 2. The caller says this is an injective (reliable) constraint, OR
-                        // 3. The inferred variance is no longer Bivariant (we found a constraint)
-                        // Case 3 fixes self-referential types where `has_inferred` is always false
-                        // but we still discover variance constraints through the fixpoint iteration.
+                        // 3. The inferred variance is no longer Bivariant (we found a constraint).
+                        //    Case 3 fixes self-referential types where `has_inferred` is always
+                        //    false but we still discover variance constraints through fixpoint.
                         let new_has_variance_inferred = old_status.has_variance_inferred
                             || has_inferred
                             || new_inferred_variance != Variance::Bivariant;
-                        if new_inferred_variance != old_status.inferred_variance
-                            || new_has_variance_inferred != old_status.has_variance_inferred
-                        {
-                            old_status.inferred_variance = new_inferred_variance;
-                            old_status.has_variance_inferred = new_has_variance_inferred;
-                            changed = true;
-                        }
+                        old_status.inferred_variance = new_inferred_variance;
+                        old_status.has_variance_inferred = new_has_variance_inferred;
                     }
                 };
                 let mut on_edge = |c: &Class| env.get(c).cloned().unwrap_or_default();
@@ -586,6 +625,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &|c| self.get_base_types_for_class(c),
                     &|c| self.get_class_field_map(c),
                 );
+                if &new_params != params {
+                    changed = true;
+                }
                 new_environment.insert(my_class.dupe(), new_params);
             }
             env = new_environment;

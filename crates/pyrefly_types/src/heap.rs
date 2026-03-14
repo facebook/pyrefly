@@ -14,12 +14,19 @@
 //! Currently this is a pass-through factory that returns boxed types, allowing
 //! incremental migration of construction sites before switching to arena allocation.
 
+use std::sync::LazyLock;
+
+use dupe::Dupe;
+use pyrefly_util::uniques::Unique;
+use pyrefly_util::uniques::UniqueFactory;
+
 use crate::callable::Callable;
 use crate::callable::Function;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
 use crate::callable::Required;
+use crate::class::Class;
 use crate::class::ClassType;
 use crate::dimension::SizeExpr;
 use crate::keywords::KwCall;
@@ -29,28 +36,90 @@ use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
 use crate::special_form::SpecialForm;
+use crate::tensor::TensorType;
+use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
 use crate::typed_dict::TypedDict;
+use crate::types::AnyStyle;
 use crate::types::BoundMethod;
 use crate::types::Forall;
 use crate::types::Forallable;
+use crate::types::NeverStyle;
 use crate::types::Overload;
 use crate::types::SuperObj;
 use crate::types::Type;
 use crate::types::Union;
+use crate::types::Var;
+
+/// Global factory for producing unique heap identifiers.
+static HEAP_UNIQUE_FACTORY: LazyLock<UniqueFactory> = LazyLock::new(UniqueFactory::new);
+
+/// A type reference with an erased lifetime.
+///
+/// Used in contexts where a lifetime parameter would be problematic,
+/// such as structs that own both a `TypeHeap` and store types.
+/// The `id` field records which `TypeHeap` created this pointer,
+/// and `TypeHeap::unptr` verifies the match at runtime (panicking on mismatch).
+#[derive(Debug, Clone, Copy, Dupe)]
+pub struct TypePtr {
+    /// Not used in Equality. Only used as a dynamic check to ensure the `unptr`
+    /// uses the same `TypeHeap` that created the `TypePtr`.
+    id: Unique,
+    /// The `'static` lifetime is erased; use `TypeHeap::unptr` to recover
+    /// a reference with the correct lifetime.
+    ptr: &'static Type,
+}
 
 /// A factory for constructing types.
 ///
 /// Currently returns boxed types; will be backed by an arena in the future.
+/// Each TypeHeap has a unique identifier for debugging and tracking purposes.
 #[derive(Debug)]
-pub struct TypeHeap(());
+pub struct TypeHeap {
+    unique: Unique,
+}
 
 impl TypeHeap {
-    /// Create a new type heap.
+    /// Create a new type heap with a unique identifier.
     pub fn new() -> Self {
-        Self(())
+        Self {
+            unique: HEAP_UNIQUE_FACTORY.fresh(),
+        }
+    }
+
+    /// Get the unique identifier for this heap.
+    pub fn unique(&self) -> Unique {
+        self.unique
+    }
+
+    /// Erase the lifetime of a type reference, creating a `TypePtr`.
+    ///
+    /// # Safety invariant
+    ///
+    /// The caller must ensure that the referenced `Type` lives at least as long
+    /// as this `TypeHeap`. Once types are arena-allocated, this invariant will
+    /// be enforced by the arena's lifetime.
+    pub fn ptr(&self, ty: &Type) -> TypePtr {
+        // SAFETY: We erase the lifetime to 'static. The TypePtr stores our
+        // unique id, and unptr will verify it matches before returning the
+        // reference. The caller must ensure the Type outlives this heap.
+        let ptr: &'static Type = unsafe { &*(ty as *const Type) };
+        TypePtr {
+            id: self.unique,
+            ptr,
+        }
+    }
+
+    /// Recover a type reference from a `TypePtr`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this `TypePtr` was not created by this `TypeHeap`.
+    pub fn unptr<'t>(&'t self, type_ptr: &TypePtr) -> &'t Type {
+        assert_eq!(self.unique, type_ptr.id, "TypePtr used with wrong TypeHeap");
+        type_ptr.ptr
     }
 
     /// Allocate a type in the heap.
@@ -182,7 +251,7 @@ impl TypeHeap {
     }
 
     /// Create a `Type::ClassDef` from a Class.
-    pub fn mk_class_def(&self, class: crate::class::Class) -> Type {
+    pub fn mk_class_def(&self, class: Class) -> Type {
         Type::ClassDef(class)
     }
 
@@ -197,7 +266,7 @@ impl TypeHeap {
     }
 
     /// Create a `Type::Tuple` from a Tuple.
-    pub fn mk_tuple(&self, tuple: crate::tuple::Tuple) -> Type {
+    pub fn mk_tuple(&self, tuple: Tuple) -> Type {
         Type::Tuple(tuple)
     }
 
@@ -212,7 +281,7 @@ impl TypeHeap {
     }
 
     /// Create a `Type::Var` from a Var.
-    pub fn mk_var(&self, var: crate::types::Var) -> Type {
+    pub fn mk_var(&self, var: Var) -> Type {
         Type::Var(var)
     }
 
@@ -348,12 +417,12 @@ impl TypeHeap {
     }
 
     /// Create a `Type::Any` with the given style.
-    pub fn mk_any(&self, style: crate::types::AnyStyle) -> Type {
+    pub fn mk_any(&self, style: AnyStyle) -> Type {
         Type::Any(style)
     }
 
     /// Create a `Type::Never` with the given style.
-    pub fn mk_never_style(&self, style: crate::types::NeverStyle) -> Type {
+    pub fn mk_never_style(&self, style: NeverStyle) -> Type {
         Type::Never(style)
     }
 
@@ -365,5 +434,34 @@ impl TypeHeap {
     /// Create a `Type::Size` from a SizeExpr.
     pub fn mk_size(&self, size_expr: SizeExpr) -> Type {
         Type::Size(size_expr)
+    }
+
+    /// Create a `Type::Tensor` from a TensorType.
+    pub fn mk_tensor(&self, tensor: TensorType) -> Type {
+        Type::Tensor(Box::new(tensor))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_type_ptr_round_trip() {
+        let heap = TypeHeap::new();
+        let ty = Type::None;
+        let ptr = heap.ptr(&ty);
+        let recovered = heap.unptr(&ptr);
+        assert_eq!(&ty, recovered);
+    }
+
+    #[test]
+    #[should_panic(expected = "TypePtr used with wrong TypeHeap")]
+    fn test_type_ptr_wrong_heap_panics() {
+        let heap1 = TypeHeap::new();
+        let heap2 = TypeHeap::new();
+        let ty = Type::None;
+        let ptr = heap1.ptr(&ty);
+        heap2.unptr(&ptr);
     }
 }

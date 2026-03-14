@@ -14,6 +14,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 
 use dupe::Dupe;
+use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
@@ -32,6 +33,7 @@ use vec1::vec1;
 
 use crate::class::Class;
 use crate::class::ClassType;
+use crate::display::TypeDisplayContext;
 use crate::equality::TypeEq;
 use crate::keywords::DataclassTransformMetadata;
 use crate::type_output::TypeOutput;
@@ -315,12 +317,13 @@ pub struct FuncMetadata {
 }
 
 impl FuncMetadata {
-    pub fn def(module: Module, cls: Class, func: Name) -> Self {
+    pub fn def(module: Module, cls: Class, func: Name, def_index: Option<FuncDefIndex>) -> Self {
         Self {
             kind: FunctionKind::Def(Box::new(FuncId {
                 module,
                 cls: Some(cls),
                 name: func,
+                def_index,
             })),
             flags: FuncFlags::default(),
         }
@@ -397,11 +400,27 @@ pub struct FuncFlags {
     pub dataclass_transform_metadata: Option<DataclassTransformMetadata>,
 }
 
+impl FuncFlags {
+    /// Whether the function lacks a runtime implementation and is not defined in a stub file.
+    /// This indicates a method that cannot actually be called at runtime (e.g. an abstract
+    /// method or protocol method with a `...` or `pass` body in a `.py` file).
+    pub fn lacks_runtime_implementation(&self) -> bool {
+        self.lacks_implementation && !self.defined_in_stub_file
+    }
+}
+
+/// The index of a function definition (`def ..():` statement) within the module,
+/// used as a reference to data associated with the function.
+#[derive(Debug, Clone, Dupe, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(Display, Visit, VisitMut, TypeEq)]
+pub struct FuncDefIndex(pub u32);
+
 #[derive(Debug, Clone)]
 pub struct FuncId {
     pub module: Module,
     pub cls: Option<Class>,
     pub name: Name,
+    pub def_index: Option<FuncDefIndex>,
 }
 
 impl PartialEq for FuncId {
@@ -439,16 +458,33 @@ impl Visit<Type> for FuncId {
 }
 
 impl FuncId {
-    fn key_eq(&self) -> (ModuleName, ModulePath, Option<Class>, &Name) {
+    fn key_eq(
+        &self,
+    ) -> (
+        ModuleName,
+        ModulePath,
+        Option<Class>,
+        &Name,
+        Option<FuncDefIndex>,
+    ) {
         (
             self.module.name(),
             self.module.path().to_key_eq(),
             self.cls.clone(),
             &self.name,
+            self.def_index,
         )
     }
 
-    fn key_ord(&self) -> (ModuleName, ModulePath, Option<Class>, &Name) {
+    fn key_ord(
+        &self,
+    ) -> (
+        ModuleName,
+        ModulePath,
+        Option<Class>,
+        &Name,
+        Option<FuncDefIndex>,
+    ) {
         self.key_eq()
     }
 
@@ -805,7 +841,7 @@ impl Param {
     ///
     /// This is similar to the `Display` impl, but allows passing in a `TypeDisplayContext`
     /// for context-aware formatting (e.g., disambiguating types with the same name).
-    pub fn format_for_signature(&self, type_ctx: &crate::display::TypeDisplayContext) -> String {
+    pub fn format_for_signature(&self, type_ctx: &TypeDisplayContext) -> String {
         use pyrefly_util::display::Fmt;
 
         use crate::type_output::DisplayOutput;
@@ -837,7 +873,12 @@ impl Display for Param {
 }
 
 impl FunctionKind {
-    pub fn from_name(module: Module, cls: Option<Class>, func: &Name) -> Self {
+    pub fn from_name(
+        module: Module,
+        cls: Option<Class>,
+        func: &Name,
+        def_index: Option<FuncDefIndex>,
+    ) -> Self {
         match (module.name().as_str(), cls.as_ref(), func.as_str()) {
             ("builtins", None, "isinstance") => Self::IsInstance,
             ("builtins", None, "issubclass") => Self::IsSubclass,
@@ -864,6 +905,7 @@ impl FunctionKind {
                 module,
                 cls,
                 name: func.clone(),
+                def_index,
             })),
         }
     }

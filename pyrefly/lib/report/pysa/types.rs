@@ -224,7 +224,7 @@ fn strip_typevar(type_: &Type) -> Option<TypeVariableRestriction> {
 pub fn has_superclass(class: &Class, want: &Class, context: &ModuleContext) -> bool {
     context
         .transaction
-        .ad_hoc_solve(&context.handle, |solver| {
+        .ad_hoc_solve(&context.handle, "pysa_has_superclass", |solver| {
             solver.type_order().has_superclass(class, want)
         })
         .unwrap()
@@ -292,6 +292,20 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
             ClassNamesFromType::from_class(class_type.class_object(), context)
                 .prepend_modifier(TypeModifier::Type)
         }
+        Type::Type(box Type::Union(box Union {
+            members: elements, ..
+        })) if !elements.is_empty() => elements
+            .iter()
+            .map(|inner| match inner {
+                Type::ClassType(class_type) => {
+                    ClassNamesFromType::from_class(class_type.class_object(), context)
+                        .prepend_modifier(TypeModifier::Type)
+                }
+                _ => ClassNamesFromType::not_a_class(),
+            })
+            .reduce(|acc, next| acc.join_with(next))
+            .expect("expected at least one element in union")
+            .sort_and_dedup(),
         Type::Tuple(_) => ClassNamesFromType::from_class(context.stdlib.tuple_object(), context),
         Type::TypedDict(TypedDict::TypedDict(inner)) => {
             ClassNamesFromType::from_class(inner.class_object(), context)

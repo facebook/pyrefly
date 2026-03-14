@@ -26,6 +26,9 @@ use starlark_map::small_set::SmallSet;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::report::pysa::ast_visitor::AstScopedVisitor;
+use crate::report::pysa::ast_visitor::ExportClassDecorators;
+use crate::report::pysa::ast_visitor::ExportDefaultArguments;
+use crate::report::pysa::ast_visitor::ExportFunctionDecorators;
 use crate::report::pysa::ast_visitor::ScopeExportedFunctionFlags;
 use crate::report::pysa::ast_visitor::Scopes;
 use crate::report::pysa::ast_visitor::visit_module_ast;
@@ -63,17 +66,32 @@ impl<Function: FunctionTrait> CapturedVariableRef<Function> {
 }
 
 #[derive(Debug, Clone)]
+pub enum CaptureKind<Function: FunctionTrait> {
+    Local(Function),
+    Global,
+}
+
+#[derive(Debug, Clone)]
 pub struct ModuleCapturedVariables<Function: FunctionTrait>(
-    HashMap<Function, HashMap<Name, Function>>,
+    HashMap<Function, HashMap<Name, CaptureKind<Function>>>,
 );
 
 impl<Function: FunctionTrait> ModuleCapturedVariables<Function> {
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
     #[cfg(test)]
-    pub fn into_iter(self) -> impl Iterator<Item = (Function, HashMap<Name, Function>)> {
+    pub fn into_iter(
+        self,
+    ) -> impl Iterator<Item = (Function, HashMap<Name, CaptureKind<Function>>)> {
         self.0.into_iter()
     }
 
-    pub fn get<'a>(&'a self, function_ref: &Function) -> Option<&'a HashMap<Name, Function>> {
+    pub fn get<'a>(
+        &'a self,
+        function_ref: &Function,
+    ) -> Option<&'a HashMap<Name, CaptureKind<Function>>> {
         self.0.get(function_ref)
     }
 }
@@ -83,10 +101,6 @@ pub struct WholeProgramCapturedVariables(
 );
 
 impl WholeProgramCapturedVariables {
-    pub fn new() -> Self {
-        WholeProgramCapturedVariables(dashmap::DashMap::new().into_read_only())
-    }
-
     pub fn get_for_module(
         &self,
         module_id: ModuleId,
@@ -98,9 +112,9 @@ impl WholeProgramCapturedVariables {
 static SCOPE_EXPORTED_FUNCTION_FLAGS: ScopeExportedFunctionFlags = ScopeExportedFunctionFlags {
     include_top_level: true,
     include_class_top_level: true,
-    include_function_decorators: super::ast_visitor::ExportFunctionDecorators::InParentScope,
-    include_class_decorators: super::ast_visitor::ExportClassDecorators::InParentScope,
-    include_default_arguments: super::ast_visitor::ExportDefaultArguments::InParentScope,
+    include_function_decorators: ExportFunctionDecorators::InParentScope,
+    include_class_decorators: ExportClassDecorators::InParentScope,
+    include_default_arguments: ExportDefaultArguments::InParentScope,
 };
 
 struct DefinitionToFunctionMapVisitor<'a> {
@@ -183,7 +197,7 @@ fn build_definition_to_function_map(context: &ModuleContext) -> HashMap<Idx<Key>
 
 struct CapturedVariableVisitor<'a> {
     // Map from a captured variable to the function that defines it, if any.
-    captured_variables: &'a mut HashMap<FunctionRef, HashMap<Name, FunctionRef>>,
+    captured_variables: &'a mut HashMap<FunctionRef, HashMap<Name, CaptureKind<FunctionRef>>>,
     definition_to_function_map: &'a HashMap<Idx<Key>, FunctionRef>,
     module_context: &'a ModuleContext<'a>,
     current_exported_function: Option<FunctionRef>,
@@ -194,13 +208,17 @@ impl<'a> CapturedVariableVisitor<'a> {
         if let Some(definition) = self.get_definition_from_usage(key)
             && let Some(current_function) = &self.current_exported_function
             && definition != *current_function
-            && definition.function_id != FunctionId::ModuleTopLevel
             && !matches!(definition.function_id, FunctionId::ClassTopLevel { .. })
         {
+            let capture = if definition.function_id == FunctionId::ModuleTopLevel {
+                CaptureKind::Global
+            } else {
+                CaptureKind::Local(definition)
+            };
             self.captured_variables
                 .entry(current_function.clone())
                 .or_default()
-                .insert(name.clone(), definition);
+                .insert(name.clone(), capture);
         }
     }
 
@@ -211,9 +229,7 @@ impl<'a> CapturedVariableVisitor<'a> {
             .key_to_idx_hashed_opt(Hashed::new(&key))?;
         let binding = self.module_context.bindings.get(idx);
         match binding {
-            Binding::Forward(definition_idx)
-            | Binding::CompletedPartialType(definition_idx, _)
-            | Binding::PartialTypeWithUpstreamsCompleted(definition_idx, _) => {
+            Binding::Forward(definition_idx) | Binding::ForwardToFirstUse(definition_idx) => {
                 self.get_definition_from_idx(
                     *definition_idx,
                     /* seen */ SmallSet::new(),
@@ -248,7 +264,9 @@ impl<'a> CapturedVariableVisitor<'a> {
 
         let binding = self.module_context.bindings.get(idx);
         match binding {
-            Binding::Forward(idx) => self.get_definition_from_idx(*idx, seen, depth),
+            Binding::Forward(idx)
+            | Binding::ForwardToFirstUse(idx)
+            | Binding::Narrow(idx, _, _) => self.get_definition_from_idx(*idx, seen, depth),
             Binding::Phi(_, branches) => {
                 for branch in branches {
                     if let Some(function_ref) =
@@ -258,10 +276,6 @@ impl<'a> CapturedVariableVisitor<'a> {
                     }
                 }
                 None
-            }
-            Binding::CompletedPartialType(idx, _)
-            | Binding::PartialTypeWithUpstreamsCompleted(idx, _) => {
-                self.get_definition_from_idx(*idx, seen, depth)
             }
             _ => None,
         }
@@ -304,6 +318,14 @@ impl<'a> AstScopedVisitor for CapturedVariableVisitor<'a> {
         match stmt {
             Stmt::Nonlocal(nonlocal) => {
                 for identifier in &nonlocal.names {
+                    self.check_capture(
+                        Key::MutableCapture(ShortIdentifier::new(identifier)),
+                        identifier.id(),
+                    );
+                }
+            }
+            Stmt::Global(global) => {
+                for identifier in &global.names {
                     self.check_capture(
                         Key::MutableCapture(ShortIdentifier::new(identifier)),
                         identifier.id(),
@@ -381,9 +403,12 @@ pub fn export_captured_variables_for_module(
                 function,
                 captures
                     .into_iter()
-                    .map(|(name, outer_function)| CapturedVariableRef {
-                        outer_function,
-                        name,
+                    .filter_map(|(name, variable_definition)| match variable_definition {
+                        CaptureKind::Local(outer_function) => Some(CapturedVariableRef {
+                            outer_function,
+                            name,
+                        }),
+                        CaptureKind::Global => None,
                     })
                     .collect::<Vec<_>>(),
             )

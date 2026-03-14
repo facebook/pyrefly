@@ -16,6 +16,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Context as _;
+use clap::ValueEnum;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::upward_search::UpwardSearch;
 use tracing::info;
@@ -28,13 +29,33 @@ use crate::migration::pyright;
 use crate::migration::pyright::PyrightConfig;
 use crate::pyproject::PyProject;
 
+/// Which type checker config to migrate from.
+///
+/// When set to a specific source (`MyPy` or `Pyright`), only that source is
+/// tried — there is no fallback. `Auto` (the default) tries mypy first, then
+/// pyright, preserving the historical behavior.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum MigrationSource {
+    /// Automatically detect: try mypy first, then pyright.
+    #[default]
+    #[value(name = "auto")]
+    Auto,
+    /// Migrate only from mypy configuration.
+    #[value(name = "mypy")]
+    MyPy,
+    /// Migrate only from pyright configuration.
+    #[value(name = "pyright")]
+    Pyright,
+}
+
 /// Migrate the config file at a given location (pyproject, mypy, pyright etc), producing a new file.
 /// In some cases, e.g. pyproject, we will modify the original file in-place.
-pub fn config_migration(path: &Path) -> anyhow::Result<PathBuf> {
+pub fn config_migration(path: &Path, migrate_from: MigrationSource) -> anyhow::Result<PathBuf> {
     // TODO: This code is written in a fairly weird style. Give it a nicer interface
     //       without bothering to refactor the internals just yet.
     Args {
         original_config_path: path.to_owned(),
+        migrate_from,
     }
     .run()
 }
@@ -46,41 +67,57 @@ struct Args {
     /// If not provided, or if it's a directory, pyrefly will search upwards for a
     /// mypy.ini, pyrightconfig.json, or pyproject.toml.
     original_config_path: PathBuf,
+    /// Which type checker config to migrate from.
+    migrate_from: MigrationSource,
 }
 
 impl Args {
-    fn load_from_pyproject(original_config_path: &Path) -> anyhow::Result<ConfigFile> {
+    /// Load config from a pyproject.toml file. When `migrate_from` is set to a
+    /// specific source, only try that one. When `Auto`, try mypy first, then
+    /// pyright (the historical default).
+    fn load_from_pyproject(
+        original_config_path: &Path,
+        migrate_from: MigrationSource,
+    ) -> anyhow::Result<ConfigFile> {
         let raw_file = fs_anyhow::read_to_string(original_config_path)?;
-        match mypy::parse_pyproject_config(&raw_file) {
-            ok @ Ok(_) => {
-                info!(
-                    "Migrating [tool.mypy] config from pyproject.toml in `{}`",
-                    original_config_path.parent().unwrap().display()
-                );
-                return ok;
-            }
-            Err(_) => {
-                // Try to parse [tool.pyright] instead.
-            }
+        let parent = original_config_path.parent().unwrap().display();
+
+        let try_mypy = || {
+            mypy::parse_pyproject_config(&raw_file).inspect(|_| {
+                info!("Migrating [tool.mypy] config from pyproject.toml in `{parent}`")
+            })
+        };
+        let try_pyright = || {
+            pyright::parse_pyproject_toml(&raw_file).inspect(|_| {
+                info!("Migrating [tool.pyright] config from pyproject.toml in `{parent}`")
+            })
+        };
+
+        match migrate_from {
+            MigrationSource::MyPy => try_mypy(),
+            MigrationSource::Pyright => try_pyright(),
+            MigrationSource::Auto => try_mypy().or_else(|_| try_pyright()),
         }
-        pyright::parse_pyproject_toml(&raw_file).inspect(|_| {
-            info!(
-                "Migrating [tool.pyright] config from pyproject.toml in `{}`",
-                original_config_path.parent().unwrap().display()
-            )
-        })
     }
 
-    fn find_config(start: &Path) -> anyhow::Result<PathBuf> {
-        let searcher = UpwardSearch::new(
-            // Search for pyproject.toml last, because we're only going to find 1 config.
-            vec![
+    /// Search upward for a config file. When `migrate_from` is set to a
+    /// specific source, only look for files matching that source (plus
+    /// pyproject.toml). When `Auto`, look for all three in the historical order.
+    fn find_config(start: &Path, migrate_from: MigrationSource) -> anyhow::Result<PathBuf> {
+        let filenames = match migrate_from {
+            MigrationSource::MyPy => {
+                vec!["mypy.ini".into(), "pyproject.toml".into()]
+            }
+            MigrationSource::Pyright => {
+                vec!["pyrightconfig.json".into(), "pyproject.toml".into()]
+            }
+            MigrationSource::Auto => vec![
                 "mypy.ini".into(),
                 "pyrightconfig.json".into(),
                 "pyproject.toml".into(),
             ],
-            |p| std::sync::Arc::new(p.to_path_buf()),
-        );
+        };
+        let searcher = UpwardSearch::new(filenames, |p| std::sync::Arc::new(p.to_path_buf()));
         searcher.directory(start).map_or_else(
             || Err(anyhow::anyhow!("Failed to find config")),
             |p| Ok(std::sync::Arc::unwrap_or_clone(p)),
@@ -109,7 +146,7 @@ impl Args {
         let original_config_path = if self.original_config_path.is_file() {
             self.original_config_path.clone()
         } else {
-            Self::find_config(&self.original_config_path)?
+            Self::find_config(&self.original_config_path, self.migrate_from)?
         };
 
         let config = if original_config_path.file_name() == Some("pyrightconfig.json".as_ref()) {
@@ -127,7 +164,7 @@ impl Args {
             );
             parse_mypy_config(&original_config_path)?
         } else if original_config_path.file_name() == Some("pyproject.toml".as_ref()) {
-            Self::load_from_pyproject(&original_config_path)
+            Self::load_from_pyproject(&original_config_path, self.migrate_from)
                 .context("Failed to load config from pyproject.toml")?
         } else {
             return Err(anyhow::anyhow!(
@@ -209,7 +246,7 @@ mod tests {
 "#;
         fs_anyhow::write(&original_config_path, pyr)?;
 
-        let pyrefly_config_path = config_migration(&original_config_path)?;
+        let pyrefly_config_path = config_migration(&original_config_path, MigrationSource::Auto)?;
         let output = fs_anyhow::read_to_string(&pyrefly_config_path)?; // We're not going to check the whole output because most of it will be default values, which may change.
         // We only actually care about the includes.
         let output_lines = output.lines().collect::<Vec<_>>();
@@ -245,7 +282,7 @@ check_untyped_defs = True
 "#;
         fs_anyhow::write(&original_config_path, mypy)?;
 
-        let pyrefly_config_path = config_migration(&original_config_path)?;
+        let pyrefly_config_path = config_migration(&original_config_path, MigrationSource::Auto)?;
 
         // We care about the config getting serialized in a way that can be checked-in to a repo,
         // i.e. without absolutized paths. So we need to check the raw file.
@@ -276,7 +313,7 @@ check_untyped_defs = True
 files = ["a.py"]
 "#;
         fs_anyhow::write(&original_config_path, pyproject)?;
-        let pyrefly_config_path = config_migration(&original_config_path)?;
+        let pyrefly_config_path = config_migration(&original_config_path, MigrationSource::Auto)?;
         assert_eq!(pyrefly_config_path, original_config_path);
         let pyproject = fs_anyhow::read_to_string(&original_config_path)?;
         assert_eq!(pyproject.lines().next().unwrap(), "[tool.mypy]");
@@ -292,7 +329,7 @@ files = ["a.py"]
 include = ["a.py"]
 "#;
         fs_anyhow::write(&original_config_path, pyproject)?;
-        config_migration(&original_config_path)?;
+        config_migration(&original_config_path, MigrationSource::Auto)?;
         let pyproject = fs_anyhow::read_to_string(&original_config_path)?;
         assert_eq!(pyproject.lines().next().unwrap(), "[tool.pyright]");
         assert!(pyproject.contains("[tool.pyrefly]"));
@@ -310,7 +347,7 @@ version = "0.1.0"
 description = "A test project"
 "#;
         fs_anyhow::write(&original_config_path, pyproject)?;
-        assert!(config_migration(&original_config_path).is_err());
+        assert!(config_migration(&original_config_path, MigrationSource::Auto).is_err());
         let content = fs_anyhow::read_to_string(&original_config_path)?;
         assert_eq!(content, pyproject);
         Ok(())
@@ -327,14 +364,13 @@ include = ["a.py"]
 files = 1
 "#;
         fs_anyhow::write(&original_config_path, pyproject)?;
-        config_migration(&original_config_path)?;
+        config_migration(&original_config_path, MigrationSource::Auto)?;
         Ok(())
     }
 
     #[test]
     fn test_run_pyproject_mypy_over_pyright() -> anyhow::Result<()> {
-        // The current implementation favors mypy over pyright. This test documents that.
-        // However, we may want to change this in the future, so it's OK to break this test.
+        // The default (Auto) favors mypy over pyright. This test documents that.
         let tmp = tempfile::tempdir()?;
         let original_config_path = tmp.path().join("pyproject.toml");
         let pyproject = r#"[tool.pyright]
@@ -344,12 +380,60 @@ include = ["pyright.py"]
 files = ["mypy.py"]
 "#;
         fs_anyhow::write(&original_config_path, pyproject)?;
-        let cfg = Args::load_from_pyproject(&original_config_path)?;
+        let cfg = Args::load_from_pyproject(&original_config_path, MigrationSource::Auto)?;
         assert_eq!(
             cfg.project_includes,
             Globs::new(vec!["mypy.py".to_owned()]).unwrap()
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_run_pyproject_migrate_from_pyright() -> anyhow::Result<()> {
+        // When migrate_from is Pyright, pyright config is picked even when mypy is also present.
+        let tmp = tempfile::tempdir()?;
+        let original_config_path = tmp.path().join("pyproject.toml");
+        let pyproject = r#"[tool.pyright]
+include = ["pyright.py"]
+
+[tool.mypy]
+files = ["mypy.py"]
+"#;
+        fs_anyhow::write(&original_config_path, pyproject)?;
+        let cfg = Args::load_from_pyproject(&original_config_path, MigrationSource::Pyright)?;
+        assert_eq!(
+            cfg.project_includes,
+            Globs::new(vec!["pyright.py".to_owned()]).unwrap()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_pyproject_migrate_from_mypy_missing() {
+        // When migrate_from is MyPy but only pyright config exists, migration should fail
+        // (no fallback to pyright).
+        let tmp = tempfile::tempdir().unwrap();
+        let original_config_path = tmp.path().join("pyproject.toml");
+        let pyproject = r#"[tool.pyright]
+include = ["pyright.py"]
+"#;
+        fs_anyhow::write(&original_config_path, pyproject).unwrap();
+        assert!(Args::load_from_pyproject(&original_config_path, MigrationSource::MyPy).is_err());
+    }
+
+    #[test]
+    fn test_run_pyproject_migrate_from_pyright_missing() {
+        // When migrate_from is Pyright but only mypy config exists, migration should fail
+        // (no fallback to mypy).
+        let tmp = tempfile::tempdir().unwrap();
+        let original_config_path = tmp.path().join("pyproject.toml");
+        let pyproject = r#"[tool.mypy]
+files = ["mypy.py"]
+"#;
+        fs_anyhow::write(&original_config_path, pyproject).unwrap();
+        assert!(
+            Args::load_from_pyproject(&original_config_path, MigrationSource::Pyright).is_err()
+        );
     }
 
     #[test]
@@ -359,7 +443,7 @@ files = ["mypy.py"]
         std::fs::create_dir_all(&bottom)?;
         fs_anyhow::write(&tmp.path().join("a/mypy.ini"), b"[mypy]\n")?;
         fs_anyhow::write(&tmp.path().join("a/pyproject.toml"), b"")?;
-        let found = Args::find_config(&bottom)?;
+        let found = Args::find_config(&bottom, MigrationSource::Auto)?;
         assert!(found.ends_with("mypy.ini"));
         Ok(())
     }
@@ -370,7 +454,7 @@ files = ["mypy.py"]
         let bottom = tmp.path().join("a/b/c/");
         std::fs::create_dir_all(&bottom)?;
         fs_anyhow::write(&tmp.path().join("a/mypy.ini"), b"[mypy]\n")?;
-        config_migration(&bottom)?;
+        config_migration(&bottom, MigrationSource::Auto)?;
         assert!(tmp.path().join("a/pyrefly.toml").try_exists()?);
         Ok(())
     }
@@ -381,7 +465,7 @@ files = ["mypy.py"]
         let original_config_path = tmp.path().join("mypy.ini");
         let pyrefly_config_path = tmp.path().join("pyrefly.toml");
         fs_anyhow::write(&original_config_path, b"[mypy]\nfake_option = True\n")?;
-        config_migration(&original_config_path)?;
+        config_migration(&original_config_path, MigrationSource::Auto)?;
         let output = fs_anyhow::read_to_string(&pyrefly_config_path)?;
         assert_eq!(
             output.trim(),
@@ -396,7 +480,7 @@ files = ["mypy.py"]
         let original_config_path = tmp.path().join("pyrightconfig.json");
         let pyrefly_config_path = tmp.path().join("pyrefly.toml");
         fs_anyhow::write(&original_config_path, b"{}")?;
-        config_migration(&original_config_path)?;
+        config_migration(&original_config_path, MigrationSource::Auto)?;
         let output = fs_anyhow::read_to_string(&pyrefly_config_path)?;
         assert_eq!(output, "infer-with-first-use = false\n");
         Ok(())

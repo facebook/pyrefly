@@ -101,6 +101,7 @@ fn default_path(module: ModuleName) -> PathBuf {
 pub struct TestEnv {
     modules: Vec<(ModuleName, ModulePath, Option<Arc<FileContents>>)>,
     version: PythonVersion,
+    platform: PythonPlatform,
     untyped_def_behavior: UntypedDefBehavior,
     infer_with_first_use: bool,
     site_package_path: Vec<PathBuf>,
@@ -113,6 +114,7 @@ pub struct TestEnv {
     open_unpacking_error: bool,
     missing_override_decorator_error: bool,
     not_required_key_access_error: bool,
+    strict_callable_subtyping: bool,
     default_require_level: Require,
 }
 
@@ -123,6 +125,7 @@ impl TestEnv {
         TestEnv {
             modules: Vec::new(),
             version: PythonVersion::default(),
+            platform: PythonPlatform::default(),
             untyped_def_behavior: UntypedDefBehavior::default(),
             infer_with_first_use: true,
             site_package_path: Vec::new(),
@@ -135,6 +138,7 @@ impl TestEnv {
             open_unpacking_error: false,
             missing_override_decorator_error: false,
             not_required_key_access_error: false,
+            strict_callable_subtyping: false,
             default_require_level: Require::Exports,
         }
     }
@@ -148,6 +152,12 @@ impl TestEnv {
     pub fn new_with_version(version: PythonVersion) -> Self {
         let mut res = Self::new();
         res.version = version;
+        res
+    }
+
+    pub fn new_with_platform(platform: PythonPlatform) -> Self {
+        let mut res = Self::new();
+        res.platform = platform;
         res
     }
 
@@ -208,6 +218,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_strict_callable_subtyping(mut self) -> Self {
+        self.strict_callable_subtyping = true;
+        self
+    }
+
     pub fn with_default_require_level(mut self, level: Require) -> Self {
         self.default_require_level = level;
         self
@@ -259,7 +274,7 @@ impl TestEnv {
     }
 
     pub fn sys_info(&self) -> SysInfo {
-        SysInfo::new(self.version, PythonPlatform::linux())
+        SysInfo::new(self.version, self.platform.clone())
     }
 
     pub fn get_memory(&self) -> Vec<(PathBuf, Option<Arc<FileContents>>)> {
@@ -275,10 +290,11 @@ impl TestEnv {
     pub fn config(&self) -> ArcId<ConfigFile> {
         let mut config = ConfigFile::default();
         config.python_environment.python_version = Some(self.version);
-        config.python_environment.python_platform = Some(PythonPlatform::linux());
+        config.python_environment.python_platform = Some(self.platform.clone());
         config.python_environment.site_package_path = Some(self.site_package_path.clone());
         config.root.untyped_def_behavior = Some(self.untyped_def_behavior);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
+        config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };
@@ -342,7 +358,9 @@ impl TestEnv {
             Some(Box::new(subscriber.dupe())),
         );
         transaction.as_mut().set_memory(self.get_memory());
-        transaction.as_mut().run(&handles, Require::Everything);
+        transaction
+            .as_mut()
+            .run(&handles, Require::Everything, None);
         state.commit_transaction(transaction, None);
         subscriber.finish();
         let project_root = PathBuf::new();
@@ -530,7 +548,22 @@ pub fn get_batched_lsp_operations_report_no_cursor(
     files: &[(&'static str, &str)],
     get_report: impl Fn(&State, &Handle) -> String,
 ) -> String {
-    let (handles, state) = mk_multi_file_state(files, Require::Exports, true);
+    get_batched_lsp_operations_report_no_cursor_helper(files, true, get_report)
+}
+
+pub fn get_batched_lsp_operations_report_no_cursor_allow_error(
+    files: &[(&'static str, &str)],
+    get_report: impl Fn(&State, &Handle) -> String,
+) -> String {
+    get_batched_lsp_operations_report_no_cursor_helper(files, false, get_report)
+}
+
+fn get_batched_lsp_operations_report_no_cursor_helper(
+    files: &[(&'static str, &str)],
+    assert_zero_errors: bool,
+    get_report: impl Fn(&State, &Handle) -> String,
+) -> String {
+    let (handles, state) = mk_multi_file_state(files, Require::Exports, assert_zero_errors);
     let mut report = String::new();
     for (name, _code) in files {
         report.push_str("# ");
@@ -594,7 +627,7 @@ pub fn testcase_for_macro(
                 PathBuf::from(file),
                 Some(Arc::new(FileContents::from_source(contents.clone()))),
             )]);
-            t.run(&[h.dupe()], Require::Everything);
+            t.run(&[h.dupe()], Require::Everything, None);
             let errors = t.get_errors([&h]);
             let project_root = PathBuf::new();
             print_errors(project_root.as_path(), &errors.collect_errors().shown);

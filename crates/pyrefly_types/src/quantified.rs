@@ -17,7 +17,6 @@ use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_util::display::Fmt;
 use pyrefly_util::uniques::Unique;
-use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::name::Name;
 
 use crate::class::ClassType;
@@ -151,13 +150,13 @@ impl Quantified {
 
     pub fn type_var(
         name: Name,
-        uniques: &UniqueFactory,
+        unique: Unique,
         default: Option<Type>,
         restriction: Restriction,
         variance: PreInferenceVariance,
     ) -> Self {
         Self::new(
-            uniques.fresh(),
+            unique,
             name,
             QuantifiedKind::TypeVar,
             default,
@@ -167,19 +166,19 @@ impl Quantified {
     }
 
     /// Creates a Quantified from a TypeVar, extracting all relevant fields.
-    pub fn from_type_var(tv: &TypeVar, uniques: &UniqueFactory) -> Self {
+    pub fn from_type_var(tv: &TypeVar, unique: Unique) -> Self {
         Self::type_var(
             tv.qname().id().clone(),
-            uniques,
+            unique,
             tv.default().cloned(),
             tv.restriction().clone(),
             tv.variance(),
         )
     }
 
-    pub fn param_spec(name: Name, uniques: &UniqueFactory, default: Option<Type>) -> Self {
+    pub fn param_spec(name: Name, unique: Unique, default: Option<Type>) -> Self {
         Self::new(
-            uniques.fresh(),
+            unique,
             name,
             QuantifiedKind::ParamSpec,
             default,
@@ -188,9 +187,9 @@ impl Quantified {
         )
     }
 
-    pub fn type_var_tuple(name: Name, uniques: &UniqueFactory, default: Option<Type>) -> Self {
+    pub fn type_var_tuple(name: Name, unique: Unique, default: Option<Type>) -> Self {
         Self::new(
-            uniques.fresh(),
+            unique,
             name,
             QuantifiedKind::TypeVarTuple,
             default,

@@ -17,7 +17,6 @@ use crate::report::pysa::call_graph::AttributeAccessCallees;
 use crate::report::pysa::call_graph::CallCallees;
 use crate::report::pysa::call_graph::CallGraph;
 use crate::report::pysa::call_graph::CallGraphs;
-use crate::report::pysa::call_graph::CallTarget;
 use crate::report::pysa::call_graph::DefineCallees;
 use crate::report::pysa::call_graph::ExpressionCallees;
 use crate::report::pysa::call_graph::ExpressionIdentifier;
@@ -27,6 +26,7 @@ use crate::report::pysa::call_graph::FunctionTrait;
 use crate::report::pysa::call_graph::HigherOrderParameter;
 use crate::report::pysa::call_graph::IdentifierCallees;
 use crate::report::pysa::call_graph::ImplicitReceiver;
+use crate::report::pysa::call_graph::PysaCallTarget;
 use crate::report::pysa::call_graph::ReturnShimArgumentMapping;
 use crate::report::pysa::call_graph::ReturnShimCallees;
 use crate::report::pysa::call_graph::Target;
@@ -157,7 +157,7 @@ impl std::fmt::Display for FunctionRefForTest {
     }
 }
 
-impl CallTarget<FunctionRefForTest> {
+impl PysaCallTarget<FunctionRefForTest> {
     fn with_receiver_class_for_test(
         mut self,
         receiver_class: &str,
@@ -193,8 +193,8 @@ fn create_target(target: &str, target_type: TargetType) -> Target<FunctionRefFor
     }
 }
 
-fn create_call_target(target: &str, target_type: TargetType) -> CallTarget<FunctionRefForTest> {
-    CallTarget {
+fn create_call_target(target: &str, target_type: TargetType) -> PysaCallTarget<FunctionRefForTest> {
+    PysaCallTarget {
         target: create_target(target, target_type),
         implicit_receiver: ImplicitReceiver::False,
         implicit_dunder_call: false,
@@ -328,7 +328,7 @@ fn test_building_call_graph_for_module(
 }
 
 fn create_higher_order_parameters(
-    inputs: Vec<(u32, Vec<CallTarget<FunctionRefForTest>>, Unresolved)>,
+    inputs: Vec<(u32, Vec<PysaCallTarget<FunctionRefForTest>>, Unresolved)>,
 ) -> HashMap<u32, HigherOrderParameter<FunctionRefForTest>> {
     inputs
         .into_iter()
@@ -346,10 +346,10 @@ fn create_higher_order_parameters(
 }
 
 fn call_callees(
-    call_targets: Vec<CallTarget<FunctionRefForTest>>,
-    init_targets: Vec<CallTarget<FunctionRefForTest>>,
-    new_targets: Vec<CallTarget<FunctionRefForTest>>,
-    higher_order_parameters: Vec<(u32, Vec<CallTarget<FunctionRefForTest>>, Unresolved)>,
+    call_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
+    init_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
+    new_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
+    higher_order_parameters: Vec<(u32, Vec<PysaCallTarget<FunctionRefForTest>>, Unresolved)>,
     unresolved: Unresolved,
 ) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::Call(CallCallees {
@@ -362,7 +362,7 @@ fn call_callees(
 }
 
 fn define_callees(
-    call_targets: Vec<CallTarget<FunctionRefForTest>>,
+    call_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
 ) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::Define(DefineCallees {
         define_targets: call_targets,
@@ -370,7 +370,7 @@ fn define_callees(
 }
 
 fn regular_call_callees(
-    call_targets: Vec<CallTarget<FunctionRefForTest>>,
+    call_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
 ) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::Call(CallCallees {
         call_targets,
@@ -382,8 +382,8 @@ fn regular_call_callees(
 }
 
 fn constructor_call_callees(
-    init_targets: Vec<CallTarget<FunctionRefForTest>>,
-    new_targets: Vec<CallTarget<FunctionRefForTest>>,
+    init_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
+    new_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
 ) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::Call(CallCallees {
         call_targets: vec![],
@@ -419,12 +419,12 @@ fn class_identifier_without_constructors(
 }
 
 fn attribute_access_callees(
-    call_targets: Vec<CallTarget<FunctionRefForTest>>,
-    init_targets: Vec<CallTarget<FunctionRefForTest>>,
-    new_targets: Vec<CallTarget<FunctionRefForTest>>,
-    property_setters: Vec<CallTarget<FunctionRefForTest>>,
-    property_getters: Vec<CallTarget<FunctionRefForTest>>,
-    higher_order_parameters: Vec<(u32, Vec<CallTarget<FunctionRefForTest>>, Unresolved)>,
+    call_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
+    init_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
+    new_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
+    property_setters: Vec<PysaCallTarget<FunctionRefForTest>>,
+    property_getters: Vec<PysaCallTarget<FunctionRefForTest>>,
+    higher_order_parameters: Vec<(u32, Vec<PysaCallTarget<FunctionRefForTest>>, Unresolved)>,
     unresolved: Unresolved,
     is_attribute: bool,
 ) -> ExpressionCallees<FunctionRefForTest> {
@@ -456,7 +456,7 @@ fn global_attribute_access_callees(
 }
 
 fn property_getter_callees(
-    property_getters: Vec<CallTarget<FunctionRefForTest>>,
+    property_getters: Vec<PysaCallTarget<FunctionRefForTest>>,
 ) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::AttributeAccess(AttributeAccessCallees {
         if_called: CallCallees::empty(),
@@ -468,7 +468,7 @@ fn property_getter_callees(
 }
 
 fn property_setter_callees(
-    property_setters: Vec<CallTarget<FunctionRefForTest>>,
+    property_setters: Vec<PysaCallTarget<FunctionRefForTest>>,
 ) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::AttributeAccess(AttributeAccessCallees {
         if_called: CallCallees::empty(),
@@ -480,7 +480,7 @@ fn property_setter_callees(
 }
 
 fn attribute_access_callable_callees(
-    call_targets: Vec<CallTarget<FunctionRefForTest>>,
+    call_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
 ) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::AttributeAccess(AttributeAccessCallees {
         if_called: CallCallees {
@@ -498,10 +498,10 @@ fn attribute_access_callable_callees(
 }
 
 fn identifier_callees(
-    call_targets: Vec<CallTarget<FunctionRefForTest>>,
-    init_targets: Vec<CallTarget<FunctionRefForTest>>,
-    new_targets: Vec<CallTarget<FunctionRefForTest>>,
-    higher_order_parameters: Vec<(u32, Vec<CallTarget<FunctionRefForTest>>, Unresolved)>,
+    call_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
+    init_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
+    new_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
+    higher_order_parameters: Vec<(u32, Vec<PysaCallTarget<FunctionRefForTest>>, Unresolved)>,
     unresolved: Unresolved,
 ) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::Identifier(IdentifierCallees {
@@ -518,7 +518,7 @@ fn identifier_callees(
 }
 
 fn regular_identifier_callees(
-    call_targets: Vec<CallTarget<FunctionRefForTest>>,
+    call_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
 ) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::Identifier(IdentifierCallees {
         if_called: CallCallees {
@@ -596,7 +596,7 @@ fn format_string_stringify_callees(
 }
 
 fn format_string_stringify_callees_from_targets(
-    call_targets: Vec<CallTarget<FunctionRefForTest>>,
+    call_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
 ) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::FormatStringStringify(FormatStringStringifyCallees {
         targets: call_targets,
@@ -620,7 +620,7 @@ fn unresolved_format_string_stringify_callees(
 }
 
 fn return_shim_callees(
-    call_targets: Vec<CallTarget<FunctionRefForTest>>,
+    call_targets: Vec<PysaCallTarget<FunctionRefForTest>>,
     arguments: Vec<ReturnShimArgumentMapping>,
 ) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::Return(ReturnShimCallees {
@@ -721,7 +721,10 @@ def foo(b: bool):
                 ),
                 (
                     "9:3-9:6",
-                    unresolved_expression_callees(UnresolvedReason::UnsupportedFunctionTarget),
+                    regular_call_callees(vec![
+                        create_call_target("test.baz", TargetType::Function),
+                        create_call_target("test.bar", TargetType::Function),
+                    ]),
                 ),
             ],
         )]
@@ -1293,7 +1296,13 @@ def foo(c_or_d: C | D, c_or_e: C | E):
                 ),
                 (
                     "14:7-14:17",
-                    property_getter_callees(/* property_getters */ property_getters_c_or_e),
+                    ExpressionCallees::AttributeAccess(AttributeAccessCallees {
+                        if_called: CallCallees::empty(),
+                        property_setters: vec![],
+                        property_getters: property_getters_c_or_e,
+                        global_targets: vec![],
+                        is_attribute: true,
+                    }),
                 ),
             ],
         )]
@@ -2333,48 +2342,55 @@ def f(foo: Foo):
     g()
 "#,
     &|context: &ModuleContext| {
-        // TODO(T105570363): Resolve calls with mixed function and methods
-        let foo_bar = vec![
-            create_call_target("test.Foo.bar", TargetType::Function)
-                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
-                .with_receiver_class_for_test("test.Foo", context),
-        ];
-        let baz = vec![create_call_target("test.baz", TargetType::Function)];
-        let iter_targets = vec![
-            create_call_target("builtins.list.__iter__", TargetType::Function)
-                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
-                .with_receiver_class_for_test("builtins.list", context),
-        ];
-        let next_targets = vec![
-            create_call_target("typing.Iterator.__next__", TargetType::AllOverrides)
-                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
-                .with_receiver_class_for_test("typing.Iterator", context),
-        ];
         vec![(
             "test.f",
             vec![
                 (
                     "8:12-8:26|artificial-call|for-iter",
-                    regular_call_callees(iter_targets),
+                    regular_call_callees(vec![
+                        create_call_target("builtins.list.__iter__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.list", context),
+                    ]),
                 ),
                 (
                     "8:12-8:26|artificial-call|for-next",
-                    regular_call_callees(next_targets),
+                    regular_call_callees(vec![
+                        create_call_target("typing.Iterator.__next__", TargetType::AllOverrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("typing.Iterator", context),
+                    ]),
                 ),
                 (
                     "8:13-8:20",
-                    attribute_access_callable_callees(foo_bar.clone()),
+                    attribute_access_callable_callees(vec![
+                        create_call_target("test.Foo.bar", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("test.Foo", context),
+                    ]),
                 ),
-                ("8:22-8:25|identifier|baz", regular_identifier_callees(baz)),
+                (
+                    "8:22-8:25|identifier|baz",
+                    regular_identifier_callees(vec![create_call_target(
+                        "test.baz",
+                        TargetType::Function,
+                    )]),
+                ),
                 (
                     "9:5-9:8",
                     call_callees(
-                        /* call_targets */ foo_bar,
+                        /* call_targets */
+                        vec![
+                            create_call_target("test.Foo.bar", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                                .with_receiver_class_for_test("test.Foo", context),
+                            create_call_target("test.baz", TargetType::Function),
+                        ],
                         /* init_targets */ vec![],
                         /* new_targets */ vec![],
                         /* higher_order_parameters */ vec![],
                         /* unresolved */
-                        Unresolved::True(UnresolvedReason::Mixed),
+                        Unresolved::False,
                     ),
                 ),
             ],
@@ -2441,11 +2457,11 @@ def f():
                 (
                     "8:5-8:8",
                     ExpressionCallees::Call(CallCallees {
-                        call_targets: vec![],
+                        call_targets: vec![create_call_target("test.bar", TargetType::Function)],
                         init_targets,
                         new_targets,
                         higher_order_parameters: HashMap::new(),
-                        unresolved: Unresolved::True(UnresolvedReason::Mixed),
+                        unresolved: Unresolved::False,
                     }),
                 ),
             ],
@@ -5113,7 +5129,7 @@ def foo():
                 (
                     "5:12-5:33",
                     regular_call_callees(vec![
-                        create_call_target("typing.Mapping.get", TargetType::Function)
+                        create_call_target("os._Environ.get", TargetType::Function)
                             .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
                             .with_receiver_class_for_test("os._Environ", context),
                     ]),
@@ -5933,9 +5949,14 @@ def foo():
   global x
   x = "str"
 "#,
-    &|_context: &ModuleContext| {
-        // TODO: Handle keyword `global` in go-to-definitions
-        vec![("test.foo", vec![])]
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "5:3-5:4|identifier|x",
+                global_identifier_callees(vec![get_global_ref("test", "x", context)]),
+            )],
+        )]
     }
 );
 
@@ -7245,6 +7266,426 @@ def foo(x: str):
                         .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
                 ]),
             )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_function_alias,
+    TEST_MODULE_NAME,
+    r#"
+import xml.etree.ElementTree as ET
+
+def foo(data: str):
+    ET.fromstring(data)
+"#,
+    &|context: &ModuleContext| {
+        // `fromstring` is an alias for `XML` in xml.etree.ElementTree.
+        // Resolves to the `XML` function via FuncDefIndex.
+        let xml_target = PysaCallTarget {
+            target: Target::Function(FunctionRefForTest {
+                module_name: "xml.etree.ElementTree".to_owned(),
+                defining_class: None,
+                identifier: "XML".to_owned(),
+                is_decorated_target: false,
+                is_property_setter: false,
+                is_class_toplevel: None,
+            }),
+            implicit_receiver: ImplicitReceiver::False,
+            implicit_dunder_call: false,
+            receiver_class: None,
+            is_class_method: false,
+            is_static_method: false,
+            return_type: ScalarTypeProperties::none(),
+        };
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "5:5-5:18",
+                    ExpressionCallees::AttributeAccess(AttributeAccessCallees {
+                        if_called: CallCallees {
+                            call_targets: vec![xml_target.clone()],
+                            init_targets: vec![],
+                            new_targets: vec![],
+                            higher_order_parameters: HashMap::new(),
+                            unresolved: Unresolved::False,
+                        },
+                        property_setters: vec![],
+                        property_getters: vec![],
+                        global_targets: vec![get_global_ref(
+                            "xml.etree.ElementTree",
+                            "fromstring",
+                            context,
+                        )],
+                        is_attribute: true,
+                    }),
+                ),
+                ("5:5-5:24", regular_call_callees(vec![xml_target])),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_attribute_callable,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Optional
+import weakref
+
+class A:
+    def __init__(self, x: Optional[weakref.ReferenceType[str]]):
+        self.x: Optional[weakref.ReferenceType[str]] = x
+"#,
+    &|context: &ModuleContext| {
+        let weakref_call_target = vec![
+            create_call_target("weakref.ReferenceType.__call__", TargetType::AllOverrides)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_implicit_dunder_call(true)
+                .with_receiver_class_for_test("weakref.ReferenceType", context),
+        ];
+        vec![(
+            "test.A.__init__",
+            vec![
+                (
+                    "7:9-7:15",
+                    ExpressionCallees::AttributeAccess(AttributeAccessCallees {
+                        if_called: CallCallees {
+                            call_targets: weakref_call_target.clone(),
+                            init_targets: vec![],
+                            new_targets: vec![],
+                            higher_order_parameters: HashMap::new(),
+                            unresolved: Unresolved::False,
+                        },
+                        property_setters: vec![],
+                        property_getters: vec![],
+                        global_targets: vec![],
+                        is_attribute: true,
+                    }),
+                ),
+                (
+                    "7:56-7:57|identifier|x",
+                    regular_identifier_callees(weakref_call_target),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_property_returning_type_called_as_constructor,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Type
+
+class LogEntry:
+    def __init__(self, event: str) -> None:
+        pass
+
+class Logger:
+    @property
+    def LogEntry(self) -> Type[LogEntry]:
+        return LogEntry
+
+def foo(logger: Logger):
+    entry = logger.LogEntry(event="test")
+"#,
+    &|context: &ModuleContext| {
+        let init_targets = vec![
+            create_call_target("test.LogEntry.__init__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.LogEntry", context),
+        ];
+        let new_targets = vec![
+            create_call_target("builtins.object.__new__", TargetType::Function)
+                .with_is_static_method(true),
+        ];
+        let property_getters = vec![
+            create_call_target("test.Logger.LogEntry", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.Logger", context),
+        ];
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "14:13-14:28",
+                    attribute_access_callees(
+                        /* call_targets */ vec![],
+                        /* init_targets */ init_targets.clone(),
+                        /* new_targets */ new_targets.clone(),
+                        /* property_setters */ vec![],
+                        /* property_getters */ property_getters,
+                        /* higher_order_parameters */ vec![],
+                        /* unresolved */ Unresolved::False,
+                        /* is_attribute */ false,
+                    ),
+                ),
+                (
+                    "14:13-14:42",
+                    constructor_call_callees(init_targets, new_targets),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_classproperty_returning_type_called_as_constructor,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Type, Callable
+
+class classproperty[T, R]:
+    def __init__(self, fget: Callable[[type[T]], R]) -> None: ...
+    def __get__(self, obj: object, obj_cls_type: type[T]) -> R: ...
+
+class LogEntry:
+    def __init__(self, event: str) -> None:
+        pass
+
+class Logger:
+    @classproperty
+    def LogEntry(cls) -> Type[LogEntry]:
+        return LogEntry
+
+def foo():
+    entry = Logger.LogEntry(event="test")
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "18:13-18:19|identifier|Logger",
+                    class_identifier_without_constructors("test.Logger", context),
+                ),
+                (
+                    "18:13-18:42",
+                    // Bug: @classproperty returning Type[LogEntry] does not resolve to the LogEntry
+                    // constructor when called. The call targets show Logger.LogEntry (the classproperty
+                    // method) rather than LogEntry.__init__.
+                    regular_call_callees(vec![create_call_target(
+                        "test.Logger.LogEntry",
+                        TargetType::Function,
+                    )]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_call_generic_member_class,
+    TEST_MODULE_NAME,
+    r#"
+from typing import TypeVar, Generic
+from dataclasses import dataclass
+
+class X:
+    def do(self) -> None:
+        pass
+
+class Y(X):
+    def do(self) -> None:
+        pass
+
+T = TypeVar("T", bound=X)
+
+@dataclass(frozen=True)
+class A(Generic[T]):
+    value: T
+
+class B(A[T], Generic[T]):
+    def foo(self) -> None:
+        self.value.do()
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.B.foo",
+            vec![(
+                "21:9-21:24",
+                regular_call_callees(vec![
+                    create_call_target("test.X.do", TargetType::AllOverrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("test.X", context),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_dataclass_constructor,
+    TEST_MODULE_NAME,
+    r#"
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    x: int
+    y: str
+
+def foo():
+    Point(1, "hello")
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "10:5-10:22",
+                constructor_call_callees(
+                    vec![
+                        create_call_target("test.Point.__init__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("test.Point", context),
+                    ],
+                    vec![
+                        create_call_target("builtins.object.__new__", TargetType::Function)
+                            .with_is_static_method(true),
+                    ],
+                ),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_named_tuple_constructor,
+    TEST_MODULE_NAME,
+    r#"
+from typing import NamedTuple
+
+class Pair(NamedTuple):
+    x: int
+    y: str
+
+def foo():
+    Pair(1, "hello")
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "9:5-9:21",
+                constructor_call_callees(
+                    vec![
+                        create_call_target("test.Pair.__init__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("test.Pair", context),
+                    ],
+                    vec![
+                        create_call_target("test.Pair.__new__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_is_static_method(true),
+                    ],
+                ),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_named_tuple_subclass_constructor,
+    TEST_MODULE_NAME,
+    r#"
+from typing import NamedTuple
+
+class Base(NamedTuple):
+    x: int
+    y: str
+
+class Sub(Base):
+    pass
+
+def foo():
+    Sub(1, "hello")
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "12:5-12:20",
+                constructor_call_callees(
+                    vec![
+                        create_call_target("test.Sub.__init__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("test.Sub", context),
+                    ],
+                    vec![
+                        create_call_target("test.Sub.__new__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_is_static_method(true),
+                    ],
+                ),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_override_classtype_union,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Type
+class A:
+    @classmethod
+    def create(cls) -> None:
+        pass
+class B(A):
+    @classmethod
+    def create(cls) -> None:
+        pass
+def foo(cls: Type[A | B]):
+    cls.create()
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "12:5-12:8|identifier|cls",
+                    ExpressionCallees::Identifier(IdentifierCallees {
+                        if_called: CallCallees {
+                            call_targets: vec![],
+                            init_targets: vec![
+                                create_call_target(
+                                    "builtins.object.__init__",
+                                    TargetType::Function,
+                                )
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                                .with_receiver_class_for_test("test.A", context),
+                                create_call_target(
+                                    "builtins.object.__init__",
+                                    TargetType::Function,
+                                )
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                                .with_receiver_class_for_test("test.B", context),
+                            ],
+                            new_targets: vec![
+                                create_call_target("builtins.object.__new__", TargetType::Function)
+                                    .with_is_static_method(true),
+                            ],
+                            higher_order_parameters: HashMap::new(),
+                            unresolved: Unresolved::False,
+                        },
+                        global_targets: vec![],
+                        captured_variables: vec![],
+                    }),
+                ),
+                (
+                    "12:5-12:17",
+                    // TODO: Should be AllOverrides with receiver_class test.A,
+                    // but union inside Type[A | B] loses receiver_class (set to None),
+                    // which prevents override dispatch.
+                    regular_call_callees(vec![
+                        create_call_target("test.A.create", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_is_class_method(true),
+                    ]),
+                ),
+            ],
         )]
     }
 );

@@ -58,8 +58,10 @@ use crate::quantified::Quantified;
 use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
+use crate::tensor::TensorType;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
+use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
 use crate::typed_dict::TypedDict;
@@ -165,6 +167,60 @@ impl TParams {
     pub fn extend(&mut self, other: &TParams) {
         self.0.extend(other.iter().cloned());
     }
+
+    /// Truncate recursive TArgs nesting in Quantified restrictions.
+    ///
+    /// During iterative fixpoint solving, TParams can grow unboundedly when
+    /// classes reference each other in type parameter bounds (either self-referentially
+    /// like `class C[T: C]`, or mutually like Session ↔ DataFrame ↔ Catalog).
+    /// Each iteration embeds the previous iteration's TParams one level deeper
+    /// through the chain: TParams → Restriction → ClassType → TArgs → TParams → ...
+    ///
+    /// This method enforces a structural invariant: within a Quantified's restriction,
+    /// any ClassType whose TArgs embed TParams with their own non-trivial restrictions
+    /// (Bound or Constraints) has its TArgs stripped to empty. This prevents recursive
+    /// nesting while preserving TArgs for simple cases like `T: List[int]` where the
+    /// inner TParams have only unrestricted type variables.
+    pub fn truncate_recursive_targs(self) -> Self {
+        let quantifieds = self
+            .0
+            .into_iter()
+            .map(|q| {
+                let new_restriction = match q.restriction() {
+                    Restriction::Bound(ty) => {
+                        Restriction::Bound(Self::strip_recursive_class_targs(ty.clone()))
+                    }
+                    Restriction::Constraints(tys) => Restriction::Constraints(
+                        tys.iter()
+                            .map(|ty| Self::strip_recursive_class_targs(ty.clone()))
+                            .collect(),
+                    ),
+                    Restriction::Unrestricted => Restriction::Unrestricted,
+                };
+                q.with_restriction(new_restriction)
+            })
+            .collect();
+        Self(quantifieds)
+    }
+
+    /// Walk a type tree and strip TArgs from any ClassType whose TArgs' TParams
+    /// have non-trivial restrictions (Bound or Constraints). Such TParams can
+    /// participate in recursive nesting across fixpoint iterations.
+    fn strip_recursive_class_targs(ty: Type) -> Type {
+        ty.transform(&mut |t| {
+            if let Type::ClassType(ct) = t
+                && !ct.targs().is_empty()
+                && Self::tparams_have_restrictions(ct.targs().tparams())
+            {
+                *t = Type::ClassType(ClassType::new(ct.class_object().dupe(), TArgs::default()));
+            }
+        })
+    }
+
+    /// Check if any Quantified in the TParams has a non-trivial restriction.
+    fn tparams_have_restrictions(tparams: &TParams) -> bool {
+        tparams.iter().any(|q| q.restriction().is_restricted())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -207,6 +263,18 @@ impl TArgs {
         self.0.1.is_empty()
     }
 
+    /// Returns the number of type arguments to display, stripping trailing args
+    /// that match their parameter defaults (WYSIWYG display per issue #2461).
+    pub fn display_count(&self) -> usize {
+        let mut last_non_default = 0;
+        for (i, (param, arg)) in self.iter_paired().enumerate() {
+            if param.default().is_none() || arg != &param.as_gradual_type() {
+                last_non_default = i + 1;
+            }
+        }
+        last_non_default
+    }
+
     /// Apply a substitution to type arguments.
     ///
     /// This is useful mainly to re-express ancestors (which, in the MRO, are in terms of class
@@ -236,12 +304,14 @@ impl TArgs {
     }
 
     pub fn substitute_into_mut(&self, ty: &mut Type) {
-        if let Type::TypeAlias(box TypeAliasData::Ref(r)) = ty {
-            // We don't have the value of the type alias available to do the substitution, so store
-            // the targs so that we can apply them when the value is looked up.
-            r.args = Some(self.clone())
-        } else {
-            self.substitution().substitute_into_mut(ty)
+        match ty {
+            Type::TypeAlias(box TypeAliasData::Ref(r))
+            | Type::UntypedAlias(box TypeAliasData::Ref(r)) => {
+                // We don't have the value of the type alias available to do the substitution, so store
+                // the targs so that we can apply them when the value is looked up.
+                r.args = Some(self.clone())
+            }
+            _ => self.substitution().substitute_into_mut(ty),
         }
     }
 
@@ -589,6 +659,9 @@ pub enum Type {
     /// For a TypedDict type `C`, `Partial[C]` represents an object with any subset of read-write
     /// keys from `C`, where each present key has the same value type as in `C`.
     PartialTypedDict(TypedDict),
+    /// Tensor type with shape information
+    /// Example: Tensor[2, 3] represents a 2x3 tensor
+    Tensor(Box<TensorType>),
     /// Dimension value type - represents values that satisfy Dim bound
     /// Examples:
     ///   - Type::Size(SizeExpr::Literal(6)) for concrete dimension 6
@@ -620,6 +693,10 @@ pub enum Type {
     ElementOfTypeVarTuple(Box<Quantified>),
     TypeGuard(Box<Type>),
     TypeIs(Box<Type>),
+    /// Used for special form `Annotated[T, ...]`.
+    /// This is transparent when resolving annotations, but is not callable and
+    /// cannot be assigned to `type[T]`.
+    Annotated(Box<Type>),
     Unpack(Box<Type>),
     TypeVar(TypeVar),
     ParamSpec(ParamSpec),
@@ -694,6 +771,7 @@ impl Visit for Type {
             Type::ClassType(x) => x.visit(f),
             Type::TypedDict(x) => x.visit(f),
             Type::PartialTypedDict(x) => x.visit(f),
+            Type::Tensor(x) => x.visit(f),
             Type::Size(x) => x.visit(f),
             Type::Dim(x) => x.visit(f),
             Type::Tuple(x) => x.visit(f),
@@ -705,6 +783,7 @@ impl Visit for Type {
             Type::ElementOfTypeVarTuple(x) => x.visit(f),
             Type::TypeGuard(x) => x.visit(f),
             Type::TypeIs(x) => x.visit(f),
+            Type::Annotated(x) => x.visit(f),
             Type::Unpack(x) => x.visit(f),
             Type::TypeVar(x) => x.visit(f),
             Type::ParamSpec(x) => x.visit(f),
@@ -745,6 +824,7 @@ impl VisitMut for Type {
             Type::ClassType(x) => x.visit_mut(f),
             Type::TypedDict(x) => x.visit_mut(f),
             Type::PartialTypedDict(x) => x.visit_mut(f),
+            Type::Tensor(x) => x.visit_mut(f),
             Type::Size(x) => x.visit_mut(f),
             Type::Dim(x) => x.visit_mut(f),
             Type::Tuple(x) => x.visit_mut(f),
@@ -756,6 +836,7 @@ impl VisitMut for Type {
             Type::ElementOfTypeVarTuple(x) => x.visit_mut(f),
             Type::TypeGuard(x) => x.visit_mut(f),
             Type::TypeIs(x) => x.visit_mut(f),
+            Type::Annotated(x) => x.visit_mut(f),
             Type::Unpack(x) => x.visit_mut(f),
             Type::TypeVar(x) => x.visit_mut(f),
             Type::ParamSpec(x) => x.visit_mut(f),
@@ -811,6 +892,14 @@ impl Type {
 
     pub fn is_union(&self) -> bool {
         matches!(self, Type::Union(_))
+    }
+
+    /// Returns the number of top-level alternatives in a union, or 1 for non-union types.
+    pub fn union_width(&self) -> usize {
+        match self {
+            Type::Union(u) => u.members.len(),
+            _ => 1,
+        }
     }
 
     pub fn is_never(&self) -> bool {
@@ -914,6 +1003,7 @@ impl Type {
                     visit(targ, f);
                 }
             };
+            // IMPORTANT: keep this match in sync with `transform_types_in_type_variable_positions`
             match ty {
                 // In `A[X]`, we only check `X` for a couple reasons:
                 // * If we were to blindly visit the entire ClassType, we would find Quantifieds in
@@ -924,6 +1014,11 @@ impl Type {
                 //   when visiting Vars. See https://github.com/facebook/pyrefly/issues/2016.
                 Type::ClassType(cls) => recurse_targs(cls.targs()),
                 Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs()),
+                // `Self` is a keyword, not a user-written type variable reference, so we don't
+                // recurse into it when looking for type variable references.
+                Type::SelfType(_) => {}
+                // Enum literals contain `ClassType`s that we shouldn't visit.
+                Type::Literal(_) => {}
                 _ => ty.recurse(&mut |ty| visit(ty, f)),
             }
         }
@@ -978,27 +1073,37 @@ impl Type {
         self.visit_type_variables(&mut f)
     }
 
-    /// Transform unreplaced references to legacy type variables. Note that references to in-scope
-    /// legacy type variables in functions and classes are replaced with Quantified, so unreplaced
-    /// references only appear in cases like a TypeVar definition or an out-of-scope type variable.
-    pub fn transform_raw_legacy_type_variables(&mut self, f: &mut dyn FnMut(&mut Type)) {
+    fn transform_types_in_type_variable_positions(&mut self, f: &mut dyn FnMut(&mut Type)) {
         fn visit(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
-            if ty.is_raw_legacy_type_variable() {
-                f(ty);
-                return;
-            }
+            f(ty);
             let mut recurse_targs = |targs: &mut TArgs| {
                 for targ in targs.as_mut().iter_mut() {
                     visit(targ, f);
                 }
             };
+            // IMPORTANT: keep this match in sync with `visit_type_variables`
             match ty {
                 Type::ClassType(cls) => recurse_targs(cls.targs_mut()),
                 Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs_mut()),
+                // `Self` is a keyword, not a user-written type variable reference.
+                Type::SelfType(_) => {}
+                // Enum literals contain `ClassType`s that we shouldn't visit.
+                Type::Literal(_) => {}
                 _ => ty.recurse_mut(&mut |ty| visit(ty, f)),
             }
         }
         visit(self, f)
+    }
+
+    /// Transform unreplaced references to legacy type variables. Note that references to in-scope
+    /// legacy type variables in functions and classes are replaced with Quantified, so unreplaced
+    /// references only appear in cases like a TypeVar definition or an out-of-scope type variable.
+    pub fn transform_raw_legacy_type_variables(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        self.transform_types_in_type_variable_positions(&mut |ty| {
+            if ty.is_raw_legacy_type_variable() {
+                f(ty);
+            }
+        })
     }
 
     /// Check if the type contains a Var that may have been instantiated from a Quantified.
@@ -1017,6 +1122,18 @@ impl Type {
             }
         });
         vs
+    }
+
+    pub fn collect_all_vars(&self) -> Vec<Var> {
+        fn f(t: &Type, vars: &mut Vec<Var>) {
+            match t {
+                Type::Var(v) => vars.push(*v),
+                _ => t.recurse(&mut |t| f(t, vars)),
+            }
+        }
+        let mut vars = vec![];
+        f(self, &mut vars);
+        vars
     }
 
     pub fn is_kind_param_spec(&self) -> bool {
@@ -1084,10 +1201,6 @@ impl Type {
                 }
             } else {
                 ty.recurse_mut(&mut |x| f(x, mp));
-            }
-            // After substitution, simplify Size expressions (constant folding).
-            if let Type::Size(_) = ty {
-                *ty = dimension::simplify(ty.clone());
             }
         }
         f(self, mp);
@@ -1237,9 +1350,7 @@ impl Type {
 
     /// If a Protocol method lacks an implementation and does not come from a `.pyi` file, then it cannot be called
     pub fn is_non_callable_protocol_method(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| {
-            meta.flags.lacks_implementation && !meta.flags.defined_in_stub_file
-        })
+        self.visit_toplevel_func_metadata(&|meta| meta.flags.lacks_runtime_implementation())
     }
 
     /// Transforms this type's function metadata, if it is a function. Note that we do *not*
@@ -1307,9 +1418,9 @@ impl Type {
         }
     }
 
-    /// Apply `f` to this type if it is a callable. Note that we do *not* recurse into the type to
+    /// Transform this type if it is a callable. Note that we do *not* recurse into the type to
     /// find nested callable types.
-    pub fn visit_toplevel_callable_mut<'a>(&'a mut self, mut f: impl FnMut(&'a mut Callable)) {
+    pub fn transform_toplevel_callable<'a>(&'a mut self, mut f: impl FnMut(&'a mut Callable)) {
         match self {
             Type::Callable(callable) => f(callable),
             Type::Forall(box Forall {
@@ -1351,44 +1462,6 @@ impl Type {
         is_callable
     }
 
-    /// Transform this type if it is a callable. Note that we do *not* recurse into the type to
-    /// find nested callable types.
-    fn transform_toplevel_callable(&mut self, mut f: impl FnMut(&mut Callable)) {
-        match self {
-            Type::Callable(callable) => f(callable),
-            Type::Forall(box Forall {
-                body: Forallable::Callable(callable),
-                ..
-            }) => f(callable),
-            Type::Function(box func)
-            | Type::Forall(box Forall {
-                body: Forallable::Function(func),
-                ..
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Function(func),
-                ..
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Forall(Forall { body: func, .. }),
-                ..
-            }) => f(&mut func.signature),
-            Type::Overload(overload)
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Overload(overload),
-                ..
-            }) => {
-                for x in overload.signatures.iter_mut() {
-                    match x {
-                        OverloadType::Function(function) => f(&mut function.signature),
-                        OverloadType::Forall(forall) => f(&mut forall.body.signature),
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
     // This doesn't handle generics currently
     pub fn callable_return_type(&self, heap: &TypeHeap) -> Option<Type> {
         let mut rets = Vec::new();
@@ -1401,29 +1474,6 @@ impl Type {
         } else {
             Some(unions(rets, heap))
         }
-    }
-
-    /// When a constructor is cast used as a callable, we need to set its return type to the instance type.
-    /// If a `self` type is in the callable, then this is set as the return type.
-    /// Otherwise, the return type is set to the class type.
-    /// This doesn't handle generics currently.
-    pub fn set_callable_return_type_for_constructor(&mut self, ret: Type) {
-        let mut set_ret = |callable: &mut Callable| {
-            match &callable.params {
-                Params::List(param_list)
-                    if let Some(first_param) = param_list.items().first()
-                        && let Param::Pos(_, ty, _) = first_param =>
-                {
-                    // Set the return type to the type of the first parameter
-                    // (i.e. `self`) if it exists and is positional.
-                    callable.ret = ty.clone();
-                }
-                _ => {
-                    callable.ret = ret.clone();
-                }
-            }
-        };
-        self.transform_toplevel_callable(&mut set_ret);
     }
 
     pub fn callable_first_param(&self, heap: &TypeHeap) -> Option<Type> {
@@ -1496,14 +1546,6 @@ impl Type {
         dimension::canonicalize(self)
     }
 
-    /// Extract the literal value from a `SizeExpr::Literal`, if this is one.
-    pub fn as_shape_literal(&self) -> Option<i64> {
-        match self {
-            Type::Size(SizeExpr::Literal(n)) => Some(*n),
-            _ => None,
-        }
-    }
-
     pub fn explicit_any(self) -> Self {
         self.transform(&mut |ty| {
             if let Type::Any(style) = ty {
@@ -1518,92 +1560,6 @@ impl Type {
                 lit.style = LitStyle::Explicit;
             } else if let Type::LiteralString(style) = ty {
                 *style = LitStyle::Explicit;
-            }
-        })
-    }
-
-    pub fn noreturn_to_never(self) -> Self {
-        self.transform(&mut |ty| {
-            if let Type::Never(style) = ty {
-                *style = NeverStyle::Never;
-            }
-        })
-    }
-
-    /// type[a | b] -> type[a] | type[b]
-    pub fn distribute_type_over_union(self, heap: &TypeHeap) -> Self {
-        self.transform(&mut |ty| {
-            if let Type::Type(box Type::Union(box Union { members, .. })) = ty {
-                *ty = unions(members.drain(..).map(Type::type_form).collect(), heap);
-            }
-        })
-    }
-
-    pub fn anon_typed_dicts(self, stdlib: &Stdlib) -> Self {
-        self.transform(&mut |ty| {
-            if let Type::TypedDict(TypedDict::Anonymous(inner)) = ty {
-                *ty = stdlib
-                    .dict(stdlib.str().clone().to_type(), inner.value_type.clone())
-                    .to_type()
-            }
-        })
-    }
-
-    pub fn anon_callables(self) -> Self {
-        self.transform(&mut |mut ty| {
-            if let Type::Function(func) = ty {
-                *ty = Type::Callable(Box::new(func.signature.clone()));
-            }
-            // Anonymize posonly parameters in callables and paramspec values.
-            fn transform_params(params: &mut ParamList) {
-                for param in params.items_mut() {
-                    if let Param::PosOnly(Some(_), ty, req) = param {
-                        *param = Param::PosOnly(None, ty.clone(), req.clone());
-                    }
-                }
-            }
-            ty.transform_toplevel_callable(
-                &mut |callable: &mut Callable| match &mut callable.params {
-                    Params::List(params) => {
-                        transform_params(params);
-                    }
-                    _ => {}
-                },
-            );
-            if let Type::ParamSpecValue(params) = &mut ty {
-                transform_params(params);
-            }
-        })
-    }
-
-    pub fn promote_typevar_values(self, stdlib: &Stdlib) -> Self {
-        self.transform(&mut |ty| match &ty {
-            Type::TypeVar(_) => *ty = stdlib.type_var().clone().to_type(),
-            Type::ParamSpec(_) => *ty = stdlib.param_spec().clone().to_type(),
-            Type::TypeVarTuple(_) => *ty = stdlib.type_var_tuple().clone().to_type(),
-            Type::QuantifiedValue(q) => *ty = q.class_type(stdlib).clone().to_type(),
-            _ => {}
-        })
-    }
-
-    pub fn sort_unions_and_drop_names(self) -> Self {
-        self.transform(&mut |ty| {
-            if let Type::Union(box Union {
-                members: ts,
-                display_name,
-            }) = ty
-            {
-                ts.sort();
-                *display_name = None;
-            }
-        })
-    }
-
-    /// Simplify intersection types to their fallback type.
-    pub fn simplify_intersections(self) -> Self {
-        self.transform(&mut |ty| {
-            if let Type::Intersect(box (_, fallback)) = ty {
-                *ty = fallback.clone();
             }
         })
     }
@@ -1647,6 +1603,14 @@ impl Type {
     pub fn as_quantified(&self) -> Option<Quantified> {
         match self {
             Type::Quantified(q) => Some((**q).clone()),
+            _ => None,
+        }
+    }
+
+    /// Extract the literal value from a `SizeExpr::Literal`, if this is one.
+    pub fn as_shape_literal(&self) -> Option<i64> {
+        match self {
+            Type::Size(SizeExpr::Literal(n)) => Some(*n),
             _ => None,
         }
     }
@@ -1742,7 +1706,8 @@ impl Type {
     }
 
     pub fn materialize(&self) -> Self {
-        self.clone().transform(&mut |ty| {
+        let mut ty = self.clone();
+        ty.transform_types_in_type_variable_positions(&mut |ty| {
             if ty.is_any() {
                 *ty = Type::Materialization;
             }
@@ -1750,8 +1715,9 @@ impl Type {
                 if matches!(callable.params, Params::Ellipsis) {
                     callable.params = Params::Materialization;
                 }
-            })
-        })
+            });
+        });
+        ty
     }
 
     /// Creates a union from the provided types without simplifying

@@ -33,7 +33,7 @@ fn get_implementations_report(state: &State, handle: &Handle, position: TextSize
     let definition = TextRangeWithModule::new(def_item.module.clone(), def_item.definition_range);
 
     let impls = match transaction
-        .find_global_implementations_from_definition(handle.sys_info(), definition)
+        .find_global_implementations_from_definition(*handle.sys_info(), definition)
     {
         Ok(impls) => impls,
         Err(_) => return "Implementation Result: Cancelled".to_owned(),

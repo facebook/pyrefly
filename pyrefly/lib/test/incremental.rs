@@ -134,6 +134,7 @@ impl Incremental {
             &handles,
             self.require.unwrap_or(Require::Everything),
             None,
+            None,
         );
         let loaded = Self::USER_FILES.map(|x| self.handle(x));
         let errors = self.state.transaction().get_errors(&loaded);
@@ -505,7 +506,7 @@ fn test_dueling_typevar() {
     i.set("bar", "from foo import T");
     i.set(
         "main",
-        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x",
+        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x  # E: Type variable `T` is not in scope  # E: Type variable `T` is not in scope",
     );
     i.check(&["main"], &["main", "foo", "bar"]);
 
@@ -515,7 +516,7 @@ fn test_dueling_typevar() {
     // Observe that foo.T and bar.T are no longer equal.
     i.set(
         "main",
-        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x # E: `TypeVar[T]` is not assignable to `TypeVar[T]`",
+        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x  # E: `TypeVar[T]` is not assignable to `TypeVar[T]`  # E: Type variable `T` is not in scope  # E: Type variable `T` is not in scope",
     );
     i.check(&["main"], &["main"]);
 }

@@ -209,7 +209,7 @@ impl CancellableTransaction<'_> {
     /// Returns Err if the request is canceled during execution.
     pub fn find_global_incoming_calls_from_function_definition(
         &mut self,
-        sys_info: &SysInfo,
+        sys_info: SysInfo,
         definition_kind: DefinitionMetadata,
         target_definition: &TextRangeWithModule,
     ) -> Result<Vec<(Module, Vec<(TextRange, String, TextRange)>)>, Cancelled> {
@@ -228,6 +228,7 @@ impl CancellableTransaction<'_> {
                         definition_kind.clone(),
                         patched_definition.range,
                         &patched_definition.module,
+                        true,
                     )
                     .unwrap_or_default();
 

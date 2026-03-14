@@ -59,8 +59,14 @@ fn read_manifest_file_data(data: &[u8]) -> anyhow::Result<Vec<ManifestItem>> {
                 // We deliberately stick with relative paths, as sometimes we are run on RE,
                 // so the absolute path on RE will not match the users absolute path.
                 let path = PathBuf::from(raw_item[1].clone());
-                if path.iter().any(|x| x == "pyre_buck_typeshed") {
-                    // We sometimes get Pyre typeshed files in the manifest, which don't match the versions we expect.
+                if path
+                    .iter()
+                    .any(|x| x == "pyre_buck_typeshed" || x == "__flattened__")
+                {
+                    // Filter out Pyre typeshed files from the manifest. These don't
+                    // match the versions Pyrefly expects and cause spurious errors.
+                    // This catches both the default target (pyre_buck_typeshed:flattened)
+                    // and user overrides (e.g. tools/pyre/stubs/typeshed/typeshed:flattened).
                     // Once Pyre is retired, we can remove this filtering.
                     continue;
                 }

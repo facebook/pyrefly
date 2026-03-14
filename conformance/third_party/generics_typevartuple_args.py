@@ -14,10 +14,7 @@ Ts = TypeVarTuple("Ts")
 
 
 def args_to_tuple(*args: *Ts) -> tuple[*Ts]:
-    ...
-
-
-assert_type(args_to_tuple(1, "a"), tuple[int, str])
+    raise NotImplementedError
 
 
 class Env:
@@ -25,13 +22,16 @@ class Env:
 
 
 def exec_le(path: str, *args: * tuple[*Ts, Env], env: Env | None = None) -> tuple[*Ts]:
-    ...
+    raise NotImplementedError
 
 
-assert_type(exec_le("", Env()), tuple[()])  # OK
-assert_type(exec_le("", 0, "", Env()), tuple[int, str])  # OK
-exec_le("", 0, "")  # E
-exec_le("", 0, "", env=Env())  # E
+def has_int_and_str(x: int, y: str):
+    assert_type(args_to_tuple(x, y), tuple[int, str])
+
+    assert_type(exec_le("", Env()), tuple[()])  # OK
+    assert_type(exec_le(y, x, y, Env()), tuple[int, str])  # OK
+    exec_le("", 0, "")  # E
+    exec_le("", 0, "", env=Env())  # E
 
 
 # > Using an unpacked unbounded tuple is equivalent to the

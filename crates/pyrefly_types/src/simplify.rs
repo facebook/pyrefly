@@ -80,6 +80,7 @@ fn unions_internal(
             promote_anonymous_typed_dicts(&mut res, stdlib, heap);
         }
         collapse_tuple_unions_with_empty(&mut res, heap);
+        collapse_builtins_type(&mut res, heap);
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
         try_collapse(res, heap).unwrap_or_else(|members| heap.mk_union(members))
     })
@@ -318,6 +319,38 @@ fn flatten_unpacked_concrete_tuples(elts: Vec<Type>) -> Vec<Type> {
         }
     }
     result
+}
+
+/// `type[int] | type[str]` => `type[int | str]`
+fn collapse_builtins_type(types: &mut Vec<Type>, heap: &TypeHeap) {
+    let mut idx = 0;
+    let mut first_elt = None;
+    let mut additional_elts = Vec::new();
+    types.retain(|t| {
+        let retain = match t {
+            Type::Type(box t) if first_elt.is_none() => {
+                first_elt = Some((idx, t.clone()));
+                true
+            }
+            Type::Type(box t) => {
+                additional_elts.push(t.clone());
+                false
+            }
+            _ => true,
+        };
+        idx += 1;
+        retain
+    });
+    if let Some((idx, first_elt)) = first_elt
+        && !additional_elts.is_empty()
+    {
+        let mut elts = vec![first_elt.clone()];
+        elts.extend(additional_elts);
+        *(types
+            .get_mut(idx)
+            .expect("idx out of bounds when collapsing type members in union")) =
+            heap.mk_type_form(heap.mk_union(elts));
+    }
 }
 
 // After a TypeVarTuple gets substituted with a tuple type, try to simplify the type

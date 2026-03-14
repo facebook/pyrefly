@@ -72,8 +72,13 @@ pub(crate) fn extract_function_code_actions(
             continue;
         }
         if ident.synthetic_load {
-            seen_params.insert(ident.name.clone());
-            params.push(ident.name.clone());
+            let defined_earlier_in_selection = store_refs
+                .iter()
+                .any(|store| store.name == ident.name && store.position < ident.position);
+            if !defined_earlier_in_selection {
+                seen_params.insert(ident.name.clone());
+                params.push(ident.name.clone());
+            }
             continue;
         }
         let defs = transaction.find_definition(handle, ident.position, FindPreference::default());

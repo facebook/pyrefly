@@ -38,7 +38,6 @@ import {
 import { editor } from 'monaco-editor';
 import type { PyreflyErrorMessage } from './SandboxResults';
 import { DEFAULT_SANDBOX_PROGRAM } from './DefaultSandboxProgram';
-import { DEFAULT_UTILS_PROGRAM } from './DefaultUtilsProgram';
 import { usePythonWorker } from './usePythonWorker';
 
 // Import type for Pyrefly State
@@ -574,7 +573,6 @@ export default function Sandbox({
                 } else {
                     // For sandbox mode, create the default files
                     createNewFile('sandbox.py', DEFAULT_SANDBOX_PROGRAM);
-                    createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
                     // Add a default pyrefly.toml so users can immediately tweak configuration
                     createNewFile(
                         'pyrefly.toml',
@@ -1037,6 +1035,9 @@ function defaultPyreflyToml(pythonVersion: string) {
         '# Pyrefly sandbox configuration.',
         '# See https://pyrefly.org/en/docs/configuration/ for available configuration options.',
         `python-version = "${pythonVersion}"`,
+        '[errors]',
+        "unimported-directive = 'ignore'",
+        "not-required-key-access = 'warn'",
         '',
     ].join('\n');
 }
@@ -1380,7 +1381,6 @@ function getResetButton(
             id="reset-button"
             onClick={async () => {
                 if (!isCodeSnippet) {
-                    createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
                     setActiveFileName('sandbox.py');
                     forceRecheck();
                 }

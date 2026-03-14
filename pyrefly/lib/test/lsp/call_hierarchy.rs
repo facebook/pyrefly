@@ -45,7 +45,7 @@ fn get_callers_report(state: &State, handle: &Handle, position: TextSize) -> Str
     let definition = TextRangeWithModule::new(def_item.module.clone(), def_item.definition_range);
 
     let callers = match transaction.find_global_incoming_calls_from_function_definition(
-        handle.sys_info(),
+        *handle.sys_info(),
         def_item.metadata.clone(),
         &definition,
     ) {

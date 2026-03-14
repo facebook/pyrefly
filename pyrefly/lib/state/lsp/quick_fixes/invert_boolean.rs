@@ -74,6 +74,7 @@ pub(crate) fn invert_boolean_code_actions(
         definition.metadata.clone(),
         definition.definition_range,
         &definition.module,
+        true,
     )?;
     let reference_set: HashSet<TextRange> = references.into_iter().collect();
 

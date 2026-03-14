@@ -227,33 +227,6 @@
               "key": {
                 "name": {
                   "id": 0,
-                  "key": "classes.Animal.__init__.<locals>.self"
-                }
-              }
-            }
-          }
-        }
-      },
-      {
-        "id": 0,
-        "key": {
-          "container": {
-            "cls": {
-              "id": 0,
-              "key": {
-                "name": {
-                  "id": 0,
-                  "key": "classes.Animal"
-                }
-              }
-            }
-          },
-          "declaration": {
-            "variable": {
-              "id": 0,
-              "key": {
-                "name": {
-                  "id": 0,
                   "key": "classes.Animal.speak.<locals>.self"
                 }
               }
@@ -706,30 +679,6 @@
           "span": {
             "length": 4,
             "start": 97
-          }
-        }
-      },
-      {
-        "id": 0,
-        "key": {
-          "declaration": {
-            "variable": {
-              "id": 0,
-              "key": {
-                "name": {
-                  "id": 0,
-                  "key": "classes.Animal.__init__.<locals>.self"
-                }
-              }
-            }
-          },
-          "file": {
-            "id": 0,
-            "key": "classes.py"
-          },
-          "span": {
-            "length": 16,
-            "start": 117
           }
         }
       },
@@ -1328,46 +1277,6 @@
             "key": "classes.py"
           },
           "span": {
-            "length": 16,
-            "start": 117
-          }
-        }
-      },
-      {
-        "id": 0,
-        "key": {
-          "definition": {
-            "variable": {
-              "id": 0,
-              "key": {
-                "container": {
-                  "func": {
-                    "id": 0,
-                    "key": {
-                      "name": {
-                        "id": 0,
-                        "key": "classes.Animal.__init__"
-                      }
-                    }
-                  }
-                },
-                "declaration": {
-                  "id": 0,
-                  "key": {
-                    "name": {
-                      "id": 0,
-                      "key": "classes.Animal.__init__.<locals>.self"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "file": {
-            "id": 0,
-            "key": "classes.py"
-          },
-          "span": {
             "length": 4,
             "start": 91
           }
@@ -1745,6 +1654,25 @@
           "spans": [
             {
               "length": 4,
+              "start": 117
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "classes.Animal.__init__.<locals>.self"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "spans": [
+            {
+              "length": 4,
               "start": 129
             }
           ],
@@ -2013,6 +1941,406 @@
                 "start": 36
               },
               "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.T"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 69
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.T"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 103
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 158
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 250
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 298
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.Dog"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 319
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.dog"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 117
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.Animal.__init__.<locals>.self"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 129
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.Animal.__init__.<locals>.name"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 181
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.Animal.speak.<locals>.self"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 186
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.Animal.name"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 273
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.Dog.speak.<locals>.self"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 278
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.Dog.name"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 323
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.Dog.speak"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 20
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.typing"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 20
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 218
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.Animal"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 54
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.typing"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 54
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 8
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 7,
+                "start": 27
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.typing.TypeVar"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 7,
+                "start": 27
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.TypeVar"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 7,
+                "start": 61
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "classes.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "classes.typing.Generic"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 7,
+                "start": 61
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Generic"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.xrefs.XRefsByFile.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 1,
+                "start": 36
+              },
+              "target": {
                 "id": 0,
                 "key": "classes.T"
               }
@@ -2075,6 +2403,16 @@
               "target": {
                 "id": 0,
                 "key": "classes.dog"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 117
+              },
+              "target": {
+                "id": 0,
+                "key": "classes.Animal.__init__.<locals>.self"
               }
             },
             {
@@ -2900,6 +3238,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "835e529061f1429222e801fbfe85f209"
+    "schema_id": "8f24e877367cad77ea2a10942e644b42"
   }
 ]

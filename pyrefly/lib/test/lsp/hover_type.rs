@@ -74,7 +74,6 @@ Hover Result: `(x: list[int], y: str, z: Literal[42]) -> list[int]`
     );
 }
 
-// TODO(kylei): redefinitions should work. they are especially common in try/except blocks
 #[test]
 fn redefinition_test() {
     let code = r#"
@@ -89,11 +88,11 @@ def f(): ...
 # main.py
 2 | def f(): ...
         ^
-Hover Result: None
+Hover Result: `() -> None`
 
 4 | def f(): ...
         ^
-Hover Result: None
+Hover Result: `() -> None`
 "#
         .trim(),
         report.trim(),
@@ -520,7 +519,7 @@ foo(C)
 # main.py
 11 | foo(C)
        ^
-Hover Result: `(x: type[T]) -> T`
+Hover Result: `[T](x: type[T]) -> T`
 "#
         .trim(),
         report.trim(),
@@ -547,8 +546,8 @@ Hover Result: `int`
     );
 }
 
-// todo(kylei): go-to definition currently finds the implementation in case of overload. it needs to be made smarter
-// for us to know the hover type
+// todo(kylei): When the callee's implementation uses *args/**kwargs, we can't refine the
+// keyword argument to a specific parameter. Ideally we'd resolve through the matched overload.
 #[test]
 fn kwarg_with_overload() {
     let code = r#"
@@ -578,6 +577,68 @@ Hover Result: None
          ^
 Hover Result: None"#
             .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn class_def_hover() {
+    let code = r#"
+class Foo:
+#     ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | class Foo:
+          ^
+Hover Result: `type[Foo]`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn parameter_hover() {
+    let code = r#"
+def f(x: int):
+#     ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | def f(x: int):
+          ^
+Hover Result: `int`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn exception_handler_hover() {
+    let code = r#"
+try:
+    pass
+except ValueError as e:
+#                    ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+4 | except ValueError as e:
+                         ^
+Hover Result: `ValueError`
+"#
+        .trim(),
         report.trim(),
     );
 }
