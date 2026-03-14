@@ -63,6 +63,7 @@ use crate::types::literal::Literal;
 use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::CalleeKind;
+use crate::types::types::TParams;
 use crate::types::types::Type;
 
 /// Synthesize an `Expr` for an integer index, producing a `NumberLiteral` for
@@ -327,11 +328,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Unwrap a class object for isinstance narrowing. When the right-hand side is `tuple`
+    /// and the left-hand side is a heterogeneous tuple type, creates a TypeVarTuple for
+    /// precise narrowing. Otherwise falls back to standard class object unwrapping.
+    fn unwrap_isinstance_target(&self, left: &Type, right: &Type) -> Option<(TParams, Type)> {
+        let right_is_tuple = match right {
+            Type::Type(box Type::Tuple(_)) => true,
+            Type::ClassDef(cls) => cls.is_builtin("tuple"),
+            _ => false,
+        };
+        let narrow_heterogeneous_tuple = right_is_tuple
+            && match left {
+                Type::Tuple(_) => true,
+                Type::ClassType(cls) => self.as_tuple(cls).is_some(),
+                _ => false,
+            };
+        if narrow_heterogeneous_tuple {
+            Some(self.instantiate_type_var_tuple())
+        } else {
+            self.unwrap_class_object_silently(right)
+        }
+    }
+
     fn narrow_isinstance(&self, left: &Type, right: &Type) -> Type {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
             res.push(self.distribute_over_union(left, |l| {
-                if let Some((tparams, right)) = self.unwrap_class_object_silently(&right) {
+                if let Some((tparams, right)) = self.unwrap_isinstance_target(l, &right) {
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
@@ -373,9 +396,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (right, allows_negative_narrow) in self.expr_as_class_info(right_expr, errors) {
             res.push(self.distribute_over_union(left, |l| {
                 let allows_negative_narrow = allows_negative_narrow || force_allow_negative;
-                if allows_negative_narrow
-                    && let Some((tparams, right)) = self.unwrap_class_object_silently(&right)
-                {
+                if !allows_negative_narrow {
+                    return l.clone();
+                }
+                if let Some((tparams, right)) = self.unwrap_isinstance_target(l, &right) {
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
@@ -402,7 +426,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && self.is_final(cls)
         {
             self.distribute_over_union(left, |l| {
-                if let Some((tparams, unwrapped)) = self.unwrap_class_object_silently(&right) {
+                if let Some((tparams, unwrapped)) = self.unwrap_isinstance_target(l, &right) {
                     let (vs, unwrapped) =
                         self.solver()
                             .fresh_quantified(&tparams, unwrapped, self.uniques);
