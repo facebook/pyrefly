@@ -1065,8 +1065,8 @@ impl Solver {
         v
     }
 
-    pub fn for_display(&self, t: Type) -> Type {
-        let mut t = self.expand_vars(t);
+    pub fn for_display(&self, mut t: Type) -> Type {
+        self.expand_with_limit(&mut t, TYPE_LIMIT, &VarRecurser::new());
         self.simplify_mut(&mut t);
         t.deterministic_printing()
     }
