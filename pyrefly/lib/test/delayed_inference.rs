@@ -414,6 +414,18 @@ assert_type(z, dict[str, int])
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2799
+testcase!(
+    test_dict_setdefault_with_empty_list_default,
+    r#"
+d = {}
+items = [("news", "token1"), ("sports", "token2"), ("news", "token3")]
+
+for topic, token in items:
+    d.setdefault(topic, []).append(token)
+    "#,
+);
+
 testcase!(
     bug = "Container contents should be promoted",
     test_redundant_empty_container_constructor_call,
