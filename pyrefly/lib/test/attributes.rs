@@ -320,7 +320,6 @@ def foo(x: Callable[[int], str], c: C, c2: C2, c3: C3):
 );
 
 testcase!(
-    bug = "classmethod bound object w/o targs is default-instantiated, solves T to Any",
     test_bound_classmethod_explicit_targs,
     r#"
 from typing import assert_type
@@ -333,7 +332,7 @@ class A[T]:
         return cls(x)
 
 assert_type(A[int].m(0), A[int])
-assert_type(A.m(0), A[int]) # TODO # E: assert_type(A[Unknown], A[int]) failed
+assert_type(A.m(0), A[int])
 
 def test_typevar_bounds[T: A[int]](x: type[T]):
     assert_type(x.m(0), A[int])
