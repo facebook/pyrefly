@@ -1204,7 +1204,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Any(_), _) => {
                 for var in want.collect_maybe_quantified_vars() {
                     // Variables in `want` now have `Any` as a lower bound.
-                    self.solver.add_lower_bound(var, got.clone());
+                    self.solver
+                        .add_lower_bound(var, got.clone(), &mut |got, want| {
+                            self.is_subset_eq(got, want).is_ok()
+                        });
                 }
                 Ok(())
             }

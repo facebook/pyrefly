@@ -1672,13 +1672,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))
                 },
             );
-            self.check_type(
-                &overload_func.signature.ret,
-                &impl_func.signature.ret,
-                *range,
-                errors,
-                &|| TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn),
-            );
             if let Err(specialization_errors) = self.solver().finish_quantified(vs, false) {
                 let mut msg = vec1![format!(
                     "Overload signature `{}` is not consistent with implementation signature `{}`",
@@ -1697,6 +1690,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     msg,
                 );
             }
+            self.check_type(
+                &overload_func.signature.ret,
+                &impl_func.signature.ret,
+                *range,
+                errors,
+                &|| TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn),
+            );
             match &overload_func.signature.params {
                 Params::List(params) => {
                     for param in params.items() {
