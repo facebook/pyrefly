@@ -110,7 +110,7 @@ enum Variable {
     /// The Variable tracks the prior type bound to this name before the loop.
     LoopRecursive(Type, LoopBound),
     /// A variable that used to decompose a type, e.g. getting T from Awaitable[T]
-    Unwrap,
+    Unwrap(Vec<Type>),
     /// A variable whose answer has been determined
     Answer(Type),
 }
@@ -162,7 +162,7 @@ impl Display for Variable {
             }
             Variable::LoopRecursive(t, _) => write!(f, "LoopRecursive(prior={t}, _)"),
             Variable::Recursive => write!(f, "Recursive"),
-            Variable::Unwrap => write!(f, "Unwrap"),
+            Variable::Unwrap(_) => write!(f, "Unwrap"),
             Variable::Answer(t) => write!(f, "{t}"),
         }
     }
@@ -399,7 +399,7 @@ impl Solver {
                 Some(PinError::ImplicitPartialContained(range))
             }
             Variable::PartialContained(_) => None,
-            Variable::Unwrap => {
+            Variable::Unwrap(_lower_bounds) => {
                 *variable = Variable::Answer(self.heap.mk_any_implicit());
                 None
             }
@@ -415,7 +415,7 @@ impl Solver {
         let variable = variables.get(var);
         matches!(
             &*variable,
-            Variable::PartialQuantified(_) | Variable::PartialContained(_) | Variable::Unwrap
+            Variable::PartialQuantified(_) | Variable::PartialContained(_) | Variable::Unwrap(_)
         )
     }
 
@@ -752,7 +752,9 @@ impl Solver {
     // the answers phase by contextually typing against an annotation.
     pub fn fresh_unwrap(&self, uniques: &UniqueFactory) -> Var {
         let v = Var::new(uniques);
-        self.variables.lock().insert_fresh(v, Variable::Unwrap);
+        self.variables
+            .lock()
+            .insert_fresh(v, Variable::Unwrap(Vec::new()));
         v
     }
 
@@ -1915,7 +1917,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         variables.update(*v1, Variable::Answer(answer));
                         Ok(())
                     }
-                    Variable::Unwrap | Variable::Recursive => {
+                    Variable::Unwrap(_) | Variable::Recursive => {
                         drop(v1_ref);
                         variables.update(*v1, Variable::Answer(t2.clone()));
                         Ok(())
@@ -2049,7 +2051,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         variables.update(*v2, Variable::Answer(answer));
                         Ok(())
                     }
-                    Variable::Unwrap | Variable::Recursive => {
+                    Variable::Unwrap(_) | Variable::Recursive => {
                         drop(v2_ref);
                         variables.update(*v2, Variable::Answer(t1.clone()));
                         Ok(())
