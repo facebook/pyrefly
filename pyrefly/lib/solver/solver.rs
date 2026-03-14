@@ -914,6 +914,16 @@ impl Solver {
         }
     }
 
+    #[expect(dead_code)]
+    fn solve_lower_bounds(&self, mut lower_bounds: Vec<Type>) -> Type {
+        // Keeping `Any` bounds causes `Any` to propagate to too many places,
+        // so we filter them out unless `Any` is the only solution.
+        if lower_bounds.iter().any(|t| !t.is_any()) {
+            lower_bounds.retain(|t| !t.is_any());
+        }
+        unions(lower_bounds, &self.heap)
+    }
+
     /// Called after a quantified function has been called. Given `def f[T](x: int): list[T]`,
     /// after the generic has completed.
     /// If `infer_with_first_use` is true, the variable `T` will be have like an
