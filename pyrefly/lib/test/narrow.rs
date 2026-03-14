@@ -2899,3 +2899,65 @@ def example(variable: str | None) -> str:
     return variable
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2607
+testcase!(
+    test_narrow_sequence_to_tuple_return,
+    r#"
+from typing import Sequence
+
+def f(x: Sequence[int]) -> tuple[int, ...]:
+    if isinstance(x, tuple):
+        return x
+    return tuple(x)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2607
+testcase!(
+    test_narrow_sequence_to_tuple_assert_type,
+    r#"
+from typing import Sequence, assert_type
+
+def seq_int(x: Sequence[int]):
+    if isinstance(x, tuple):
+        assert_type(x, tuple[int, ...])
+
+def seq_str(x: Sequence[str]):
+    if isinstance(x, tuple):
+        assert_type(x, tuple[str, ...])
+"#,
+);
+
+testcase!(
+    test_narrow_to_named_tuple,
+    r#"
+from typing import NamedTuple, Sequence, assert_type
+
+class Point(NamedTuple):
+    x: int
+    y: str
+
+def f(x: Sequence[int]) -> Point:
+    if isinstance(x, Point):
+        return x
+    raise ValueError
+
+def g(x: object):
+    if isinstance(x, Point):
+        assert_type(x, Point)
+        assert_type(x.x, int)
+        assert_type(x.y, str)
+"#,
+);
+
+testcase!(
+    test_narrow_concrete_tuple_to_tuple,
+    r#"
+from typing import assert_type
+
+def f(x: tuple[int, str] | int):
+    if isinstance(x, tuple):
+        assert_type(x, tuple[int, str])
+"#,
+);
