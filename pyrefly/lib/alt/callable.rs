@@ -552,7 +552,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .filter_map(|kw| kw.arg.map(|id| &id.id))
             .collect();
 
-        let iargs = self_arg.iter().chain(args.iter());
         // Creates a reversed copy of the parameters that we iterate through from back to front,
         // so that we can easily peek at and pop from the end.
         let mut rparams: Vec<&Param> = params.items().iter().rev().collect::<Vec<_>>();
@@ -586,7 +585,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             param_list_owner.push(ps).items().iter().rev().collect()
         };
-        for arg in iargs {
+        for arg in self_arg.iter().chain(args.iter()) {
             let mut arg_pre = arg.pre_eval(self, arg_errors);
             while arg_pre.step() {
                 let param = if let Some(p) = rparams.last() {
