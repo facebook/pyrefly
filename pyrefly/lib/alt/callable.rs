@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::mem;
 
 use itertools::Itertools;
 use pyrefly_python::dunder;
@@ -514,6 +515,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // See test::paramspec::test_paramspec_twice for an example of this.
         mut paramspec: Option<Var>,
         self_arg: Option<CallArg>,
+        mut self_qs: Option<QuantifiedHandle>,
         args: &[CallArg],
         keywords: &[CallKeyword],
         arguments_range: TextRange,
@@ -688,6 +690,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                         break;
                     }
+                }
+            }
+            // `self_qs` contains type parameters referenced in the `self` type. Pyrefly follows
+            // mypy and pyright's lead in solving type parameters in `self` as soon as `self` is
+            // matched. That is:
+            //     class A:
+            //         def f[T](self: T, other: T): ...
+            //     A().f(0)  # T = A, passing 0 is an error
+            // Contrast this to how type parameters usually behave:
+            //     def f[T](x: T, other: T): ...
+            //     f(A(), 0)  # T = A | int
+            if let Some(self_qs) = mem::take(&mut self_qs) {
+                let specialization_errors = self
+                    .solver()
+                    .finish_quantified(self_qs, self.solver().infer_with_first_use);
+                if let Err(errors) = specialization_errors {
+                    self.add_specialization_errors(errors, arg.range(), call_errors, context);
                 }
             }
         }
@@ -1130,6 +1149,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             (QuantifiedHandle::empty(), callable)
         };
+        let (self_qs, remaining_callable_qs) = if self_obj.is_some()
+            && let Some(first_param) = callable.get_first_param()
+            // TODO(https://github.com/facebook/pyrefly/issues/105): handle nested vars
+            && matches!(first_param, Type::Var(_))
+        {
+            // Quantifieds in `self` need to be finished as soon as `self_arg` is matched, unlike
+            // other quantifieds that are finished at the end of the call, so we split them out to
+            // be handled separately.
+            let (self_qs, remaining_qs) = callable_qs.partition_by(&first_param);
+            (Some(self_qs), remaining_qs)
+        } else {
+            (None, callable_qs)
+        };
         let ctor_qs = if let Some(targs) = ctor_targs.as_mut() {
             let qs = self.solver().freshen_class_targs(targs, self.uniques);
             let mp = targs.substitution_map();
@@ -1157,6 +1189,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &params,
                     None,
                     self_arg,
+                    self_qs,
                     args,
                     keywords,
                     arguments_range,
@@ -1180,6 +1213,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &params.prepend_types(&concatenate),
                         None,
                         self_arg,
+                        self_qs,
                         args,
                         keywords,
                         arguments_range,
@@ -1195,6 +1229,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &ParamList::new_types(concatenate.into_vec()),
                         Some(var),
                         self_arg,
+                        self_qs,
                         args,
                         keywords,
                         arguments_range,
@@ -1227,6 +1262,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &ParamList::new_types(concatenate.into_vec()),
                                 None,
                                 self_arg,
+                                self_qs,
                                 &args[0..args.len() - 1],
                                 &keywords[0..keywords.len() - 1],
                                 arguments_range,
@@ -1255,7 +1291,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let mut errors = self
             .solver()
-            .finish_quantified(callable_qs, self.solver().infer_with_first_use)
+            .finish_quantified(remaining_callable_qs, self.solver().infer_with_first_use)
             .map_or_else(|e| e.to_vec(), |_| Vec::new());
         if let Err(e) = self
             .solver()

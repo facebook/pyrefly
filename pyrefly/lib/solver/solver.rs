@@ -176,6 +176,13 @@ impl QuantifiedHandle {
     pub fn empty() -> Self {
         Self(Vec::new())
     }
+
+    /// Split the handle into (vars in ty, vars not in ty)
+    pub fn partition_by(self, ty: &Type) -> (Self, Self) {
+        let vars_in_ty = ty.collect_maybe_quantified_vars();
+        let (left, right) = self.0.into_iter().partition(|var| vars_in_ty.contains(var));
+        (QuantifiedHandle(left), QuantifiedHandle(right))
+    }
 }
 
 /// The solver tracks variables as a mapping from Var to Variable.
