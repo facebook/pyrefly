@@ -429,7 +429,7 @@ impl Solver {
     /// Finish the type returned from a function call. This entails expanding solved variables and
     /// erasing unsolved variables without defaults from unions.
     pub fn finish_function_return(&self, mut t: Type) -> Type {
-        self.expand_with_limit(&mut t, TYPE_LIMIT, &VarRecurser::new());
+        self.expand_with_limit(&mut t, TYPE_LIMIT, &VarRecurser::new(), false);
         self.erase_unsolved_variables(&mut t);
         self.simplify_mut(&mut t);
         t
@@ -447,14 +447,21 @@ impl Solver {
 
     /// Like `expand`, but when you have a `&mut`.
     pub fn expand_vars_mut(&self, t: &mut Type) {
-        self.expand_with_limit(t, TYPE_LIMIT, &VarRecurser::new());
+        self.expand_with_limit(t, TYPE_LIMIT, &VarRecurser::new(), false);
         // After we substitute bound variables, we may be able to simplify some types
         self.simplify_mut(t);
     }
 
     /// Expand, but if the resulting type will be greater than limit levels deep, return an `Any`.
     /// Avoids producing things that stack overflow later in the process.
-    fn expand_with_limit(&self, t: &mut Type, limit: usize, recurser: &VarRecurser) {
+    #[expect(clippy::only_used_in_recursion)]
+    fn expand_with_limit(
+        &self,
+        t: &mut Type,
+        limit: usize,
+        recurser: &VarRecurser,
+        expand_unfinished_quantified: bool,
+    ) {
         if limit == 0 {
             // TODO: Should probably add an error here, and use any_error,
             // but don't have any good location information to hand.
@@ -468,7 +475,12 @@ impl Solver {
                         *t = ty.clone();
                         drop(variable);
                         drop(lock);
-                        self.expand_with_limit(t, limit - 1, recurser);
+                        self.expand_with_limit(
+                            t,
+                            limit - 1,
+                            recurser,
+                            expand_unfinished_quantified,
+                        );
                     }
                     _ => {}
                 }
@@ -476,14 +488,16 @@ impl Solver {
                 *t = self.heap.mk_any_implicit();
             }
         } else {
-            t.recurse_mut(&mut |t| self.expand_with_limit(t, limit - 1, recurser));
+            t.recurse_mut(&mut |t| {
+                self.expand_with_limit(t, limit - 1, recurser, expand_unfinished_quantified)
+            });
         }
     }
 
     /// Public wrapper to expand a dimension type by resolving bound Vars.
     /// Used by subset checking to expand Vars before comparing dimension expressions.
     pub fn expand_dimension(&self, dim_ty: &mut Type) {
-        self.expand_with_limit(dim_ty, TYPE_LIMIT, &VarRecurser::new());
+        self.expand_with_limit(dim_ty, TYPE_LIMIT, &VarRecurser::new(), true);
     }
 
     /// Given a `Var`, ensures that the solver has an answer for it (or inserts Any if not already),
@@ -1066,7 +1080,7 @@ impl Solver {
     }
 
     pub fn for_display(&self, mut t: Type) -> Type {
-        self.expand_with_limit(&mut t, TYPE_LIMIT, &VarRecurser::new());
+        self.expand_with_limit(&mut t, TYPE_LIMIT, &VarRecurser::new(), true);
         self.simplify_mut(&mut t);
         t.deterministic_printing()
     }
