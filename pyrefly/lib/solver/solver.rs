@@ -1648,6 +1648,36 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             _ if got == want => Ok(()),
             (Type::Var(v1), Type::Var(v2)) => {
                 let variables = self.solver.variables.lock();
+                // Variable unification is destructive, so we have to copy lower bounds first.
+                let root1 = variables.get_root(*v1);
+                let root2 = variables.get_root(*v2);
+                if root1 == root2 {
+                    // same variable after unification, nothing to do
+                } else {
+                    let mut v1_mut = variables.get_mut(*v1);
+                    let mut v2_mut = variables.get_mut(*v2);
+                    match (&mut *v1_mut, &mut *v2_mut) {
+                        (
+                            Variable::Quantified {
+                                quantified: _,
+                                lower_bounds: v1_bounds,
+                            }
+                            | Variable::Unwrap(v1_bounds),
+                            Variable::Quantified {
+                                quantified: _,
+                                lower_bounds: v2_bounds,
+                            }
+                            | Variable::Unwrap(v2_bounds),
+                        ) => {
+                            v1_bounds.extend(mem::take(v2_bounds));
+                            *v2_bounds = v1_bounds.clone();
+                        }
+                        _ => {}
+                    }
+                    drop(v1_mut);
+                    drop(v2_mut);
+                }
+
                 let variable1 = variables.get(*v1);
                 let variable2 = variables.get(*v2);
                 match (&*variable1, &*variable2) {
