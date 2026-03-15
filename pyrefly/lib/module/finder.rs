@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::iter;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -39,11 +38,13 @@ enum FindResult {
     SingleFilePyiModule(PathBuf),
     /// Found a single-file .py module. The path must not point to an __init__ file.
     SingleFilePyModule(PathBuf),
-    /// Found regular packages. First path must point to an __init__ file.
-    /// Second path indicates where to continue search next. It should always point to the parent of the __init__ file.
-    /// The ordering of packages should be the same as the order they're found
-    /// in the `includes`.
-    RegularPackage(PathBuf, PathBuf),
+    /// Found regular packages. First field must point to an __init__ file.
+    /// Second field accumulates all roots in priority order. In typical
+    /// cases, the second field will be of length 1, containing only the
+    /// root of the first field. To support legacy pkgutil.extend_path-style
+    /// namespace packages, the second field also contains the remaining roots
+    /// to search for matches if the first does not contain a match.
+    RegularPackage(PathBuf, Vec1<PathBuf>),
     /// Found a namespace package.
     /// The path component indicates where to continue search next. It may contain more than one directories as the namespace package
     /// may span across multiple search roots.
@@ -133,7 +134,10 @@ fn find_one_part_in_root(
     for candidate_init_suffix in candidate_init_suffixes {
         let init_path = candidate_dir.join(candidate_init_suffix);
         if init_path.exists() {
-            return Some(FindResult::RegularPackage(init_path, candidate_dir));
+            return Some(FindResult::RegularPackage(
+                init_path,
+                Vec1::new(candidate_dir),
+            ));
         } else if let Some(v) = phantom_paths.as_deref_mut() {
             v.push(init_path);
         }
@@ -205,16 +209,53 @@ fn find_one_part<'a>(
     if name == &Name::new_static("__pycache__") {
         return None;
     }
-    let mut namespace_roots = Vec::new();
+
+    // Accumulates NamespacePackage across roots.
+    let mut namespace_roots: Vec<PathBuf> = Vec::new();
+
+    // Accumulates a RegularPackage(init_path: PathBuf, roots: Vec1<PathBuf>)
+    // across roots. init_path and the first element of roots come from the first
+    // (highest-priority) root, and subsequent roots append their directory to roots.
+    let mut regular_package: Option<FindResult> = None;
+
     while let Some(root) = roots.next() {
         match find_one_part_in_root(name, root, style_filter, phantom_paths) {
             None => (),
             Some(FindResult::NamespacePackage(package)) => {
-                namespace_roots.push(package.first().clone())
+                // Accumulate namespace roots. Skip if a regular package has already been
+                // found, since RegularPackage will take priority anyway.
+                if regular_package.is_none() {
+                    namespace_roots.push(package.first().clone());
+                }
+            }
+            Some(FindResult::RegularPackage(init_path, roots)) => {
+                debug_assert_eq!(roots.len(), 1); // only one root: the one containing init_path
+                match &mut regular_package {
+                    None => {
+                        // First instance of this package found, so initialize the accumulator.
+                        regular_package = Some(FindResult::RegularPackage(init_path, roots))
+                    }
+                    Some(FindResult::RegularPackage(_, existing_roots)) => {
+                        // These __init__ files are lower-priority, so just accumulate the
+                        // new roots after the existing roots in case we need to look there.
+                        existing_roots.push(roots.into_vec().remove(0));
+                    }
+                    _ => unreachable!("regular_package can only be None or RegularPackage"),
+                }
             }
             Some(result) => return Some((result, roots.cloned().collect::<Vec<_>>())),
         }
     }
+
+    if let Some(pkg) = regular_package {
+        // The lower-priority roots are contained in pkg. An empty vec is returned
+        // as the second item because this vec is used by the caller to search for
+        // higher-priority FindResult variants, but between RegularPackage and
+        // NamespacePackage, the former is already the higher priority, so there
+        // can definitionally be nowhere to look for a higher priority variant.
+        return Some((pkg, vec![]));
+    }
+
     match Vec1::try_from_vec(namespace_roots) {
         Err(_) => None,
         Ok(namespace_roots) => Some((FindResult::NamespacePackage(namespace_roots), vec![])),
@@ -247,7 +288,10 @@ fn find_one_part_prefix<'a>(
                                 let init_path = path.join(candidate_init_suffix);
                                 if init_path.exists() {
                                     results.push((
-                                        FindResult::RegularPackage(init_path, path.clone()),
+                                        FindResult::RegularPackage(
+                                            init_path,
+                                            Vec1::new(path.clone()),
+                                        ),
                                         ModuleName::from_str(name),
                                     ));
                                     break;
@@ -255,7 +299,7 @@ fn find_one_part_prefix<'a>(
                             }
 
                             if !results.iter().any(|r| match r {
-                                (FindResult::RegularPackage(_, p), _) => p == &path,
+                                (FindResult::RegularPackage(_, p), _) => p.first() == &path,
                                 _ => false,
                             }) {
                                 namespace_roots
@@ -323,10 +367,22 @@ fn continue_find_module(
                 current_result = None;
                 break;
             }
-            Some(FindResult::RegularPackage(_, next_root)) => {
-                current_result =
-                    find_one_part(part, [next_root].iter(), style_filter, phantom_paths)
-                        .map(|x| x.0);
+            Some(FindResult::RegularPackage(_, next_roots)) => {
+                current_result = find_one_part(
+                    part,
+                    next_roots.iter(),
+                    style_filter,
+                    phantom_paths,
+                )
+                .map(|(first_init, all_roots)| {
+                    all_roots
+                        .into_iter()
+                        .filter_map(|r| {
+                            find_one_part(part, std::iter::once(&r), style_filter, &mut None)
+                                .map(|x| x.0)
+                        })
+                        .fold(first_init, FindResult::best_result)
+                });
             }
             Some(FindResult::NamespacePackage(next_roots)) => {
                 current_result =
@@ -567,14 +623,13 @@ fn find_module_prefixes<'a>(
                 ) => {
                     break;
                 }
-                Some(FindResult::RegularPackage(_, next_root)) => {
+                Some(FindResult::RegularPackage(_, next_roots)) => {
                     if is_last {
-                        results = find_one_part_prefix(part, iter::once(&next_root));
+                        results = find_one_part_prefix(part, next_roots.iter());
                         break;
                     } else {
                         current_result =
-                            find_one_part(part, iter::once(&next_root), None, &mut None)
-                                .map(|x| x.0);
+                            find_one_part(part, next_roots.iter(), None, &mut None).map(|x| x.0);
                     }
                 }
                 Some(FindResult::NamespacePackage(next_roots)) => {
@@ -1068,7 +1123,75 @@ mod tests {
     }
 
     #[test]
-    fn test_find_regular_package_early_return() {
+    fn test_find_regular_package_zero_instances_found() {
+        // When no root contains the package at all, find_module returns None.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::dir("search_root0", vec![])]);
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a"),
+                [root.join("search_root0")].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_regular_package_one_instance_found() {
+        // A regular package found in exactly one root resolves to its __init__.py.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "search_root0",
+                vec![TestPath::dir(
+                    "a",
+                    vec![TestPath::file("__init__.py"), TestPath::file("b.py")],
+                )],
+            )],
+        );
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a"),
+                [root.join("search_root0")].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root0/a/__init__.py")
+            ))
+        );
+        // Submodule in the same root is also reachable.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.b"),
+                [root.join("search_root0")].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
+        );
+    }
+
+    #[test]
+    fn test_find_regular_package_multiple_instances_found() {
+        // When a regular package spans multiple roots (pkgutil-style), submodules from
+        // all roots are reachable, and the __init__.py from the highest-priority root wins.
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
         TestPath::setup_test_directory(
@@ -1090,19 +1213,122 @@ mod tests {
                 ),
             ],
         );
+        let roots = [root.join("search_root0"), root.join("search_root1")];
+        // The package itself resolves to the highest-priority root's __init__.py.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root0/a/__init__.py")
+            ))
+        );
+        // Submodule in the first root is reachable.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.b"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
+        );
+        // Submodule only in the second root is also reachable.
         assert_eq!(
             find_module(
                 ModuleName::from_str("a.c"),
-                [root.join("search_root0"), root.join("search_root1")].iter(),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root1/a/c.py")))
+        );
+    }
+
+    #[test]
+    fn test_find_regular_package_takes_priority_over_namespace_package() {
+        // Pathological case: a regular package and a namespace package both exist with
+        // the same name. A regular package (has __init__.py) in one root takes priority
+        // over a namespace package (no __init__.py) in another root. The submodule from
+        // the namespace root is only reachable if the regular package spans that root too.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                // root0: regular package `a` with submodule `b`
+                TestPath::dir(
+                    "search_root0",
+                    vec![TestPath::dir(
+                        "a",
+                        vec![TestPath::file("__init__.py"), TestPath::file("b.py")],
+                    )],
+                ),
+                // root1: namespace package `a` (no __init__.py) with submodule `c`
+                TestPath::dir(
+                    "search_root1",
+                    vec![TestPath::dir("a", vec![TestPath::file("c.py")])],
+                ),
+            ],
+        );
+        let roots = [root.join("search_root0"), root.join("search_root1")];
+        // `a` resolves as a regular package (root0 wins over the namespace in root1).
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root0/a/__init__.py")
+            ))
+        );
+        // `a.b` is reachable (lives in root0's regular package).
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.b"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
+        );
+        // `a.c` is NOT reachable: root1 contributes only a namespace directory,
+        // and RegularPackage in root0 does not include root1's directory.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.c"),
+                roots.iter(),
                 &mut vec![],
                 None,
                 None,
                 false,
                 &mut None,
             ),
-            // We won't find `a.c` because when searching for package `a`, we've already
-            // committed to `search_root0/a/` as the path to search next for `c`. And there's
-            // no `c.py` in `search_root0/a/`.
             None
         );
     }
@@ -1247,19 +1473,21 @@ mod tests {
         // py preferred over pyc
         assert_eq!(
             find_one_part(&Name::new("compiled"), roots.iter(), None, &mut None),
+            // Both roots are accumulated since both have `compiled/__init__.py`.
             Some((
                 FindResult::RegularPackage(
                     root.join("foo/compiled/__init__.py"),
-                    root.join("foo/compiled")
+                    Vec1::try_from_vec(vec![root.join("foo/compiled"), root.join("bar/compiled"),])
+                        .unwrap()
                 ),
-                vec![root.join("bar")]
+                vec![]
             ))
         );
         assert_eq!(
             continue_find_module(
                 FindResult::RegularPackage(
                     root.join("foo/compiled/__init__.py"),
-                    root.join("foo/compiled")
+                    Vec1::new(root.join("foo/compiled"))
                 ),
                 &[Name::new("a")],
                 None,
@@ -1971,8 +2199,10 @@ mod tests {
 
     #[test]
     fn test_continue_find_module_signature() {
-        let start_result =
-            FindResult::RegularPackage(PathBuf::from("path/to/init.py"), PathBuf::from("path/to"));
+        let start_result = FindResult::RegularPackage(
+            PathBuf::from("path/to/init.py"),
+            Vec1::new(PathBuf::from("path/to")),
+        );
         let components_rest = vec![Name::new("test_module")];
         assert!(continue_find_module(start_result, &components_rest, None, &mut None).is_none());
     }
