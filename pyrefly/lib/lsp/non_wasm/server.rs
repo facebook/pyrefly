@@ -4188,6 +4188,10 @@ impl Server {
                 transaction.introduce_parameter_code_actions(&handle, range)
             );
             timed_refactor_action!(
+                "change_signature",
+                transaction.change_signature_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "convert_star_import",
                 transaction.convert_star_import_code_actions(&handle, range)
             );
