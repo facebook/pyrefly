@@ -679,6 +679,26 @@ reveal_type(my_func)  # E: revealed type: (object) -> None
 "#,
 );
 
+testcase!(
+    test_class_decorator_rebinds_class_value,
+    r#"
+class ActorHandle[T]:
+    def remote(self) -> T: ...
+    def options(self, num_cpus: int) -> "ActorHandle[T]": ...
+
+def remote[T](cls: type[T]) -> ActorHandle[T]:
+    return ActorHandle()
+
+@remote
+class Worker:
+    def compute(self) -> int:
+        return 42
+
+Worker.remote()
+Worker.options(num_cpus=2)
+"#,
+);
+
 fn env_numba() -> TestEnv {
     let mut env = TestEnv::one_with_path(
         "numba",
