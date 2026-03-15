@@ -12,8 +12,7 @@
         <link href="https://pyrefly.org/blog/typing-conformance-comparison/"/>
         <updated>2026-03-10T00:00:00.000Z</updated>
         <summary type="html"><![CDATA[Learn what it means to conform to the Python typing spec, why it matters, and the conformance status of each type checker including Pyrefly, Ty, Pyright and Mypy.]]></summary>
-        <content type="html"><![CDATA[<p><img decoding="async" loading="lazy" alt="Hero image" src="https://pyrefly.org/assets/images/conformance-e3a5b0691798c3046878f5d4908f5207.png" width="1200" height="630" class="img_ev3q"></p>
-<p>When you write typed Python, you expect your type checker to follow the rules of the language. But how closely do today's type checkers actually follow the Python typing specification?</p>
+        <content type="html"><![CDATA[<p>When you write typed Python, you expect your type checker to follow the rules of the language. But how closely do today's type checkers actually follow the Python typing specification?</p>
 <p>In this post, we look at what typing spec conformance means, how different type checkers compare, and what the conformance numbers don't tell you.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="a-brief-history-of-the-typing-specification">A brief history of the Typing Specification<a href="https://pyrefly.org/blog/typing-conformance-comparison/#a-brief-history-of-the-typing-specification" class="hash-link" aria-label="Direct link to A brief history of the Typing Specification" title="Direct link to A brief history of the Typing Specification">​</a></h2>
 <p>Python's type system started with <a href="https://peps.python.org/pep-0484/" target="_blank" rel="noopener noreferrer">PEP 484</a>. At the time, the semantics of the type system were mostly defined by the reference implementation, mypy. In practice, whatever mypy implemented became the de-facto specification.</p>
