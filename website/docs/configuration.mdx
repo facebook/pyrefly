@@ -453,6 +453,19 @@ more details on how baseline files work.
     - Errors suppressed by the baseline file are still shown in the IDE.
     - Errors are matched with the baseline by file, error code, and column number.
 
+### `output-format`
+
+Default format for `pyrefly check` error output when `--output-format` is not
+set on the CLI.
+
+- Type: `"min-text" | "full-text" | "json" | "github" | "omit-errors"`
+- Default: `full-text`
+- Flag equivalent: `--output-format`
+- Notes:
+    - `output-format` is a **project-level setting** and cannot be overridden in
+      [`sub-config`](#sub-configs) sections.
+    - A CLI `--output-format` flag still takes precedence over the config value.
+
 ### `errors`
 
 Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.
