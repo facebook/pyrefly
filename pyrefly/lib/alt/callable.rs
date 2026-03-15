@@ -505,6 +505,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )
     }
 
+    /// Validate that a quantified ParamSpec forwarding pattern has the expected
+    /// `*P.args` / `**P.kwargs` as the last positional and keyword arguments.
+    /// Called when `var_to_rparams` returns `None` (the Var resolved to a
+    /// still-quantified ParamSpec).
+    fn check_paramspec_forwarding(
+        &self,
+        var: Var,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        arguments_range: TextRange,
+        arg_errors: &ErrorCollector,
+        call_errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) {
+        let q = match self.solver().force_var(var) {
+            Type::Quantified(q) => q,
+            // var_to_rparams only returns None for Quantified; this is unreachable.
+            _ => unreachable!("check_paramspec_forwarding called for non-Quantified var"),
+        };
+        if !args
+            .last()
+            .is_some_and(|x| self.is_param_spec_args(x, &q, arg_errors))
+            || !keywords
+                .last()
+                .is_some_and(|x| self.is_param_spec_kwargs(x, &q, arg_errors))
+        {
+            self.error(
+                call_errors,
+                arguments_range,
+                ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
+                format!(
+                    "Expected *-unpacked {}.args and **-unpacked {}.kwargs",
+                    q.name(),
+                    q.name()
+                ),
+            );
+        }
+    }
+
     // See comment on `callable_infer` about `arg_errors` and `call_errors`.
     fn callable_infer_params(
         &self,
@@ -565,7 +604,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut variadic_name: Option<&Name> = None;
         let mut variadic_collected: Vec<Type> = Vec::new();
 
-        let var_to_rparams = |var| {
+        // Resolve a deferred ParamSpec Var into additional parameters.
+        // Returns `None` when the Var resolved to a quantified ParamSpec
+        // (forwarding case), meaning the caller should validate that the
+        // remaining args are `*P.args` / `**P.kwargs` and stop matching.
+        let var_to_rparams = |var| -> Option<Vec<&Param>> {
             let ps = match self.solver().force_var(var) {
                 Type::ParamSpecValue(ps) => ps,
                 Type::Any(_) | Type::Ellipsis => ParamList::everything(),
@@ -574,6 +617,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let ps = ParamList::everything();
                     ps.prepend_types(&prefix).into_owned()
                 }
+                // The ParamSpec Var resolved to another quantified ParamSpec (e.g.,
+                // one generic helper forwarding `*args: P.args, **kwargs: P.kwargs`
+                // to another). There are no concrete parameters to contribute;
+                // the caller must validate the forwarding pattern.
+                Type::Quantified(q) if q.is_param_spec() => return None,
                 t => {
                     error(
                         call_errors,
@@ -584,7 +632,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ParamList::everything()
                 }
             };
-            param_list_owner.push(ps).items().iter().rev().collect()
+            Some(param_list_owner.push(ps).items().iter().rev().collect())
         };
         for arg in iargs {
             let mut arg_pre = arg.pre_eval(self, arg_errors);
@@ -595,7 +643,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // We've run out of parameters but haven't finished matching arguments. If we
                     // have a ParamSpec Var, it may contribute more parameters; force it and tack
                     // the result onto the parameter list.
-                    rparams = var_to_rparams(var);
+                    if let Some(new_rparams) = var_to_rparams(var) {
+                        rparams = new_rparams;
+                    } else {
+                        // Quantified ParamSpec forwarding: validate that the
+                        // remaining args/kwargs are the expected `*P.args` /
+                        // `**P.kwargs` pair and stop matching.
+                        self.check_paramspec_forwarding(
+                            var,
+                            args,
+                            keywords,
+                            arguments_range,
+                            arg_errors,
+                            call_errors,
+                            context,
+                        );
+                        return;
+                    }
                     paramspec = None;
                     continue;
                 } else {
@@ -791,7 +855,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(p) => p,
                 None if let Some(var) = paramspec => {
                     // We've reached the end of our regular parameter list. Now check if we have more parameters from a ParamSpec.
-                    rparams = var_to_rparams(var);
+                    if let Some(new_rparams) = var_to_rparams(var) {
+                        rparams = new_rparams;
+                    } else {
+                        // Quantified ParamSpec forwarding: all positional args
+                        // have been consumed, just validate the kwargs pattern.
+                        self.check_paramspec_forwarding(
+                            var,
+                            &[],
+                            keywords,
+                            arguments_range,
+                            arg_errors,
+                            call_errors,
+                            context,
+                        );
+                        return;
+                    }
                     paramspec = None;
                     continue;
                 }
