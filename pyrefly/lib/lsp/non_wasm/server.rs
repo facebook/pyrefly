@@ -4164,6 +4164,10 @@ impl Server {
                 transaction.inline_parameter_code_actions(&handle, range)
             );
             timed_refactor_action!(
+                "method_object",
+                transaction.method_object_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "pull_members_up",
                 transaction.pull_members_up_code_actions(&handle, range)
             );

@@ -320,6 +320,20 @@ fn apply_first_inline_parameter_action(code: &str) -> Option<String> {
     Some(apply_refactor_edits_for_module(&module_info, &edits))
 }
 
+fn apply_first_method_object_action(code: &str) -> Option<String> {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(code);
+    let actions = transaction
+        .method_object_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
+}
+
 fn apply_first_safe_delete_action(code: &str) -> Option<String> {
     apply_first_safe_delete_action_multi(&[("main", code)], "main")
 }
@@ -3890,6 +3904,75 @@ class Outer:
 #            ^
 "#;
     assert_eq!(expected, updated);
+}
+
+#[test]
+fn method_object_basic_function() {
+    let code = r#"
+def add(a, b):
+#    ^
+    return a + b
+"#;
+    let updated = apply_first_method_object_action(code).expect("expected method-object action");
+    let expected = r#"
+def add(a, b):
+#    ^
+    return NewMethodObject(a, b)()
+
+class NewMethodObject(object):
+
+    def __init__(self, a, b):
+        self.a = a
+        self.b = b
+
+    def __call__(self):
+        return self.a + self.b
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn method_object_instance_method() {
+    let code = r#"
+class Accumulator:
+    base = 1
+
+    def add(self, a, b):
+#        ^
+        total = self.base + a
+        return total + b
+"#;
+    let updated = apply_first_method_object_action(code).expect("expected method-object action");
+    let expected = r#"
+class Accumulator:
+    base = 1
+
+    def add(self, a, b):
+#        ^
+        return NewMethodObject(self, a, b)()
+
+class NewMethodObject(object):
+
+    def __init__(self, host, a, b):
+        self.self = host
+        self.a = a
+        self.b = b
+
+    def __call__(self):
+        total = self.self.base + self.a
+        return total + self.b
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn method_object_not_offered_from_body_selection() {
+    let code = r#"
+def add(a, b):
+    return a + b
+#           ^
+"#;
+    assert!(apply_first_method_object_action(code).is_none());
 }
 
 #[test]
