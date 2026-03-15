@@ -822,7 +822,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let result = if let Some(mut ret) = dunder_new_ret {
             ret.subst_mut(&cls.targs().substitution_map());
-            ret
+            if constructor_kind == ConstructorKind::TypeOfSelf
+                && let Type::ClassType(ret_cls) = &ret
+            {
+                self.heap.mk_self_type(ret_cls.clone())
+            } else {
+                ret
+            }
         } else if constructor_kind == ConstructorKind::TypeOfSelf {
             self.heap.mk_self_type(cls)
         } else {
@@ -1371,9 +1377,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 bound
             } else {
-                // Fallback: just set the return type without stripping self
+                // Fallback: just set the return type without stripping self.
                 let ret_type = t
                     .callable_first_param(self.heap)
+                    .map(|ty| match ty {
+                        Type::SelfType(cls) => Type::ClassType(cls),
+                        other => other,
+                    })
                     .unwrap_or_else(|| class_type.clone());
                 let mut t = t;
                 t.transform_toplevel_callable(&mut |c: &mut Callable| c.ret = ret_type.clone());

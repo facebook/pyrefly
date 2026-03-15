@@ -105,14 +105,10 @@
   ],
   "generics_self_advanced.py": [],
   "generics_self_attributes.py": [],
-  "generics_self_basic.py": [
-    "Line 20: Expected 1 errors",
-    "Line 33: Expected 1 errors"
-  ],
+  "generics_self_basic.py": [],
   "generics_self_protocols.py": [],
   "generics_self_usage.py": [
-    "Line 82: Expected 1 errors",
-    "Line 87: Expected 1 errors"
+    "Line 82: Expected 1 errors"
   ],
   "generics_syntax_compatibility.py": [],
   "generics_syntax_declarations.py": [],

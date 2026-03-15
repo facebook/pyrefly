@@ -646,10 +646,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             Callable::list(ParamList::new(def.params.clone()), ret)
         };
-        if let Some(cls) = &def.defining_cls
-            && stmt.name.id == dunder::INIT
-        {
-            self.validate_init_self_annotation(cls.name(), &callable, def.id_range(), errors);
+        if let Some(cls) = &def.defining_cls {
+            if stmt.name.id == dunder::INIT {
+                self.validate_init_self_annotation(cls, &callable, def.id_range(), errors);
+            } else if is_dunder_new {
+                self.validate_new_cls_annotation(cls, &callable, def.id_range(), errors);
+            }
         }
         // Extend tparams with any implicit jaxtyping dimension TypeVars found
         // in the signature, and detect mixing of native and jaxtyping syntax.
@@ -663,7 +665,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         .forall(tparams);
         ty = self.move_return_tparams_of_type(ty);
         for (x, range) in def.decorators.iter().rev() {
-            ty = self.apply_function_decorator(x.clone(), ty, &def.metadata, *range, errors);
+            ty = self.apply_function_decorator(
+                x.clone(),
+                ty,
+                &def.metadata,
+                &def.defining_cls,
+                *range,
+                errors,
+            );
         }
         Arc::new(ty)
     }
@@ -1260,6 +1269,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorator: Type,
         decoratee: Type,
         metadata: &FuncMetadata,
+        defining_cls: &Option<Class>,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
@@ -1279,53 +1289,84 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Forall(forall) => (Some(forall.tparams.clone()), forall.body.clone().as_type()),
             _ => (None, decoratee.clone()),
         };
-        let arg = CallArg::ty(&decoratee_arg, range);
-        // Compute the raw return type - this may need tweaks to handle Forall well.
-        let inferred_ty =
-            match self.call_infer(call_target, &[arg], &[], range, errors, None, None, None) {
-                Type::Callable(c) => self.heap.mk_function(Function {
-                    signature: *c,
-                    metadata: metadata.clone(),
-                }),
-                Type::Forall(box Forall {
-                    tparams,
-                    body: Forallable::Callable(c),
-                }) => Forallable::Function(Function {
-                    signature: c,
-                    metadata: metadata.clone(),
-                })
-                .forall(tparams),
-                // Callback protocol. We convert it to a function so we can add function metadata.
-                Type::ClassType(cls)
-                    if self
-                        .get_metadata_for_class(cls.class_object())
-                        .is_protocol() =>
-                {
-                    let call_attr = self.instance_as_dunder_call(&cls).and_then(|call_attr| {
-                        if let Type::BoundMethod(m) = call_attr {
-                            Some(
-                                self.bind_boundmethod(&m, &mut |a, b| self.is_subset_eq(a, b))
-                                    .unwrap_or(m.func.as_type()),
-                            )
-                        } else {
-                            None
-                        }
-                    });
-                    if let Some(mut call_attr) = call_attr {
-                        call_attr.transform_toplevel_func_metadata(|m| {
-                            *m = FuncMetadata {
-                                kind: FunctionKind::CallbackProtocol(Box::new(cls.clone())),
-                                flags: metadata.flags.clone(),
-                            };
-                        });
-                        call_attr
+        // If the decoratee contains SelfType, try calling the decorator with Self intact first.
+        // If it works, Self flows through type variables naturally (e.g. `R` binds to `Self@C`).
+        // If it fails (e.g. contravariance with a non-generic decorator), fall back to
+        // substituting Self with the concrete class type.
+        let mut decoratee_arg = decoratee_arg;
+        let base_result = if let Some(cls) = defining_cls
+            && decoratee_arg.any(|t| matches!(t, Type::SelfType(_)))
+        {
+            let self_errors = self.error_collector();
+            let self_arg = CallArg::ty(&decoratee_arg, range);
+            let self_result = self.call_infer(
+                call_target.clone(),
+                &[self_arg],
+                &[],
+                range,
+                &self_errors,
+                None,
+                None,
+                None,
+            );
+            if self_errors.is_empty() {
+                self_result
+            } else {
+                // Self caused errors (e.g., contravariance with non-generic decorator).
+                // Fall back to substituted version.
+                let cls_type = self.instantiate(cls);
+                decoratee_arg.subst_self_type_mut(&cls_type);
+                let arg = CallArg::ty(&decoratee_arg, range);
+                self.call_infer(call_target, &[arg], &[], range, errors, None, None, None)
+            }
+        } else {
+            let arg = CallArg::ty(&decoratee_arg, range);
+            self.call_infer(call_target, &[arg], &[], range, errors, None, None, None)
+        };
+        let inferred_ty = match base_result {
+            Type::Callable(c) => self.heap.mk_function(Function {
+                signature: *c,
+                metadata: metadata.clone(),
+            }),
+            Type::Forall(box Forall {
+                tparams,
+                body: Forallable::Callable(c),
+            }) => Forallable::Function(Function {
+                signature: c,
+                metadata: metadata.clone(),
+            })
+            .forall(tparams),
+            // Callback protocol. We convert it to a function so we can add function metadata.
+            Type::ClassType(cls)
+                if self
+                    .get_metadata_for_class(cls.class_object())
+                    .is_protocol() =>
+            {
+                let call_attr = self.instance_as_dunder_call(&cls).and_then(|call_attr| {
+                    if let Type::BoundMethod(m) = call_attr {
+                        Some(
+                            self.bind_boundmethod(&m, &mut |a, b| self.is_subset_eq(a, b))
+                                .unwrap_or(m.func.as_type()),
+                        )
                     } else {
-                        self.heap.mk_class_type(cls)
+                        None
                     }
+                });
+                if let Some(mut call_attr) = call_attr {
+                    call_attr.transform_toplevel_func_metadata(|m| {
+                        *m = FuncMetadata {
+                            kind: FunctionKind::CallbackProtocol(Box::new(cls.clone())),
+                            flags: metadata.flags.clone(),
+                        };
+                    });
+                    call_attr
+                } else {
+                    self.heap.mk_class_type(cls)
                 }
-                Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped") => decoratee.clone(),
-                returned_ty => returned_ty,
-            };
+            }
+            Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped") => decoratee.clone(),
+            returned_ty => returned_ty,
+        };
 
         // Given the raw `inferred_ty`, which may include `Type::Quantified` type variables coming from a
         // `Forall` in the original decoratee, we need to create the proper output type:
@@ -1605,10 +1646,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(Arc::new(all_tparams))
             }
         };
+        let cls_type = def.defining_cls().map(|cls| self.instantiate(cls));
+        let has_self_param = def.defining_cls().is_some() && !def.metadata().flags.is_staticmethod;
         let sig_for_input_check = |sig: &Callable| {
             let mut sig = sig.clone();
+            if let Some(cls_ty) = &cls_type {
+                sig.subst_self_type_mut(cls_ty);
+            }
             // Set the return type to `Any` so that we check just the input signature.
             sig.ret = self.heap.mk_any_implicit();
+            // Skip self/cls to avoid a variance computation cycle with the defining class.
+            if has_self_param {
+                let mut owner = Owner::new();
+                if let Some((_, rest)) = sig.split_first_param(&mut owner) {
+                    sig = rest;
+                }
+            }
             sig
         };
         // Collect param name -> default map from implementation so we can check for
@@ -1656,29 +1709,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // signature of the overload and that the return type of the overload is assignable
             // to the return type of the implementation. (Note that the two assignability checks
             // are in opposite directions.)
-            self.check_type(
-                &self
-                    .heap
-                    .mk_callable_from(sig_for_input_check(&impl_func.signature)),
-                &self
-                    .heap
-                    .mk_callable_from(sig_for_input_check(&overload_func.signature)),
-                *range,
-                errors,
-                &|| {
-                    TypeCheckContext::of_kind(TypeCheckKind::OverloadInput(
-                        original_overload_func.signature.clone(),
-                        impl_sig.clone(),
-                    ))
-                },
-            );
-            self.check_type(
-                &overload_func.signature.ret,
-                &impl_func.signature.ret,
-                *range,
-                errors,
-                &|| TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn),
-            );
+            let got = &self
+                .heap
+                .mk_callable_from(sig_for_input_check(&impl_func.signature));
+            let want = &self
+                .heap
+                .mk_callable_from(sig_for_input_check(&overload_func.signature));
+            self.check_type(got, want, *range, errors, &|| {
+                TypeCheckContext::of_kind(TypeCheckKind::OverloadInput(
+                    original_overload_func.signature.clone(),
+                    impl_sig.clone(),
+                ))
+            });
+            let mut overload_ret = overload_func.signature.ret.clone();
+            let mut impl_func_ret = impl_func.signature.ret.clone();
+            if let Some(cls_ty) = &cls_type {
+                overload_ret.subst_self_type_mut(cls_ty);
+                impl_func_ret.subst_self_type_mut(cls_ty);
+            }
+            self.check_type(&overload_ret, &impl_func_ret, *range, errors, &|| {
+                TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn)
+            });
             if let Err(specialization_errors) = self.solver().finish_quantified(vs, false) {
                 let mut msg = vec1![format!(
                     "Overload signature `{}` is not consistent with implementation signature `{}`",
@@ -1863,7 +1914,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // For each callable, set its return type to its first param's type (i.e. `self`).
         func_type.transform_toplevel_callable(&mut |c: &mut Callable| {
             if let Some(self_type) = c.get_first_param() {
-                c.ret = self_type;
+                c.ret = match self_type {
+                    Type::SelfType(cls) => Type::ClassType(cls),
+                    other => other,
+                };
             }
         });
         self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)
@@ -1996,12 +2050,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Ensure that self annotation does not contain class-scoped type variables.
+    /// Validate the self annotation on `__init__`.
     /// Per spec: https://typing.python.org/en/latest/spec/constructors.html#init-method
-    /// "Class-scoped type variables should not be used in the self annotation"
+    /// - The self type must be the defining class or a superclass of it.
+    /// - Class-scoped type variables should not be used in the self annotation.
     fn validate_init_self_annotation(
         &self,
-        cls_name: &Name,
+        cls: &Class,
         callable: &Callable,
         range: TextRange,
         errors: &ErrorCollector,
@@ -2009,8 +2064,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Params::List(param_list) = &callable.params
             && let Some(Param::Pos(_, self_ty, _)) = param_list.items().first()
             && let Type::ClassType(cls_ty) = self_ty
-            && cls_ty.name() == cls_name
         {
+            let cls_name = cls.name();
+            // The self type must be the defining class itself or a superclass of it.
+            if cls_ty.name() != cls_name
+                && !self.type_order().has_superclass(cls, cls_ty.class_object())
+            {
+                errors.add(
+                    range,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    vec1![format!(
+                        "`__init__` method self type `{}` is not a superclass of class `{cls_name}`",
+                        self.for_display(self_ty.clone()),
+                    )],
+                );
+                return;
+            }
             let tparams_names = cls_ty.tparams().iter().collect::<SmallSet<_>>();
             let mut class_scoped_tvars = SmallSet::new();
             for (_, ty) in cls_ty.targs().iter_paired() {
@@ -2031,6 +2100,52 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         pluralize(class_scoped_tvars.len(), "type parameter")
                     )],
                 );
+            }
+        }
+    }
+
+    /// Validate the cls annotation on `__new__`.
+    /// The cls type must be `type[X]` where `X` is the defining class or a superclass of it.
+    fn validate_new_cls_annotation(
+        &self,
+        cls: &Class,
+        callable: &Callable,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if let Params::List(param_list) = &callable.params
+            && let Some(Param::Pos(_, cls_ty, _)) = param_list.items().first()
+        {
+            let cls_name = cls.name();
+            match cls_ty {
+                Type::Type(box Type::ClassType(inner_cls)) => {
+                    if inner_cls.name() != cls_name
+                        && !self
+                            .type_order()
+                            .has_superclass(cls, inner_cls.class_object())
+                    {
+                        errors.add(
+                            range,
+                            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                            vec1![format!(
+                                "`__new__` method cls type `{}` is not a superclass of class `{cls_name}`",
+                                self.for_display(cls_ty.clone()),
+                            )],
+                        );
+                    }
+                }
+                // type[Self] and type[TypeVar] are valid
+                Type::Type(box Type::SelfType(_) | box Type::Quantified(_)) => {}
+                _ => {
+                    errors.add(
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        vec1![format!(
+                            "`__new__` method cls type `{}` is not a valid `type[...]` annotation",
+                            self.for_display(cls_ty.clone()),
+                        )],
+                    );
+                }
             }
         }
     }

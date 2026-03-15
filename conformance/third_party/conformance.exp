@@ -6404,6 +6404,28 @@
   "generics_self_basic.py": [
     {
       "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "line": 20,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 20
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "line": 33,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 33
+    },
+    {
+      "code": -2,
       "column": 26,
       "concise_description": "`type[Self@Container]` is not subscriptable",
       "description": "`type[Self@Container]` is not subscriptable",
@@ -6471,6 +6493,17 @@
       "severity": "error",
       "stop_column": 10,
       "stop_line": 76
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `Foo3` is not assignable to declared return type `Self@Foo3`",
+      "description": "Returned type `Foo3` is not assignable to declared return type `Self@Foo3`",
+      "line": 87,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 87
     },
     {
       "code": -2,
@@ -9021,17 +9054,6 @@
       "description": "If `@classmethod` is present on any overload or the implementation, it should be on every overload and the implementation.",
       "line": 90,
       "name": "invalid-overload",
-      "severity": "error",
-      "stop_column": 14,
-      "stop_line": 90
-    },
-    {
-      "code": -2,
-      "column": 9,
-      "concise_description": "Implementation signature `(cls: type[Self@C], *args: int | str) -> int | str` does not accept all arguments that overload signature `(self: Self@C, x: str, /) -> str` accepts",
-      "description": "Implementation signature `(cls: type[Self@C], *args: int | str) -> int | str` does not accept all arguments that overload signature `(self: Self@C, x: str, /) -> str` accepts",
-      "line": 90,
-      "name": "inconsistent-overload",
       "severity": "error",
       "stop_column": 14,
       "stop_line": 90
