@@ -560,8 +560,10 @@ impl Solver {
             }) = x
             {
                 let mut merged = unions(mem::take(xs), &self.heap);
-                // Preserve union display names during simplification
-                if let Type::Union(box Union { display_name, .. }) = &mut merged {
+                // Preserve a pre-existing display name, but keep any newly inferred one.
+                if let Type::Union(box Union { display_name, .. }) = &mut merged
+                    && original_name.is_some()
+                {
                     *display_name = original_name.clone();
                 }
                 *x = merged;

@@ -18,6 +18,8 @@ use crate::typed_dict::TypedDict;
 use crate::types::Type;
 use crate::types::Union;
 
+const PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS: usize = 3;
+
 /// Turn unions of unions into a flattened list for one union, and return the deduped list.
 fn flatten_and_dedup(xs: Vec<Type>, heap: &TypeHeap) -> Vec<Type> {
     fn flatten(xs: Vec<Type>, res: &mut Vec<Type>) {
@@ -67,12 +69,68 @@ fn simplify_intersections(xs: &mut [Type], heap: &TypeHeap) {
     }
 }
 
+#[derive(Debug, Clone)]
+struct LargeAliasUnion {
+    name: Box<str>,
+    members: Vec<Type>,
+}
+
+fn large_alias_union_info(xs: &[Type]) -> Option<LargeAliasUnion> {
+    let mut info: Option<LargeAliasUnion> = None;
+    for x in xs {
+        match x {
+            Type::Union(box Union {
+                members,
+                display_name: Some(name),
+            }) if members.len() >= PRESERVE_LARGE_ALIAS_DISPLAY_MIN_MEMBERS => {
+                if info.is_some() {
+                    return None;
+                }
+                info = Some(LargeAliasUnion {
+                    name: name.clone(),
+                    members: members.clone(),
+                });
+            }
+            _ => {}
+        }
+    }
+    info
+}
+
+/// If the final union is a strict superset of a single large alias union, keep that
+/// alias name in the display output and append only the extra members.
+fn large_alias_union_display_name(
+    members: &[Type],
+    alias_union: &LargeAliasUnion,
+) -> Option<Box<str>> {
+    let alias_members: SmallSet<_> = alias_union.members.iter().cloned().collect();
+    if alias_members
+        .iter()
+        .any(|alias_member| !members.contains(alias_member))
+    {
+        return None;
+    }
+    if members.len() <= alias_members.len() {
+        return None;
+    }
+    let extras = members
+        .iter()
+        .filter(|member| !alias_members.contains(*member))
+        .map(|member| member.to_string())
+        .collect::<Vec<_>>();
+    if extras.is_empty() {
+        return None;
+    }
+    Some(format!("{} | {}", alias_union.name, extras.join(" | ")).into_boxed_str())
+}
+
 fn unions_internal(
     xs: Vec<Type>,
     stdlib: Option<&Stdlib>,
     enum_members: Option<&dyn Fn(&Class) -> Option<usize>>,
     heap: &TypeHeap,
 ) -> Type {
+    let alias_union = large_alias_union_info(&xs);
     try_collapse(xs, heap).unwrap_or_else(|xs| {
         let mut res = flatten_and_dedup(xs, heap);
         if let Some(stdlib) = stdlib {
@@ -82,7 +140,16 @@ fn unions_internal(
         collapse_tuple_unions_with_empty(&mut res, heap);
         collapse_builtins_type(&mut res, heap);
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
-        try_collapse(res, heap).unwrap_or_else(|members| heap.mk_union(members))
+        try_collapse(res, heap).unwrap_or_else(|members| {
+            let display_name = alias_union
+                .as_ref()
+                .and_then(|alias_union| large_alias_union_display_name(&members, alias_union));
+            if let Some(name) = display_name {
+                heap.mk_union_with_name(members, name)
+            } else {
+                heap.mk_union(members)
+            }
+        })
     })
 }
 
