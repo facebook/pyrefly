@@ -2258,3 +2258,14 @@ takes_Type_any(Callable) # E: is not assignable to parameter `x` with type `type
 takes_Type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
 "#,
 );
+
+testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/105",
+    test_max,
+    r#"
+def f(x: float):
+    return max(0, x)  # E: No matching overload
+def g(x: float) -> float:
+    return max(0, x)  # E: No matching overload
+    "#,
+);
