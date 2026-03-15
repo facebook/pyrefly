@@ -49,6 +49,7 @@ pub struct Context<'a, Lookup> {
     pub infer_with_first_use: bool,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
+    pub infer_pytest_fixture_types: bool,
     pub recursion_limit_config: Option<RecursionLimitConfig>,
 }
 
@@ -404,6 +405,7 @@ impl Step {
             ctx.infer_with_first_use,
             ctx.tensor_shapes,
             ctx.strict_callable_subtyping,
+            ctx.infer_pytest_fixture_types,
         );
         let enable_index = ctx.require.keep_index();
         let enable_trace = ctx.require.keep_answers_trace();

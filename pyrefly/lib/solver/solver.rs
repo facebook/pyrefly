@@ -328,6 +328,7 @@ pub struct Solver {
     pub heap: TypeHeap,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
+    pub infer_pytest_fixture_types: bool,
 }
 
 impl Display for Solver {
@@ -349,6 +350,7 @@ impl Solver {
         infer_with_first_use: bool,
         tensor_shapes: bool,
         strict_callable_subtyping: bool,
+        infer_pytest_fixture_types: bool,
     ) -> Self {
         Self {
             variables: Default::default(),
@@ -357,6 +359,7 @@ impl Solver {
             heap: TypeHeap::new(),
             tensor_shapes,
             strict_callable_subtyping,
+            infer_pytest_fixture_types,
         }
     }
 

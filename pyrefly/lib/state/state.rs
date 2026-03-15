@@ -1101,6 +1101,8 @@ impl<'a> Transaction<'a> {
                 tensor_shapes: config.tensor_shapes(module_data.handle.path().as_path()),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(module_data.handle.path().as_path()),
+                infer_pytest_fixture_types: config
+                    .infer_pytest_fixture_types(module_data.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
             };
 
@@ -1996,6 +1998,8 @@ impl<'a> Transaction<'a> {
                 tensor_shapes: config.tensor_shapes(m.handle.path().as_path()),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(m.handle.path().as_path()),
+                infer_pytest_fixture_types: config
+                    .infer_pytest_fixture_types(m.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
             };
             while let Some(step) = alt.next_step() {

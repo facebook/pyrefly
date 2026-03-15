@@ -57,6 +57,7 @@ mod perf;
 mod protocol;
 mod pydantic;
 mod pysa;
+mod pytest;
 mod query;
 mod recursive_alias;
 mod redundant_cast;

@@ -54,6 +54,7 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
+use crate::binding::bindings::PytestFixtureParamHint;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
@@ -496,6 +497,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &mut self_type,
             &mut decorator_param_hints,
             &mut parent_param_hints,
+            class_key,
             errors,
         );
         let mut tparams = self.scoped_type_params(def.type_params.as_deref(), errors);
@@ -895,12 +897,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self_type: &mut Option<Type>,
         decorator_param_hints: &mut Option<DecoratorParamHints>,
         parent_param_hints: &mut Option<ParentParamHints>,
+        class_key: Option<&Idx<KeyClass>>,
         errors: &ErrorCollector,
     ) -> FunctionParamsResult {
         let mut paramspec_args = None;
         let mut paramspec_kwargs = None;
         let mut resolved_param_types = SmallMap::new();
         let mut params = Vec::with_capacity(def.parameters.len());
+        let fixture_hint = |name: &Identifier| {
+            self.bindings()
+                .pytest_fixture_param_hint(def, class_key, name)
+                .map(|hint| match hint {
+                    PytestFixtureParamHint::Any => Type::any_explicit(),
+                    PytestFixtureParamHint::ReturnType(key) => {
+                        let return_ty = self.get(&Key::ReturnType(key)).arc_clone_ty();
+                        if let Some((yield_ty, _, _)) = self.unwrap_generator(&return_ty) {
+                            yield_ty
+                        } else if let Some((yield_ty, _)) =
+                            self.decompose_async_generator(&return_ty)
+                        {
+                            yield_ty
+                        } else if let Some((_, _, coroutine_return_ty)) =
+                            self.unwrap_coroutine(&return_ty)
+                        {
+                            coroutine_return_ty
+                        } else {
+                            return_ty
+                        }
+                    }
+                })
+        };
         params.extend(def.parameters.posonlyargs.iter().map(|x| {
             let decorator_hint = decorator_param_hints
                 .as_mut()
@@ -912,6 +938,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .as_mut()
                     .and_then(|hint| hint.take_posonly())
             };
+            let fixture_hint = fixture_hint(&x.parameter.name);
             let ParamTypeResult {
                 ty,
                 required,
@@ -921,7 +948,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                decorator_hint.or(parent_hint),
+                decorator_hint.or(parent_hint).or(fixture_hint),
                 errors,
             );
             if is_unannotated {
@@ -946,6 +973,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .as_mut()
                     .and_then(|hint| hint.take_positional())
             };
+            let fixture_hint = fixture_hint(&x.parameter.name);
             let ParamTypeResult {
                 ty,
                 required,
@@ -955,7 +983,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                decorator_hint.or(parent_hint),
+                decorator_hint.or(parent_hint).or(fixture_hint),
                 errors,
             );
             if is_unannotated {
@@ -1027,6 +1055,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let parent_hint = parent_param_hints
                 .as_mut()
                 .and_then(|hint| hint.take_kwonly(&x.parameter.name));
+            let fixture_hint = fixture_hint(&x.parameter.name);
             let ParamTypeResult {
                 ty,
                 required,
@@ -1036,7 +1065,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                parent_hint,
+                parent_hint.or(fixture_hint),
                 errors,
             );
             if is_unannotated {
