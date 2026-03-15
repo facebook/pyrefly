@@ -108,6 +108,8 @@ pub struct Stdlib {
     builtins_type: StdlibResult<ClassType>,
     /// Introduced in Python 3.10.
     ellipsis_type: Option<StdlibResult<ClassType>>,
+    /// Introduced in Python 3.10.
+    not_implemented_type: Option<StdlibResult<ClassType>>,
     /// Moved from `_typeshed` to `types` in 3.10.
     none_type: StdlibResult<ClassType>,
     function_type: StdlibResult<ClassType>,
@@ -240,6 +242,9 @@ impl Stdlib {
             ellipsis_type: version
                 .at_least(3, 10)
                 .then(|| lookup_concrete(types, "EllipsisType")),
+            not_implemented_type: version
+                .at_least(3, 10)
+                .then(|| lookup_concrete(types, "NotImplementedType")),
             none_type: lookup_concrete(none_location, "NoneType"),
             iterable: lookup_generic(typing, "Iterable", 1),
             async_iterable: lookup_generic(typing, "AsyncIterable", 1),
@@ -345,6 +350,10 @@ impl Stdlib {
 
     pub fn ellipsis_type(&self) -> Option<&ClassType> {
         Some(Self::primitive(self.ellipsis_type.as_ref()?))
+    }
+
+    pub fn not_implemented_type(&self) -> Option<&ClassType> {
+        Some(Self::primitive(self.not_implemented_type.as_ref()?))
     }
 
     pub fn none_type(&self) -> &ClassType {
