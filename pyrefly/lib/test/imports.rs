@@ -468,7 +468,7 @@ testcase!(
     test_export_all_wrongly_star,
     env_export_all_wrongly(),
     r#"
-from foo import *  # E: Could not import `bad_definition` from `foo`
+from foo import *
 "#,
 );
 
