@@ -398,7 +398,7 @@ assert_type(x, list[int])
 testcase!(
     test_empty_container_constructor_call,
     r#"
-from typing import assert_type
+from typing import assert_type, Any
 
 x = list()
 x.append(1)
@@ -410,7 +410,19 @@ assert_type(y, set[int])
 
 z = dict()
 z['k'] = 3
-assert_type(z, dict[str, int])
+assert_type(z, dict[str, Any])
+    "#,
+);
+
+testcase!(
+    test_dict_constructor_vs_literal,
+    r#"
+from typing import assert_type, Any
+
+# dict() goes through construct_class, not dict_items_infer
+a = dict()
+a['k'] = 3
+assert_type(a, dict[str, Any])
     "#,
 );
 
@@ -426,7 +438,7 @@ assert_type(x, list[int])  # E: assert_type(list[Literal[1]], list[int])
 
 y = dict({})
 y['k'] = 3
-assert_type(y, dict[str, int])  # E: assert_type(dict[Literal['k'], Literal[3]], dict[str, int])
+assert_type(y, dict[str, int])  # E: assert_type(dict[Literal['k'], Any], dict[str, int])
     "#,
 );
 

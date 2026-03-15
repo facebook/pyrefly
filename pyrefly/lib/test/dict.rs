@@ -32,10 +32,10 @@ def test(cond: bool):
 testcase!(
     test_unpack_empty,
     r#"
-from typing import assert_type
+from typing import assert_type, Any
 x = {**{}}
 x['x'] = 0
-assert_type(x, dict[str, int])
+assert_type(x, dict[str, Any])
     "#,
 );
 
