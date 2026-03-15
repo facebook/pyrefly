@@ -1557,6 +1557,26 @@ def test_union(x: A  | B):
 );
 
 testcase!(
+    test_unbound_method_call_on_type_union_type_parameter,
+    r#"
+from typing import Any, assert_type
+
+class ResultWrapper:
+    render_result: str | None = None
+
+def gen_result_wrapper(kls: type[dict | list | set]) -> type:
+    class Wrapper(kls, ResultWrapper):  # type: ignore
+        def __str__(self) -> str:
+            if self.render_result is None:
+                assert_type(kls.__str__(self), str)
+                return kls.__str__(self)
+            return self.render_result
+
+    return Wrapper
+"#,
+);
+
+testcase!(
     bug = "type[ClassDef(..)] and type[ClassType(..)] should be type (or the direct metaclass?)",
     test_attribute_access_on_type_class,
     r#"
