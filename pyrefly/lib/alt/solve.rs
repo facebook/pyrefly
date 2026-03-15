@@ -2295,7 +2295,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 is_explicit,
                 ..
             } => {
-                let (annot, ty) = self.name_assign_infer(name, annot_key.as_ref(), expr, errors);
+                let (annot, ty) =
+                    self.name_assign_infer(name, annot_key.as_ref(), expr, None, errors);
                 if let Some(annot) = &annot
                     && let Some((AnnotationStyle::Forwarded, _)) = annot_key
                 {
@@ -3104,6 +3105,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         annot_key: Option<&(AnnotationStyle, Idx<KeyAnnotation>)>,
         expr: &Expr,
+        class_key: Option<Idx<KeyClass>>,
         errors: &ErrorCollector,
     ) -> (Option<Arc<AnnotationWithTarget>>, Type) {
         match annot_key {
@@ -3119,7 +3121,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let annot_ty = annot.ty(self.heap, self.stdlib);
                 let hint = annot_ty.as_ref().map(|t| (t, tcc));
                 let expr_ty = self.expr(expr, hint, errors);
-                let ty = if style == &AnnotationStyle::Direct {
+                let ty = if matches!(annot.target, AnnotationTarget::ClassMember(_))
+                    && self.is_dataclass_field_specifier_assignment(class_key, expr)
+                {
+                    // Inside a class body, field specifiers like `attrs.field()` are runtime
+                    // field objects, even when their stubs lie about returning the annotated type.
+                    // Model those reads as `Any` so decorator surfaces like `.validator` resolve.
+                    self.heap.mk_any_implicit()
+                } else if style == &AnnotationStyle::Direct {
                     // For direct assignments, user-provided annotation takes
                     // precedence over inferred expr type.
                     annot_ty.unwrap_or(expr_ty)
@@ -3140,6 +3149,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn is_dataclass_field_specifier_assignment(
+        &self,
+        class_key: Option<Idx<KeyClass>>,
+        expr: &Expr,
+    ) -> bool {
+        let Some(class_key) = class_key else {
+            return false;
+        };
+        let Expr::Call(call) = expr else {
+            return false;
+        };
+        let class = self.get_idx(class_key);
+        let Some(cls) = &class.as_ref().0 else {
+            return false;
+        };
+        let metadata = self.get_metadata_for_class(cls);
+        let Some(dataclass) = metadata.dataclass_metadata() else {
+            return false;
+        };
+        self.compute_dataclass_field_initialization(call, dataclass)
+            .is_some()
+    }
+
     /// Handle `Binding::NameAssign` - process name assignment with optional annotation.
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
     #[inline(never)]
@@ -3148,11 +3180,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         annot_key: Option<(AnnotationStyle, Idx<KeyAnnotation>)>,
         expr: &Expr,
+        class_key: Option<Idx<KeyClass>>,
         legacy_tparams: &Option<Box<[Idx<KeyLegacyTypeParam>]>>,
         is_in_function_scope: bool,
         errors: &ErrorCollector,
     ) -> Type {
-        let (annot, ty) = self.name_assign_infer(name, annot_key.as_ref(), expr, errors);
+        let (annot, ty) = self.name_assign_infer(name, annot_key.as_ref(), expr, class_key, errors);
         if let Some(annot) = &annot
             && let Some((AnnotationStyle::Forwarded, _)) = annot_key
         {
@@ -4695,6 +4728,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &x.name,
                 x.annotation,
                 &x.expr,
+                x.class_key,
                 &x.legacy_tparams,
                 x.is_in_function_scope,
                 errors,

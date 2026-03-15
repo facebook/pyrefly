@@ -540,6 +540,10 @@ impl<'a> BindingsBuilder<'a> {
                 name: name.id.clone(),
                 annotation: ann,
                 expr: value,
+                class_key: self
+                    .scopes
+                    .current_class_and_metadata_keys()
+                    .map(|(class_key, _)| class_key),
                 legacy_tparams: tparams,
                 is_in_function_scope: self.scopes.in_function_scope(),
                 first_use: FirstUse::Undetermined,
