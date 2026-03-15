@@ -160,7 +160,7 @@ pub(crate) fn emit_stmt(
                 }
                 out.push_str(indent);
                 out.push_str(id.as_str());
-                out.push_str(": Any = ...\n");
+                out.push_str(": Incomplete = ...\n");
                 return true;
             }
             false
@@ -363,21 +363,19 @@ fn emit_class(
     }
 }
 
-/// Check whether a statement will produce a literal `Any` token in its
-/// stub output, so we know to add `from typing import Any` at the top.
+/// Check whether a statement will produce an `Incomplete` token in its
+/// stub output, so we know to add `from _typeshed import Incomplete`.
 ///
-/// Only unannotated `Assign` statements produce `x: Any = ...`; functions
-/// with missing annotations are emitted without `Any` (parameters are left
-/// bare, return types are omitted).
-pub(crate) fn stmt_uses_any(stmt: &Stmt) -> bool {
+/// Only unannotated `Assign` statements produce `x: Incomplete = ...`;
+/// functions with missing annotations are emitted without `Incomplete`
+/// (parameters are left bare, return types are omitted).
+pub(crate) fn stmt_uses_incomplete(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Assign(assign) => {
             if let [Expr::Name(ExprName { id, .. })] = assign.targets.as_slice() {
                 if id.as_str() == "__all__" {
                     return false;
                 }
-                // TypeVar calls and type-alias subscripts are emitted verbatim
-                // and don't need the `Any` import.
                 if is_type_var_call(&assign.value) || is_type_alias_value(&assign.value) {
                     return false;
                 }
@@ -386,7 +384,7 @@ pub(crate) fn stmt_uses_any(stmt: &Stmt) -> bool {
                 false
             }
         }
-        Stmt::ClassDef(class) => class.body.iter().any(stmt_uses_any),
+        Stmt::ClassDef(class) => class.body.iter().any(stmt_uses_incomplete),
         _ => false,
     }
 }

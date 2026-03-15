@@ -26,7 +26,7 @@ use crate::export::definitions::Definitions;
 use crate::stubgen::emit::collect_overloaded_names;
 use crate::stubgen::emit::emit_stmt;
 use crate::stubgen::emit::is_overload_impl;
-use crate::stubgen::emit::stmt_uses_any;
+use crate::stubgen::emit::stmt_uses_incomplete;
 use crate::stubgen::visibility::VisibilityFilter;
 
 /// Options controlling stub generation.
@@ -51,7 +51,7 @@ pub fn generate_stub(source: &str, module_name: &str, options: &StubgenOptions) 
     let overloaded = collect_overloaded_names(&ast.body);
 
     let mut out = String::new();
-    let mut needs_any_import = false;
+    let mut needs_incomplete_import = false;
     let mut last_emitted_class = false;
 
     for stmt in &ast.body {
@@ -68,14 +68,16 @@ pub fn generate_stub(source: &str, module_name: &str, options: &StubgenOptions) 
             if (is_class || last_emitted_class) && pos_before > 0 {
                 out.insert(pos_before, '\n');
             }
-            needs_any_import = needs_any_import || stmt_uses_any(stmt);
+            needs_incomplete_import = needs_incomplete_import || stmt_uses_incomplete(stmt);
             last_emitted_class = is_class;
         }
     }
 
-    // Prepend `from typing import Any` if we emitted any `Any` placeholders.
-    if needs_any_import {
-        let mut header = String::from("from typing import Any\n");
+    // Prepend `from _typeshed import Incomplete` if we emitted any
+    // `Incomplete` placeholders for unannotated assignments.
+    // (https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs)
+    if needs_incomplete_import {
+        let mut header = String::from("from _typeshed import Incomplete\n");
         if !out.is_empty() {
             header.push('\n');
         }
@@ -179,7 +181,10 @@ mod tests {
     #[test]
     fn test_unannotated_variable() {
         let result = stub("x = 42\n");
-        assert_eq!(result, "from typing import Any\n\nx: Any = ...\n");
+        assert_eq!(
+            result,
+            "from _typeshed import Incomplete\n\nx: Incomplete = ...\n"
+        );
     }
 
     #[test]
@@ -419,4 +424,5 @@ class Foo:
         let result = stub("def foo(x: 'ForwardRef') -> 'ForwardRef':\n    pass\n");
         assert_eq!(result, "def foo(x: 'ForwardRef') -> 'ForwardRef': ...\n");
     }
+
 }
