@@ -1279,6 +1279,8 @@ impl<'a> BindingsBuilder<'a> {
                 Usage::StaticTypeInformation | Usage::TypeAliasRhs
             ) {
                 self.mark_does_not_pin_if_first_use(def_idx);
+            } else if matches!(deferred.usage, Usage::NonPinningRead(_)) {
+                // Intentionally avoid consuming first-use inference for reveal_type-style reads.
             } else if !is_narrowing {
                 // Normal reads: if this is the first use, mark it.
                 if matches!(first_use, FirstUse::Undetermined)

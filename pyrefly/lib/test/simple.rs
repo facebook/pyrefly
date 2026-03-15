@@ -542,6 +542,17 @@ reveal_type(f(0))  # E: revealed type: int
 );
 
 testcase!(
+    test_reveal_type_does_not_pin_partial,
+    r#"
+from typing import reveal_type
+x = []
+reveal_type(x)  # E: revealed type: list[@_]
+x.append(1)
+reveal_type(x)  # E: revealed type: list[int]
+    "#,
+);
+
+testcase!(
     test_forward_refs_in_bases,
     r#"
 from typing import assert_type, Any
@@ -2100,7 +2111,7 @@ testcase!(
     r#"
 from typing import reveal_type
 f1 = lambda x, *args, **kwargs: x
-reveal_type(f1) # E: revealed type: (x: Unknown, *args: Unknown, **kwargs: Unknown) -> Unknown
+reveal_type(f1) # E: revealed type: (x: @_, *args: @_, **kwargs: @_) -> @_
     "#,
 );
 
