@@ -235,6 +235,25 @@ def func2(a: T2) -> T2:
 );
 
 testcase!(
+    test_bounded_typevar_covariant_iterator_assignment,
+    r#"
+from typing import Iterator
+
+class NumberStream[_R: int]:
+    def __init__(self, start: _R) -> None:
+        self._val = start
+
+    def __iter__(self) -> Iterator[_R]:
+        return iter([self._val])
+
+    def __next__(self) -> _R:
+        return self._val
+
+stream: Iterator[int | None] = NumberStream(start=0)
+ "#,
+);
+
+testcase!(
     test_bounded_typevar_attribute_access,
     r#"
 from typing import TypeVar, assert_type
