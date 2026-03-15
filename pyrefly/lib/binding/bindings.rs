@@ -1287,10 +1287,9 @@ impl<'a> BindingsBuilder<'a> {
                     self.mark_first_use(def_idx, current_idx);
                 }
             } else {
-                // Narrowing or other reads: mark as DoesNotPin if still undetermined.
-                if matches!(first_use, FirstUse::Undetermined) {
-                    self.mark_does_not_pin_if_first_use(def_idx);
-                }
+                // Narrowing reads should not pin partial types, but they also should not
+                // consume first-use inference. A later ordinary read may still determine the
+                // type, such as `if key not in seen: seen.add(key)`.
             }
 
             // All partial type reads forward to the NameAssign (def_idx).
