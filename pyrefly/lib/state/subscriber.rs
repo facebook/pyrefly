@@ -201,3 +201,38 @@ where
         (self.publish_callback)(transaction, handle, exports_changed);
     }
 }
+
+/// A subscriber that forwards all events to each of its inner subscribers.
+pub struct CompositeSubscriber<'a> {
+    subscribers: Vec<Box<dyn Subscriber + 'a>>,
+}
+
+impl<'a> CompositeSubscriber<'a> {
+    pub fn new(subscribers: Vec<Box<dyn Subscriber + 'a>>) -> Self {
+        assert!(
+            !subscribers.is_empty(),
+            "CompositeSubscriber requires at least one subscriber"
+        );
+        Self { subscribers }
+    }
+}
+
+impl<'a> Subscriber for CompositeSubscriber<'a> {
+    fn start_work(&self, handle: &Handle) {
+        for subscriber in &self.subscribers {
+            subscriber.start_work(handle);
+        }
+    }
+
+    fn finish_work(
+        &self,
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        result: &Arc<Load>,
+        exports_changed: bool,
+    ) {
+        for subscriber in &self.subscribers {
+            subscriber.finish_work(transaction, handle, result, exports_changed);
+        }
+    }
+}
