@@ -3118,7 +3118,47 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 let annot_ty = annot.ty(self.heap, self.stdlib);
                 let hint = annot_ty.as_ref().map(|t| (t, tcc));
-                let expr_ty = self.expr(expr, hint, errors);
+                let expr_ty = if style == &AnnotationStyle::Forwarded
+                    && annot_ty.as_ref().is_some_and(|ann| ann.is_union())
+                    && matches!(expr, Expr::Call(_))
+                {
+                    // For forwarded assignments (reassignment to an annotated variable),
+                    // first try inferring without the annotation hint. The annotation
+                    // may be broader than the current narrowed type (e.g. `int | float | None`
+                    // when the variable has been narrowed to `int | float`), and using it
+                    // as a hint can artificially broaden the inferred type by pre-constraining
+                    // type variables during overload resolution.
+                    // For more see: https://github.com/facebook/pyrefly/issues/2592.
+                    // Strategy:
+                    // 1. Run a single unhinted inference to get a
+                    //    candidate type (unhinted_ty).
+                    // 2. If that candidate is imprecise (contains Any or unresolved
+                    //    quantified/type variables), use the annotation as a hint (and
+                    //    report errors) to produce a more stable result.
+                    // 3. Otherwise, if the candidate is assignable to the annotation, we
+                    //    accept it directly (no re-run inference), which in turn avoids a
+                    //    second call to expr().
+                    let unhinted_ty = self.expr(expr, None, errors);
+
+                    // if the unhinted result is imprecise, fall back to hinted inference.
+                    if unhinted_ty.is_any()
+                        || unhinted_ty.is_never()
+                        || unhinted_ty.contains_type_variable()
+                        || unhinted_ty.may_contain_quantified_var()
+                    {
+                        self.expr(expr, hint, errors)
+                    } else if annot_ty
+                        .as_ref()
+                        .is_some_and(|ann| self.is_subset_eq(&unhinted_ty, ann))
+                    {
+                        // accept the precise unhinted result without re-running inference.
+                        unhinted_ty
+                    } else {
+                        self.expr(expr, hint, errors)
+                    }
+                } else {
+                    self.expr(expr, hint, errors)
+                };
                 let ty = if style == &AnnotationStyle::Direct {
                     // For direct assignments, user-provided annotation takes
                     // precedence over inferred expr type.
