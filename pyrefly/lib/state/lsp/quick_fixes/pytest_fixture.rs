@@ -283,7 +283,7 @@ fn import_edits_for_type(
         else {
             return;
         };
-        let (position, insert_text, _) = insert_import_edit(
+        let import_edit = insert_import_edit(
             ast,
             transaction.config_finder(),
             handle.dupe(),
@@ -291,6 +291,8 @@ fn import_edits_for_type(
             qname.id().as_str(),
             import_format,
         );
+        let position = import_edit.range.start();
+        let insert_text = import_edit.new_text;
         if module_contents.contains(&insert_text) {
             return;
         }
