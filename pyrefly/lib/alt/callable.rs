@@ -552,7 +552,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .filter_map(|kw| kw.arg.map(|id| &id.id))
             .collect();
 
-        let iargs = self_arg.iter().chain(args.iter());
+        let iargs: Vec<CallArg<'_>> = self_arg
+            .iter()
+            .cloned()
+            .chain(args.iter().cloned())
+            .collect();
+        let empty_params = ParamList::new(Vec::new());
         // Creates a reversed copy of the parameters that we iterate through from back to front,
         // so that we can easily peek at and pop from the end.
         let mut rparams: Vec<&Param> = params.items().iter().rev().collect::<Vec<_>>();
@@ -565,28 +570,72 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut variadic_name: Option<&Name> = None;
         let mut variadic_collected: Vec<Type> = Vec::new();
 
-        let var_to_rparams = |var| {
-            let ps = match self.solver().force_var(var) {
-                Type::ParamSpecValue(ps) => ps,
-                Type::Any(_) | Type::Ellipsis => ParamList::everything(),
-                Type::Concatenate(prefix, _) => {
-                    // TODO: handle second component of Type::Concatenate
-                    let ps = ParamList::everything();
-                    ps.prepend_types(&prefix).into_owned()
-                }
-                t => {
+        let try_match_quantified_paramspec =
+            |q: &Quantified,
+             remaining_args: &[CallArg<'_>],
+             bound_args: &mut Option<HashMap<String, Type>>| {
+                if !remaining_args
+                    .last()
+                    .is_some_and(|x| self.is_param_spec_args(x, q, arg_errors))
+                    || !keywords
+                        .last()
+                        .is_some_and(|x| self.is_param_spec_kwargs(x, q, arg_errors))
+                {
                     error(
                         call_errors,
                         arguments_range,
-                        ErrorKind::BadArgumentType,
-                        format!("Expected `{}` to be a ParamSpec value", self.for_display(t)),
+                        ErrorKind::InvalidParamSpec,
+                        format!(
+                            "Expected *-unpacked {}.args and **-unpacked {}.kwargs",
+                            q.name(),
+                            q.name()
+                        ),
                     );
-                    ParamList::everything()
+                } else {
+                    self.callable_infer_params(
+                        callable_name,
+                        &empty_params,
+                        None,
+                        None,
+                        &remaining_args[..remaining_args.len() - 1],
+                        &keywords[..keywords.len() - 1],
+                        arguments_range,
+                        arg_errors,
+                        call_errors,
+                        context,
+                        bound_args,
+                    );
                 }
             };
-            param_list_owner.push(ps).items().iter().rev().collect()
-        };
-        for arg in iargs {
+        let var_to_rparams =
+            |var,
+             remaining_args: &[CallArg<'_>],
+             bound_args: &mut Option<HashMap<String, Type>>| {
+                let ps = match self.solver().force_var(var) {
+                    Type::ParamSpecValue(ps) => ps,
+                    Type::Any(_) | Type::Ellipsis => ParamList::everything(),
+                    Type::Concatenate(prefix, _) => {
+                        // TODO: handle second component of Type::Concatenate
+                        let ps = ParamList::everything();
+                        ps.prepend_types(&prefix).into_owned()
+                    }
+                    Type::Quantified(q) if q.is_param_spec() => {
+                        try_match_quantified_paramspec(&q, remaining_args, bound_args);
+                        return None;
+                    }
+                    t => {
+                        error(
+                            call_errors,
+                            arguments_range,
+                            ErrorKind::BadArgumentType,
+                            format!("Expected `{}` to be a ParamSpec value", self.for_display(t)),
+                        );
+                        ParamList::everything()
+                    }
+                };
+                Some(param_list_owner.push(ps).items().iter().rev().collect())
+            };
+        for (arg_idx, arg) in iargs.iter().enumerate() {
             let mut arg_pre = arg.pre_eval(self, arg_errors);
             while arg_pre.step() {
                 let param = if let Some(p) = rparams.last() {
@@ -595,7 +644,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // We've run out of parameters but haven't finished matching arguments. If we
                     // have a ParamSpec Var, it may contribute more parameters; force it and tack
                     // the result onto the parameter list.
-                    rparams = var_to_rparams(var);
+                    let Some(new_rparams) = var_to_rparams(var, &iargs[arg_idx..], bound_args)
+                    else {
+                        return;
+                    };
+                    rparams = new_rparams;
                     paramspec = None;
                     continue;
                 } else {
@@ -791,7 +844,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(p) => p,
                 None if let Some(var) = paramspec => {
                     // We've reached the end of our regular parameter list. Now check if we have more parameters from a ParamSpec.
-                    rparams = var_to_rparams(var);
+                    let Some(new_rparams) = var_to_rparams(var, &[], bound_args) else {
+                        return;
+                    };
+                    rparams = new_rparams;
                     paramspec = None;
                     continue;
                 }
