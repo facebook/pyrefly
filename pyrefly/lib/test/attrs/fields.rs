@@ -8,7 +8,6 @@
 use crate::attrs_testcase;
 
 attrs_testcase!(
-    bug = "Correctly recognize field and default decorator",
     field_default_decorator,
     r#"
 from attrs import define, field
@@ -17,11 +16,11 @@ from attrs import define, field
 class C:
     a: dict = field()
 
-    @a.default # E: Object of class `dict` has no attribute `default`
+    @a.default
     def _default_a(self):
         return {}
 
-c = C() # E: Missing argument `a` in function `C.__init__`
+c = C()
 "#,
 );
 
