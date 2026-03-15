@@ -424,5 +424,4 @@ class Foo:
         let result = stub("def foo(x: 'ForwardRef') -> 'ForwardRef':\n    pass\n");
         assert_eq!(result, "def foo(x: 'ForwardRef') -> 'ForwardRef': ...\n");
     }
-
 }
