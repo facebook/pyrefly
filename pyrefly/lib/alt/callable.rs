@@ -36,6 +36,7 @@ use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::call::TargetWithTParams;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::solve::Iterable;
 use crate::alt::unwrap::HintRef;
@@ -48,11 +49,13 @@ use crate::error::context::TypeCheckKind;
 use crate::error::display::function_suffix;
 use crate::solver::solver::QuantifiedHandle;
 use crate::types::callable::Callable;
+use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
+use crate::types::types::OverloadType;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -551,6 +554,109 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter_map(|kw| kw.arg.map(|id| &id.id))
             .collect();
+
+        if let Some(paramspec_var) = paramspec
+            && self_arg.is_none()
+            && params.items().len() == 1
+            && (args.len() > 1 || !keywords.is_empty())
+        {
+            let first_param = params.items().first().unwrap();
+            if let Some((param_name, param_ty)) = match first_param {
+                Param::PosOnly(name, ty, _) => Some((name.as_ref(), ty)),
+                Param::Pos(name, ty, _) => Some((Some(name), ty)),
+                _ => None,
+            } {
+                let has_param_name_kw = param_name.is_some_and(|n| keyword_arg_names.contains(n));
+                let matches_callable_paramspec = match param_ty {
+                    Type::Callable(box Callable {
+                        params: Params::ParamSpec(prefix, pspec),
+                        ..
+                    }) if prefix.is_empty() => {
+                        matches!(pspec, Type::Var(v) if *v == paramspec_var)
+                    }
+                    Type::Function(box Function {
+                        signature:
+                            Callable {
+                                params: Params::ParamSpec(prefix, pspec),
+                                ..
+                            },
+                        ..
+                    }) if prefix.is_empty() => matches!(pspec, Type::Var(v) if *v == paramspec_var),
+                    _ => false,
+                };
+                let arg_ty = match args.first() {
+                    Some(CallArg::Arg(TypeOrExpr::Type(ty, _))) => Some((*ty).clone()),
+                    Some(CallArg::Arg(TypeOrExpr::Expr(expr))) => {
+                        Some(self.expr_infer(expr, arg_errors))
+                    }
+                    _ => None,
+                };
+                if !has_param_name_kw
+                    && matches_callable_paramspec
+                    && let Some(Type::Overload(overload)) = arg_ty
+                    && overload.signatures.iter().all(|sig| match sig {
+                        OverloadType::Function(func) => {
+                            matches!(func.signature.params, Params::List(_))
+                        }
+                        OverloadType::Forall(forall) => {
+                            matches!(forall.body.signature.params, Params::List(_))
+                        }
+                    })
+                {
+                    let overload_for_call = overload.clone();
+                    let overload_type = Type::Overload(overload);
+                    let overloads = overload_for_call.signatures.mapped(|sig| match sig {
+                        OverloadType::Function(func) => TargetWithTParams(None, func),
+                        OverloadType::Forall(forall) => {
+                            TargetWithTParams(Some(forall.tparams), forall.body)
+                        }
+                    });
+                    let (ret, chosen_sig) = self.call_overloads(
+                        overloads,
+                        &overload_for_call.metadata,
+                        None,
+                        &args[1..],
+                        keywords,
+                        arguments_range,
+                        call_errors,
+                        context,
+                        None,
+                        None,
+                    );
+                    if !ret.is_error()
+                        && let Params::List(chosen_params) = &chosen_sig.params
+                    {
+                        let tcc = &|| TypeCheckContext {
+                            kind: TypeCheckKind::CallArgument(
+                                param_name.cloned(),
+                                callable_name.cloned(),
+                            ),
+                            context: context.map(|ctx| ctx()),
+                        };
+                        self.check_type(
+                            &self.heap.mk_param_spec_value(chosen_params.clone()),
+                            &Type::Var(paramspec_var),
+                            arguments_range,
+                            call_errors,
+                            tcc,
+                        );
+                        self.check_type(
+                            &overload_type,
+                            param_ty,
+                            args[0].range(),
+                            call_errors,
+                            tcc,
+                        );
+                        if let Some(name) = param_name
+                            && bound_args.is_some()
+                        {
+                            record(bound_args, name, overload_type);
+                        }
+                    }
+                    return;
+                }
+            }
+        }
 
         let iargs = self_arg.iter().chain(args.iter());
         // Creates a reversed copy of the parameters that we iterate through from back to front,

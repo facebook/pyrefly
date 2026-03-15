@@ -122,6 +122,23 @@ def test(f1: Callable[[int], None] | Callable[[str], None]):
 );
 
 testcase!(
+    test_paramspec_overload_resolution,
+    r#"
+import atexit
+from typing import overload
+
+@overload
+def f(x: int) -> None: ...
+@overload
+def f(x: str, message: str) -> None: ...
+
+def f(x, message=None): ...
+
+atexit.register(f, "foo", "bar")
+"#,
+);
+
+testcase!(
     test_function_concatenate,
     r#"
 from typing import Callable, ParamSpec, Concatenate
