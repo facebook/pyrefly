@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::iter::once;
+
 use dupe::Dupe;
 use num_traits::ToPrimitive;
 use pyrefly_config::error_kind::ErrorKind;
@@ -149,10 +151,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Tuple::Unbounded(elt) => self.membership_narrow_type(elt),
             Tuple::Unpacked(unpacked) => {
-                let (prefix, middle, suffix) = unpacked.as_ref();
+                let (prefix, middle, suffix) = unpacked.parts();
                 let members: Option<Vec<_>> = prefix
                     .iter()
-                    .chain(std::iter::once(middle))
+                    .chain(once(middle))
                     .chain(suffix.iter())
                     .map(|elt| self.membership_narrow_type(elt))
                     .collect();
