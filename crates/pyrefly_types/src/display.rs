@@ -234,12 +234,14 @@ impl<'a> TypeDisplayContext<'a> {
     }
 
     pub(crate) fn fmt_targs(&self, targs: &TArgs, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if !targs.is_empty() {
+        let display_count = targs.display_count();
+        if display_count > 0 {
             write!(
                 f,
                 "[{}]",
                 commas_iter(|| targs
                     .iter_paired()
+                    .take(display_count)
                     .map(|(param, arg)| Fmt(|f| self.fmt_targ(param, arg, f))))
             )
         } else {
@@ -871,8 +873,22 @@ impl<'a> TypeDisplayContext<'a> {
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
+            Type::Annotated(ty) => {
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("Annotated");
+                output.write_builtin("Annotated", qname)?;
+                output.write_str("[")?;
+                self.fmt_helper_generic(ty, false, output)?;
+                output.write_str("]")
+            }
             Type::Unpack(box ty @ Type::TypedDict(_)) => {
-                self.maybe_fmt_with_module("typing", "Unpack", output)?;
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("Unpack");
+                output.write_builtin("Unpack", qname)?;
                 output.write_str("[")?;
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
@@ -1209,6 +1225,7 @@ pub mod tests {
                     class.dupe().module().dupe(),
                     class.dupe(),
                     Name::new(method_name),
+                    None,
                 ),
             }),
         }))
@@ -1251,6 +1268,7 @@ pub mod tests {
                         class.dupe().module().dupe(),
                         class.dupe(),
                         Name::new(method_name),
+                        None,
                     ),
                 },
             }),
@@ -1841,6 +1859,7 @@ pub mod tests {
                 class.dupe().module().dupe(),
                 class.dupe(),
                 Name::new_static("overloaded_func"),
+                None,
             ),
         };
 
@@ -1864,6 +1883,7 @@ pub mod tests {
                 class.dupe().module().dupe(),
                 class.dupe(),
                 Name::new_static("overloaded_func"),
+                None,
             ),
         };
 

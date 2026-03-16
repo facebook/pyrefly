@@ -81,6 +81,17 @@ assert_type(x, list[Literal[4]])
 "#,
 );
 
+testcase!(
+    test_empty_list_append_pow,
+    r#"
+from typing import assert_type
+def f(a: int, b: int, c: int) -> None:
+    x = []
+    x.append(pow(a, b, c))
+    assert_type(x, list[int])
+"#,
+);
+
 // NOTE(grievejia): There's also an argument to be made that `y` should be inferred as
 // `list[int] | list[Any]`, and `e` inferred as `int | Any`. The test case here is to ensure
 // that if we ever want to take the alternative behavior, an explicit acknowledgement (of
@@ -382,4 +393,107 @@ for i in range(5):
     y = len(x)  # secondary read of x, doesn't reassign
 assert_type(x, list[int])
 "#,
+);
+
+testcase!(
+    test_empty_container_constructor_call,
+    r#"
+from typing import assert_type
+
+x = list()
+x.append(1)
+assert_type(x, list[int])
+
+y = set()
+y.add(2)
+assert_type(y, set[int])
+
+z = dict()
+z['k'] = 3
+assert_type(z, dict[str, int])
+    "#,
+);
+
+testcase!(
+    bug = "Container contents should be promoted",
+    test_redundant_empty_container_constructor_call,
+    r#"
+from typing import assert_type
+
+x = list([])
+x.append(1)
+assert_type(x, list[int])  # E: assert_type(list[Literal[1]], list[int])
+
+y = dict({})
+y['k'] = 3
+assert_type(y, dict[str, int])  # E: assert_type(dict[Literal['k'], Literal[3]], dict[str, int])
+    "#,
+);
+
+testcase!(
+    test_container_of_unknown_function_parameter,
+    r#"
+from typing import Any, assert_type
+def f(a):
+    x = list(a)
+    x.append(1)
+    assert_type(x, list[Any])
+
+    y = set(a)
+    y.add(2)
+    assert_type(y, set[Any])
+
+    z = dict(a)
+    z['k'] = 3
+    assert_type(z, dict[Any, Any])
+    "#,
+);
+
+testcase!(
+    test_partial_quantified_in_function,
+    r#"
+from typing import assert_type
+
+def f[T](x: T | None) -> list[T]: ...
+
+x = f(None)
+x.append(5)
+assert_type(x, list[int])
+    "#,
+);
+
+testcase!(
+    test_partial_quantified_in_class_constructor,
+    r#"
+from typing import assert_type
+
+class A[T]:
+    def __new__[T2](cls, x: T2 | None) -> A[T2]: ...
+    def add(self, x: T): ...
+
+a = A(None)
+a.add(5)
+assert_type(a, A[int])
+    "#,
+);
+
+testcase!(
+    test_should_not_infer_on_first_use_if_solved_to_any,
+    r#"
+from typing import Any, assert_type
+
+def f[T](x: list[T]) -> list[T]:
+    return x
+
+def g(x: Any):
+    y = f(x)
+    y.append(1)
+    assert_type(y, list[Any])
+
+# Make sure Any::Error behaves the same way as Any::Explicit
+def h(x: ThisIsANameError):  # E: Could not find name
+    y = f(x)
+    y.append(1)
+    assert_type(y, list[Any])
+    "#,
 );

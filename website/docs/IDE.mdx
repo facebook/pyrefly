@@ -34,6 +34,8 @@ Want type error squiggles to show up in your editor by default? Try setting `pyt
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
 
 The following configuration options are IDE-specific and exposed as VSCode settings:
+- Diagnostic mode
+  - `python.pyrefly.diagnosticMode` [enum: openFilesOnly, workspace]: Controls the scope of Pyrefly's diagnostic analysis. When set to `'openFilesOnly'` (default), diagnostics are only computed for files currently open in the editor. When set to `'workspace'`, Pyrefly publishes diagnostics for all files in a project once any file from that project is opened. Projects are identified through pyrefly config files (`pyrefly.toml` or `pyproject.toml` with `[tool.pyrefly]`) discovered by the normal upward config search. Files not covered by any explicit pyrefly config are not included.
 - Disable all language services
   - `python.pyrefly.disableLanguageServices` [boolean: false]: By default, Pyrefly will provide both type errors and other language features like go-to definition, intellisense, hover, etc. Set `disableLanguageServices` to `true` to keep type errors from Pyrefly unchanged but use VSCode's Python extension for everything else.
 - Disable certain language services
@@ -255,7 +257,7 @@ require("mason-lspconfig").setup {
             settings = {
                 python = {
                     pyrefly = {
-                        displayTypeError = 'force-on'
+                        displayTypeErrors = 'force-on'
                     }
                 }
             }
@@ -373,9 +375,23 @@ See the documentation [here](https://lsp.sublimetext.io/language_servers/#pyrefl
 
 Positron comes with Pyrefly out of the box. See the documentation [here](https://positron.posit.co/guide-python.html#settings).
 
+### Marimo
+
+Pyrefly provides language services to [Marimo notebooks](https://marimo.io/). See
+[Language Server Protocol](https://docs.marimo.io/guides/editor_features/language_server/#pyrefly) for how to enable it.
+
 ### Jupyter Lab
 
 Pyrefly may be used in Jupyter Lab through the [jupyterlab-lsp](https://jupyterlab-lsp.readthedocs.io/en/latest/Installation.html) extension.
+Once the extension is installed, Pyrefly will appear on the list of automatically-detected language servers.
+
+:::tip
+Unlike in VS Code, autocomplete in Jupyter Lab is not automatically-triggered as you type. To enable this, enable Code Completion & Continuous Completions in the Jupyter Lab Settings.
+
+Out of the box, Jupyter Lab's go-to-definition will not navigate to dependencies outside of your project. To enable this behavior:
+1. Go to your project directory and run `ln -s / .lsp_symlink`
+2. When launching Jupyter Lab, use `jupyter lab --ContentsManager.allow_hidden=True`
+:::
 
 ### Zed
 

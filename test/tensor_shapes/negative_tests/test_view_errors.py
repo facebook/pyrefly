@@ -5,7 +5,7 @@
 
 """Test view/reshape validation errors"""
 
-from typing import assert_type, reveal_type, TYPE_CHECKING
+from typing import assert_type, TYPE_CHECKING
 
 import torch
 
@@ -23,14 +23,14 @@ def test_multiple_minus_ones():
 def test_incompatible_shape():
     """Incompatible shape with literal dimensions should error"""
     x: Tensor[10, 20] = torch.randn(10, 20)  # 200 elements
-    y = x.view(3, -1)  # ERROR: 200 / 3 is not an integer
+    y = x.view(3, -1)  # ERROR: shape is not compatible with input size
     assert_type(y, Tensor)
 
 
 def test_invalid_dimension_value():
     """Invalid dimension values like -2, -3 should error"""
     x: Tensor[100] = torch.randn(100)
-    y = x.view(-2, 10)  # ERROR: invalid dimension value
+    y = x.view(-2, 10)  # ERROR: invalid negative dimension value (only -1 is allowed)
     assert_type(y, Tensor)
 
 

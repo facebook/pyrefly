@@ -35,9 +35,10 @@
 
 use std::sync::Arc;
 
+use arc_swap::Guard;
 use dupe::Dupe;
-use pyrefly_util::exclusive_lock::ExclusiveLock;
-use pyrefly_util::exclusive_lock::ExclusiveLockGuard;
+use pyrefly_util::lock::Condvar;
+use pyrefly_util::lock::Mutex;
 use ruff_python_ast::ModModule;
 
 use crate::alt::answers::Answers;
@@ -46,7 +47,7 @@ use crate::alt::answers::Solutions;
 use crate::binding::bindings::Bindings;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
-use crate::state::dirty::AtomicDirty;
+use crate::state::dirty::AtomicComputedDirty;
 use crate::state::dirty::Dirty;
 use crate::state::epoch::AtomicEpoch;
 use crate::state::epoch::Epoch;
@@ -84,10 +85,10 @@ impl ModuleState {
         ModuleStateMut {
             steps: StepsMut::from_frozen(&self.steps),
             checked: AtomicEpoch::new(self.epochs.checked),
-            computed: AtomicEpoch::new(self.epochs.computed),
-            dirty: AtomicDirty::new(self.dirty),
+            computed_dirty: AtomicComputedDirty::new(self.epochs.computed, self.dirty),
             require: AtomicRequire::new(self.require),
-            compute_lock: ExclusiveLock::default(),
+            computing: Mutex::new(false),
+            computing_condvar: Condvar::new(),
         }
     }
 }
@@ -100,10 +101,12 @@ impl ModuleState {
 pub struct ModuleStateMut {
     steps: StepsMut,
     checked: AtomicEpoch,
-    computed: AtomicEpoch,
-    pub dirty: AtomicDirty,
+    computed_dirty: AtomicComputedDirty,
     require: AtomicRequire,
-    compute_lock: ExclusiveLock<Step>,
+    /// True when a thread is computing or cleaning this module.
+    computing: Mutex<bool>,
+    /// Signaled when `computing` becomes false.
+    computing_condvar: Condvar,
 }
 
 impl ModuleStateMut {
@@ -111,10 +114,10 @@ impl ModuleStateMut {
         Self {
             steps: StepsMut::new(),
             checked: AtomicEpoch::new(now),
-            computed: AtomicEpoch::new(now),
-            dirty: AtomicDirty::new(Dirty::default()),
+            computed_dirty: AtomicComputedDirty::new(now, Dirty::default()),
             require: AtomicRequire::new(require),
-            compute_lock: ExclusiveLock::default(),
+            computing: Mutex::new(false),
+            computing_condvar: Condvar::new(),
         }
     }
 
@@ -152,6 +155,12 @@ impl ModuleStateMut {
         self.steps.answers.load_full()
     }
 
+    /// Borrow the answers via a Guard, avoiding Arc refcount operations.
+    /// The Guard keeps the data alive without incrementing the Arc refcount.
+    pub fn load_answers(&self) -> Guard<Option<Arc<(Bindings, Arc<Answers>)>>> {
+        self.steps.answers.load()
+    }
+
     pub fn get_solutions(&self) -> Option<Arc<Solutions>> {
         self.steps.solutions.load_full()
     }
@@ -162,48 +171,75 @@ impl ModuleStateMut {
 
     // --- Compute Guards ---
 
-    /// Try to start computing a step. Returns `None` if another thread is
-    /// already computing the same step (or this step is being cleaned).
-    pub fn try_start_compute(&self, step: Step) -> Option<ComputeGuard<'_>> {
-        let exclusive = self.compute_lock.lock(step)?;
-        Some(ComputeGuard {
-            state: self,
-            _exclusive: exclusive,
-        })
+    /// Blocks until `needed` is computed or this thread should make progress
+    /// toward computing it.
+    ///
+    /// Returns `None` when `needed` is already computed.
+    /// Returns `Some(guard)` when this thread should compute the next step.
+    pub fn try_start_compute(&self, needed: Step) -> Option<ComputeGuard<'_>> {
+        let mut computing = self.computing.lock();
+        loop {
+            if let Some(todo) = self.steps.next_step()
+                && todo <= needed
+            {
+                if !*computing {
+                    *computing = true;
+                    return Some(ComputeGuard {
+                        state: self,
+                        todo,
+                        _computing: ComputingFlag { state: self },
+                    });
+                }
+            } else {
+                return None;
+            }
+            computing = self.computing_condvar.wait(computing);
+        }
     }
 
-    /// Try to start clean. Uses `Step::first()` as the exclusive key,
-    /// preventing concurrent computation from starting while clean is in progress.
-    pub fn try_start_clean(&self) -> Option<CleanGuard<'_>> {
-        let exclusive = self.compute_lock.lock(Step::first())?;
-        Some(CleanGuard {
-            state: self,
-            _exclusive: exclusive,
-        })
+    /// Blocks until this module is checked for `now` or this thread should clean it.
+    ///
+    /// Returns `None` when the module is already checked for this epoch.
+    /// Returns `Some(guard)` when this thread should clean the module.
+    pub fn try_start_clean(&self, now: Epoch) -> Option<CleanGuard<'_>> {
+        let mut computing = self.computing.lock();
+        loop {
+            if self.is_checked(now) {
+                return None;
+            }
+            if !*computing {
+                *computing = true;
+                return Some(CleanGuard {
+                    state: self,
+                    _computing: ComputingFlag { state: self },
+                });
+            }
+            computing = self.computing_condvar.wait(computing);
+        }
     }
 
     // --- Dirty Marking ---
+
+    /// Set the LOAD dirty flag.
+    pub fn set_dirty_load(&self) {
+        self.computed_dirty.set_load();
+    }
+
+    /// Set the FIND dirty flag.
+    pub fn set_dirty_find(&self) {
+        self.computed_dirty.set_find();
+    }
+
+    /// Set the DEPS dirty flag.
+    pub fn set_dirty_deps(&self) {
+        self.computed_dirty.set_deps();
+    }
 
     /// Try to mark this module's deps as dirty.
     /// Returns true if we were the one to set the flag (CAS succeeded),
     /// meaning the caller should add this module to the dirty set.
     pub fn try_mark_deps_dirty(&self, now: Epoch) -> bool {
-        // If already computed in this epoch, skip.
-        if self.computed.load() == now {
-            return false;
-        }
-        if !self.dirty.try_set_deps() {
-            return false;
-        }
-        // Re-check after setting. If the module was computed between our
-        // epoch check and the CAS, the dirty flag is spurious — undo it.
-        // Safe because try_set_deps uses CAS: no other thread can set DEPS
-        // between our successful CAS and this check (they'd see it already set).
-        if self.computed.load() == now {
-            self.dirty.clear_deps();
-            return false;
-        }
-        true
+        self.computed_dirty.try_mark_deps_dirty(now)
     }
 
     /// Increase the require level and set dirty.require if increased.
@@ -211,7 +247,7 @@ impl ModuleStateMut {
     pub fn increase_require(&self, require: Require) -> bool {
         let dirty_require = self.require.increase(require);
         if dirty_require {
-            self.dirty.set_require();
+            self.computed_dirty.set_require();
         }
         dirty_require
     }
@@ -219,15 +255,33 @@ impl ModuleStateMut {
     /// Drain into a read-only snapshot for committed state.
     /// The `ModuleStateMut` should not be reused after this call.
     pub fn take_and_freeze(&self) -> ModuleState {
+        let (computed, dirty) = self.computed_dirty.load();
         ModuleState {
             require: self.require(),
             epochs: Epochs {
                 checked: self.checked.load(),
-                computed: self.computed.load(),
+                computed,
             },
-            dirty: self.dirty.snapshot(),
+            dirty,
             steps: self.steps.take_and_freeze(),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ComputingFlag — RAII handle for the `computing` flag
+// ---------------------------------------------------------------------------
+
+/// Clears the `computing` flag and notifies waiters on drop.
+struct ComputingFlag<'a> {
+    state: &'a ModuleStateMut,
+}
+
+impl Drop for ComputingFlag<'_> {
+    fn drop(&mut self) {
+        let mut computing = self.state.computing.lock();
+        *computing = false;
+        self.state.computing_condvar.notify_all();
     }
 }
 
@@ -235,32 +289,69 @@ impl ModuleStateMut {
 // ComputeGuard — held while computing a step
 // ---------------------------------------------------------------------------
 
-/// Guard held while computing a step. The `ExclusiveLock` ensures only one
-/// thread computes a given step at a time.
+/// Guard held while computing a step. The `computing` flag is set while
+/// this guard is alive via the `ComputingFlag`.
 pub struct ComputeGuard<'a> {
     state: &'a ModuleStateMut,
-    _exclusive: ExclusiveLockGuard<'a, Step>,
+    /// The next step to compute, determined atomically with the lock
+    /// acquisition in `try_start_compute`.
+    todo: Step,
+    _computing: ComputingFlag<'a>,
 }
 
-impl ComputeGuard<'_> {
-    /// Re-check the next step under exclusive access. Another thread may have
-    /// computed it between our initial check and acquiring the lock.
-    pub fn next_step(&self) -> Option<Step> {
-        self.state.next_step()
+impl<'a> ComputeGuard<'a> {
+    /// The step to compute, determined when the guard was acquired.
+    pub fn todo(&self) -> Step {
+        self.todo
     }
 
     pub fn require(&self) -> Require {
         self.state.require()
     }
 
-    /// Compute a step under exclusive access, delegating to `StepsMut::compute`.
+    /// Compute the step, then release the computing flag and notify waiters.
+    /// Returns a `PostComputeGuard` for post-compute work (diffing, eviction).
     pub fn compute<Lookup: LookupExport + LookupAnswer>(
-        &self,
-        step: Step,
-        old: &mut Steps,
+        self,
         ctx: &Context<Lookup>,
-    ) {
-        self.state.steps.compute(step, old, ctx)
+    ) -> PostComputeGuard<'a> {
+        let ComputeGuard {
+            state,
+            todo,
+            _computing,
+        } = self;
+        state.steps.compute(todo, ctx);
+        drop(_computing);
+        PostComputeGuard { state }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PostComputeGuard — held after computing, lock released
+// ---------------------------------------------------------------------------
+
+/// Guard returned by `ComputeGuard::compute()`. The computing flag has been
+/// released, so other threads can proceed. Provides access to diffing and
+/// eviction operations that are safe without exclusion (step data is in
+/// ArcSwap, old data slots are only written during clean).
+pub struct PostComputeGuard<'a> {
+    state: &'a ModuleStateMut,
+}
+
+impl PostComputeGuard<'_> {
+    /// Take old exports saved before rebuild for diffing. Clears the slot.
+    pub fn take_old_exports(&self) -> Option<Arc<Exports>> {
+        self.state.steps.old_exports.swap(None)
+    }
+
+    /// Take old answers saved before rebuild for diffing. Clears the slot.
+    pub fn take_old_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
+        self.state.steps.old_answers.swap(None)
+    }
+
+    /// Take old solutions saved before rebuild for diffing. Clears the slot.
+    pub fn take_old_solutions(&self) -> Option<Arc<Solutions>> {
+        self.state.steps.old_solutions.swap(None)
     }
 
     /// Evict the AST after computing answers (if not needed for retention).
@@ -286,18 +377,18 @@ impl ComputeGuard<'_> {
 // CleanGuard — held while cleaning a module
 // ---------------------------------------------------------------------------
 
-/// Guard held while cleaning a module. Uses `Step::first()` as the exclusive key,
-/// preventing concurrent computation from starting while clean is in progress.
+/// Guard held while cleaning a module. The `computing` flag is set while
+/// this guard is alive, preventing concurrent computation from starting.
 pub struct CleanGuard<'a> {
     state: &'a ModuleStateMut,
-    _exclusive: ExclusiveLockGuard<'a, Step>,
+    _computing: ComputingFlag<'a>,
 }
 
 impl CleanGuard<'_> {
-    /// Atomically read and clear all dirty flags in a single `swap(0)`.
-    /// Any flag set after this swap remains set for the next clean cycle.
+    /// Atomically read and clear all dirty flags in a single operation.
+    /// Any flag set after this operation remains set for the next clean cycle.
     pub fn take_dirty(&self) -> Dirty {
-        self.state.dirty.take_all()
+        self.state.computed_dirty.take_dirty()
     }
 
     /// Read load data (under exclusive, for comparison during clean).
@@ -321,7 +412,26 @@ impl CleanGuard<'_> {
     /// `clear_ast`: if true, also clear the AST (e.g., load contents changed).
     pub fn rebuild(&self, clear_ast: bool, now: Epoch) {
         self.state.steps.reset_for_rebuild(clear_ast);
-        self.state.computed.store_relaxed(now);
+
+        // Atomically set computed = now and clear all dirty flags.
+        //
+        // This closes a race window between `take_dirty()` at the start of
+        // `clean` and this `rebuild` call: another thread computing our
+        // dependency's Solutions step can call `try_mark_deps_dirty`, which
+        // checks `computed != now` and sets the DEPS flag. Without clearing
+        // here, that DEPS flag would persist and cause a redundant recheck
+        // in the next epoch.
+        //
+        // Clearing DEPS is safe because we are rebuilding: the module will
+        // re-demand all its dependencies and get fresh data, making any
+        // concurrent DEPS notification redundant.
+        //
+        // Clearing LOAD, FIND, and REQUIRE is safe because those flags are
+        // only set during invalidation (set_memory, config changes, etc.),
+        // which happens before transactions run and never races with clean.
+        self.state
+            .computed_dirty
+            .store_computed_and_clear_dirty_relaxed(now);
 
         // Release-store checked: this is the synchronization point.
         // Any reader that subsequently observes `checked == now` via

@@ -16,6 +16,7 @@ pub mod new_type;
 pub mod pydantic;
 pub mod pydantic_lax;
 pub mod targs;
+pub mod targs_cursor;
 pub mod total_ordering;
 pub mod tparams;
 pub mod tuple;

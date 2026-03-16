@@ -6,12 +6,13 @@
  */
 
 use std::collections::HashMap;
+use std::mem;
 
 use itertools::Itertools;
 use pyrefly_python::dunder;
 use pyrefly_types::callable::FunctionKind;
-use pyrefly_types::meta_shape::MetaShapeFunction;
-use pyrefly_types::meta_shape::MetaShapeRegistry;
+use pyrefly_types::meta_shape_dsl::MetaShapeFunction;
+use pyrefly_types::tensor_ops_registry::TensorOpsRegistry;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::TArgs;
@@ -263,9 +264,29 @@ impl<'a> CallArg<'a> {
         match self {
             Self::Arg(TypeOrExpr::Type(ty, _)) => CallArgPreEval::Type(ty, false),
             Self::Arg(TypeOrExpr::Expr(e)) => CallArgPreEval::Expr(e, false),
-            Self::Star(e, range) => {
+            Self::Star(e, _range) => {
+                // Special-case list/set/tuple literals with statically known element count.
+                // Only do this if there are no starred elements inside the literal.
+                if let TypeOrExpr::Expr(expr) = e {
+                    let literal_elts: Option<&[Expr]> = match expr {
+                        Expr::List(list_expr) => Some(&list_expr.elts),
+                        Expr::Set(set_expr) => Some(&set_expr.elts),
+                        Expr::Tuple(tuple_expr) => Some(&tuple_expr.elts),
+                        _ => None,
+                    };
+                    if let Some(elts) = literal_elts {
+                        let has_starred = elts.iter().any(|elt| matches!(elt, Expr::Starred(_)));
+                        if !has_starred {
+                            let tys: Vec<Type> = elts
+                                .iter()
+                                .map(|elt| solver.expr_infer(elt, arg_errors))
+                                .collect();
+                            return CallArgPreEval::Fixed(tys, 0);
+                        }
+                    }
+                }
                 let ty = e.infer(solver, arg_errors);
-                let iterables = solver.iterate(&ty, *range, arg_errors, None);
+                let iterables = solver.iterate(&ty, *_range, arg_errors, None);
                 // If we have a union of iterables, use a fixed length only if every iterable is
                 // fixed and has the same length. Otherwise, use star.
                 let mut fixed_lens = Vec::new();
@@ -382,6 +403,18 @@ impl CallArgPreEval<'_> {
         }
     }
 
+    // Similar to post_skip but it skips to the end of any fixed length arguments.
+    fn mark_done(&mut self) {
+        match self {
+            Self::Type(_, done) | Self::Expr(_, done) | Self::Star(_, done) => {
+                *done = true;
+            }
+            Self::Fixed(tys, i) => {
+                *i = tys.len();
+            }
+        }
+    }
+
     fn post_infer<Ans: LookupAnswer>(
         &mut self,
         solver: &AnswersSolver<Ans>,
@@ -482,6 +515,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // See test::paramspec::test_paramspec_twice for an example of this.
         mut paramspec: Option<Var>,
         self_arg: Option<CallArg>,
+        mut self_qs: Option<QuantifiedHandle>,
         args: &[CallArg],
         keywords: &[CallKeyword],
         arguments_range: TextRange,
@@ -514,7 +548,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             )
         };
-        let iargs = self_arg.iter().chain(args.iter());
+
+        let keyword_arg_names: SmallSet<&Name> = keywords
+            .iter()
+            .filter_map(|kw| kw.arg.map(|id| &id.id))
+            .collect();
+
         // Creates a reversed copy of the parameters that we iterate through from back to front,
         // so that we can easily peek at and pop from the end.
         let mut rparams: Vec<&Param> = params.items().iter().rev().collect::<Vec<_>>();
@@ -548,7 +587,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             param_list_owner.push(ps).items().iter().rev().collect()
         };
-        for arg in iargs {
+        for arg in self_arg.iter().chain(args.iter()) {
             let mut arg_pre = arg.pre_eval(self, arg_errors);
             while arg_pre.step() {
                 let param = if let Some(p) = rparams.last() {
@@ -569,6 +608,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         name,
                         kind: kind @ (PosParamKind::PositionalOnly | PosParamKind::Positional),
                     }) => {
+                        // For unknown-length star args, stop consuming positional parameters
+                        // when we reach a one that has a corresponding keyword argument.
+                        // This is unsound, but prevents false positive "multiple values" errors.
+                        if arg_pre.is_star()
+                            && kind == PosParamKind::Positional
+                            && name.is_some_and(|n| keyword_arg_names.contains(n))
+                        {
+                            arg_pre.mark_done();
+                            break;
+                        }
                         num_positional_params += 1;
                         rparams.pop();
                         if let Some(name) = name
@@ -641,6 +690,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                         break;
                     }
+                }
+            }
+            // `self_qs` contains type parameters referenced in the `self` type. Pyrefly follows
+            // mypy and pyright's lead in solving type parameters in `self` as soon as `self` is
+            // matched. That is:
+            //     class A:
+            //         def f[T](self: T, other: T): ...
+            //     A().f(0)  # T = A, passing 0 is an error
+            // Contrast this to how type parameters usually behave:
+            //     def f[T](x: T, other: T): ...
+            //     f(A(), 0)  # T = A | int
+            if let Some(self_qs) = mem::take(&mut self_qs) {
+                let specialization_errors = self
+                    .solver()
+                    .finish_quantified(self_qs, self.solver().infer_with_first_use);
+                if let Err(errors) = specialization_errors {
+                    self.add_specialization_errors(errors, arg.range(), call_errors, context);
                 }
             }
         }
@@ -1050,16 +1116,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut ctor_targs: Option<&mut TArgs>,
     ) -> Type {
         // Look up meta-shape early so we can conditionally collect bound args.
-        let meta_shape_func = Self::lookup_meta_shape(callable_name);
-        let mut bound_args: Option<HashMap<String, Type>> = meta_shape_func
-            .filter(|f| !f.signature().is_empty())
-            .map(|_| HashMap::new());
+        // Only consult the registry when tensor_shapes is enabled to avoid
+        // unnecessary DSL parsing and per-call HashMap lookups.
+        let meta_shape_func = if self.solver().tensor_shapes {
+            Self::lookup_meta_shape(callable_name)
+        } else {
+            None
+        };
+        let mut bound_args: Option<HashMap<String, Type>> = meta_shape_func.map(|_| HashMap::new());
 
         let (callable_qs, mut callable) = if let Some(tparams) = tparams {
             // If we have a hint, we want to try to instantiate against it first, so we can contextually type
             // arguments. If we don't match the hint, we need to throw away any instantiations we might have made.
             // By invariant, hint will be None if we are calling a constructor.
-            if let Some(hint) = hint {
+            if let Some(hint) = hint
+                && !self.solver().is_partial(hint.ty())
+            {
                 let (qs, callable_) = self.instantiate_fresh_callable(tparams, callable.clone());
                 if self.is_subset_eq(&callable_.ret, hint.ty())
                     && !self.solver().has_instantiation_errors(&qs)
@@ -1076,6 +1148,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         } else {
             (QuantifiedHandle::empty(), callable)
+        };
+        let (self_qs, remaining_callable_qs) = if self_obj.is_some()
+            && let Some(first_param) = callable.get_first_param()
+            // TODO(https://github.com/facebook/pyrefly/issues/105): handle nested vars
+            && matches!(first_param, Type::Var(_))
+        {
+            // Quantifieds in `self` need to be finished as soon as `self_arg` is matched, unlike
+            // other quantifieds that are finished at the end of the call, so we split them out to
+            // be handled separately.
+            let (self_qs, remaining_qs) = callable_qs.partition_by(&first_param);
+            (Some(self_qs), remaining_qs)
+        } else {
+            (None, callable_qs)
         };
         let ctor_qs = if let Some(targs) = ctor_targs.as_mut() {
             let qs = self.solver().freshen_class_targs(targs, self.uniques);
@@ -1104,6 +1189,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &params,
                     None,
                     self_arg,
+                    self_qs,
                     args,
                     keywords,
                     arguments_range,
@@ -1127,6 +1213,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &params.prepend_types(&concatenate),
                         None,
                         self_arg,
+                        self_qs,
                         args,
                         keywords,
                         arguments_range,
@@ -1142,6 +1229,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &ParamList::new_types(concatenate.into_vec()),
                         Some(var),
                         self_arg,
+                        self_qs,
                         args,
                         keywords,
                         arguments_range,
@@ -1174,6 +1262,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &ParamList::new_types(concatenate.into_vec()),
                                 None,
                                 self_arg,
+                                self_qs,
                                 &args[0..args.len() - 1],
                                 &keywords[0..keywords.len() - 1],
                                 arguments_range,
@@ -1202,7 +1291,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let mut errors = self
             .solver()
-            .finish_quantified(callable_qs, self.solver().infer_with_first_use)
+            .finish_quantified(remaining_callable_qs, self.solver().infer_with_first_use)
             .map_or_else(|e| e.to_vec(), |_| Vec::new());
         if let Err(e) = self
             .solver()
@@ -1233,11 +1322,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Look up whether a callable has a registered meta-shape function.
-    fn lookup_meta_shape(
-        callable_name: Option<&FunctionKind>,
-    ) -> Option<&'static dyn MetaShapeFunction> {
+    fn lookup_meta_shape(callable_name: Option<&FunctionKind>) -> Option<&dyn MetaShapeFunction> {
         use std::sync::OnceLock;
-        static META_SHAPE_REGISTRY: OnceLock<MetaShapeRegistry> = OnceLock::new();
+        static TENSOR_OPS_REGISTRY: OnceLock<TensorOpsRegistry> = OnceLock::new();
 
         let func_id = callable_name.and_then(|fk| match fk {
             FunctionKind::Def(box_func_id) => Some(box_func_id.as_ref()),
@@ -1250,7 +1337,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             format!("{}.{}", func_id.module.name(), func_id.name)
         };
 
-        let registry = META_SHAPE_REGISTRY.get_or_init(MetaShapeRegistry::new);
+        let registry = TENSOR_OPS_REGISTRY.get_or_init(TensorOpsRegistry::new);
         registry.get(&qualified_name)
     }
 
@@ -1263,18 +1350,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
-        match meta_shape_func.bind_args(bound_args) {
-            Some(meta_args) => match meta_shape_func.compute(meta_args) {
-                Ok(result) => meta_shape_func.result_to_type(result, &ret_type),
-                Err(shape_error) => {
-                    errors.add(
-                        range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                        vec1![format!("{}", shape_error)],
-                    );
-                    ret_type
-                }
-            },
+        match meta_shape_func.evaluate(bound_args, &ret_type) {
+            Some(Ok(ty)) => ty,
+            Some(Err(shape_error)) => {
+                errors.add(
+                    range,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    vec1![format!("{}", shape_error)],
+                );
+                ret_type
+            }
             None => ret_type,
         }
     }

@@ -602,8 +602,13 @@ pub enum ShapeError {
     /// Tensor ranks don't match
     RankMismatch { got: usize, want: usize },
 
-    /// Invalid dimension value (e.g., negative or zero)
+    /// Invalid dimension value (e.g., negative or zero).
+    /// `value` is the offending dimension index; `reason` explains why it's invalid.
     InvalidDimension { value: i64, reason: String },
+
+    /// General shape computation error from a meta-shape function or broadcasting.
+    /// The message is self-contained (no "Invalid dimension value N:" prefix).
+    ShapeComputation { message: String },
 
     /// Structural mismatch between dimension types
     StructuralMismatch {
@@ -637,6 +642,9 @@ impl Display for ShapeError {
             }
             Self::InvalidDimension { value, reason } => {
                 write!(f, "Invalid dimension value {}: {}", value, reason)
+            }
+            Self::ShapeComputation { message } => {
+                write!(f, "{}", message)
             }
             Self::StructuralMismatch {
                 got: _,

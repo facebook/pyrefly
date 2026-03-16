@@ -95,6 +95,7 @@ fn compute_errors(sys_info: SysInfo, sourcedb: impl SourceDatabase + 'static) ->
         },
         None,
         None,
+        None,
     );
     let transaction = state.transaction();
     let errors = transaction.get_errors(&modules_to_check);

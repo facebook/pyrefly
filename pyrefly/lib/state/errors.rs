@@ -13,9 +13,13 @@ use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lined_buffer::LineNumber;
+use pyrefly_util::visit::Visit;
+use ruff_python_ast::Expr;
+use ruff_python_ast::ModModule;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
@@ -29,24 +33,71 @@ use crate::error::error::Error;
 use crate::error::expectation::Expectation;
 use crate::state::load::Load;
 
+/// Extracts `(start_line, end_line)` ranges for all multi-line f-strings and
+/// t-strings from the AST. Single-line f/t-strings (where start == end) are
+/// excluded. The returned list is sorted by start_line.
+pub fn sorted_multi_line_fstring_ranges(
+    ast: &ModModule,
+    module: &Module,
+) -> Vec<(LineNumber, LineNumber)> {
+    let mut ranges = Vec::new();
+    ast.visit(&mut |expr: &Expr| {
+        let text_range = match expr {
+            Expr::FString(x) => Some(x.range),
+            Expr::TString(x) => Some(x.range),
+            _ => None,
+        };
+        if let Some(range) = text_range {
+            let display = module.display_range(range);
+            let start = display.start.line_within_file();
+            let end = display.end.line_within_file();
+            if start != end {
+                ranges.push((start, end));
+            }
+        }
+    });
+    ranges.sort();
+    ranges
+}
+
+/// Binary search over sorted f-string ranges to find the range containing `line`.
+pub fn find_containing_range(
+    ranges: &[(LineNumber, LineNumber)],
+    line: LineNumber,
+) -> Option<(LineNumber, LineNumber)> {
+    let idx = ranges.partition_point(|(start, _)| *start <= line);
+    if idx == 0 {
+        return None;
+    }
+    let (start, end) = ranges[idx - 1];
+    if line >= start && line <= end {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
 /// The errors from a collection of modules.
 #[derive(Debug)]
 pub struct Errors {
     // Sorted by module name and path (so deterministic display order)
-    loads: Vec<(Arc<Load>, ArcId<ConfigFile>)>,
+    loads: Vec<(Arc<Load>, ArcId<ConfigFile>, Vec<(LineNumber, LineNumber)>)>,
 }
 
 impl Errors {
-    pub fn new(mut loads: Vec<(Arc<Load>, ArcId<ConfigFile>)>) -> Self {
+    pub fn new(
+        mut loads: Vec<(Arc<Load>, ArcId<ConfigFile>, Vec<(LineNumber, LineNumber)>)>,
+    ) -> Self {
         loads.sort_by_key(|x| (x.0.module_info.name(), x.0.module_info.path().dupe()));
         Self { loads }
     }
 
     pub fn collect_errors(&self) -> CollectedErrors {
         let mut errors = CollectedErrors::default();
-        for (load, config) in &self.loads {
+        for (load, config, fstring_ranges) in &self.loads {
             let error_config = config.get_error_config(load.module_info.path().as_path());
-            load.errors.collect_into(&error_config, &mut errors);
+            load.errors
+                .collect_into(&error_config, fstring_ranges, &mut errors);
         }
         errors
     }
@@ -67,7 +118,7 @@ impl Errors {
 
     pub fn collect_ignores(&self) -> SmallMap<&ModulePath, &Ignore> {
         let mut ignore_collection: SmallMap<&ModulePath, &Ignore> = SmallMap::new();
-        for (load, _) in &self.loads {
+        for (load, _, _) in &self.loads {
             let module_path = load.module_info.path();
             let ignores = load.module_info.ignore();
             ignore_collection.insert(module_path, ignores);
@@ -89,6 +140,13 @@ impl Errors {
             SmallMap<LineNumber, SmallSet<String>>,
         > = SmallMap::new();
 
+        // Build a map from module path to f-string ranges for lookup.
+        let fstring_ranges_by_module: SmallMap<&ModulePath, &[(LineNumber, LineNumber)]> = self
+            .loads
+            .iter()
+            .map(|(load, _, ranges)| (load.module_info.path(), ranges.as_slice()))
+            .collect();
+
         for error in &collected.suppressed {
             if error.is_ignored(&Tool::default_enabled()) {
                 let module_path = error.path();
@@ -96,12 +154,28 @@ impl Errors {
                 let end_line = error.display_range().end.line_within_file();
                 let error_code = error.error_kind().to_name().to_owned();
 
-                // Track the error code for all lines the error spans
+                let module_codes = suppressed_codes_by_module.entry(module_path).or_default();
+
+                // Track the error code for all lines the error spans.
                 for line_idx in start_line.to_zero_indexed()..=end_line.to_zero_indexed() {
-                    suppressed_codes_by_module
-                        .entry(module_path)
-                        .or_default()
+                    module_codes
                         .entry(LineNumber::from_zero_indexed(line_idx))
+                        .or_default()
+                        .insert(error_code.clone());
+                }
+
+                // If the error is inside a multi-line f/t-string, also track
+                // the code at the f-string's start and end lines so that a
+                // suppression comment placed there is recognized as "used".
+                if let Some(ranges) = fstring_ranges_by_module.get(&module_path)
+                    && let Some((fs_start, fs_end)) = find_containing_range(ranges, start_line)
+                {
+                    module_codes
+                        .entry(fs_start)
+                        .or_default()
+                        .insert(error_code.clone());
+                    module_codes
+                        .entry(fs_end)
                         .or_default()
                         .insert(error_code.clone());
                 }
@@ -109,7 +183,7 @@ impl Errors {
         }
 
         // Iterate over each module and check for unused ignores
-        for (load, _) in &self.loads {
+        for (load, _, _) in &self.loads {
             let module = &load.module_info;
             let module_path = module.path();
             let ignore = module.ignore();
@@ -195,7 +269,7 @@ impl Errors {
 
         for error in unused_errors {
             // Find the config for this error's module
-            for (load, config) in &self.loads {
+            for (load, config, _) in &self.loads {
                 if load.module_info.path() == error.path() {
                     let error_config = config.get_error_config(error.path().as_path());
                     let severity = error_config
@@ -216,10 +290,13 @@ impl Errors {
     }
 
     pub fn check_against_expectations(&self) -> anyhow::Result<()> {
-        for (load, config) in &self.loads {
+        for (load, config, fstring_ranges) in &self.loads {
             let error_config = config.get_error_config(load.module_info.path().as_path());
+            let mut result = CollectedErrors::default();
+            load.errors
+                .collect_into(&error_config, fstring_ranges, &mut result);
             Expectation::parse(load.module_info.dupe(), load.module_info.contents())
-                .check(&load.errors.collect(&error_config).shown)?;
+                .check(&result.shown)?;
         }
         Ok(())
     }
@@ -250,7 +327,7 @@ mod tests {
     impl Errors {
         pub fn check_var_leak(&self) -> anyhow::Result<()> {
             let regex = Regex::new(r"@\d+").unwrap();
-            for (load, config) in &self.loads {
+            for (load, config, _) in &self.loads {
                 let error_config = config.get_error_config(load.module_info.path().as_path());
                 let errors = load.errors.collect(&error_config).shown;
                 for error in errors {
@@ -295,7 +372,7 @@ mod tests {
             get_path(&tdir),
             Some(Arc::new(FileContents::from_source(contents.to_owned()))),
         )]);
-        transaction.run(&[handle.dupe()], Require::Everything);
+        transaction.run(&[handle.dupe()], Require::Everything, None);
         (transaction.get_errors([handle.clone()].iter()), tdir)
     }
 

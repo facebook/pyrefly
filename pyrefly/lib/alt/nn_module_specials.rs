@@ -39,6 +39,24 @@ pub fn is_nn_module_dict(cls: &ClassType) -> bool {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Check if `cls` is or inherits from `torch.nn.Module`.
+    ///
+    /// Used by `instance_as_dunder_call` (in `class_field.rs`) to fall back to
+    /// `forward` when `__call__` is not found, matching PyTorch's runtime behavior
+    /// where `nn.Module.__call__` delegates to `self.forward()`.
+    pub fn is_nn_module_subclass(&self, cls: &ClassType) -> bool {
+        cls.class_object().has_toplevel_qname("torch.nn", "Module")
+            || self
+                .get_mro_for_class(cls.class_object())
+                .ancestors_no_object()
+                .iter()
+                .any(|ancestor| {
+                    ancestor
+                        .class_object()
+                        .has_toplevel_qname("torch.nn", "Module")
+                })
+    }
+
     /// Check if the callee type is an nn.Module instance (ClassType or SelfType),
     /// and if so, return the type of its `forward` method for dispatch.
     ///

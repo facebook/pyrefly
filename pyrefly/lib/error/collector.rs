@@ -10,6 +10,7 @@ use std::mem;
 
 use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -21,6 +22,7 @@ use crate::error::context::ErrorInfo;
 use crate::error::error::Error;
 use crate::error::style::ErrorStyle;
 use crate::module::module_info::ModuleInfo;
+use crate::state::errors::find_containing_range;
 
 #[derive(Debug, Default, Clone)]
 struct ModuleErrors {
@@ -171,11 +173,44 @@ impl ErrorCollector {
         self.errors.lock().len()
     }
 
-    pub fn collect_into(&self, error_config: &ErrorConfig, result: &mut CollectedErrors) {
+    /// Checks whether an error is suppressed, considering both the error's own
+    /// line and, if it falls inside a multi-line f/t-string, the f-string's
+    /// start and end lines.
+    fn is_error_suppressed(
+        err: &Error,
+        fstring_ranges: &[(LineNumber, LineNumber)],
+        error_config: &ErrorConfig,
+    ) -> bool {
+        if err.is_ignored(&error_config.enabled_ignores) {
+            return true;
+        }
+        // Check if the error is inside a multi-line f/t-string. If so, a
+        // suppression that covers the f-string's start or end line should also apply.
+        let line = err.display_range().start.line_within_file();
+        if let Some((fs_start, fs_end)) = find_containing_range(fstring_ranges, line) {
+            let ignore = err.module().ignore();
+            let kind = err.error_kind().to_name();
+            let enabled = &error_config.enabled_ignores;
+            if fs_start != line && ignore.is_ignored(fs_start, kind, enabled) {
+                return true;
+            }
+            if fs_end != line && ignore.is_ignored(fs_end, kind, enabled) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn collect_into(
+        &self,
+        error_config: &ErrorConfig,
+        fstring_ranges: &[(LineNumber, LineNumber)],
+        result: &mut CollectedErrors,
+    ) {
         let mut errors = self.errors.lock();
         if !(self.module_info.is_generated() && error_config.ignore_errors_in_generated_code) {
             for err in errors.iter() {
-                if err.is_ignored(&error_config.enabled_ignores) {
+                if Self::is_error_suppressed(err, fstring_ranges, error_config) {
                     result.suppressed.push(err.clone());
                 } else {
                     match error_config.display_config.severity(err.error_kind()) {
@@ -191,7 +226,7 @@ impl ErrorCollector {
 
     pub fn collect(&self, error_config: &ErrorConfig) -> CollectedErrors {
         let mut result = CollectedErrors::default();
-        self.collect_into(error_config, &mut result);
+        self.collect_into(error_config, &[], &mut result);
         result
     }
 }

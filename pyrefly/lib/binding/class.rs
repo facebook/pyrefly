@@ -111,9 +111,11 @@ impl<'a> BindingsBuilder<'a> {
         key: Key,
     ) -> (CurrentIdx, ClassIndices) {
         let def_index = self.def_index();
+        let class_object = self.declare_current_idx(key);
         let class_indices = ClassIndices {
             def_index,
             class_idx: self.idx_for_promise(KeyClass(ShortIdentifier::new(class_name))),
+            class_object_idx: class_object.idx(),
             base_type_idx: self.idx_for_promise(KeyClassBaseType(def_index)),
             metadata_idx: self.idx_for_promise(KeyClassMetadata(def_index)),
             mro_idx: self.idx_for_promise(KeyClassMro(def_index)),
@@ -124,7 +126,6 @@ impl<'a> BindingsBuilder<'a> {
                 .idx_for_promise(KeyConsistentOverrideCheck(def_index)),
             abstract_class_check_idx: self.idx_for_promise(KeyAbstractClassCheck(def_index)),
         };
-        let class_object = self.declare_current_idx(key);
         (class_object, class_indices)
     }
 
@@ -583,12 +584,16 @@ impl<'a> BindingsBuilder<'a> {
     /// Parse fields for `collections.namedtuple`: string splitting, list/tuple of strings.
     /// `members` is a slice of the positional arguments after the name string.
     /// `error_range` is used for the fallback error.
+    ///
+    /// Returns a tuple of (fields, has_dynamic_fields) where has_dynamic_fields is true
+    /// if the fields couldn't be statically resolved.
     fn parse_collections_namedtuple_fields(
         &mut self,
         members: &[Expr],
         error_range: TextRange,
-    ) -> Vec<(String, TextRange, Option<Expr>)> {
-        match members {
+    ) -> (Vec<(String, TextRange, Option<Expr>)>, bool) {
+        let mut has_dynamic_fields = false;
+        let fields = match members {
             // namedtuple('Point', 'x y')
             // namedtuple('Point', 'x, y')
             [Expr::StringLiteral(x)] => {
@@ -610,6 +615,22 @@ impl<'a> BindingsBuilder<'a> {
             {
                 Vec::new()
             }
+            // namedtuple('Point', [*Base._fields, 'z'])
+            // Starred expressions can't be resolved statically, so mark
+            // the namedtuple as having dynamic fields. We still extract
+            // any string literals we can see as known fields for
+            // autocomplete and type checking.
+            [Expr::List(ExprList { elts, .. }) | Expr::Tuple(ExprTuple { elts, .. })]
+                if elts.iter().any(|elt| matches!(elt, Expr::Starred(_))) =>
+            {
+                has_dynamic_fields = true;
+                elts.iter()
+                    .filter_map(|elt| match elt {
+                        Expr::StringLiteral(s) => Some((s.value.to_string(), s.range(), None)),
+                        _ => None,
+                    })
+                    .collect()
+            }
             // namedtuple('Point', ['x', 'y'])
             [Expr::List(ExprList { elts, .. })]
                 if matches!(elts.as_slice(), [Expr::StringLiteral(_), ..]) =>
@@ -625,23 +646,29 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 self.error(
                     error_range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                     "Expected valid functional named tuple definition".to_owned(),
                 );
+                has_dynamic_fields = true;
                 Vec::new()
             }
-        }
+        };
+        (fields, has_dynamic_fields)
     }
 
     /// Parse fields for `typing.NamedTuple`: list/tuple of (name, type) pairs.
     /// `members` is a slice of the positional arguments after the name string.
     /// `error_range` is used for the fallback error.
+    ///
+    /// Returns a tuple of (fields, has_dynamic_fields) where has_dynamic_fields is true
+    /// if the fields couldn't be statically resolved.
     fn parse_typing_namedtuple_fields(
         &mut self,
         members: &[Expr],
         error_range: TextRange,
-    ) -> Vec<(String, TextRange, Option<Expr>)> {
-        match members {
+    ) -> (Vec<(String, TextRange, Option<Expr>)>, bool) {
+        let mut has_dynamic_fields = false;
+        let fields = match members {
             // NamedTuple('Point', []), NamedTuple('Point', ())
             [Expr::List(ExprList { elts, .. }) | Expr::Tuple(ExprTuple { elts, .. })]
                 if elts.is_empty() =>
@@ -663,12 +690,14 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 self.error(
                     error_range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
                     "Expected valid functional named tuple definition".to_owned(),
                 );
+                has_dynamic_fields = true;
                 Vec::new()
             }
-        }
+        };
+        (fields, has_dynamic_fields)
     }
 
     fn extract_string_literals(
@@ -823,7 +852,10 @@ impl<'a> BindingsBuilder<'a> {
                     alias_of: None,
                 },
                 (None, false) => match annotation {
-                    Some(annotation) => ClassFieldDefinition::DeclaredByAnnotation { annotation },
+                    Some(annotation) => ClassFieldDefinition::DeclaredByAnnotation {
+                        annotation,
+                        initialized_in_recognized_method: false,
+                    },
                     None => ClassFieldDefinition::DeclaredWithoutAnnotation,
                 },
             };
@@ -1085,7 +1117,7 @@ impl<'a> BindingsBuilder<'a> {
             self.anon_class_object_and_indices(&class_name)
         };
         self.ensure_expr(func, class_object.usage());
-        let member_definitions =
+        let (member_definitions, has_dynamic_fields) =
             self.parse_collections_namedtuple_fields(members, class_name.range);
         let n_members = member_definitions.len();
         let mut illegal_identifier_handling = IllegalIdentifierHandling::Error;
@@ -1149,7 +1181,7 @@ impl<'a> BindingsBuilder<'a> {
             illegal_identifier_handling,
             false,
             SynthesizedClassKind::NamedTuple,
-            Some(BaseClass::NamedTuple(range)),
+            Some(BaseClass::NamedTuple(range, has_dynamic_fields)),
             bind_to_name,
         );
         class_indices.class_idx
@@ -1172,6 +1204,7 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(func, class_object.usage());
         let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> = self
             .parse_typing_namedtuple_fields(members, class_name.range)
+            .0
             .into_iter()
             .map(|(name, range, annotation)| {
                 if let Some(mut ann) = annotation {
@@ -1204,11 +1237,13 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         name: &ExprName,
         parent: &NestingContext,
+        func: &mut Expr,
         new_type_name: &mut Expr,
         base: &mut Expr,
     ) {
         let class_name = Ast::expr_name_identifier(name.clone());
         let (mut class_object, class_indices) = self.class_object_and_indices(&class_name);
+        self.ensure_expr(func, class_object.usage());
         self.ensure_expr(new_type_name, class_object.usage());
         self.check_functional_definition_name(&name.id, new_type_name);
         self.ensure_type(base, &mut None);

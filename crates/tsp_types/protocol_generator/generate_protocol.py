@@ -197,10 +197,16 @@ def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
                         documentation=prop_def.get("documentation"),
                     )
                 )
+            # Convert extends references so the Rust generator flattens
+            # parent properties into child structs.
+            extends = [
+                convert_type_reference(ext) for ext in type_def.get("extends", [])
+            ]
             structures.append(
                 model.Structure(
                     name=type_name,
                     properties=properties,
+                    extends=extends,
                     documentation=type_def.get("documentation"),
                 )
             )
@@ -304,7 +310,13 @@ def convert_type_reference(type_def: Dict[str, Any]) -> model.LSP_TYPE_SPEC:
         name = base_type_mapping.get(name, name)
         return model.BaseType(kind="base", name=name)
     elif kind == "reference":
-        return model.ReferenceType(kind="reference", name=type_def["name"])
+        name = type_def["name"]
+        # Generic type parameters like T in TypeBase<T> and DeclarationBase<T>
+        # are used as discriminator fields. In JSON serialization these are just
+        # strings, so map them to the string base type.
+        if name == "T":
+            return model.BaseType(kind="base", name="string")
+        return model.ReferenceType(kind="reference", name=name)
     elif kind == "array":
         element_type = convert_type_reference(type_def["element"])
         return model.ArrayType(kind="array", element=element_type)
@@ -793,9 +805,24 @@ def generate_rust_protocol(tsp_json_path: str, output_dir: str) -> None:
         constants_rust = generate_constants_rust(tsp_json)
         if constants_rust:
             content += "\n\n" + constants_rust
-        # Add crate-level allows
+        # Remove the Microsoft copyright from the lsprotocol generator output
+        content = content.replace(
+            "// Copyright (c) Microsoft Corporation. All rights reserved.\n// Licensed under the MIT License.\n\n",
+            "",
+        )
 
-        content = "#![allow(clippy::all)]\n#![allow(dead_code)]\n\n" + content
+        # Add crate-level allows and Meta copyright header
+
+        content = (
+            "/*\n"
+            " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
+            " *\n"
+            " * This source code is licensed under the MIT license found in the\n"
+            " * LICENSE file in the root directory of this source tree.\n"
+            " */\n"
+            "\n"
+            "#![allow(clippy::all)]\n#![allow(dead_code)]\n\n" + content
+        )
 
         # Fixup flag enums - automatically detect flag enums from TSP JSON
 

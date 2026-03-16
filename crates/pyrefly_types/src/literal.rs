@@ -102,6 +102,8 @@ impl Lit {
     pub fn negate(&self) -> Option<Type> {
         match self {
             Lit::Int(x) => Some(Lit::Int(x.negate()).to_implicit_type()),
+            Lit::Bool(true) => Some(LitInt::new(-1).to_implicit_type()),
+            Lit::Bool(false) => Some(LitInt::new(0).to_implicit_type()),
             _ => None,
         }
     }
@@ -123,6 +125,8 @@ impl Lit {
                 let x = x.invert();
                 Some(Lit::Int(x).to_implicit_type())
             }
+            Lit::Bool(true) => Some(LitInt::new(-2).to_implicit_type()),
+            Lit::Bool(false) => Some(LitInt::new(-1).to_implicit_type()),
             _ => None,
         }
     }

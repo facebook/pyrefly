@@ -116,6 +116,11 @@ The internal (Meta) checkout always uses Sapling. The GitHub checkout uses Git.
   (from within the project folder)
 - **With cargo (external):** `cargo test <name of test>`
 
+Note: The heavyweight `lsp_interaction` tests live in a separate
+`rust_unittest` target for faster iteration. Run them with
+`buck test pyrefly:pyrefly_lsp_interaction_tests -- <name of test>`.
+Running `buck test pyrefly:pyrefly` triggers both test targets.
+
 ### Running the full test suite
 
 - `./test.py` runs linters and tests. It is heavyweight, so only run it when

@@ -56,41 +56,55 @@ fn signature_parts(sig: &str) -> Option<(Range<usize>, Range<usize>)> {
     Some((params, ret_start..ret_end))
 }
 
-/// Find the byte ranges where two strings differ, using longest common
-/// prefix and suffix. Returns `None` if the strings are equal.
+/// Find the UTF-8-safe byte ranges where two strings differ, using longest
+/// common prefix and suffix. Returns `None` if the strings are equal.
 ///
 /// The returned ranges highlight the "differing middle" of each string.
 /// When one string is a strict prefix/suffix of the other, a minimal
-/// single-byte range is returned to ensure there's always something to annotate.
-///
-/// Note: operates on raw bytes, which is correct for ASCII type names but
-/// could produce ranges that split multi-byte UTF-8 characters for non-ASCII
-/// identifiers.
+/// single-character range is returned to ensure there's always something to
+/// annotate.
 fn diff_ranges(expected: &str, found: &str) -> Option<(Range<usize>, Range<usize>)> {
     if expected == found {
         return None;
     }
-    let expected_bytes = expected.as_bytes();
-    let found_bytes = found.as_bytes();
-    let mut lcp = 0;
-    while lcp < expected_bytes.len()
-        && lcp < found_bytes.len()
-        && expected_bytes[lcp] == found_bytes[lcp]
-    {
-        lcp += 1;
-    }
-    let mut lcs = 0;
-    while expected_bytes.len() > lcp + lcs
-        && found_bytes.len() > lcp + lcs
-        && expected_bytes[expected_bytes.len() - 1 - lcs]
-            == found_bytes[found_bytes.len() - 1 - lcs]
-    {
-        lcs += 1;
-    }
-    let expected_end = expected_bytes.len().saturating_sub(lcs);
-    let found_end = found_bytes.len().saturating_sub(lcs);
+
+    let expected_char_len = expected.chars().count();
+    let found_char_len = found.chars().count();
+
+    // Count matching characters from the front.
+    let lcp = expected
+        .chars()
+        .zip(found.chars())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    // Count matching characters from the end, not overlapping with the prefix.
+    let max_suffix = std::cmp::min(expected_char_len - lcp, found_char_len - lcp);
+    let lcs = expected
+        .chars()
+        .rev()
+        .zip(found.chars().rev())
+        .take(max_suffix)
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let expected_end = expected_char_len - lcs;
+    let found_end = found_char_len - lcs;
+
+    // Collect byte offsets for each character index in a single pass per string.
+    // Index `i` gives the byte offset of the `i`-th character; the final entry
+    // is the total byte length, so lookups for `n == char_count` work too.
+    let byte_offsets = |s: &str| -> Vec<usize> {
+        s.char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(s.len()))
+            .collect()
+    };
+    let expected_offsets = byte_offsets(expected);
+    let found_offsets = byte_offsets(found);
+
     let expected_span = if expected_end > lcp {
-        lcp..expected_end
+        expected_offsets[lcp]..expected_offsets[expected_end]
     } else {
         // The expected params are a prefix of the found params (or vice versa).
         // Point at the first character after the shared prefix, which in the
@@ -98,12 +112,14 @@ fn diff_ranges(expected: &str, found: &str) -> Option<(Range<usize>, Range<usize
         // parameters are missing or extra. Clamp to the string length to avoid
         // producing an out-of-bounds range when the entire string is a prefix
         // (e.g., for Callable types whose return type ends at the string boundary).
-        lcp..(lcp + 1).min(expected_bytes.len())
+        let next = (lcp + 1).min(expected_char_len);
+        expected_offsets[lcp]..expected_offsets[next]
     };
     let found_span = if found_end > lcp {
-        lcp..found_end
+        found_offsets[lcp]..found_offsets[found_end]
     } else {
-        lcp..(lcp + 1).min(found_bytes.len())
+        let next = (lcp + 1).min(found_char_len);
+        found_offsets[lcp]..found_offsets[next]
     };
     Some((expected_span, found_span))
 }
@@ -473,6 +489,53 @@ class B(A):
         assert!(
             result.is_some(),
             "Expected a signature diff for differing return types"
+        );
+    }
+
+    #[test]
+    fn test_render_signature_diff_unicode_literal_return_type() {
+        use super::render_signature_diff;
+
+        let expected = "def _money_desc(cls: type[PensionAsset]) -> Literal['累计可领(元)']: ...";
+        let found = "def _money_desc(cls: type[PensionAsset]) -> Literal['90岁累计可领(元)']: ...";
+        let result = render_signature_diff(expected, found);
+        let lines = result.expect("Expected a signature diff for differing Unicode return types");
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("return type"),
+            "Expected return type annotation in diff, got:\n{joined}"
+        );
+        assert!(
+            !joined.contains("parameters"),
+            "Expected no parameter annotation (params are identical), got:\n{joined}"
+        );
+
+        let expected = "def _money_desc(cls: type[PensionAsset]) -> Literal['累计可领']: ...";
+        let found = "def _money_desc(cls: type[PensionAsset]) -> Literal['累计可累']: ...";
+        let result = render_signature_diff(expected, found);
+        let lines = result.expect("Expected a signature diff for differing Unicode return types");
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("return type"),
+            "Expected return type annotation in diff, got:\n{joined}"
+        );
+        assert!(
+            !joined.contains("parameters"),
+            "Expected no parameter annotation (params are identical), got:\n{joined}"
+        );
+
+        let expected = "def _money_desc(cls: type[PensionAsset]) -> Literal['累计可领']: ...";
+        let found = "def _money_desc(cls: type[PensionAsset]) -> Literal['领计可领']: ...";
+        let result = render_signature_diff(expected, found);
+        let lines = result.expect("Expected a signature diff for differing Unicode return types");
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("return type"),
+            "Expected return type annotation in diff, got:\n{joined}"
+        );
+        assert!(
+            !joined.contains("parameters"),
+            "Expected no parameter annotation (params are identical), got:\n{joined}"
         );
     }
 }

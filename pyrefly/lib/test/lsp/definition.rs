@@ -940,7 +940,7 @@ Definition Result:
 10 | def f(x: A[B, Path]) -> None:
                    ^
 Definition Result:
-173 | class Path(PurePath):
+182 | class Path(PurePath):
             ^^^^
 "#
         .trim(),
@@ -1182,13 +1182,13 @@ Definition Result:
 25 | dict["foo"]
             ^
 Definition Result:
-3618 |     def __getitem__(self, key: _KT, /) -> _VT:
+3632 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 
 27 | dict["bar"]
             ^
 Definition Result:
-3618 |     def __getitem__(self, key: _KT, /) -> _VT:
+3632 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 "#
         .trim(),
@@ -1380,7 +1380,6 @@ Definition Result:
     );
 }
 
-// todo(kylei) go-to definition on x should go to the definition
 #[test]
 fn global_keyword() {
     let code = r#"
@@ -1395,7 +1394,33 @@ def test():
 # main.py
 4 |     global x
                ^
-Definition Result: None
+Definition Result:
+2 | x = 5
+    ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn nonlocal_keyword() {
+    let code = r#"
+def outer():
+    x = 5
+    def inner():
+        nonlocal x
+        #        ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 |         nonlocal x
+                     ^
+Definition Result:
+3 |     x = 5
+        ^
 "#
         .trim(),
         report.trim(),
@@ -2081,5 +2106,134 @@ y = f"hello {x:{f()}}"
     assert!(
         report.contains("Definition Result:") && report.contains("None"),
         "Expected definition to jump to function f, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_target() {
+    let code = r#"
+items = [1, 2, 3]
+result = [x for x in items]
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 | result = [x for x in items]
+                    ^
+Definition Result:
+3 | result = [x for x in items]
+                    ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_usage() {
+    let code = r#"
+items = [1, 2, 3]
+result = [x for x in items]
+#         ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // Go-to-def on the usage `x` should jump to the target `x` (the iteration variable)
+    assert_eq!(
+        r#"
+# main.py
+3 | result = [x for x in items]
+              ^
+Definition Result:
+3 | result = [x for x in items]
+                    ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_tuple_unpacking_target_x() {
+    let code = r#"
+result = [(y, x) for x, y in [(1, 2)]]
+#                    ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                         ^
+Definition Result:
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                         ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_tuple_unpacking_target_y() {
+    let code = r#"
+result = [(y, x) for x, y in [(1, 2)]]
+#                       ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                            ^
+Definition Result:
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                            ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_tuple_unpacking_usage_y() {
+    let code = r#"
+result = [(y, x) for x, y in [(1, 2)]]
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | result = [(y, x) for x, y in [(1, 2)]]
+               ^
+Definition Result:
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                            ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_tuple_unpacking_usage_x() {
+    let code = r#"
+result = [(y, x) for x, y in [(1, 2)]]
+#             ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                  ^
+Definition Result:
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                         ^
+"#
+        .trim(),
+        report.trim(),
     );
 }

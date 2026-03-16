@@ -1,0 +1,165 @@
+{
+  "variables": [],
+  "line_count": 22,
+  "functions": [
+    {
+      "name": "test.foo",
+      "return_annotation": "bool",
+      "is_return_type_known": true,
+      "parameters": [
+        {
+          "name": "x",
+          "annotation": "int",
+          "is_type_known": true,
+          "location": {
+            "line": 7,
+            "column": 9
+          }
+        },
+        {
+          "name": "y",
+          "annotation": "str",
+          "is_type_known": true,
+          "location": {
+            "line": 7,
+            "column": 17
+          }
+        }
+      ],
+      "is_type_known": true,
+      "location": {
+        "line": 7,
+        "column": 1
+      }
+    },
+    {
+      "name": "test.foo_unannotated",
+      "return_annotation": null,
+      "is_return_type_known": false,
+      "parameters": [
+        {
+          "name": "x",
+          "annotation": null,
+          "is_type_known": false,
+          "location": {
+            "line": 11,
+            "column": 21
+          }
+        },
+        {
+          "name": "y",
+          "annotation": null,
+          "is_type_known": false,
+          "location": {
+            "line": 11,
+            "column": 24
+          }
+        }
+      ],
+      "is_type_known": false,
+      "location": {
+        "line": 11,
+        "column": 1
+      }
+    },
+    {
+      "name": "test.C.bar",
+      "return_annotation": "bool",
+      "is_return_type_known": true,
+      "parameters": [
+        {
+          "name": "self",
+          "annotation": null,
+          "is_type_known": true,
+          "location": {
+            "line": 16,
+            "column": 13
+          }
+        },
+        {
+          "name": "x",
+          "annotation": "int",
+          "is_type_known": true,
+          "location": {
+            "line": 16,
+            "column": 19
+          }
+        },
+        {
+          "name": "y",
+          "annotation": "str",
+          "is_type_known": true,
+          "location": {
+            "line": 16,
+            "column": 27
+          }
+        }
+      ],
+      "is_type_known": true,
+      "location": {
+        "line": 16,
+        "column": 5
+      }
+    },
+    {
+      "name": "test.C.Inner.baz",
+      "return_annotation": "bool",
+      "is_return_type_known": true,
+      "parameters": [
+        {
+          "name": "self",
+          "annotation": null,
+          "is_type_known": true,
+          "location": {
+            "line": 20,
+            "column": 17
+          }
+        },
+        {
+          "name": "x",
+          "annotation": "int",
+          "is_type_known": true,
+          "location": {
+            "line": 20,
+            "column": 23
+          }
+        },
+        {
+          "name": "y",
+          "annotation": "str",
+          "is_type_known": true,
+          "location": {
+            "line": 20,
+            "column": 31
+          }
+        }
+      ],
+      "is_type_known": true,
+      "location": {
+        "line": 20,
+        "column": 9
+      }
+    }
+  ],
+  "classes": [
+    {
+      "name": "test.C",
+      "incomplete_attributes": [],
+      "location": {
+        "line": 15,
+        "column": 1
+      }
+    },
+    {
+      "name": "test.C.Inner",
+      "incomplete_attributes": [],
+      "location": {
+        "line": 19,
+        "column": 5
+      }
+    }
+  ],
+  "suppressions": [],
+  "annotation_completeness": 75.0,
+  "type_completeness": 100.0
+}

@@ -31,6 +31,7 @@ use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
+use pyrefly_types::types::Forallable;
 use pyrefly_types::types::Union;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
@@ -59,6 +60,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
+use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 use vec1::vec1;
 
@@ -72,6 +74,8 @@ use crate::alt::unwrap::HintRef;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::binding::binding::LambdaParamId;
+use crate::binding::narrow::int_from_slice;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -97,6 +101,7 @@ use crate::types::type_var::TypeVar;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::Type;
+use crate::types::types::Var;
 
 #[derive(Debug, Clone, Copy)]
 pub enum TypeOrExpr<'a> {
@@ -383,39 +388,52 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::BinOp(x) => self.binop_infer(x, hint, errors),
             Expr::UnaryOp(x) => self.unop_infer(x, errors),
             Expr::Lambda(lambda) => {
-                let param_vars = if let Some(parameters) = &lambda.parameters {
+                let param_ids = if let Some(parameters) = &lambda.parameters {
                     parameters
                         .iter_non_variadic_params()
-                        .map(|x| (&x.name().id, self.bindings().get_lambda_param(x.name())))
+                        .map(|x| (&x.name().id, self.bindings().get_lambda_param_id(x.name())))
                         .collect()
                 } else {
                     Vec::new()
                 };
+                let param_vars = self.allocate_lambda_param_vars(&param_ids);
+
                 // Pass any contextual information to the parameter bindings used in the lambda body as a side
                 // effect, by setting an answer for the vars created at binding time.
                 let return_hint = hint.and_then(|hint| self.decompose_lambda(hint, &param_vars));
 
-                let mut params = param_vars.into_map(|(name, var)| {
-                    Param::Pos(
-                        name.clone(),
-                        self.solver().force_var(var),
-                        Required::Required,
-                    )
-                });
+                let mut params: Vec<Param> = if let Some(parameters) = &lambda.parameters {
+                    param_vars
+                        .into_iter()
+                        .zip(parameters.iter_non_variadic_params())
+                        .map(|((name, var), param)| {
+                            let required = if param.default.is_some() {
+                                Required::Optional(None)
+                            } else {
+                                Required::Required
+                            };
+                            Param::Pos(name.clone(), self.solver().force_var(var), required)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 if let Some(parameters) = &lambda.parameters {
                     params.extend(parameters.vararg.iter().map(|x| {
-                        Param::VarArg(
-                            Some(x.name.id.clone()),
-                            self.solver()
-                                .force_var(self.bindings().get_lambda_param(&x.name)),
-                        )
+                        let var = self.solver().fresh_unwrap(self.uniques);
+                        self.set_lambda_param_var(
+                            self.bindings().get_lambda_param_id(&x.name),
+                            var,
+                        );
+                        Param::VarArg(Some(x.name.id.clone()), self.solver().force_var(var))
                     }));
                     params.extend(parameters.kwarg.iter().map(|x| {
-                        Param::Kwargs(
-                            Some(x.name.id.clone()),
-                            self.solver()
-                                .force_var(self.bindings().get_lambda_param(&x.name)),
-                        )
+                        let var = self.solver().fresh_unwrap(self.uniques);
+                        self.set_lambda_param_var(
+                            self.bindings().get_lambda_param_id(&x.name),
+                            var,
+                        );
+                        Param::Kwargs(Some(x.name.id.clone()), self.solver().force_var(var))
                     }));
                 }
                 let params = Params::List(ParamList::new(params));
@@ -575,7 +593,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Expr::FString(x) => {
-                // Ensure we detect type errors in f-string expressions.
                 let mut all_literal_strings = true;
                 x.visit(&mut |x| {
                     let fstring_expr_ty = self.expr_infer(x, errors);
@@ -929,7 +946,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// typed dict if the following conditions are met:
     /// - there cannot already be a contextual hint
     /// - all the keys must be string literals
-    /// - there cannot be any unpackings
+    /// - any unpacked value is also an anonymous typed dict
     /// - the dict cannot be empty
     fn dict_items_infer(
         &self,
@@ -958,13 +975,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             self.heap.mk_class_type(self.stdlib.dict(key_ty, value_ty))
         } else {
-            let mut typed_dict_fields = Vec::new();
-            let can_create_anonymous_typed_dict = hint.is_none()
+            // Use a map to track fields by name so later fields override earlier ones
+            let mut typed_dict_fields_map: SmallMap<Name, TypedDictField> = SmallMap::new();
+            // We can create an anonymous typed dict if there's no hint, the size is reasonable,
+            // and all keys are string literals. Unpackings are resolved later - we only allow them
+            // if all unpackings resolve to anonymous typed dicts.
+            let mut can_create_anonymous_typed_dict = hint.is_none()
                 && items.len() <= ANONYMOUS_TYPED_DICT_MAX_ITEMS
                 && items.iter().all(|item| {
-                    item.key
-                        .as_ref()
-                        .is_some_and(|k| k.as_string_literal_expr().is_some())
+                    item.key.is_none()
+                        || item
+                            .key
+                            .as_ref()
+                            .is_some_and(|k| k.as_string_literal_expr().is_some())
                 });
             let mut key_tys = Vec::new();
             let mut value_tys = Vec::new();
@@ -988,7 +1011,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             && let Some(string_lit) = key.as_string_literal_expr()
                         {
                             let key_name = Name::new(string_lit.value.to_str());
-                            typed_dict_fields.push((
+                            typed_dict_fields_map.insert(
                                 key_name,
                                 TypedDictField {
                                     ty: if value_t.is_none() {
@@ -1007,14 +1030,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     required: false,
                                     read_only_reason: None,
                                 },
-                            ));
+                            );
                         }
                         value_tys.push(value_t);
                     }
                 }
                 None => {
                     let ty = self.expr_infer(&x.value, errors);
-                    if let Some((key_t, value_t)) = self.unwrap_mapping(&ty) {
+                    // If the unpacked value is an anonymous typed dict, merge its fields.
+                    // Later fields override earlier ones with the same name.
+                    if can_create_anonymous_typed_dict
+                        && let Type::TypedDict(TypedDict::Anonymous(inner)) = &ty
+                    {
+                        key_tys.push(self.stdlib.str().clone().to_type());
+                        for (name, field) in inner.fields.iter() {
+                            typed_dict_fields_map.insert(name.clone(), field.clone());
+                            if !field.ty.is_error() {
+                                value_tys.push(field.ty.clone());
+                            }
+                        }
+                    } else if let Some((key_t, value_t)) = self.unwrap_mapping(&ty) {
+                        // Non-anonymous-typed-dict unpacking disables anonymous typed dict creation
+                        can_create_anonymous_typed_dict = false;
                         if !key_t.is_error() {
                             if let Some(key_hint) = &key_hint
                                 && self.is_subset_eq(&key_t, key_hint.ty())
@@ -1034,6 +1071,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         }
                     } else {
+                        can_create_anonymous_typed_dict = false;
                         self.error(
                             errors,
                             x.value.range(),
@@ -1043,11 +1081,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             });
-            if can_create_anonymous_typed_dict && !typed_dict_fields.is_empty() {
+            if can_create_anonymous_typed_dict
+                && !typed_dict_fields_map.is_empty()
+                && typed_dict_fields_map.len() <= ANONYMOUS_TYPED_DICT_MAX_ITEMS
+            {
+                // Compute the fallback value type from the field mapping, not from value_tys which
+                // may contain types from overridden keys
+                let final_value_tys: Vec<_> = typed_dict_fields_map
+                    .values()
+                    .map(|f| f.ty.clone())
+                    .collect();
+                let typed_dict_fields: Vec<_> = typed_dict_fields_map.into_iter().collect();
                 return self.heap.mk_typed_dict(TypedDict::Anonymous(Box::new(
                     AnonymousTypedDictInner {
                         fields: typed_dict_fields,
-                        value_type: self.unions(value_tys),
+                        value_type: self.unions(final_value_tys),
                     },
                 )));
             }
@@ -1295,12 +1343,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        if let Expr::NumberLiteral(ExprNumberLiteral {
-            value: Number::Int(idx),
-            ..
-        }) = slice
-            && let Some(idx) = idx.as_usize()
-        {
+        if let Some(idx) = int_from_slice(slice) {
             TypeInfo::at_facet(base, &FacetKind::Index(idx), || {
                 self.subscript_infer_for_type(base.ty(), slice, range, errors)
             })
@@ -1363,6 +1406,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .mk_type_form(self.heap.mk_type_form(self.heap.mk_any_implicit()));
                 } else if cls.has_toplevel_qname("typing", "Any") {
                     *ty = self.heap.mk_type_form(self.heap.mk_any_explicit())
+                } else if cls.has_toplevel_qname("typing", "NamedTuple") {
+                    // When `NamedTuple` is used as a type annotation (e.g. TypeVar bound),
+                    // resolve to `NamedTupleFallback` — the class that actually appears in
+                    // the MRO of user-defined NamedTuple subclasses.
+                    *ty = self.heap.mk_type_form(
+                        self.heap
+                            .mk_class_type(self.stdlib.named_tuple_fallback().clone()),
+                    );
                 } else {
                     // All other classes (including Tensor) get promoted and wrapped in type_form
                     *ty = self.heap.mk_type_form(self.promote(cls, range, errors));
@@ -1877,9 +1928,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             match base {
                 Type::Forall(forall) => {
-                    let tys =
-                        xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
-                    self.specialize_forall(*forall, tys, range, errors)
+                    if matches!(forall.body, Forallable::TypeAlias(_)) {
+                        let tys = xs
+                            .map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
+                        self.specialize_forall(*forall, tys, range, errors)
+                    } else {
+                        let name = forall.body.name();
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                            format!("`{}` is not subscriptable", name.as_ref().as_str()),
+                        )
+                    }
                 }
                 // Note that we have to check for `builtins.type` by name here because this code runs
                 // when we're bootstrapping the stdlib and don't have access to class objects yet.
@@ -1921,6 +1982,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Tensor type parsing: Tensor[2, 3] syntax
                 Type::ClassDef(ref cls) if self.is_tensor_class(cls) => {
                     Type::type_form(self.parse_tensor_type(cls, xs, errors))
+                }
+                // Jaxtyping annotation parsing: Float[Tensor, "batch channels"] syntax
+                Type::ClassDef(ref cls)
+                    if self.is_jaxtyping_wrapper(cls)
+                        && self.solver().tensor_shapes =>
+                {
+                    Type::type_form(self.parse_jaxtyping_annotation(xs, range, errors))
                 }
                 // Dim type parsing: Dim[3], Dim[N], Dim[N+1] syntax
                 Type::ClassDef(ref cls) if self.is_symint_class(cls) => {
@@ -1971,13 +2039,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // TODO(stroxler): Add a new API, similar to `type_of_attr_get` but returning a
                         // LookupResult or an Optional type, that we could use here to avoid the double lookup.
                         if self.has_attr(&class_ty, &dunder::CLASS_GETITEM) {
-                            let cls_value = self.promote_silently(&cls);
-                            let call_args = [CallArg::ty(&cls_value, range), CallArg::expr(slice)];
                             Some(self.call_method_or_error(
                                 &class_ty,
                                 &dunder::CLASS_GETITEM,
                                 range,
-                                &call_args,
+                                &[CallArg::expr(slice)],
                                 &[],
                                 errors,
                                 Some(&|| ErrorContext::Index(self.for_display(class_ty.clone()))),
@@ -2745,5 +2811,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!("{reason}"),
             );
         }
+    }
+}
+
+impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn allocate_lambda_param_vars<'b>(
+        &self,
+        param_ids: &[(&'b Name, LambdaParamId)],
+    ) -> Vec<(&'b Name, Var)> {
+        param_ids
+            .iter()
+            .map(|(name, id)| {
+                let var = self.solver().fresh_unwrap(self.uniques);
+                self.set_lambda_param_var(*id, var);
+                (*name, var)
+            })
+            .collect()
     }
 }

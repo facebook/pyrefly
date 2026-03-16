@@ -6,7 +6,6 @@
  */
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 use pyrefly_build::handle::Handle;
 use pyrefly_types::class::Class;
@@ -15,70 +14,19 @@ use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use ruff_python_ast::name::Name;
 
-use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::class::get_context_from_class;
 use crate::report::pysa::context::ModuleContext;
-use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionNode;
 use crate::report::pysa::function::FunctionRef;
-use crate::report::pysa::function::WholeProgramFunctionDefinitions;
 use crate::report::pysa::function::get_all_functions;
 use crate::report::pysa::module::ModuleIds;
 use crate::report::pysa::slow_fun_monitor::slow_fun_monitor_scope;
 use crate::report::pysa::step_logger::StepLogger;
 use crate::state::state::Transaction;
 
-/// A map from a (base) method to classes that directly override it
-#[derive(Debug)]
-pub(crate) struct OverrideGraph {
-    edges: HashMap<FunctionRef, HashSet<ClassRef>>,
-}
-
 pub struct ModuleReversedOverrideGraph(HashMap<FunctionRef, FunctionRef>);
 
 pub struct WholeProgramReversedOverrideGraph(dashmap::ReadOnlyView<FunctionRef, FunctionRef>);
-
-impl OverrideGraph {
-    pub fn new() -> Self {
-        OverrideGraph {
-            edges: HashMap::new(),
-        }
-    }
-
-    fn add_edge(&mut self, base_method: FunctionRef, overriding_class: ClassRef) {
-        self.edges
-            .entry(base_method)
-            .or_default()
-            .insert(overriding_class);
-    }
-
-    pub fn from_reversed(
-        reversed_override_graph: &WholeProgramReversedOverrideGraph,
-        function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
-    ) -> Self {
-        let step = StepLogger::start("Building override graph", "Built override graph");
-
-        let mut graph = OverrideGraph::new();
-        for (overriding_method, base_method) in reversed_override_graph.0.iter() {
-            let overriding_class = function_base_definitions
-                .get(overriding_method.module_id, &overriding_method.function_id)
-                .and_then(|definition| definition.defining_class.clone())
-                .unwrap();
-            graph.add_edge(base_method.clone(), overriding_class);
-        }
-
-        step.finish();
-        graph
-    }
-
-    pub fn overrides_exist(&self, method: &FunctionRef) -> bool {
-        self.edges.contains_key(method)
-    }
-
-    pub fn get_overriding_classes(&self, method: &FunctionRef) -> Option<&HashSet<ClassRef>> {
-        self.edges.get(method)
-    }
-}
 
 impl WholeProgramReversedOverrideGraph {
     #[cfg(test)]
@@ -100,7 +48,7 @@ fn get_super_class_member(
 
     let super_class_member = context
         .transaction
-        .ad_hoc_solve(&context.handle, |solver| {
+        .ad_hoc_solve(&context.handle, "override_super_class_member", |solver| {
             solver.get_super_class_member(class, None, field_name)
         })
         .flatten()?;

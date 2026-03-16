@@ -77,7 +77,6 @@ use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleId;
 use crate::report::pysa::module::ModuleIds;
 use crate::report::pysa::module::ModuleKey;
-use crate::report::pysa::override_graph::OverrideGraph;
 use crate::report::pysa::override_graph::build_reversed_override_graph;
 use crate::report::pysa::slow_fun_monitor::slow_fun_monitor_scope;
 use crate::report::pysa::step_logger::StepLogger;
@@ -185,14 +184,12 @@ pub fn export_module_type_of_expressions(context: &ModuleContext) -> PysaModuleT
 pub fn export_module_call_graphs(
     context: &ModuleContext,
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
-    override_graph: &OverrideGraph,
     global_variables: &WholeProgramGlobalVariables,
     captured_variables: &WholeProgramCapturedVariables,
 ) -> PysaModuleCallGraphs {
     let call_graphs = export_call_graphs(
         context,
         function_base_definitions,
-        override_graph,
         global_variables,
         captured_variables,
     )
@@ -391,7 +388,6 @@ fn write_module_type_of_expressions_files(
 fn write_module_call_graph_files(
     module_work_list: &Vec<(Handle, ModuleId, PathBuf)>,
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
-    override_graph: &OverrideGraph,
     global_variables: &WholeProgramGlobalVariables,
     captured_variables: &WholeProgramCapturedVariables,
     transaction: &Transaction,
@@ -414,7 +410,6 @@ fn write_module_call_graph_files(
                             export_module_call_graphs(
                                 &context,
                                 function_base_definitions,
-                                override_graph,
                                 global_variables,
                                 captured_variables,
                             )
@@ -593,9 +588,6 @@ pub fn write_results(
     let global_variables = collect_global_variables(&handles, transaction, &module_ids);
     let captured_variables = collect_captured_variables(&handles, transaction, &module_ids);
 
-    let override_graph =
-        OverrideGraph::from_reversed(&reversed_override_graph, &function_base_definitions);
-
     write_module_definitions_files(
         &module_work_list,
         &function_base_definitions,
@@ -616,7 +608,6 @@ pub fn write_results(
     write_module_call_graph_files(
         &module_work_list,
         &function_base_definitions,
-        &override_graph,
         &global_variables,
         &captured_variables,
         transaction,

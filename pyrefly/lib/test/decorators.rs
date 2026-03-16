@@ -608,10 +608,10 @@ testcase!(
     r#"
 import contextlib
 from contextlib import contextmanager
-from typing import Iterator, List, assert_type
+from typing import Generator, List, assert_type
 
 @contextmanager
-def generic_ctx[T](val: T) -> Iterator[T]:
+def generic_ctx[T](val: T) -> Generator[T, None, None]:
     yield val
 
 def test(x: int, items: List[int]):

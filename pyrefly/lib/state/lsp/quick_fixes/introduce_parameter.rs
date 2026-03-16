@@ -39,6 +39,7 @@ use super::extract_shared::split_selection;
 use super::extract_shared::unique_name;
 use super::extract_shared::validate_non_empty_selection;
 use super::types::LocalRefactorCodeAction;
+use crate::module::module_info::ModuleInfo;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
 
@@ -472,7 +473,7 @@ fn collect_matching_expression_ranges(
 fn build_callsite_edits(
     transaction: &Transaction<'_>,
     handle: &Handle,
-    module_info: &crate::module::module_info::ModuleInfo,
+    module_info: &ModuleInfo,
     param_info: &ParamInfo,
     template: &ExpressionTemplate,
     new_param_name: &str,
@@ -503,6 +504,7 @@ fn build_callsite_edits(
             definition.metadata.clone(),
             definition.definition_range,
             &definition.module,
+            true,
         ) else {
             continue;
         };

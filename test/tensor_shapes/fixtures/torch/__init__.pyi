@@ -183,6 +183,50 @@ class Tensor[*Shape]:
         """Returns detached tensor. Shape inference via generic fixture signature."""
         ...
 
+    # ==== Tensor Creation Methods ====
+    # These create new tensors; shape depends on size args, not self's shape.
+
+    def new_zeros(
+        self,
+        *size: builtins.int,
+        dtype: Any = None,
+        device: Any = None,
+        requires_grad: builtins.bool = False,
+    ) -> Tensor:
+        """Create zero-filled tensor with same dtype/device."""
+        ...
+
+    def new_ones(
+        self,
+        *size: builtins.int,
+        dtype: Any = None,
+        device: Any = None,
+        requires_grad: builtins.bool = False,
+    ) -> Tensor:
+        """Create one-filled tensor with same dtype/device."""
+        ...
+
+    def new_empty(
+        self,
+        *size: builtins.int,
+        dtype: Any = None,
+        device: Any = None,
+        requires_grad: builtins.bool = False,
+    ) -> Tensor:
+        """Create uninitialized tensor with same dtype/device."""
+        ...
+
+    def new_full(
+        self,
+        size: tuple[builtins.int, ...],
+        fill_value: builtins.float | builtins.int,
+        dtype: Any = None,
+        device: Any = None,
+        requires_grad: builtins.bool = False,
+    ) -> Tensor:
+        """Create tensor filled with fill_value, same dtype/device."""
+        ...
+
     # ==== Dtype Conversion Methods ====
     # Note: These method names shadow Python builtins, so type annotations
     # after this point should use builtins.int, builtins.bool, builtins.float
@@ -283,8 +327,8 @@ class Tensor[*Shape]:
         """Scatter elements along dimension. Shape-preserving operation."""
         ...
 
-    def masked_select(self: Tensor, mask: Tensor) -> Tensor:
-        """Select elements with mask. Shape inference via meta-shape: torch.Tensor.masked_select"""
+    def masked_select(self: Tensor, mask: Tensor) -> Tensor[Any]:
+        """Select elements with mask. Returns 1D tensor with data-dependent size."""
         ...
 
     # ==== Phase 1.1: Missing Shape Operations (Methods) ====
@@ -1233,8 +1277,8 @@ def scatter[*Shape](
     """Scatter elements along dimension. Shape-preserving operation."""
     ...
 
-def masked_select(self: Tensor, mask: Tensor) -> Tensor:
-    """Select elements with mask. Shape inference via meta-shape: torch.masked_select"""
+def masked_select(self: Tensor, mask: Tensor) -> Tensor[Any]:
+    """Select elements with mask. Returns 1D tensor with data-dependent size."""
     ...
 
 # ==== Phase 1.1: Missing Shape Operations ====
@@ -1933,6 +1977,18 @@ def tensor(
     """Create tensor from data. Returns shapeless tensor (shape depends on input data)."""
     ...
 
+def randint(
+    low: int,
+    high: int,
+    size: tuple[int, ...],
+    *,
+    dtype: Any = None,
+    device: Any = None,
+    requires_grad: bool = False,
+) -> Tensor:
+    """Create tensor of random integers. Returns shapeless tensor (shape depends on size arg)."""
+    ...
+
 # ==============================================================================
 # Additional Math Operations
 # ==============================================================================
@@ -1947,6 +2003,25 @@ def outer(self: Tensor, vec2: Tensor) -> Tensor:
 
 def polar[*Shape](abs: Tensor[*Shape], angle: Tensor[*Shape]) -> Tensor[*Shape]:
     """Construct complex tensor from polar coordinates. Shape-preserving operation."""
+    ...
+
+def addmm[N, K, M](
+    input: Tensor[N, M],
+    mat1: Tensor[N, K],
+    mat2: Tensor[K, M],
+    *,
+    beta: float = 1,
+    alpha: float = 1,
+) -> Tensor[N, M]:
+    """Matrix multiply with add: beta * input + alpha * (mat1 @ mat2)."""
+    ...
+
+def cross[*B](
+    input: Tensor[*B, 3],
+    other: Tensor[*B, 3],
+    dim: int = -1,
+) -> Tensor[*B, 3]:
+    """Cross product of two tensors along a dimension of size 3."""
     ...
 
 # Context managers

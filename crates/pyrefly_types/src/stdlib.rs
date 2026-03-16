@@ -35,6 +35,7 @@ const SPECIAL_FORM_NAMES: &[&str] = &[
     "NoReturn",
     "TypeGuard",
     "TypeIs",
+    "Unpack",
 ];
 
 #[derive(Debug, Clone)]

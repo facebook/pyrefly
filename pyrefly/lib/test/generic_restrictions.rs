@@ -248,6 +248,17 @@ def func(c: T) -> C:
 );
 
 testcase!(
+    test_bounded_typevar_type_attribute_access,
+    r#"
+from typing import TypeVar, assert_type
+T = TypeVar('T', bound=type)
+def get_class_name(cls: T) -> str:
+    assert_type(cls.__name__, str)
+    return cls.__name__
+ "#,
+);
+
+testcase!(
     test_instantiate_default_typevar,
     r#"
 from typing import assert_type, reveal_type, Callable, Self
@@ -256,7 +267,7 @@ class C[T = int]:
         return self
     attr: T
 reveal_type(C.meth)  # E: [T = int](self: C[T], /) -> C[T]
-assert_type(C.attr, int)  # E: assert_type(Any, int) failed  # E: Generic attribute `attr` of class `C` is not visible on the class
+assert_type(C.attr, int)  # E: assert_type(Unknown, int) failed  # E: Generic attribute `attr` of class `C` is not visible on the class
  "#,
 );
 
@@ -515,6 +526,73 @@ assert_type(f("bar"), str) # E: `str` is not assignable to upper bound `Literal[
 
 assert_type(g("foo"), Literal["foo"])
 assert_type(g("bar"), Literal["bar"])
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_bool_to_int,
+    r#"
+from typing import assert_type
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# bool is a subtype of int, so T should resolve to int (the constraint), not bool.
+assert_type(f(True), int)
+assert_type(f(False), int)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_literal_int,
+    r#"
+from typing import assert_type
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# Literal[42] is a subtype of int, so T should resolve to int.
+assert_type(f(42), int)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_literal_str,
+    r#"
+from typing import assert_type
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# Literal["hi"] is a subtype of str, so T should resolve to str.
+assert_type(f("hi"), str)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_subclass,
+    r#"
+from typing import assert_type
+
+class B: ...
+class C(B): ...
+class D(C): ...
+
+def f[T: (B, C)](x: T) -> T: ...
+
+# D is a subtype of C (and B), so T should resolve to C (the narrowest constraint).
+assert_type(f(D()), C)
+# B matches B exactly.
+assert_type(f(B()), B)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_no_match,
+    r#"
+class X: ...
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# X is not assignable to int or str, so this should error.
+f(X())  # E: `X` is not assignable to upper bound `int | str` of type variable `T`
     "#,
 );
 
@@ -974,7 +1052,7 @@ testcase!(
     r#"
 from typing import assert_type
 def f[T1, T2 = T1](x: T1, y: T2 | None = None) -> tuple[T1, T2]: ...
-assert_type(f(1), tuple[int, int])  # E: assert_type(tuple[int, Any], tuple[int, int])
+assert_type(f(1), tuple[int, int])  # E: assert_type(tuple[int, Unknown], tuple[int, int])
     "#,
 );
 
@@ -1076,4 +1154,45 @@ global_var1: T  # E: Type variable `T` is not in scope
 global_var2: list[T] = []  # E: Type variable `T` is not in scope
 list[T]()  # should error
 "#,
+);
+
+testcase!(
+    bug = "Follow-on errors on TypeVar usages inside nested class that shadows outer TypeVars",
+    test_nested_class_independent_typevar_adoption,
+    r#"
+from typing import Generic, Type, TypeVar
+
+_Deserialized = TypeVar("_Deserialized")
+_Serialized = TypeVar("_Serialized")
+
+class CustomCoercer(Generic[_Deserialized, _Serialized]):
+    # CoercerMapping uses the same TypeVars as CustomCoercer, which the spec forbids.
+    class CoercerMapping(
+        dict[
+            Type[_Deserialized],  # should error: _Deserialized already bound by CustomCoercer
+            Type["CustomCoercer[_Deserialized, _Serialized]"],  # should error: both TypeVars
+        ]
+    ):
+        def __getitem__(
+            self,
+            key: type[_Deserialized],
+        ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...
+"#,
+);
+
+testcase!(
+    test_constraint_promotion_anystr_passthrough,
+    r#"
+from typing import AnyStr, assert_type
+
+def f(x: AnyStr) -> AnyStr: ...
+def g(x: AnyStr) -> AnyStr:
+    # Passing an abstract AnyStr (which is itself constrained to str | bytes)
+    # to another function that also expects AnyStr should succeed without error.
+    return f(x)
+
+# Concrete calls still promote correctly.
+assert_type(f("hi"), str)
+assert_type(f(b"hi"), bytes)
+    "#,
 );

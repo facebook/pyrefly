@@ -72,11 +72,12 @@ def test_cross_entropy[N, C](input: Tensor[N, C], target: Tensor[N]):
 
 
 def test_cross_entropy_no_reduction[N, C](input: Tensor[N, C], target: Tensor[N]):
-    """Cross entropy with no reduction - returns scalar with default reduction='mean'"""
+    """Cross entropy with no reduction preserves self shape"""
     loss = F.cross_entropy(input, target, reduction="none")
-    # Loss function with reduction="none" should return element-wise loss Tensor[N]
-    # but meta-shape currently returns scalar for loss functions
-    assert_type(loss, Tensor[()])  # Currently returns scalar
+    # reduction="none" preserves the input (self) shape.
+    # PyTorch actually returns Tensor[N] for cross_entropy, but our meta-shape
+    # uses a single loss_ir for all loss functions and preserves self's shape.
+    assert_type(loss, Tensor[N, C])
 
 
 def test_nll_loss[N, C](input: Tensor[N, C], target: Tensor[N]):

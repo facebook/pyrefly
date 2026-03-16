@@ -5,8 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
+use std::hash::Hash;
+use std::hash::Hasher;
 
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
@@ -25,6 +28,54 @@ use crate::types::Type;
 // Tensor Types
 // ============================================================================
 
+/// Whether a tensor type was constructed using native (`Tensor[N, M]`) or
+/// jaxtyping (`Float[Tensor, "N M"]`) syntax. Controls display rendering and
+/// enables diagnostic checks (e.g., mixing both syntaxes in one function).
+///
+/// Transparent to equality, hashing, and ordering — syntax does not affect
+/// type identity. Two tensor types with different syntax but identical base
+/// class and shape are considered equal.
+#[derive(Debug, Clone, Copy, Default)]
+#[derive(Visit, VisitMut)]
+pub enum TensorSyntax {
+    #[default]
+    Native,
+    Jaxtyping,
+}
+
+// Syntax is a display/diagnostic concern, not a type identity concern.
+// All trait impls treat every TensorSyntax value as equal.
+
+impl PartialEq for TensorSyntax {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for TensorSyntax {}
+
+impl Hash for TensorSyntax {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
+}
+
+impl PartialOrd for TensorSyntax {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TensorSyntax {
+    fn cmp(&self, _other: &Self) -> Ordering {
+        Ordering::Equal
+    }
+}
+
+impl crate::equality::TypeEq for TensorSyntax {
+    fn type_eq(&self, _other: &Self, _ctx: &mut crate::equality::TypeEqCtx) -> bool {
+        true
+    }
+}
+
 /// A tensor type with shape information
 /// Example: Tensor[2, 3] represents a 2x3 tensor
 /// Example: Tensor (no brackets) represents a shapeless tensor (Unpacked with tuple[Unknown, ...])
@@ -35,12 +86,18 @@ pub struct TensorType {
     pub base_class: ClassType,
     /// Shape dimensions. Shapeless tensors use Unpacked([], tuple[Unknown, ...], []).
     pub shape: TensorShape,
+    /// Whether this type was constructed from native or jaxtyping syntax.
+    pub syntax: TensorSyntax,
 }
 
 impl TensorType {
-    /// Create tensor type with shape information
+    /// Create tensor type with shape information (defaults to Native syntax)
     pub fn new(base_class: ClassType, shape: TensorShape) -> Self {
-        Self { base_class, shape }
+        Self {
+            base_class,
+            shape,
+            syntax: TensorSyntax::Native,
+        }
     }
 
     /// Create shapeless tensor type (compatible with any shape)
@@ -49,7 +106,14 @@ impl TensorType {
         Self {
             base_class,
             shape: TensorShape::Unpacked(Box::new((vec![], Type::any_tuple(), vec![]))),
+            syntax: TensorSyntax::Native,
         }
+    }
+
+    /// Set the syntax for this tensor type.
+    pub fn with_syntax(mut self, syntax: TensorSyntax) -> Self {
+        self.syntax = syntax;
+        self
     }
 
     pub fn to_type(self) -> Type {
@@ -73,10 +137,22 @@ impl TensorType {
 
 impl Display for TensorType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_shapeless() {
-            write!(f, "{}", self.base_class.name())
-        } else {
-            write!(f, "{}[{}]", self.base_class.name(), self.shape)
+        match self.syntax {
+            TensorSyntax::Native => {
+                if self.is_shapeless() {
+                    write!(f, "{}", self.base_class.name())
+                } else {
+                    write!(f, "{}[{}]", self.base_class.name(), self.shape)
+                }
+            }
+            TensorSyntax::Jaxtyping => {
+                write!(
+                    f,
+                    "Shaped[{}, \"{}\"]",
+                    self.base_class.name(),
+                    self.shape.fmt_jaxtyping()
+                )
+            }
         }
     }
 }
@@ -263,6 +339,81 @@ impl TensorShape {
 
         Ok(normalized as usize)
     }
+
+    /// Format the shape using jaxtyping syntax (space-separated, no parens for scalar).
+    ///
+    /// Handles all jaxtyping dimension types:
+    /// - `Type::Any` → `_` (anonymous dim)
+    /// - `Type::Size(Literal(n))` → `n`
+    /// - `Type::Size(Add/Sub)` → `a+b` / `a-b` (no parens, no spaces)
+    /// - `Type::Quantified` → dim name
+    /// - Unpacked with `tuple[Any, ...]` middle → `...` (ellipsis)
+    /// - Unpacked with TypeVarTuple middle → `*name`
+    pub fn fmt_jaxtyping(&self) -> String {
+        match self {
+            Self::Concrete(dims) => {
+                if dims.is_empty() {
+                    String::new() // Scalar: empty string inside quotes
+                } else {
+                    dims.iter()
+                        .map(fmt_jaxtyping_dim)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                }
+            }
+            Self::Unpacked(box (prefix, middle, suffix)) => {
+                let mut parts: Vec<String> = prefix.iter().map(fmt_jaxtyping_dim).collect();
+
+                // Ellipsis: tuple[Any, ...] middle renders as "..."
+                // Named TypeVarTuple renders as "*name"
+                if *middle == Type::any_tuple() {
+                    parts.push("...".to_owned());
+                } else {
+                    parts.push(format!("*{middle}"));
+                }
+
+                parts.extend(suffix.iter().map(fmt_jaxtyping_dim));
+                parts.join(" ")
+            }
+        }
+    }
+}
+
+/// Format a single dimension type in jaxtyping syntax.
+///
+/// Jaxtyping uses different rendering than native tensor syntax:
+/// - `Type::Any(_)` → `_` (anonymous dim, not "Any")
+/// - `SizeExpr::Add/Sub` → `a+b` / `a-b` (no parens, no spaces)
+/// - Negative literal in Add → rendered as subtraction: `Add(-1, n)` → `n-1`
+/// - All other types use their default Display
+fn fmt_jaxtyping_dim(d: &Type) -> String {
+    match d {
+        Type::Any(_) => "_".to_owned(),
+        Type::Size(expr) => fmt_jaxtyping_size_expr(expr),
+        _ => format!("{d}"),
+    }
+}
+
+/// Format a SizeExpr in jaxtyping syntax (no parens, no spaces around operators).
+fn fmt_jaxtyping_size_expr(expr: &SizeExpr) -> String {
+    match expr {
+        SizeExpr::Literal(n) => n.to_string(),
+        SizeExpr::Add(left, right) => {
+            // After canonicalization, Sub(a,b) becomes Add(Literal(-b), a).
+            // Detect this and render as subtraction: Add(-n, x) → x-n
+            if let Type::Size(SizeExpr::Literal(n)) = left.as_ref()
+                && *n < 0
+            {
+                return format!("{}-{}", fmt_jaxtyping_dim(right), n.wrapping_neg());
+            }
+            format!("{}+{}", fmt_jaxtyping_dim(left), fmt_jaxtyping_dim(right))
+        }
+        SizeExpr::Sub(left, right) => {
+            format!("{}-{}", fmt_jaxtyping_dim(left), fmt_jaxtyping_dim(right))
+        }
+        // Mul/FloorDiv fall back to default SizeExpr display (rare in jaxtyping)
+        _ => format!("{expr}"),
+    }
 }
 
 impl Display for TensorShape {
@@ -378,9 +529,8 @@ fn broadcast_concrete_with_unpacked(
             result_suffix,
         ))))
     } else {
-        Err(ShapeError::InvalidDimension {
-            value: 0,
-            reason: "Cannot broadcast concrete dims with variadic shape: alignment is ambiguous"
+        Err(ShapeError::ShapeComputation {
+            message: "Cannot broadcast concrete dims with variadic shape: alignment is ambiguous"
                 .to_owned(),
         })
     }
@@ -438,9 +588,8 @@ fn broadcast_unpacked_with_unpacked(
         ))))
     } else {
         // Different TypeVarTuples or structural mismatch
-        Err(ShapeError::InvalidDimension {
-            value: 0,
-            reason: format!(
+        Err(ShapeError::ShapeComputation {
+            message: format!(
                 "Cannot broadcast variadic shapes: incompatible middles *{} vs *{}",
                 am, bm
             ),
@@ -501,9 +650,8 @@ fn broadcast_dim(a_ty: &Type, b_ty: &Type, position: usize) -> Result<Type, Shap
         (Type::Size(SizeExpr::Literal(1)), _) => Ok(b_ty.clone()),
         (_, Type::Size(SizeExpr::Literal(1))) => Ok(a_ty.clone()),
         // Different non-broadcastable types: incompatible
-        _ => Err(ShapeError::InvalidDimension {
-            value: 0,
-            reason: format!(
+        _ => Err(ShapeError::ShapeComputation {
+            message: format!(
                 "Cannot broadcast dimension {} with dimension {} at position {}",
                 a_ty, b_ty, position
             ),

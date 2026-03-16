@@ -136,6 +136,19 @@ def process(items: List[str]):
 }
 
 #[test]
+fn test_new_type_import_used() {
+    let code = r#"
+from typing import NewType
+
+UserID = NewType("UserID", int)
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_import_diagnostics(&state, handle);
+    assert_eq!(report, "No unused imports");
+}
+
+#[test]
 fn test_star_import_not_reported_as_unused() {
     let code = r#"
 from typing import *

@@ -220,6 +220,9 @@ fn recurse_stmt_adding_symbols<'a>(
         Stmt::Assign(stmt_assign) => {
             for target in &stmt_assign.targets {
                 if let Expr::Name(name) = target {
+                    if name.id.is_empty() {
+                        continue;
+                    }
                     // todo(jvansch): Try to reuse DefinitionMetadata here.
                     symbols.push(DocumentSymbol {
                         name: name.id.to_string(),
@@ -235,7 +238,9 @@ fn recurse_stmt_adding_symbols<'a>(
             }
         }
         Stmt::AnnAssign(stmt_ann_assign) => {
-            if let Expr::Name(name) = &*stmt_ann_assign.target {
+            if let Expr::Name(name) = &*stmt_ann_assign.target
+                && !name.id.is_empty()
+            {
                 symbols.push(DocumentSymbol {
                     name: name.id.to_string(),
                     detail: Some(

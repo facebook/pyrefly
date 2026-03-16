@@ -656,7 +656,7 @@ class B[T: int | A[Any] = Any]:
     def __new__(cls, x: list[A[T]]) -> B[A[T]]: ...
 
 assert_type(B([A(0)]), B[A[int]])
-B([A("oops")])  # E: `str` is not assignable to upper bound `A[Any] | int` of type variable `T`
+B([A("oops")])  # E: `str` is not assignable to upper bound `A | int` of type variable `T`
     "#,
 );
 

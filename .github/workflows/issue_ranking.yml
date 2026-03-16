@@ -1,0 +1,363 @@
+name: Issue Priority Ranking
+
+on:
+  workflow_dispatch:
+    inputs:
+      labels:
+        description: 'Comma-separated labels to filter (empty = all open issues)'
+        required: false
+        default: ''
+      run_primer:
+        description: 'Run primer comparison for error data (adds ~2 hours)'
+        required: false
+        type: boolean
+        default: false
+      check_snippets:
+        description: 'Run type checkers on code snippets from issues'
+        required: false
+        type: boolean
+        default: true
+      v1_analysis_run_id:
+        description: 'Run ID to pull ranking.json from (V1 analysis only, skips primer+ranking)'
+        required: false
+        default: ''
+
+permissions: {}
+
+jobs:
+  # Job 1: Run primer comparison shards (optional, parallelized)
+  primer:
+    name: Primer shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    if: ${{ inputs.run_primer && inputs.v1_analysis_run_id == '' }}
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-05
+
+      - name: Install type checkers
+        run: pip install pyright mypy
+
+      - name: Build pyrefly
+        run: |
+          cargo build --manifest-path pyrefly/Cargo.toml
+          echo "Built pyrefly binary at $(pwd)/target/debug/pyrefly"
+          ./target/debug/pyrefly --version
+
+      - name: Run primer shard ${{ matrix.shard }}/4
+        working-directory: scripts
+        run: |
+          echo "=== Starting primer shard ${{ matrix.shard }}/4 ==="
+          python3 compare_typecheckers.py \
+            --pyrefly ../target/debug/pyrefly \
+            --cache-dir /tmp/primer_cache \
+            --output-json /tmp/primer_shard_${{ matrix.shard }}.json \
+            --shard-index ${{ matrix.shard }} \
+            --num-shards 4 \
+            2>&1 | tee /tmp/primer_log_${{ matrix.shard }}.txt
+          echo "=== Shard ${{ matrix.shard }} complete ==="
+          echo "Output size: $(du -h /tmp/primer_shard_${{ matrix.shard }}.json | cut -f1)"
+
+      - name: Upload shard results
+        uses: actions/upload-artifact@v6
+        with:
+          name: primer-shard-${{ matrix.shard }}
+          path: |
+            /tmp/primer_shard_${{ matrix.shard }}.json
+            /tmp/primer_log_${{ matrix.shard }}.txt
+
+  # Job 2: Merge primer shards into a single file
+  primer-merge:
+    name: Merge primer shards
+    runs-on: ubuntu-latest
+    needs: [primer]
+    if: ${{ inputs.run_primer && inputs.v1_analysis_run_id == '' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/merge_primer_shards.py
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Download all shards
+        uses: actions/download-artifact@v6
+        with:
+          pattern: primer-shard-*
+          path: /tmp/shards
+
+      - name: Merge shards
+        run: |
+          python3 scripts/merge_primer_shards.py \
+            /tmp/shards/primer-shard-0/primer_shard_0.json \
+            /tmp/shards/primer-shard-1/primer_shard_1.json \
+            /tmp/shards/primer-shard-2/primer_shard_2.json \
+            /tmp/shards/primer-shard-3/primer_shard_3.json \
+            -o /tmp/primer_errors.json
+          echo "Merged size: $(du -h /tmp/primer_errors.json | cut -f1)"
+
+      - name: Upload merged results
+        uses: actions/upload-artifact@v6
+        with:
+          name: primer-results
+          path: /tmp/primer_errors.json
+
+  # Job 3: Collect issues + run ranking pipeline
+  rank:
+    name: Collect and rank issues
+    runs-on: ubuntu-latest
+    needs: [primer-merge]
+    if: ${{ always() && !cancelled() && inputs.v1_analysis_run_id == '' }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            scripts/issue_ranker
+            scripts/primer_classifier
+            scripts/compare_typecheckers.py
+            scripts/llm_transport.py
+            scripts/projects.py
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Log workflow inputs
+        run: |
+          echo "=== Issue Ranking Pipeline ==="
+          echo "Labels: ${{ inputs.labels }}"
+          echo "Run primer: ${{ inputs.run_primer }}"
+          echo "Check snippets: ${{ inputs.check_snippets }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Run ID: ${{ github.run_id }}"
+
+      # Install type checkers for snippet checking
+      - name: Install type checkers
+        if: ${{ inputs.check_snippets }}
+        run: |
+          echo "=== Installing type checkers ==="
+          pip install pyrefly pyright mypy
+          echo "pyrefly version: $(pyrefly --version 2>&1 || echo 'not found')"
+          echo "pyright version: $(pyright --version 2>&1 || echo 'not found')"
+          echo "mypy version: $(mypy --version 2>&1 || echo 'not found')"
+          echo "pyrefly path: $(which pyrefly 2>&1 || echo 'not found')"
+
+      # Download primer results if available
+      - name: Download primer results
+        if: ${{ inputs.run_primer }}
+        uses: actions/download-artifact@v6
+        with:
+          name: primer-results
+          path: /tmp/primer_output
+        continue-on-error: true
+
+      - name: Check primer data
+        id: primer_check
+        run: |
+          if [ -f /tmp/primer_output/primer_errors.json ]; then
+            echo "primer_available=true" >> $GITHUB_OUTPUT
+            echo "Primer data available: $(du -h /tmp/primer_output/primer_errors.json | cut -f1)"
+          else
+            echo "primer_available=false" >> $GITHUB_OUTPUT
+            echo "No primer data available — ranking will proceed without it"
+          fi
+
+      # Phase 1: Collect issue data
+      - name: Collect issue data
+        run: |
+          echo "=== Phase 1: Collecting issues from GitHub ==="
+          PYREFLY_FLAG=""
+          if [ "${{ inputs.check_snippets }}" = "true" ]; then
+            PYREFLY_BIN=$(which pyrefly 2>/dev/null || echo "")
+            if [ -n "$PYREFLY_BIN" ]; then
+              PYREFLY_FLAG="--pyrefly $PYREFLY_BIN"
+              echo "Using pyrefly binary: $PYREFLY_BIN"
+            else
+              echo "WARNING: pyrefly not found, skipping snippet checking"
+            fi
+          fi
+
+          LABELS_FLAG=""
+          if [ -n "${{ inputs.labels }}" ]; then
+            LABELS_FLAG="--labels ${{ inputs.labels }}"
+          fi
+
+          python -m scripts.issue_ranker --mode collect \
+            $LABELS_FLAG \
+            $PYREFLY_FLAG \
+            --output /tmp/issue_data.json \
+            2>&1 | tee /tmp/collect_log.txt
+
+          echo "=== Collection complete ==="
+          echo "Issue data size: $(du -h /tmp/issue_data.json | cut -f1)"
+          python -c "
+          import json
+          with open('/tmp/issue_data.json') as f:
+              data = json.load(f)
+          meta = data.get('metadata', {})
+          print(f\"Issues fetched: {meta.get('issue_count', '?')}\")
+          print(f\"Typechecking issues: {meta.get('typechecking_issues', '?')}\")
+          print(f\"Issues with code: {meta.get('issues_with_code', '?')}\")
+          "
+        env:
+          # GH_PROJECT_TOKEN needs read:project scope to fetch P0/P1/P2 priorities.
+          # Falls back to GITHUB_TOKEN (repo scope) — priorities will be empty.
+          GITHUB_TOKEN: ${{ secrets.GH_PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # Phase 2: Run ranking pipeline
+      - name: Run ranking pipeline
+        run: |
+          echo "=== Phase 2: Running 5-pass LLM ranking pipeline ==="
+          PRIMER_FLAG=""
+          if [ "${{ steps.primer_check.outputs.primer_available }}" = "true" ]; then
+            PRIMER_FLAG="--primer-data /tmp/primer_output/primer_errors.json"
+            echo "Using primer data for enhanced scoring"
+          else
+            echo "Running without primer data"
+          fi
+
+          python -m scripts.issue_ranker --mode rank \
+            --issue-data /tmp/issue_data.json \
+            $PRIMER_FLAG \
+            --output /tmp/ranking.md \
+            --output-json /tmp/ranking.json \
+            --pass-results /tmp/pass_results_cache.json \
+            2>&1 | tee /tmp/ranking_log.txt
+
+          echo "=== Ranking complete ==="
+          echo "Report size: $(du -h /tmp/ranking.md | cut -f1)"
+          echo "JSON size: $(du -h /tmp/ranking.json | cut -f1)"
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.PRIMER_CLASSIFIER_API_KEY }}
+
+      # Phase 3: V1 gap analysis (1 Haiku call + label management)
+      - name: V1 gap analysis
+        run: |
+          echo "=== V1 Gap Analysis ==="
+          python -m scripts.issue_ranker --mode v1-analysis \
+            --ranking-json /tmp/ranking.json \
+            --output /tmp/v1_analysis.md \
+            --apply-labels \
+            2>&1 | tee /tmp/v1_analysis_log.txt
+          cat /tmp/v1_analysis.md >> $GITHUB_STEP_SUMMARY
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.PRIMER_CLASSIFIER_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Phase 4: Summary
+      - name: Print ranking summary
+        run: |
+          echo "=== Ranking Summary ==="
+          python -c "
+          import json
+          with open('/tmp/ranking.json') as f:
+              data = json.load(f)
+          tiers = data.get('priority_tiers', {})
+          gap = data.get('v1_gap_analysis', {})
+          print(f\"Total issues ranked: {len(data.get('ranked_issues', []))}\")
+          for tier in ['critical', 'high', 'medium', 'low']:
+              count = len(tiers.get(tier, []))
+              print(f\"  {tier.title()}: {count}\")
+          if gap.get('v1_issue_count', 0) > 0:
+              print(f\"V1 overlap: {gap['overlap_percentage']}% ({gap['overlap_count']}/{gap['v1_issue_count']})\")
+          print(f\"Cost estimate: \${data.get('cost_estimate', '?')}\")
+          "
+          echo ""
+          echo "=== Top 10 Issues ==="
+          python -c "
+          import json
+          with open('/tmp/ranking.json') as f:
+              data = json.load(f)
+          for i, issue in enumerate(data.get('ranked_issues', [])[:10], 1):
+              print(f\"  {i}. #{issue['number']} [score={issue['final_score']}] [{issue['tier']}] {issue['title'][:60]}\")
+          "
+
+      - name: Upload ranking results
+        uses: actions/upload-artifact@v6
+        with:
+          name: issue-ranking
+          path: |
+            /tmp/ranking.md
+            /tmp/ranking.json
+            /tmp/pass_results_cache.json
+            /tmp/issue_data.json
+            /tmp/collect_log.txt
+            /tmp/ranking_log.txt
+            /tmp/v1_analysis.md
+            /tmp/v1_analysis_log.txt
+
+  # Job 4: Standalone V1 analysis (reuse ranking artifacts from a previous run)
+  v1-analysis-standalone:
+    name: V1 analysis (standalone)
+    runs-on: ubuntu-latest
+    if: ${{ inputs.v1_analysis_run_id != '' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            scripts/issue_ranker
+            scripts/llm_transport.py
+            scripts/primer_classifier
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Download ranking artifacts from previous run
+        run: |
+          gh run download ${{ inputs.v1_analysis_run_id }} \
+            -n issue-ranking -D /tmp/prev_run
+          ls -la /tmp/prev_run/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run V1 analysis
+        run: |
+          python -m scripts.issue_ranker --mode v1-analysis \
+            --ranking-json /tmp/prev_run/ranking.json \
+            --output /tmp/v1_analysis.md \
+            --apply-labels \
+            2>&1 | tee /tmp/v1_analysis_log.txt
+          cat /tmp/v1_analysis.md >> $GITHUB_STEP_SUMMARY
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.PRIMER_CLASSIFIER_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: v1-analysis
+          path: |
+            /tmp/v1_analysis.md
+            /tmp/v1_analysis_log.txt

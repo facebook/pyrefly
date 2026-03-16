@@ -60,24 +60,24 @@ use lsp_types::request::SignatureHelpRequest;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
 use pretty_assertions::assert_eq;
+use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
+use pyrefly::commands::lsp::run_lsp;
+use pyrefly::lsp::non_wasm::external_provider::NoExternalProvider;
+use pyrefly::lsp::non_wasm::protocol::JsonRpcMessage;
+use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly::lsp::non_wasm::protocol::Notification;
+use pyrefly::lsp::non_wasm::protocol::Request;
+use pyrefly::lsp::non_wasm::protocol::Response;
+use pyrefly::lsp::non_wasm::server::Connection;
+use pyrefly::lsp::wasm::provide_type::ProvideType;
 use pyrefly_util::fs_anyhow::read_to_string;
 use pyrefly_util::lock::FinishHandle;
 use pyrefly_util::telemetry::NoTelemetry;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::commands::lsp::IndexingMode;
-use crate::commands::lsp::LspArgs;
-use crate::commands::lsp::run_lsp;
-use crate::lsp::non_wasm::external_references::NoExternalReferences;
-use crate::lsp::non_wasm::protocol::JsonRpcMessage;
-use crate::lsp::non_wasm::protocol::Message;
-use crate::lsp::non_wasm::protocol::Notification;
-use crate::lsp::non_wasm::protocol::Request;
-use crate::lsp::non_wasm::protocol::Response;
-use crate::lsp::non_wasm::server::Connection;
-use crate::lsp::wasm::provide_type::ProvideType;
-use crate::test::util::init_test;
+use crate::init::init_test;
 
 #[derive(Debug)]
 pub enum LspMessageError {
@@ -123,7 +123,7 @@ pub struct InitializeSettings {
 }
 
 pub struct ClientRequestHandle<'a, R: lsp_types::request::Request> {
-    id: RequestId,
+    pub(crate) id: RequestId,
     client: &'a TestClient,
     _type: PhantomData<R>,
 }
@@ -293,7 +293,7 @@ impl TestClient {
         self.conn
             .as_ref()
             .unwrap()
-            .receiver
+            .channel_receiver()
             .recv_timeout(self.recv_timeout)
     }
 
@@ -727,7 +727,7 @@ impl TestClient {
     pub fn expect_message<T>(
         &self,
         description: &str,
-        matcher: impl Fn(Message) -> Option<Result<T, LspMessageError>>,
+        mut matcher: impl FnMut(Message) -> Option<Result<T, LspMessageError>>,
     ) -> Result<T, LspMessageError> {
         loop {
             match self.recv_timeout() {
@@ -907,6 +907,7 @@ impl TestClient {
     }
 
     /// Wait for a publishDiagnostics notification for the given file path, regardless of error count.
+    #[allow(dead_code)]
     pub fn expect_publish_diagnostics_for_file(
         &self,
         path: PathBuf,
@@ -1243,7 +1244,7 @@ impl LspInteraction {
     pub fn new_with_indexing_mode(indexing_mode: IndexingMode) -> Self {
         init_test();
 
-        let (conn_client, conn_server) = Connection::memory();
+        let ((conn_client, _client_reader), (conn_server, server_reader)) = Connection::memory();
 
         let finish_handle = Arc::new(FinishHandle::new());
         let finish_server = finish_handle.clone();
@@ -1254,14 +1255,17 @@ impl LspInteraction {
                 indexing_mode,
                 workspace_indexing_limit: 50,
                 build_system_blocking: false,
+                enable_external_references: false,
             };
             let _ = run_lsp(
                 conn_server,
+                server_reader,
                 args,
                 None,
                 None,
                 &NoTelemetry,
-                Arc::new(NoExternalReferences),
+                Arc::new(NoExternalProvider),
+                None,
             );
             finish_server.notify_finished();
         });

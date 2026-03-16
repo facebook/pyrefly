@@ -134,6 +134,7 @@ impl Incremental {
             &handles,
             self.require.unwrap_or(Require::Everything),
             None,
+            None,
         );
         let loaded = Self::USER_FILES.map(|x| self.handle(x));
         let errors = self.state.transaction().get_errors(&loaded);

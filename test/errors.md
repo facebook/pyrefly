@@ -27,7 +27,10 @@ $ echo "x: str = 12" > $TMPDIR/shown1.py && \
  WARN ast.pyi:1113:10-18: `Constant.n` is deprecated [deprecated]
  WARN ast.pyi:1123:10-11: `Constant.s` is deprecated [deprecated]
  WARN ast.pyi:1123:10-18: `Constant.s` is deprecated [deprecated]
+ WARN importlib/abc.pyi:184:9-41: `ResourceReader` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:51:9-29: `contents` is deprecated [deprecated]
+ WARN importlib/resources/__init__.pyi:84:41-73: `ResourceReader` is deprecated [deprecated]
+ WARN importlib/resources/_common.pyi:8:41-55: `ResourceReader` is deprecated [deprecated]
 */shown*.py:1:* (glob)
  WARN typing_extensions.pyi:65:5-55: `no_type_check_decorator` is deprecated [deprecated]
 [1]

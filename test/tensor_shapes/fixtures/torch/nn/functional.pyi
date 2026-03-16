@@ -63,15 +63,25 @@ __all__ = [
     "hardshrink",
     "logsigmoid",
     "softmax",
+    "log_softmax",
+    "softmin",
+    # Linear
+    "linear",
+    # Embedding
+    "embedding",
     # Normalization
     "batch_norm",
     "instance_norm",
     "layer_norm",
     "group_norm",
+    "rms_norm",
     "normalize",
     "local_response_norm",
     # Dropout
     "dropout",
+    "dropout1d",
+    "dropout2d",
+    "dropout3d",
     "alpha_dropout",
     "feature_alpha_dropout",
     # Attention
@@ -713,6 +723,90 @@ def softmax[*Shape](
     input: Tensor[*Shape], dim: int | None = None, dtype: int | None = None
 ) -> Tensor[*Shape]:
     """Softmax activation. Shape inference via generic fixture signature."""
+    ...
+
+def log_softmax[*Shape](
+    input: Tensor[*Shape], dim: int | None = None, dtype: int | None = None
+) -> Tensor[*Shape]:
+    """Log-softmax activation. Shape inference via generic fixture signature."""
+    ...
+
+def softmin[*Shape](
+    input: Tensor[*Shape], dim: int | None = None, dtype: int | None = None
+) -> Tensor[*Shape]:
+    """Softmin activation. Shape inference via generic fixture signature."""
+    ...
+
+# ==============================================================================
+# Linear
+# ==============================================================================
+
+def linear[*Bs, IN, OUT](
+    input: Tensor[*Bs, IN],
+    weight: Tensor[OUT, IN],
+    bias: Tensor[OUT] | None = None,
+) -> Tensor[*Bs, OUT]:
+    """Linear transformation: y = xA^T + b. Shape inference via generic fixture signature."""
+    ...
+
+# ==============================================================================
+# Embedding
+# ==============================================================================
+
+@overload
+def embedding[T, V, D](
+    input: Tensor[T],
+    weight: Tensor[V, D],
+    padding_idx: int | None = None,
+    max_norm: float | None = None,
+    norm_type: float = 2.0,
+    scale_grad_by_freq: bool = False,
+    sparse: bool = False,
+) -> Tensor[T, D]: ...
+@overload
+def embedding[B, T, V, D](
+    input: Tensor[B, T],
+    weight: Tensor[V, D],
+    padding_idx: int | None = None,
+    max_norm: float | None = None,
+    norm_type: float = 2.0,
+    scale_grad_by_freq: bool = False,
+    sparse: bool = False,
+) -> Tensor[B, T, D]: ...
+
+# ==============================================================================
+# Normalization (additional)
+# ==============================================================================
+
+def rms_norm[*S](
+    input: Tensor[*S],
+    normalized_shape: list[int] | tuple[int, ...],
+    weight: Tensor | None = None,
+    eps: float = 1e-5,
+) -> Tensor[*S]:
+    """RMS normalization. Shape inference via generic fixture signature."""
+    ...
+
+# ==============================================================================
+# Dropout (additional)
+# ==============================================================================
+
+def dropout1d[*S](
+    input: Tensor[*S], p: float = 0.5, training: bool = True, inplace: bool = False
+) -> Tensor[*S]:
+    """1D channel-wise dropout. Shape inference via generic fixture signature."""
+    ...
+
+def dropout2d[*S](
+    input: Tensor[*S], p: float = 0.5, training: bool = True, inplace: bool = False
+) -> Tensor[*S]:
+    """2D channel-wise dropout. Shape inference via generic fixture signature."""
+    ...
+
+def dropout3d[*S](
+    input: Tensor[*S], p: float = 0.5, training: bool = True, inplace: bool = False
+) -> Tensor[*S]:
+    """3D channel-wise dropout. Shape inference via generic fixture signature."""
     ...
 
 # Attention operations

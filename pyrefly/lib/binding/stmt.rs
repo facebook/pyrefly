@@ -420,6 +420,7 @@ impl<'a> BindingsBuilder<'a> {
         let key_type_alias = KeyTypeAlias(self.type_alias_index());
         let binding_type_alias = BindingTypeAlias::TypeAliasType {
             name: name.id.clone(),
+            range: name.range,
             annotation: ann,
             expr: value.map(Box::new),
         };
@@ -639,6 +640,7 @@ impl<'a> BindingsBuilder<'a> {
                                     self.synthesize_typing_new_type(
                                         name,
                                         parent,
+                                        &mut call.func,
                                         new_type_name,
                                         base,
                                     );
@@ -851,6 +853,7 @@ impl<'a> BindingsBuilder<'a> {
                     let key_type_alias = KeyTypeAlias(self.type_alias_index());
                     let binding_type_alias = BindingTypeAlias::Scoped {
                         name: name.id.clone(),
+                        range: name.range,
                         expr: x.value,
                     };
                     let idx_type_alias = self.insert_binding(key_type_alias, binding_type_alias);
@@ -889,7 +892,11 @@ impl<'a> BindingsBuilder<'a> {
                 // (must be done before x.iter is moved)
                 let loop_definitely_runs = is_definitely_nonempty_iterable(&x.iter);
                 self.bind_target_with_expr(&mut x.target, &mut x.iter, &|expr, ann| {
-                    Binding::IterableValue(ann, Box::new(expr.clone()), IsAsync::new(x.is_async))
+                    Binding::IterableValueLoop(
+                        ann,
+                        Box::new(expr.clone()),
+                        IsAsync::new(x.is_async),
+                    )
                 });
                 // Note that we set up the loop *after* the header is fully bound, because the
                 // loop iterator is only evaluated once before the loop begins. But the loop header
@@ -934,10 +941,14 @@ impl<'a> BindingsBuilder<'a> {
                     is_while_true,
                 );
             }
-            Stmt::If(x) => {
+            Stmt::If(mut x) => {
                 let is_definitely_unreachable = self.scopes.is_definitely_unreachable();
                 let mut exhaustive = false;
                 let if_range = x.range;
+                // Process the first `if` test before forking so that walrus-defined names
+                // are in the base flow and visible after the if-statement. This mirrors the
+                // fix for ternary expressions in expr.rs (Expr::If handling).
+                self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
                 self.start_fork(if_range);
                 // Type narrowing operations that are carried over from one branch to the next. For example, in:
                 //   if x is None:
@@ -948,6 +959,7 @@ impl<'a> BindingsBuilder<'a> {
                 // is carried over to the else branch.
                 let mut negated_prev_ops = NarrowOps::new();
                 let mut contains_static_test_with_no_else = false;
+                let mut is_first_branch = true;
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
                     self.start_branch();
                     self.bind_narrow_ops(
@@ -969,10 +981,21 @@ impl<'a> BindingsBuilder<'a> {
                             result
                         }
                     };
-                    self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
+                    // The first `if` test was already processed before the fork (above).
+                    // Only process elif/else tests here, inside the branch.
+                    if !is_first_branch {
+                        self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
+                    }
+                    is_first_branch = false;
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
                         // Skip the body in this case - it typically means a check (e.g. a sys version,
                         // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
+                        // However, we still need to check for `yield`/`yield from` in the skipped
+                        // body, because Python determines generator status syntactically at compile
+                        // time, regardless of reachability.
+                        if Ast::body_contains_yield(&body) {
+                            self.scopes.mark_has_yield_in_dead_code();
+                        }
                         self.abandon_branch();
                         continue;
                     } else {
@@ -1042,7 +1065,7 @@ impl<'a> BindingsBuilder<'a> {
                 if exhaustive {
                     self.finish_exhaustive_fork();
                 } else {
-                    self.finish_non_exhaustive_fork(&negated_prev_ops);
+                    self.finish_non_exhaustive_fork(&negated_prev_ops, None);
                 }
                 // If we have a statically evaluated test like `sys.version_info`, we should set `is_definitely_unreachable` to false
                 // to reduce false positive unreachable errors, since some code paths can still be hit at runtime
@@ -1363,11 +1386,13 @@ impl<'a> BindingsBuilder<'a> {
                     let val = if self.lookup.export_exists(m, &name) {
                         Binding::Import(Box::new((m, name.into_key().clone(), None)))
                     } else {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
-                            format!("Could not import `{name}` from `{m}`"),
-                        );
+                        if !self.scopes.is_unreachable_from_static_test() {
+                            self.error(
+                                x.range,
+                                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
+                                format!("Could not import `{name}` from `{m}`"),
+                            );
+                        }
                         Binding::Any(AnyStyle::Error)
                     };
                     let key = self.insert_binding(key, val);
@@ -1429,11 +1454,13 @@ impl<'a> BindingsBuilder<'a> {
                         // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
                         Binding::ImportViaGetattr(Box::new((m, x.name.id.clone())))
                     } else if is_not_found {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
-                            format!("Could not import `{}` from `{m}`", x.name.id),
-                        );
+                        if !self.scopes.is_unreachable_from_static_test() {
+                            self.error(
+                                x.range,
+                                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
+                                format!("Could not import `{}` from `{m}`", x.name.id),
+                            );
+                        }
                         Binding::Any(AnyStyle::Error)
                     } else {
                         Binding::Any(AnyStyle::Explicit)

@@ -139,10 +139,11 @@ impl SpecialExport {
 
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
+            Self::TypeVar | Self::TypeVarTuple => {
+                matches!(m.as_str(), "typing" | "typing_extensions" | "torch_shapes")
+            }
             Self::TypeAlias
-            | Self::TypeVar
             | Self::ParamSpec
-            | Self::TypeVarTuple
             | Self::Annotated
             | Self::Literal
             | Self::TypedDict

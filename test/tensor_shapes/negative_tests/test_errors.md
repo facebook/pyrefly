@@ -103,13 +103,13 @@ ERROR Returned type `Tensor[(M * N)]` is not assignable to declared return type 
    |            ^
    |
   Size mismatch: expected K, got (M * N)
- INFO revealed type: Dim[@_] [reveal-type]
+ INFO revealed type: Dim [reveal-type]
   --> *test_check_symbolic_binding.py:64:16 (glob)
    |
 64 |     reveal_type(n)
    |                ---
    |
- INFO revealed type: Tensor[@_] [reveal-type]
+ INFO revealed type: Tensor[Unknown] [reveal-type]
   --> *test_check_symbolic_binding.py:71:16 (glob)
    |
 71 |     reveal_type(t)
@@ -254,25 +254,25 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_dim_in_non_tensor.py"
 
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_view_errors.py"
-ERROR Invalid dimension value -1: can only specify one unknown dimension as -1 [invalid-argument]
+ERROR can only specify one unknown dimension as -1 [invalid-argument]
   --> *test_view_errors.py:19:15 (glob)
    |
 19 |     y = x.view(-1, -1)  # ERROR: can only specify one unknown dimension as -1
    |               ^^^^^^^^
    |
-ERROR Invalid dimension value -1: shape 3, -1 is not compatible with input size 200 [invalid-argument]
+ERROR could not infer size for dimension -1: expected 200 to be divisible by 3 [invalid-argument]
   --> *test_view_errors.py:26:15 (glob)
    |
-26 |     y = x.view(3, -1)  # ERROR: 200 / 3 is not an integer
+26 |     y = x.view(3, -1)  # ERROR: shape is not compatible with input size
    |               ^^^^^^^
    |
-ERROR Invalid dimension value -2: cannot specify -2 as a reshape dimension [invalid-argument]
+ERROR invalid negative dimension value (only -1 is allowed) [invalid-argument]
   --> *test_view_errors.py:33:15 (glob)
    |
-33 |     y = x.view(-2, 10)  # ERROR: invalid dimension value
+33 |     y = x.view(-2, 10)  # ERROR: invalid negative dimension value (only -1 is allowed)
    |               ^^^^^^^^
    |
-ERROR Invalid dimension value 0: reshape dimensions cannot contain 0 [invalid-argument]
+ERROR reshape dimensions cannot contain 0 [invalid-argument]
   --> *test_view_errors.py:40:15 (glob)
    |
 40 |     y = x.view(0, -1)  # ERROR: reshape dimensions cannot contain 0
@@ -285,36 +285,17 @@ ERROR Invalid dimension value 0: reshape dimensions cannot contain 0 [invalid-ar
 
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_item_error.py"
-ERROR Invalid dimension value 1: item() only works on 0-dimensional tensors, got 1D tensor [invalid-argument]
+ERROR item() only works on 0-dimensional tensors, got 1D tensor [invalid-argument]
   --> *test_item_error.py:20:11 (glob)
    |
 20 |     x.item()
    |           ^^
    |
-ERROR Invalid dimension value 2: item() only works on 0-dimensional tensors, got 2D tensor [invalid-argument]
+ERROR item() only works on 0-dimensional tensors, got 2D tensor [invalid-argument]
   --> *test_item_error.py:28:11 (glob)
    |
 28 |     x.item()
    |           ^^
-   |
-[1]
-```
-
-## View with zero dimension (test_view_simple)
-
-```scrut
-$ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_view_simple.py"
-ERROR Invalid dimension value 0: reshape dimensions cannot contain 0 [invalid-argument]
-  --> *test_view_simple.py:26:15 (glob)
-   |
-26 |     y = x.view(0, -1)  # Should ERROR but still return Tensor
-   |               ^^^^^^^
-   |
- INFO revealed type: Tensor [reveal-type]
-  --> *test_view_simple.py:27:16 (glob)
-   |
-27 |     reveal_type(y)
-   |                ---
    |
 [1]
 ```
@@ -509,25 +490,25 @@ ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Te
     |            ^^^^^
     |
   Size mismatch: expected 1, got 2
-ERROR Cannot broadcast tensor shapes: Invalid dimension value 0: Cannot broadcast dimension 3 with dimension 5 at position 1 [unsupported-operation]
+ERROR Cannot broadcast tensor shapes: Cannot broadcast dimension 3 with dimension 5 at position 1 [unsupported-operation]
    --> *test_tensor_arithmetic.py:165:12 (glob)
     |
 165 |     return x + y  # ERROR: Cannot broadcast shapes [2, 3] and [4, 5]
     |            ^^^^^
     |
-ERROR Cannot broadcast tensor shapes: Invalid dimension value 0: Cannot broadcast dimension N with dimension M at position 0 [unsupported-operation]
+ERROR Cannot broadcast tensor shapes: Cannot broadcast dimension N with dimension M at position 0 [unsupported-operation]
    --> *test_tensor_arithmetic.py:207:12 (glob)
     |
 207 |     return x + y  # ERROR: Cannot broadcast dimension N with dimension M
     |            ^^^^^
     |
-ERROR Cannot broadcast tensor shapes: Invalid dimension value 0: Cannot broadcast concrete dims with variadic shape: alignment is ambiguous [unsupported-operation]
+ERROR Cannot broadcast tensor shapes: Cannot broadcast concrete dims with variadic shape: alignment is ambiguous [unsupported-operation]
    --> *test_tensor_arithmetic.py:244:12 (glob)
     |
 244 |     return x + y  # ERROR: Cannot broadcast concrete dims with variadic shape
     |            ^^^^^
     |
-ERROR Cannot broadcast tensor shapes: Invalid dimension value 0: Cannot broadcast variadic shapes: incompatible middles *Ts vs *Us [unsupported-operation]
+ERROR Cannot broadcast tensor shapes: Cannot broadcast variadic shapes: incompatible middles *Ts vs *Us [unsupported-operation]
    --> *test_tensor_arithmetic.py:278:12 (glob)
     |
 278 |     return x + y  # ERROR: incompatible middles

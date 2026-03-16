@@ -153,6 +153,86 @@ assert_type(f(h(0)), str) # E: Argument `Literal[0]` is not assignable to parame
 );
 
 testcase!(
+    test_overload_default_incompatible,
+    r#"
+from typing import Literal, overload
+
+@overload
+def foo(a: Literal[True] = ...) -> None: ...  # E: Default `Literal[False]` from implementation is not assignable to overload parameter `a` with type `Literal[True]`
+@overload
+def foo(a: Literal[False]) -> int: ...
+def foo(a: bool = False) -> None | int:
+    return 1 if not a else None
+"#,
+);
+
+testcase!(
+    test_overload_default_matches_one_signature,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int = ..., y: None = ...) -> None: ...
+
+# In this situation, we're forced to write `y: int = ...` to avoid a
+# "parameter without a default follows parameter with a default" syntax error,
+# even though any call that omits `y` will match the first overload above.
+# So we should not error here even though `y`'s `None` default is not an `int`.
+@overload
+def f(x: int = ..., y: int = ...) -> int: ...
+
+def f(x: int = 0, y: int | None = None):
+    if y is None:
+        return None
+    return x + y
+
+# Make sure using a `None` default instead of `...` in the overload works as well.
+@overload
+def g(x: int = ..., y: None = None) -> None: ...
+@overload
+def g(x: int = ..., y: int = ...) -> int: ...
+def g(x: int = 0, y: int | None = None):
+    if y is None:
+        return None
+    return x + y
+"#,
+);
+
+testcase!(
+    test_overload_default_does_not_match_second_signature,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int, y: None = ...) -> str: ...
+
+# False negative: an `f()` call (no args) matches this overload, but `y`'s default of `None` is
+# inconsistent with its type of `int` in the signature. We allow this in order to avoid a false
+# positive in test_overload_default_matches_one_signature.
+@overload
+def f(x: int = ..., y: int = ...) -> int: ...
+
+def f(x: int = 0, y: int | None = None) -> str | int: ...
+"#,
+);
+
+// See `dataclasses_transform_field.py` in the conformance test suite.
+// This pattern is used to indicate that the value of one parameter is implicitly specified by
+// another, which is useful for expressing dataclass transforms.
+testcase!(
+    test_overload_default_do_not_check_non_ellipsis,
+    r#"
+from typing import Literal, overload
+
+@overload
+def f(x: int, y: Literal[True] = True): ...
+@overload
+def f(x: None, y: Literal[False] = False): ...
+def f(x: int | None, y: bool = False): ...
+    "#,
+);
+
+testcase!(
     test_overload_missing_implementation,
     r#"
 from typing import overload, assert_type
@@ -572,6 +652,25 @@ class C[T](Iterable[T]):
 
 def g(x: int):
     f(C(x))
+    "#,
+);
+
+testcase!(
+    test_overload_type_form_inference,
+    r#"
+from typing import assert_type, overload
+
+class C: ...
+
+@overload
+def foo[T](x: type[T]) -> T: ...  # E: Overloaded function must have an implementation
+@overload
+def foo(x: int) -> int: ...
+
+def bar[T](x: type[T]) -> T: ...
+
+assert_type(foo(C), C)
+assert_type(bar(C), C)
     "#,
 );
 
@@ -1171,7 +1270,7 @@ def f3(x: Callable[[], None]) -> str: ...
 def f3(x: Any) -> int | str: ...
 
 def g(x: Callable[..., None], y: Callable[[Callable[..., None]], None]):
-    assert_type(f1(x), Any)
+    assert_type(f1(x), int)
     assert_type(f2(y), int)
     assert_type(f3(x), int)
     "#,
@@ -1354,28 +1453,28 @@ testcase!(
     r#"
 import contextlib
 import os
-from typing import AnyStr, IO, Iterator, Literal, assert_type, overload
+from typing import AnyStr, IO, Generator, Literal, assert_type, overload
 
 @overload
 @contextlib.contextmanager
 def atomic_file(
     dest: str | os.PathLike[str], mode: Literal["wb", "w+b"] = ..., **kwargs
-) -> Iterator[IO[bytes]]: ...
+) -> Generator[IO[bytes], None, None]: ...
 @overload
 @contextlib.contextmanager
 def atomic_file(
     dest: str | os.PathLike[str], mode: Literal["w", "w+", "wt", "w+t"], **kwargs
-) -> Iterator[IO[str]]: ...
+) -> Generator[IO[str], None, None]: ...
 @overload
 @contextlib.contextmanager
 def atomic_file(
     dest: str | os.PathLike[str], mode: str, **kwargs
-) -> Iterator[IO[AnyStr]]: ...
+) -> Generator[IO[AnyStr], None, None]: ...
 
 @contextlib.contextmanager
 def atomic_file(
     dest: str | os.PathLike[str], mode: str = "w+b", **kwargs
-) -> Iterator[IO]:
+) -> Generator[IO, None, None]:
     ...
 
 with atomic_file("foo", "w") as f:
@@ -1384,7 +1483,6 @@ with atomic_file("foo", "w") as f:
 );
 
 testcase!(
-    bug = "We incorrectly match the `LiteralString` overload of `relpath`",
     test_literalstring_or_str_overloads,
     r#"
 from typing import Any, LiteralString, overload
@@ -1403,7 +1501,7 @@ def f(path: Any, data: Any) -> dict[str, Any]:
     outputs = {}
     relative_normalized_path = relpath(normpath(path))
     outputs[relative_normalized_path] = data
-    return outputs  # E: `dict[LiteralString, Any]` is not assignable to declared return type `dict[str, Any]`
+    return outputs
     "#,
 );
 
@@ -1459,5 +1557,47 @@ def demo_two(s: tuple[int, int]):
 
 def demo_variadic(s: tuple[int, ...]):
     assert_type(ndim(s), int)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2600.
+testcase!(
+    test_materialization_does_not_leak_into_partial_contained,
+    r#"
+def f(x: None):
+    config = {}
+    # Intentionally introduce Error types.
+    for k, v in x:  # E: Type `None` is not iterable
+        config.setdefault(k, v)
+    for k in config:
+        if k == "hello":
+            pass
+    "#,
+);
+
+testcase!(
+    bug = "op(A[Any], A[Any]) should be treated as ambiguous",
+    test_ambiguous,
+    r#"
+from typing import Any, overload, assert_type
+
+class A[T]:  # covariant
+    def get(self) -> T: ...
+
+@overload
+def op(l: A[None], r: A[None]) -> A[None]: ...
+@overload
+def op(l: A[None], r: A[Any]) -> A[None]: ...
+@overload
+def op(l: A[Any], r: A[None]) -> A[None]: ...
+@overload
+def op(l: A[Any], r: A[Any]) -> A[Any]: ...
+def op(l, r) -> A[None | Any]: ...
+
+def test(x: A[None], y: A[Any]) -> None:
+    assert_type(op(x, x), A[None])
+    assert_type(op(x, y), A[None])
+    assert_type(op(y, x), A[None])
+    assert_type(op(y, y), Any)  # E: assert_type(A[None], Any)
     "#,
 );

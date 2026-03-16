@@ -74,6 +74,70 @@ D(x="oops")  # E: `Literal['oops']` is not assignable to parameter `x` with type
 );
 
 testcase!(
+    test_metaclass_with_fields,
+    r#"
+from typing import dataclass_transform
+
+@dataclass_transform()
+class Meta(type): ...
+
+class C(metaclass=Meta):
+    x: int
+    y: str = ""
+C(x=0)
+C(x=0, y="hello")
+C(x="oops")  # E: `Literal['oops']` is not assignable to parameter `x` with type `int`
+    "#,
+);
+
+testcase!(
+    test_metaclass_inheritance_with_fields,
+    r#"
+from typing import Any, dataclass_transform
+
+@dataclass_transform(kw_only_default=True)
+class Meta(type):
+    def __new__(mcs, name: str, bases: tuple[type, ...], namespace: dict[str, Any], **kwargs: Any) -> Any:
+        return super().__new__(mcs, name, bases, namespace)
+
+class Base(metaclass=Meta):
+    key: str
+    name: str | None = None
+
+class Child(Base):
+    device_class: str | None = None
+    unit: str | None = None
+
+Child(key="temperature", device_class="temperature", name="Sensor")
+Child()  # E: Missing argument `key`
+    "#,
+);
+
+testcase!(
+    test_metaclass_frozen_inheritance,
+    r#"
+from typing import Any, dataclass_transform
+
+@dataclass_transform()
+class Meta(type): ...
+
+class Base(metaclass=Meta):
+    x: int
+
+# A frozen subclass of a non-frozen base is allowed for dataclass_transform classes.
+class FrozenChild(Base, frozen=True):
+    y: str
+
+f = FrozenChild(x=0, y="hello")
+f.y = "world"  # E: frozen dataclass member
+
+# A non-frozen subclass of a frozen class is not allowed.
+class MutableChild(FrozenChild, frozen=False):  # E: Cannot inherit non-frozen dataclass `MutableChild` from frozen dataclass `FrozenChild`
+    z: int
+    "#,
+);
+
+testcase!(
     test_call_transform,
     r#"
 from typing import dataclass_transform

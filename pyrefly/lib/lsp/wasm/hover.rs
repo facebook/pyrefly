@@ -45,6 +45,8 @@ use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::wasm::signature_help::CallInfo;
 use crate::lsp::wasm::signature_help::is_constructor_call;
 use crate::lsp::wasm::signature_help::override_constructor_return_type;
+use crate::lsp::wasm::type_source::set_display_pos_fragment;
+use crate::lsp::wasm::type_source::type_sources_for_hover;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
@@ -58,6 +60,7 @@ pub struct HoverValue {
     pub type_: Type,
     pub docstring: Option<Docstring>,
     pub parameter_doc: Option<(String, String)>,
+    pub type_sources: Vec<String>,
     pub display: Option<String>,
     pub show_go_to_links: bool,
 }
@@ -71,20 +74,7 @@ impl HoverValue {
             .filter_map(|(qname, file_path)| {
                 if let Ok(mut url) = Url::from_file_path(&file_path) {
                     let start_pos = qname.module().display_range(qname.range()).start;
-                    if let Some(cell) = start_pos.cell() {
-                        url.set_fragment(Some(&format!(
-                            "{},L{},{}",
-                            cell.get(),
-                            start_pos.line_within_cell().get(),
-                            start_pos.column()
-                        )));
-                    } else {
-                        url.set_fragment(Some(&format!(
-                            "L{},{}",
-                            start_pos.line_within_file().get(),
-                            start_pos.column()
-                        )));
-                    }
+                    set_display_pos_fragment(&mut url, start_pos);
                     Some(format!("[{}]({})", qname.id(), url))
                 } else {
                     None
@@ -158,6 +148,17 @@ impl HoverValue {
         } else {
             String::new()
         };
+        let type_source_formatted = if self.type_sources.is_empty() {
+            String::new()
+        } else {
+            let mut section = String::from("\n---\n**Type source**\n");
+            for source in &self.type_sources {
+                section.push_str("- ");
+                section.push_str(source);
+                section.push('\n');
+            }
+            section
+        };
         let type_display = self.display.clone().unwrap_or_else(|| {
             self.type_
                 .as_lsp_string_with_fallback_name(self.name.as_deref(), LspDisplayMode::Hover)
@@ -167,10 +168,11 @@ impl HoverValue {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: format!(
-                    "```python\n{}{}{}\n```{}{}{}",
+                    "```python\n{}{}{}\n```{}{}{}{}",
                     kind_formatted,
                     name_formatted,
                     type_display,
+                    type_source_formatted,
                     docstring_formatted,
                     parameter_doc_formatted,
                     symbol_def_formatted
@@ -580,10 +582,10 @@ pub fn get_hover(
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
     let name_for_display = name.clone();
-    let type_display = transaction.ad_hoc_solve(handle, {
+    let type_display = transaction.ad_hoc_solve(handle, "hover_display", {
         let mut cloned = type_.clone();
         move |solver| {
-            cloned.visit_toplevel_callable_mut(|c| expand_callable_kwargs_for_hover(&solver, c));
+            cloned.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(&solver, c));
             cloned.as_lsp_string_with_fallback_name(
                 name_for_display.as_deref(),
                 LspDisplayMode::Hover,
@@ -627,6 +629,7 @@ pub fn get_hover(
             type_,
             docstring,
             parameter_doc,
+            type_sources: type_sources_for_hover(transaction, handle, position),
             display: type_display,
             show_go_to_links,
         }
@@ -664,6 +667,7 @@ mod tests {
                 module,
                 cls: None,
                 name: Name::new(func_name),
+                def_index: None,
             })),
             flags: FuncFlags::default(),
         };

@@ -1386,7 +1386,6 @@ class GoodChild2(Parent3, extra_items=bool):  # ok because Parent3 has extra ite
 );
 
 testcase!(
-    bug = "You shouldn't be able to add items to a closed TypedDict",
     test_no_add_items_if_closed,
     r#"
 from typing import TypedDict
@@ -2067,13 +2066,13 @@ x: str = foo()["a"]
 );
 
 testcase!(
-    test_typed_dict_none_var_pinning,
+    test_anonymous_typed_dict_none_var_pinning,
     r#"
 from typing import assert_type
 x = { "foo": None }
 x["foo"] = 1
 # currently extra_items does not use the var, but we could
-assert_type(x["bar"], None)
+assert_type(x["bar"], int | None)
 "#,
 );
 
@@ -2332,4 +2331,132 @@ f(
     td2=td,
 )
     "#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_spread_unpack,
+    r#"
+from typing import assert_type
+
+# Basic dict unpacking should preserve anonymous typed dict
+defaults = {"host": "localhost", "port": 8080}
+overrides = {"port": 9090}
+config = {**defaults, **overrides}
+port: int = config["port"]
+host: str = config["host"]
+
+# Multiple dict unpacking with different value types
+base = {"name": "test", "count": 0}
+extra = {"count": 5, "active": True}
+combined = {**base, **extra}
+count: int = combined["count"]
+name: str = combined["name"]
+active: bool = combined["active"]
+
+# Passing unpacked dict value to typed function
+def process_port(port: int) -> str:
+    return f":{port}"
+
+merged = {**defaults, **overrides}
+process_port(merged["port"])
+
+# assert_type works on the dict
+assert_type(config["port"], int)
+assert_type(config["host"], str)
+"#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_spread_with_explicit_keys,
+    r#"
+from typing import assert_type
+base = {"x": 1, "y": "hello"}
+extended = {**base, "z": True}
+assert_type(extended["x"], int)
+assert_type(extended["y"], str)
+assert_type(extended["z"], bool)
+assert_type(extended, dict[str, int | str | bool])
+"#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_spread_override,
+    r#"
+from typing import assert_type
+original = {"val": "string"}
+updated = {**original, "val": 42}
+assert_type(updated["val"], int)
+assert_type(updated, dict[str, int])
+"#,
+);
+
+testcase!(
+    test_typed_dict_inherited_field_shadows_dict_method,
+    r#"
+from typing import TypedDict, assert_type
+
+class Base(TypedDict):
+    values: list[str]
+    items: list[int]
+    keys: list[float]
+    get: str
+    update: int
+
+class Child(Base):
+    version: int
+
+class Grandchild(Child):
+    extra: bool
+
+def accept_base(x: Base) -> None: ...
+
+def test_one_hop(x: Child) -> None:
+    accept_base(x)
+    assert_type(x["values"], list[str])
+    assert_type(x["items"], list[int])
+    assert_type(x["keys"], list[float])
+    assert_type(x["get"], str)
+    assert_type(x["update"], int)
+
+def test_two_hops(x: Grandchild) -> None:
+    accept_base(x)
+    assert_type(x["values"], list[str])
+    assert_type(x["items"], list[int])
+    assert_type(x["keys"], list[float])
+    assert_type(x["get"], str)
+    assert_type(x["update"], int)
+"#,
+);
+
+testcase!(
+    test_typed_dict_field_shadows_dict_method_attribute_access,
+    r#"
+from typing import TypedDict
+
+class Base(TypedDict):
+    values: list[str]
+    items: list[int]
+    keys: list[float]
+    get: str
+    update: int
+
+class Child(Base):
+    version: int
+
+def test_direct(c: Base) -> None:
+    # TypedDict fields shadow dict methods by name, but attribute access should
+    # still resolve to the dict method (fields are only accessible via subscript).
+    c.values
+    c.items
+    c.keys
+    c.get
+    c.update
+
+def test_inherited(c: Child) -> None:
+    c.values
+    c.items
+    c.keys
+    c.get
+    c.update
+"#,
 );

@@ -7,9 +7,9 @@
 
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_notebook_publish_diagnostics() {
@@ -479,7 +479,6 @@ fn test_notebook_did_change_delete_cell() {
 }
 
 #[test]
-#[ignore] // This currently panics, but not sure how we want to proceed
 fn test_notebook_did_change_add_cell() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();

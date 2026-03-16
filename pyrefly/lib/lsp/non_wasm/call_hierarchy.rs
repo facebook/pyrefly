@@ -14,6 +14,7 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::Module;
 use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::task_heap::Cancelled;
@@ -31,6 +32,12 @@ use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
 use crate::state::state::CancellableTransaction;
+
+pub struct CallerInfo {
+    pub call_range: TextRange,
+    pub name: String,
+    pub def_range: TextRange,
+}
 
 /// Finds a function definition at a specific position in an AST.
 ///
@@ -62,35 +69,25 @@ pub fn find_function_at_position_in_ast(
 /// For module-level code (e.g., `if __name__ == "__main__":`), returns
 /// the module name with `<module>` suffix.
 pub fn find_containing_function_for_call(
-    handle: &Handle,
+    module_name: ModuleName,
     ast: &ModModule,
     position: TextSize,
 ) -> Option<(String, TextRange)> {
     let covering_nodes = Ast::locate_node(ast, position);
 
-    // Look through the node chain for the containing function
     for (i, node) in covering_nodes.iter().enumerate() {
         if let AnyNodeRef::StmtFunctionDef(func_def) = node {
-            // Check if this is a method (next node is a ClassDef)
             if let Some(AnyNodeRef::StmtClassDef(class_def)) = covering_nodes.get(i + 1) {
-                let name = format!(
-                    "{}.{}.{}",
-                    handle.module(),
-                    class_def.name.id,
-                    func_def.name.id
-                );
+                let name = format!("{}.{}.{}", module_name, class_def.name.id, func_def.name.id);
                 return Some((name, func_def.name.range()));
             } else {
-                // Top-level function
-                let name = format!("{}.{}", handle.module(), func_def.name.id);
+                let name = format!("{}.{}", module_name, func_def.name.id);
                 return Some((name, func_def.name.range()));
             }
         }
     }
 
-    // No containing function found - this is module-level code.
-    // Use "<module>" as the caller name with the module's range.
-    let name = format!("{}.<module>", handle.module());
+    let name = format!("{}.<module>", module_name);
     Some((name, ast.range()))
 }
 
@@ -99,34 +96,35 @@ pub fn find_containing_function_for_call(
 /// Takes the output from `find_global_incoming_calls_from_function_definition`
 /// and transforms it into the LSP response format.
 pub fn transform_incoming_calls(
-    callers: Vec<(Module, Vec<(TextRange, String, TextRange)>)>,
+    callers: Vec<(Module, Vec<CallerInfo>)>,
     path_remapper: Option<&PathRemapper>,
 ) -> Vec<CallHierarchyIncomingCall> {
     let mut incoming_calls = Vec::new();
     for (caller_module, call_sites) in callers {
-        for (call_range, caller_name, caller_def_range) in call_sites {
+        for caller in call_sites {
             let Some(caller_uri) = module_info_to_uri(&caller_module, path_remapper) else {
                 continue;
             };
 
             let from = CallHierarchyItem {
-                name: caller_name
+                name: caller
+                    .name
                     .split('.')
                     .next_back()
-                    .unwrap_or(&caller_name)
+                    .unwrap_or(&caller.name)
                     .to_owned(),
                 kind: SymbolKind::FUNCTION,
                 tags: None,
-                detail: Some(caller_name),
+                detail: Some(caller.name),
                 uri: caller_uri,
-                range: caller_module.to_lsp_range(caller_def_range),
-                selection_range: caller_module.to_lsp_range(caller_def_range),
+                range: caller_module.to_lsp_range(caller.def_range),
+                selection_range: caller_module.to_lsp_range(caller.def_range),
                 data: None,
             };
 
             incoming_calls.push(CallHierarchyIncomingCall {
                 from,
-                from_ranges: vec![caller_module.to_lsp_range(call_range)],
+                from_ranges: vec![caller_module.to_lsp_range(caller.call_range)],
             });
         }
     }
@@ -209,10 +207,10 @@ impl CancellableTransaction<'_> {
     /// Returns Err if the request is canceled during execution.
     pub fn find_global_incoming_calls_from_function_definition(
         &mut self,
-        sys_info: &SysInfo,
+        sys_info: SysInfo,
         definition_kind: DefinitionMetadata,
         target_definition: &TextRangeWithModule,
-    ) -> Result<Vec<(Module, Vec<(TextRange, String, TextRange)>)>, Cancelled> {
+    ) -> Result<Vec<(Module, Vec<CallerInfo>)>, Cancelled> {
         // Use process_rdeps_with_definition to find references and filter to call sites in a single pass
         let results = self.process_rdeps_with_definition(
             sys_info,
@@ -228,6 +226,7 @@ impl CancellableTransaction<'_> {
                         definition_kind.clone(),
                         patched_definition.range,
                         &patched_definition.module,
+                        true,
                     )
                     .unwrap_or_default();
 
@@ -240,30 +239,42 @@ impl CancellableTransaction<'_> {
 
                 let mut callers_in_file = Vec::new();
 
-                /// Recursively collects Call expressions that match references to the target function.
                 fn collect_calls_from_expr(
                     expr: &Expr,
                     ref_set: &std::collections::HashSet<TextRange>,
-                    handle: &Handle,
+                    module_name: ModuleName,
                     ast: &ModModule,
-                    callers: &mut Vec<(TextRange, String, TextRange)>,
+                    callers: &mut Vec<CallerInfo>,
                 ) {
                     if let Expr::Call(call) = expr
                         && ref_set
                             .iter()
                             .any(|ref_range| call.func.range().contains(ref_range.start()))
-                        && let Some((containing_func_name, containing_func_range)) =
-                            find_containing_function_for_call(handle, ast, call.range().start())
+                        && let Some((name, def_range)) = find_containing_function_for_call(
+                            module_name,
+                            ast,
+                            call.range().start(),
+                        )
                     {
-                        callers.push((call.range(), containing_func_name, containing_func_range));
+                        callers.push(CallerInfo {
+                            call_range: call.range(),
+                            name,
+                            def_range,
+                        });
                     }
                     expr.recurse(&mut |child| {
-                        collect_calls_from_expr(child, ref_set, handle, ast, callers)
+                        collect_calls_from_expr(child, ref_set, module_name, ast, callers)
                     });
                 }
 
                 ast.visit(&mut |expr| {
-                    collect_calls_from_expr(expr, &ref_set, handle, &ast, &mut callers_in_file)
+                    collect_calls_from_expr(
+                        expr,
+                        &ref_set,
+                        handle.module(),
+                        &ast,
+                        &mut callers_in_file,
+                    )
                 });
 
                 if callers_in_file.is_empty() {
@@ -363,13 +374,8 @@ impl CancellableTransaction<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
-    use pyrefly_build::handle::Handle;
     use pyrefly_python::ast::Ast;
     use pyrefly_python::module_name::ModuleName;
-    use pyrefly_python::module_path::ModulePath;
-    use pyrefly_python::sys_info::SysInfo;
     use ruff_python_ast::PySourceType;
     use ruff_text_size::TextSize;
 
@@ -386,20 +392,15 @@ class MyClass:
         y = call()
 "#;
         let (ast, _, _) = Ast::parse(source, PySourceType::Python);
-        let handle = Handle::new(
-            ModuleName::from_str("test"),
-            ModulePath::memory(PathBuf::from("test.py")),
-            SysInfo::default(),
-        );
+        let module_name = ModuleName::from_str("test");
 
-        // Returns qualified name for top-level function
         let pos_in_func = TextSize::from(30);
-        let (name, _) = find_containing_function_for_call(&handle, &ast, pos_in_func).unwrap();
+        let (name, _) = find_containing_function_for_call(module_name, &ast, pos_in_func).unwrap();
         assert_eq!(name, "test.my_function");
 
-        // Returns qualified name for class method
         let pos_in_method = TextSize::from(85);
-        let (name, _) = find_containing_function_for_call(&handle, &ast, pos_in_method).unwrap();
+        let (name, _) =
+            find_containing_function_for_call(module_name, &ast, pos_in_method).unwrap();
         assert_eq!(name, "test.MyClass.method");
     }
 
