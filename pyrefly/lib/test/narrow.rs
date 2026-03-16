@@ -2673,6 +2673,96 @@ def test(key: str) -> None:
 );
 
 testcase!(
+    test_narrow_in_iterable_element_type,
+    r#"
+from typing import assert_type
+
+def generate_missing() -> list[str]:
+    return ["a", "b"]
+
+def takes_string(arg: str) -> None: ...
+
+def test_list(arg: str | None) -> None:
+    missing = generate_missing()
+    if arg in missing:
+        assert_type(arg, str)
+        takes_string(arg)
+
+def test_set(arg: str | None, missing: set[str]) -> None:
+    if arg in missing:
+        assert_type(arg, str)
+        takes_string(arg)
+
+def test_frozenset(arg: str | None, missing: frozenset[str]) -> None:
+    if arg in missing:
+        assert_type(arg, str)
+        takes_string(arg)
+"#,
+);
+
+testcase!(
+    test_narrow_in_does_not_widen,
+    r#"
+from typing import Any, Literal, Mapping, assert_type
+
+list_any: list[Any] = [1]
+list_object: list[object] = [1]
+set_any: set[Any] = {1}
+set_object: set[object] = {1}
+dict_any: dict[Any, int] = {1: 1}
+dict_object: dict[object, int] = {1: 1}
+mapping_any: Mapping[Any, int] = {1: 1}
+mapping_object: Mapping[object, int] = {1: 1}
+
+def test_list(x: Literal[1] | str) -> None:
+    if x in list_any:
+        assert_type(x, Literal[1] | str)
+    if x in list_object:
+        assert_type(x, Literal[1] | str)
+
+def test_list_optional(x: str | None) -> None:
+    if x in list_any:
+        assert_type(x, str | None)
+    if x in list_object:
+        assert_type(x, str | None)
+
+def test_set(x: Literal[1] | str) -> None:
+    if x in set_any:
+        assert_type(x, Literal[1] | str)
+    if x in set_object:
+        assert_type(x, Literal[1] | str)
+
+def test_dict(x: Literal[1] | str) -> None:
+    if x in dict_any:
+        assert_type(x, Literal[1] | str)
+    if x in dict_object:
+        assert_type(x, Literal[1] | str)
+
+def test_mapping(x: Literal[1] | str) -> None:
+    if x in mapping_any:
+        assert_type(x, Literal[1] | str)
+    if x in mapping_object:
+        assert_type(x, Literal[1] | str)
+"#,
+);
+
+testcase!(
+    test_in_abstract_mapping_narrows_key,
+    r#"
+from typing import Mapping, assert_type
+
+def parse_resource_id() -> tuple[str, str] | tuple[None, None]: ...
+
+def lookup_resource(registry: Mapping[str, str]) -> str | None:
+    kind, _obj_id = parse_resource_id()
+    if kind not in registry:
+        return None
+    assert_type(kind, str)
+    return registry[kind]
+"#,
+);
+
+testcase!(
     test_narrow_len,
     r#"
 from typing import assert_type, Never, NamedTuple
