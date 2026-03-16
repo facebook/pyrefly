@@ -63,6 +63,7 @@ use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassSynthesizedFields;
+use crate::binding::binding::MethodDefinedAttribute;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodThatSetsAttr;
 use crate::config::error_kind::ErrorKind;
@@ -1432,6 +1433,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         range: TextRange,
         field_definition: &ClassFieldDefinition,
+        method_assignments: &[MethodDefinedAttribute],
         functional_class_def: bool,
         errors: &ErrorCollector,
     ) -> ClassField {
@@ -1455,7 +1457,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let (
             initialization,
             is_function_without_return_annotation,
-            value_ty,
+            mut value_ty,
             annotation,
             is_inherited,
             direct_annotation,
@@ -1739,17 +1741,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 has_implicit_literal |= current_type_node.is_implicit_literal();
             });
         }
-        let ty = if annotation
+        let mut ty = value_ty.clone();
+        if annotation
             .as_ref()
             .and_then(|ann| ann.ty.as_ref())
             .is_none()
             && matches!(read_only_reason, None | Some(ReadOnlyReason::NamedTuple))
             && has_implicit_literal
         {
-            value_ty.promote_implicit_literals(self.stdlib)
-        } else {
-            value_ty
-        };
+            ty = ty.promote_implicit_literals(self.stdlib);
+        }
 
         // Identify whether this is a descriptor
         let mut descriptor = None;
@@ -1795,6 +1796,63 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 _ => {}
             };
+        }
+
+        let init_assignments: Vec<&MethodDefinedAttribute> = method_assignments
+            .iter()
+            .filter(|assignment| {
+                assignment.method.method_name == dunder::INIT
+                    && matches!(
+                        assignment.method.instance_or_class,
+                        MethodSelfKind::Instance
+                    )
+            })
+            .collect();
+        if matches!(
+            field_definition,
+            ClassFieldDefinition::AssignedInBody { .. }
+        ) && !init_assignments.is_empty()
+            && annotation
+                .as_ref()
+                .and_then(|ann| ann.ty.as_ref())
+                .is_none()
+            && descriptor.is_none()
+        {
+            let ignore_errors = self.error_swallower();
+            let mut types = Vec::with_capacity(init_assignments.len() + 1);
+            types.push(value_ty);
+            for assignment in init_assignments {
+                let direct_annotation = assignment
+                    .annotation
+                    .map(|annot| self.get_idx(annot).annotation.clone());
+                let (ty, _, _) = self.analyze_class_field_value(
+                    &assignment.value,
+                    class,
+                    name,
+                    direct_annotation.as_ref(),
+                    true,
+                    assignment.range,
+                    &ignore_errors,
+                );
+                types.push(ty);
+            }
+            value_ty = self.unions(types);
+            let mut has_implicit_literal = value_ty.is_implicit_literal();
+            if !has_implicit_literal {
+                value_ty.universe(&mut |current_type_node| {
+                    has_implicit_literal |= current_type_node.is_implicit_literal();
+                });
+            }
+            ty = value_ty;
+            if annotation
+                .as_ref()
+                .and_then(|ann| ann.ty.as_ref())
+                .is_none()
+                && matches!(read_only_reason, None | Some(ReadOnlyReason::NamedTuple))
+                && has_implicit_literal
+            {
+                ty = ty.promote_implicit_literals(self.stdlib);
+            }
         }
         // Check if this is a Django ForeignKey field
         let is_foreign_key = metadata.is_django_model()
