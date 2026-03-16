@@ -62,6 +62,7 @@ use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::export::definitions::MutableCaptureKind;
+use crate::export::exports::ExportLocation;
 use crate::export::special::SpecialExport;
 use crate::state::loader::FindError;
 use crate::state::loader::FindingOrError;
@@ -1372,24 +1373,26 @@ impl<'a> BindingsBuilder<'a> {
             if &x.name == "*"
                 && let Some(wildcards) = self.lookup.get_wildcard(m)
             {
-                let has_explicit_dunder_all = self.lookup.has_explicit_dunder_all(m);
                 for name in wildcards.iter_hashed() {
                     let key = Key::Import(Box::new((name.into_key().clone(), x.range)));
-                    let val = if self.lookup.export_exists(m, &name) {
-                        Binding::Import(Box::new((m, name.into_key().clone(), None)))
-                    } else {
-                        // If __all__ was explicitly specified, missing names are already
-                        // reported as bad-dunder-all in the defining module.
-                        if !has_explicit_dunder_all
-                            && !self.scopes.is_unreachable_from_static_test()
-                        {
-                            self.error(
-                                x.range,
-                                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
-                                format!("Could not import `{name}` from `{m}`"),
-                            );
+                    let val = match self.lookup.get_export(m, &name) {
+                        Some(ExportLocation::ThisModule(..) | ExportLocation::OtherModule(..)) => {
+                            Binding::Import(Box::new((m, name.into_key().clone(), None)))
                         }
-                        Binding::Any(AnyStyle::Error)
+                        Some(ExportLocation::InvalidDunderAll(..)) => {
+                            // The defining module already owns the bad-dunder-all diagnostic.
+                            Binding::Any(AnyStyle::Error)
+                        }
+                        None => {
+                            if !self.scopes.is_unreachable_from_static_test() {
+                                self.error(
+                                    x.range,
+                                    ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
+                                    format!("Could not import `{name}` from `{m}`"),
+                                );
+                            }
+                            Binding::Any(AnyStyle::Error)
+                        }
                     };
                     let key = self.insert_binding(key, val);
                     // Register the imported name from wildcard imports
@@ -1422,44 +1425,53 @@ impl<'a> BindingsBuilder<'a> {
                 // If both are present, generally we prefer the name defined in `x`,
                 // but there is an exception: if we are already looking at the
                 // `__init__` module of `x`, we always prefer the submodule.
-                let val = if (self.module_info.name() != m)
-                    && self.lookup.export_exists(m, &x.name.id)
-                {
-                    if let Some(deprecated) = self.lookup.get_deprecated(m, &x.name.id) {
-                        let msg =
-                            deprecated.as_error_message(format!("`{}` is deprecated", x.name));
-                        self.error_multiline(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
-                    }
-                    Binding::Import(Box::new((m, x.name.id.clone(), original_name_range)))
-                } else {
-                    // Try submodule lookup first, then fall back to __getattr__
-                    let x_as_module_name = m.append(&x.name.id);
-                    let (finding, error) = match self.lookup.module_exists(x_as_module_name) {
-                        FindingOrError::Finding(finding) => (true, finding.error),
-                        FindingOrError::Error(error) => (false, Some(error)),
-                    };
-                    let is_not_found = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
-                    if finding {
-                        Binding::Module(Box::new((
-                            x_as_module_name,
-                            x_as_module_name.components().into_boxed_slice(),
-                            None,
-                        )))
-                    } else if self.lookup.export_exists(m, &dunder::GETATTR) {
-                        // Module has __getattr__, which means any attribute can be accessed.
-                        // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
-                        Binding::ImportViaGetattr(Box::new((m, x.name.id.clone())))
-                    } else if is_not_found {
-                        if !self.scopes.is_unreachable_from_static_test() {
-                            self.error(
+                let val = match self.lookup.get_export(m, &x.name.id) {
+                    Some(ExportLocation::InvalidDunderAll(..)) => Binding::Any(AnyStyle::Error),
+                    Some(ExportLocation::ThisModule(..) | ExportLocation::OtherModule(..))
+                        if self.module_info.name() != m =>
+                    {
+                        if let Some(deprecated) = self.lookup.get_deprecated(m, &x.name.id) {
+                            let msg =
+                                deprecated.as_error_message(format!("`{}` is deprecated", x.name));
+                            self.error_multiline(
                                 x.range,
-                                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
-                                format!("Could not import `{}` from `{m}`", x.name.id),
+                                ErrorInfo::Kind(ErrorKind::Deprecated),
+                                msg,
                             );
                         }
-                        Binding::Any(AnyStyle::Error)
-                    } else {
-                        Binding::Any(AnyStyle::Explicit)
+                        Binding::Import(Box::new((m, x.name.id.clone(), original_name_range)))
+                    }
+                    _ => {
+                        // Try submodule lookup first, then fall back to __getattr__
+                        let x_as_module_name = m.append(&x.name.id);
+                        let (finding, error) = match self.lookup.module_exists(x_as_module_name) {
+                            FindingOrError::Finding(finding) => (true, finding.error),
+                            FindingOrError::Error(error) => (false, Some(error)),
+                        };
+                        let is_not_found =
+                            error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
+                        if finding {
+                            Binding::Module(Box::new((
+                                x_as_module_name,
+                                x_as_module_name.components().into_boxed_slice(),
+                                None,
+                            )))
+                        } else if self.lookup.export_exists(m, &dunder::GETATTR) {
+                            // Module has __getattr__, which means any attribute can be accessed.
+                            // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
+                            Binding::ImportViaGetattr(Box::new((m, x.name.id.clone())))
+                        } else if is_not_found {
+                            if !self.scopes.is_unreachable_from_static_test() {
+                                self.error(
+                                    x.range,
+                                    ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
+                                    format!("Could not import `{}` from `{m}`", x.name.id),
+                                );
+                            }
+                            Binding::Any(AnyStyle::Error)
+                        } else {
+                            Binding::Any(AnyStyle::Explicit)
+                        }
                     }
                 };
                 // __future__ imports have side effects even if not explicitly used,

@@ -548,7 +548,7 @@ impl Bindings {
         builder.process_deferred_bound_names();
 
         // Validate that all entries in __all__ are defined in the module
-        for (range, name) in exports.invalid_dunder_all_entries(lookup, &module_info) {
+        for (range, name) in exports.invalid_dunder_all_entries(lookup) {
             builder.error(
                 range,
                 ErrorInfo::Kind(ErrorKind::BadDunderAll),

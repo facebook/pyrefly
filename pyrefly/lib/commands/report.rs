@@ -290,6 +290,7 @@ impl ReportArgs {
                 Some(ExportLocation::ThisModule(export)) => {
                     Self::range_to_location(module, export.location)
                 }
+                Some(ExportLocation::InvalidDunderAll(..)) => continue,
                 _ => continue,
             };
             match binding {

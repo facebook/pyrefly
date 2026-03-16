@@ -466,6 +466,7 @@ impl Transaction<'_> {
                 }
                 let kind = match location {
                     ExportLocation::OtherModule(..) => continue,
+                    ExportLocation::InvalidDunderAll(..) => continue,
                     ExportLocation::ThisModule(export) => export
                         .symbol_kind
                         .map_or(Some(CompletionItemKind::VARIABLE), |k| {
@@ -894,6 +895,7 @@ impl Transaction<'_> {
                     for (name, export) in exports.iter() {
                         let is_deprecated = match export {
                             ExportLocation::ThisModule(export) => export.deprecation.is_some(),
+                            ExportLocation::InvalidDunderAll(..) => continue,
                             ExportLocation::OtherModule(_, _) => false,
                         };
                         let kind = match export {
@@ -903,6 +905,7 @@ impl Transaction<'_> {
                                     k.to_lsp_completion_item_kind()
                                 }),
                             ExportLocation::OtherModule(_, _) => CompletionItemKind::VARIABLE,
+                            ExportLocation::InvalidDunderAll(..) => continue,
                         };
                         result.push(RankedCompletion::new(CompletionItem {
                             label: name.to_string(),

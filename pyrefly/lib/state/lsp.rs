@@ -1122,6 +1122,7 @@ impl<'a> Transaction<'a> {
                     }
                     m = *module;
                 }
+                Some(ExportLocation::InvalidDunderAll(..)) => return None,
                 None => return None,
             }
         }
@@ -3186,6 +3187,7 @@ impl<'a> Transaction<'a> {
                 let target_name = original_name.clone().unwrap_or_else(|| export_name.clone());
                 self.resolve_named_import(handle, *module, target_name, FindPreference::default())
             }
+            ExportLocation::InvalidDunderAll(..) => None,
         }
     }
 

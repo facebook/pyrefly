@@ -460,7 +460,17 @@ testcase!(
     test_export_all_wrongly,
     env_export_all_wrongly(),
     r#"
-from foo import bad_definition  # E: Could not import `bad_definition` from `foo`
+from foo import bad_definition
+x = bad_definition
+"#,
+);
+
+testcase!(
+    test_export_all_wrongly_missing_other_name,
+    env_export_all_wrongly(),
+    r#"
+from foo import missing_definition  # E: Could not import `missing_definition` from `foo`
+x = missing_definition
 "#,
 );
 

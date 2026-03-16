@@ -39,6 +39,10 @@ pub trait LookupExport {
     /// Check if a specific export exists in a module. Records a dependency on `name` from `module` regardless of if it exists.
     fn export_exists(&self, module: ModuleName, name: &Name) -> bool;
 
+    /// Get the export entry for a name in a module. Records a dependency on `name`
+    /// from `module` regardless of if it exists.
+    fn get_export(&self, module: ModuleName, name: &Name) -> Option<ExportLocation>;
+
     /// Check if a module exists and do nothing with it. Note: if we rely on the exports of `module`, we need to call
     /// `module_exists_and_record_export_dependency` instead.
     fn module_exists(&self, module: ModuleName) -> FindingOrError<()>;
@@ -66,10 +70,6 @@ pub trait LookupExport {
 
     /// Check if an export is marked as `Final`. Records a dependency on `name` from `module` regardless of if it exists.
     fn is_final(&self, module: ModuleName, name: &Name) -> bool;
-
-    /// Check if the module has an explicitly specified `__all__`.
-    /// Records a dependency on the module's wildcard exports.
-    fn has_explicit_dunder_all(&self, module: ModuleName) -> bool;
 }
 
 #[derive(Debug, Clone)]
@@ -90,10 +90,14 @@ pub enum ExportLocation {
     ThisModule(Export),
     /// Export from another module ModuleName. If it's aliased, the old name (before the alias) is provided.
     OtherModule(ModuleName, Option<Name>),
+    /// This name is listed in an explicit `__all__`, but the defining module does not actually export it.
+    InvalidDunderAll(TextRange),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Exports {
+    module_name: ModuleName,
+    is_init: bool,
     /// The underlying definitions.
     /// Note that these aren't actually required, once we have calculated the other fields,
     /// but they take up very little space, so not worth the hassle to detect when
@@ -147,6 +151,8 @@ impl Exports {
         }
 
         Self {
+            module_name: module_info.name(),
+            is_init: module_info.path().is_init(),
             definitions,
             wildcard: Calculation::new(),
             exports: Calculation::new(),
@@ -247,10 +253,6 @@ impl Exports {
         self.docstring_range
     }
 
-    pub fn has_explicit_dunder_all(&self) -> bool {
-        self.definitions.dunder_all.kind == DunderAllKind::Specified
-    }
-
     /// If `position` is inside a user-specified `__all__` string entry, return its range and name.
     pub fn dunder_all_name_at(&self, position: TextSize) -> Option<(TextRange, Name)> {
         if self.definitions.dunder_all.kind != DunderAllKind::Specified {
@@ -294,11 +296,7 @@ impl Exports {
     /// Returns entries in `__all__` that don't exist in the module's definitions.
     /// Only validates explicitly user-defined `__all__` entries, not synthesized ones.
     /// Returns a vector of (range, name) tuples for invalid entries.
-    pub fn invalid_dunder_all_entries(
-        &self,
-        lookup: &dyn LookupExport,
-        module_info: &ModuleInfo,
-    ) -> Vec<(TextRange, Name)> {
+    pub fn invalid_dunder_all_entries(&self, lookup: &dyn LookupExport) -> Vec<(TextRange, Name)> {
         // Only validate if __all__ was explicitly defined and resolvable
         if self.definitions.dunder_all.kind != DunderAllKind::Specified {
             return Vec::new();
@@ -328,8 +326,8 @@ impl Exports {
                     continue;
                 }
                 // In __init__.py, __all__ can list submodule names
-                if module_info.path().is_init() {
-                    let submodule = module_info.name().append(name);
+                if self.is_init {
+                    let submodule = self.module_name.append(name);
                     if lookup.module_exists(submodule).finding().is_some() {
                         continue;
                     }
@@ -399,6 +397,9 @@ impl Exports {
                     }
                 }
             }
+            for (range, name) in self.invalid_dunder_all_entries(lookup) {
+                result.insert(name, ExportLocation::InvalidDunderAll(range));
+            }
             Arc::new(result)
         };
         self.exports.calculate(f).unwrap_or_default()
@@ -438,9 +439,13 @@ mod tests {
 
     impl LookupExport for SmallMap<ModuleName, Arc<Exports>> {
         fn export_exists(&self, module: ModuleName, k: &Name) -> bool {
+            self.get_export(module, k)
+                .is_some_and(|export| !matches!(export, ExportLocation::InvalidDunderAll(..)))
+        }
+
+        fn get_export(&self, module: ModuleName, k: &Name) -> Option<ExportLocation> {
             self.get(&module)
-                .map(|x| x.exports(self).contains_key(k))
-                .unwrap_or(false)
+                .and_then(|x| x.exports(self).get(k).cloned())
         }
 
         fn get_wildcard(&self, module: ModuleName) -> Option<Arc<SmallSet<Name>>> {
@@ -481,11 +486,6 @@ mod tests {
 
         fn is_final(&self, _module: ModuleName, _name: &Name) -> bool {
             false
-        }
-
-        fn has_explicit_dunder_all(&self, module: ModuleName) -> bool {
-            self.get(&module)
-                .is_some_and(|exports| exports.has_explicit_dunder_all())
         }
     }
 

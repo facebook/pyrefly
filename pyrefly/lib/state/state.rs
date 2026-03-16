@@ -1425,6 +1425,7 @@ impl<'a> Transaction<'a> {
                 let other_handle = Handle::new(*other_module, other_path, handle.sys_info().dupe());
                 self.lookup_export_location(&other_handle, actual_name)
             }
+            ExportLocation::InvalidDunderAll(..) => None,
         }
     }
 
@@ -2314,15 +2315,25 @@ impl Drop for TransactionHandle<'_> {
 
 impl<'a> LookupExport for TransactionHandle<'a> {
     fn export_exists(&self, module: ModuleName, name: &Name) -> bool {
-        // TODO: This should be ModuleDep::NameExists instead
-        // but tests fail.
-        let dep = ModuleDep::Key(AnyExportedKey::KeyExport(KeyExport(name.clone())));
         self.with_exports(
             module,
-            |exports, lookup| exports.exports(lookup).contains_key(name),
-            dep,
+            |exports, lookup| {
+                matches!(
+                    exports.exports(lookup).get(name),
+                    Some(ExportLocation::ThisModule(..) | ExportLocation::OtherModule(..))
+                )
+            },
+            ModuleDep::NameExists(name.clone()),
         )
         .unwrap_or(false)
+    }
+
+    fn get_export(&self, module: ModuleName, name: &Name) -> Option<ExportLocation> {
+        self.with_exports(
+            module,
+            |exports, lookup| exports.exports(lookup).get(name).cloned(),
+            ModuleDep::NameExists(name.clone()),
+        )?
     }
 
     fn get_wildcard(&self, module: ModuleName) -> Option<Arc<SmallSet<Name>>> {
@@ -2413,6 +2424,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                     ExportLocation::OtherModule(other_module, original_name) => {
                         Some(Ok((*other_module, original_name.clone())))
                     }
+                    ExportLocation::InvalidDunderAll(..) => Some(Err(None)),
                 },
                 ModuleDep::NameMetadata(name.clone()),
             )??;
@@ -2458,7 +2470,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                     Some(ExportLocation::OtherModule(other_module, original_name)) => {
                         Ok((*other_module, original_name.clone()))
                     }
-                    None => Err(false),
+                    Some(ExportLocation::InvalidDunderAll(..)) | None => Err(false),
                 },
                 ModuleDep::NameMetadata(name.clone()),
             );
@@ -2474,15 +2486,6 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                 None => return false,
             }
         }
-    }
-
-    fn has_explicit_dunder_all(&self, module: ModuleName) -> bool {
-        self.with_exports(
-            module,
-            |exports, _lookup| exports.has_explicit_dunder_all(),
-            ModuleDep::Wildcard,
-        )
-        .unwrap_or(false)
     }
 }
 
