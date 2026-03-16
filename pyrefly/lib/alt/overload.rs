@@ -622,7 +622,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut try_call = |hint| {
             let call_errors = self.error_collector();
-            let res = self.callable_infer(
+            let (res, specialization_errors) = self.callable_infer(
                 callable.1.signature.clone(),
                 Some(&metadata.kind),
                 tparams,
@@ -639,6 +639,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 hint,
                 overload_ctor_targs.as_mut(),
             );
+            if let Ok(errors) = Vec1::try_from_vec(specialization_errors) {
+                self.add_specialization_errors(errors, arguments_range, &call_errors, None);
+            }
             (call_errors, res)
         };
 

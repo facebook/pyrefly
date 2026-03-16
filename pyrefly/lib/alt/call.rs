@@ -1032,7 +1032,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         metadata,
                     },
                 ),
-            ) => self.callable_infer(
+            ) => self.call_infer_inner(
                 signature,
                 Some(&metadata.kind),
                 tparams.as_deref(),
@@ -1046,7 +1046,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 hint,
                 ctor_targs,
             ),
-            CallTarget::Callable(TargetWithTParams(tparams, callable)) => self.callable_infer(
+            CallTarget::Callable(TargetWithTParams(tparams, callable)) => self.call_infer_inner(
                 callable,
                 None,
                 tparams.as_deref(),
@@ -1066,7 +1066,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     signature: callable,
                     metadata,
                 },
-            )) => self.callable_infer(
+            )) => self.call_infer_inner(
                 callable,
                 Some(&metadata.kind),
                 tparams.as_deref(),
@@ -1159,6 +1159,79 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             res
         }
+    }
+
+    /// Wrapper for `callable_infer` that handles trying a call with and without a contextual hint.
+    fn call_infer_inner(
+        &self,
+        callable: Callable,
+        callable_name: Option<&FunctionKind>,
+        tparams: Option<&TParams>,
+        self_obj: Option<Type>,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        arguments_range: TextRange,
+        arg_errors: &ErrorCollector,
+        call_errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        hint: Option<HintRef>,
+        ctor_targs: Option<&mut TArgs>,
+    ) -> Type {
+        // First try the call without the hint to see if it succeeds.
+        let mut ctor_targs_no_hint = ctor_targs.as_ref().map(|x| (**x).clone());
+        let call_errors_no_hint = self.error_collector();
+        let res_no_hint = self.callable_infer(
+            callable.clone(),
+            callable_name,
+            tparams,
+            self_obj.clone(),
+            args,
+            keywords,
+            arguments_range,
+            arg_errors,
+            &call_errors_no_hint,
+            context,
+            None,
+            ctor_targs_no_hint.as_mut(),
+        );
+        let (chosen_ctor_targs, chosen_call_errors, chosen_res) =
+            if call_errors_no_hint.is_empty() && hint.is_some() {
+                // If the call succeeds, attempt contextual typing with the hint.
+                let mut ctor_targs_with_hint = ctor_targs.as_ref().map(|x| (**x).clone());
+                let call_errors_with_hint = self.error_collector();
+                let res_with_hint = self.callable_infer(
+                    callable,
+                    callable_name,
+                    tparams,
+                    self_obj,
+                    args,
+                    keywords,
+                    arguments_range,
+                    arg_errors,
+                    &call_errors_with_hint,
+                    context,
+                    hint,
+                    ctor_targs_with_hint.as_mut(),
+                );
+                if call_errors_with_hint.is_empty() {
+                    (ctor_targs_with_hint, call_errors_with_hint, res_with_hint)
+                } else {
+                    (ctor_targs_no_hint, call_errors_no_hint, res_no_hint)
+                }
+            } else {
+                (ctor_targs_no_hint, call_errors_no_hint, res_no_hint)
+            };
+        call_errors.extend(chosen_call_errors);
+        if let Some(targs) = ctor_targs
+            && let Some(chosen_targs) = chosen_ctor_targs
+        {
+            *targs = chosen_targs;
+        }
+        let (ty, specialization_errors) = chosen_res;
+        if let Ok(errors) = Vec1::try_from_vec(specialization_errors) {
+            self.add_specialization_errors(errors, arguments_range, call_errors, context);
+        }
+        ty
     }
 
     pub fn call_infer(

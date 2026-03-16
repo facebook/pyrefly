@@ -4164,8 +4164,8 @@
     {
       "code": -2,
       "column": 41,
-      "concise_description": "Argument `() -> int` is not assignable to parameter `converter` with type `(@_) -> int` in function `model_field`",
-      "description": "Argument `() -> int` is not assignable to parameter `converter` with type `(@_) -> int` in function `model_field`",
+      "concise_description": "Argument `() -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
+      "description": "Argument `() -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
       "line": 48,
       "name": "bad-argument-type",
       "severity": "error",
@@ -4175,8 +4175,8 @@
     {
       "code": -2,
       "column": 41,
-      "concise_description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> int` in function `model_field`",
-      "description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> int` in function `model_field`",
+      "concise_description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
+      "description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
       "line": 49,
       "name": "bad-argument-type",
       "severity": "error",

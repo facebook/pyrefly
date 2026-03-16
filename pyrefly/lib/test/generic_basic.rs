@@ -121,6 +121,25 @@ append(v, "test")
 "#,
 );
 testcase!(
+    test_call_hint_does_not_override_arg,
+    r#"
+from typing import Any, reveal_type
+
+class Map[K, V]:
+    def set(self, key: K, value: V) -> None: ...
+    def get[T](self, key: Any, default: T, /) -> V | T: ...
+
+d_any: Map[str, Any] = Map()
+
+reveal_type(d_any.get("key", None))  # E: revealed type: Any | None
+result: str = reveal_type(d_any.get("key", None))  # E: revealed type: Any | None  # E: `Any | None` is not assignable to `str`
+
+def get[V, T](x: Map[str, V], key: Any, default: T, /) -> V | T: ...
+result2: str = reveal_type(get(d_any, "key", None))  # E: revealed type: Any | None  # E: `Any | None` is not assignable to `str`
+"#,
+);
+
+testcase!(
     test_generic_default,
     r#"
 from typing import assert_type

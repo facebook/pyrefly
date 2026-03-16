@@ -32,7 +32,6 @@ use ruff_text_size::TextRange;
 use starlark_map::ordered_map::OrderedMap;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
-use vec1::Vec1;
 use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
@@ -48,6 +47,7 @@ use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::display::function_suffix;
 use crate::solver::solver::QuantifiedHandle;
+use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
@@ -1114,7 +1114,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         mut ctor_targs: Option<&mut TArgs>,
-    ) -> Type {
+    ) -> (Type, Vec<TypeVarSpecializationError>) {
         // Look up meta-shape early so we can conditionally collect bound args.
         // Only consult the registry when tensor_shapes is enabled to avoid
         // unnecessary DSL parsing and per-call HashMap lookups.
@@ -1299,9 +1299,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             errors.extend(e);
         }
-        if let Ok(errors) = Vec1::try_from_vec(errors) {
-            self.add_specialization_errors(errors, arguments_range, call_errors, context);
-        }
 
         // Apply meta-shape inference if bound args were collected
         let ret = if let Some(meta_shape_func) = meta_shape_func
@@ -1318,7 +1315,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             callable.ret.clone()
         };
 
-        self.solver().finish_function_return(ret)
+        (self.solver().finish_function_return(ret), errors)
     }
 
     /// Look up whether a callable has a registered meta-shape function.

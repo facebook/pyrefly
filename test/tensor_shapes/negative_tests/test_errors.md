@@ -434,11 +434,11 @@ ERROR Returned type `Tensor[(M + N), 3]` is not assignable to declared return ty
     |            ^
     |
   Size mismatch: expected (M * N), got (M + N)
-ERROR Argument `Tensor[2, 3]` is not assignable to parameter `x` with type `Tensor[4, 3]` in function `tensor_generic_identity` [bad-argument-type]
-   --> *test_tensor_subtyping.py:123:36 (glob)
+ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[4, 3]` [bad-return]
+   --> *test_tensor_subtyping.py:123:12 (glob)
     |
 123 |     return tensor_generic_identity(x)  # ERROR
-    |                                    ^
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
     |
   Size mismatch: expected 4, got 2
 [1]
@@ -577,18 +577,19 @@ ERROR Returned type `Tensor[5, 4]` is not assignable to declared return type `Te
 
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_variadic.py"
-ERROR Argument `Tensor[10, 20]` is not assignable to parameter `x` with type `Tensor[10, 30]` in function `variadic_identity` [bad-argument-type]
-  --> *test_tensor_variadic.py:97:30 (glob)
+ERROR Returned type `Tensor[10, 20]` is not assignable to declared return type `Tensor[10, 30]` [bad-return]
+  --> *test_tensor_variadic.py:97:12 (glob)
    |
 97 |     return variadic_identity(x)
-   |                              ^
+   |            ^^^^^^^^^^^^^^^^^^^^
    |
   Size mismatch: expected 30, got 20
-ERROR Argument `Tensor[1, 2, 3, 4]` is not assignable to parameter `x` with type `Tensor[1, 2, 3]` in function `split_first_rest` [bad-argument-type]
-   --> *test_tensor_variadic.py:104:29 (glob)
+ERROR Returned type `tuple[Tensor[1], Tensor[2, 3, 4]]` is not assignable to declared return type `tuple[Tensor[1], Tensor[2, 3]]` [bad-return]
+   --> *test_tensor_variadic.py:104:12 (glob)
     |
 104 |     return split_first_rest(x)
-    |                             ^
+    |            ^^^^^^^^^^^^^^^^^^^
     |
+  Tensor rank mismatch: expected 2 dimensions, got 3 dimensions
 [1]
 ```
