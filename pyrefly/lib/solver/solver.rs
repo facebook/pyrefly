@@ -884,17 +884,33 @@ impl Solver {
     }
 
     /// Add a lower bound to the variable if it is a Quantified
-    pub fn add_lower_bound(&self, v: Var, bound: Type) {
+    pub fn add_lower_bound(
+        &self,
+        v: Var,
+        bound: Type,
+        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
+    ) {
         let lock = self.variables.lock();
         let mut e = lock.get_mut(v);
+        let mut first_bound = None;
         match &mut *e {
             Variable::Quantified {
                 quantified: _,
                 lower_bounds,
             } => {
-                lower_bounds.push(bound);
+                if let Some(first) = lower_bounds.first() {
+                    first_bound = Some(first.clone());
+                }
+                lower_bounds.push(bound.clone());
             }
             _ => {}
+        }
+        drop(e);
+        drop(lock);
+        // TODO(https://github.com/facebook/pyrefly/issues/105): this probably isn't the right way
+        // to record relationships between vars.
+        if let Some(first) = &first_bound {
+            is_subset(&bound, first); // Ignore the result, just pin vars
         }
     }
 
