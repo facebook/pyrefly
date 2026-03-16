@@ -1147,6 +1147,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // If so, we can narrow the left operand to the mapping's key type.
                 if !self.behaves_like_any(&right_ty)
                     && let Some((key_ty, _)) = self.unwrap_mapping(&right_ty)
+                    && !self.behaves_like_any(&key_ty)
                 {
                     return self.intersect(ty, &key_ty);
                 }

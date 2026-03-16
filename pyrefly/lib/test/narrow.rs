@@ -2069,6 +2069,30 @@ def test(key: str) -> None:
 );
 
 testcase!(
+    test_narrow_in_does_not_widen,
+    r#"
+from typing import Any, Literal, assert_type
+
+list_any: list[Any] = [1]
+list_object: list[object] = [1]
+dict_any: dict[Any, int] = {1: 1}
+dict_object: dict[object, int] = {1: 1}
+
+def test_list(x: Literal[1] | str) -> None:
+    if x in list_any:
+        assert_type(x, Literal[1] | str)
+    if x in list_object:
+        assert_type(x, Literal[1] | str)
+
+def test_dict(x: Literal[1] | str) -> None:
+    if x in dict_any:
+        assert_type(x, Literal[1] | str)
+    if x in dict_object:
+        assert_type(x, Literal[1] | str)
+"#,
+);
+
+testcase!(
     test_narrow_len,
     r#"
 from typing import assert_type, Never, NamedTuple
