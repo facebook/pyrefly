@@ -477,7 +477,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut matched_overloads = Vec::with_capacity(overloads.len());
         let mut closest_unmatched_overload: Option<CalledOverload> = None;
         for callable in overloads {
-            let called_overload = self.try_call_overload(
+            let called_overload = self.call_overload(
                 callable,
                 metadata,
                 self_obj,
@@ -485,7 +485,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 keywords,
                 arguments_range,
                 errors,
-                hint,
+                None, // don't use the hint yet, it shouldn't influence overload selection
                 ctor_targs,
             );
             if called_overload.call_errors.is_empty() {
@@ -564,7 +564,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     matched_overloads
                         .iter()
                         .find_position(|o| {
-                            let res = self.try_call_overload(
+                            let res = self.call_overload(
                                 &o.func,
                                 metadata,
                                 self_obj,
@@ -572,7 +572,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &materialized_keywords,
                                 arguments_range,
                                 errors,
-                                hint,
+                                None, // don't use the hint yet, it shouldn't influence overload selection
                                 &None,
                             );
                             res.call_errors.is_empty()
@@ -597,11 +597,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
             // Step 6: if there are still multiple matches, pick the first one.
-            (first_overload, true)
+            // Now that we've selected an overload, use the hint to contextually type the arguments.
+            let contextual_overload = self.call_overload(
+                &first_overload.func,
+                metadata,
+                self_obj,
+                args,
+                keywords,
+                arguments_range,
+                &self.error_collector(),
+                hint,
+                ctor_targs,
+            );
+            (
+                if contextual_overload.call_errors.is_empty() {
+                    contextual_overload
+                } else {
+                    first_overload
+                },
+                true,
+            )
         }
     }
 
-    fn try_call_overload(
+    fn call_overload(
         &self,
         callable: &TargetWithTParams<Function>,
         metadata: &FuncMetadata,
@@ -620,40 +639,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut overload_ctor_targs = ctor_targs.as_ref().map(|x| (**x).clone());
         let tparams = callable.0.as_deref();
 
-        let mut try_call = |hint| {
-            let call_errors = self.error_collector();
-            let (res, specialization_errors) = self.callable_infer(
-                callable.1.signature.clone(),
-                Some(&metadata.kind),
-                tparams,
-                self_obj.cloned(),
-                args,
-                keywords,
-                arguments_range,
-                errors,
-                &call_errors,
-                // We intentionally drop the context here, as arg errors don't need it,
-                // and if there are any call errors, we'll log a "No matching overloads"
-                // error with the necessary context.
-                None,
-                hint,
-                overload_ctor_targs.as_mut(),
-            );
-            if let Ok(errors) = Vec1::try_from_vec(specialization_errors) {
-                self.add_specialization_errors(errors, arguments_range, &call_errors, None);
-            }
-            (call_errors, res)
-        };
-
-        // We want to use our hint to contextually type the arguments, but errors resulting
-        // from the hint should not influence overload selection. If there are call errors, we
-        // try again without a hint in case we can still match this overload.
-        let (call_errors, res) = try_call(hint);
-        let (call_errors, res) = if tparams.is_some() && hint.is_some() && !call_errors.is_empty() {
-            try_call(None)
-        } else {
-            (call_errors, res)
-        };
+        let call_errors = self.error_collector();
+        let (res, specialization_errors) = self.callable_infer(
+            callable.1.signature.clone(),
+            Some(&metadata.kind),
+            tparams,
+            self_obj.cloned(),
+            args,
+            keywords,
+            arguments_range,
+            errors,
+            &call_errors,
+            // We intentionally drop the context here, as arg errors don't need it,
+            // and if there are any call errors, we'll log a "No matching overloads"
+            // error with the necessary context.
+            None,
+            hint,
+            overload_ctor_targs.as_mut(),
+        );
+        if let Ok(errors) = Vec1::try_from_vec(specialization_errors) {
+            self.add_specialization_errors(errors, arguments_range, &call_errors, None);
+        }
 
         CalledOverload {
             func: callable.clone(),
