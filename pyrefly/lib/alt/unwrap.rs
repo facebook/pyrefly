@@ -257,42 +257,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_iterable(&self, ty: &Type) -> Option<Type> {
-        // Distribute over union members so each gets its own fresh type
-        // variable. Checking the whole union at once fails because the solver
-        // pins the variable on the first member, then rejects later members
-        // with different element types.
-        let mut failed = false;
-        let result = self.distribute_over_union(ty, |member| {
-            let iter_ty = self.fresh_var();
-            let iterable_ty = self
-                .heap
-                .mk_class_type(self.stdlib.iterable(iter_ty.to_type(self.heap)));
-            if self.is_subset_eq(member, &iterable_ty) {
-                self.resolve_var(member, iter_ty)
-            } else {
-                failed = true;
-                self.heap.mk_never()
-            }
-        });
-        if failed { None } else { Some(result) }
+        let iter_ty = self.fresh_var();
+        let iterable_ty = self
+            .heap
+            .mk_class_type(self.stdlib.iterable(iter_ty.to_type(self.heap)));
+        if self.is_subset_eq(ty, &iterable_ty) {
+            Some(self.resolve_var(ty, iter_ty))
+        } else {
+            None
+        }
     }
 
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_async_iterable(&self, ty: &Type) -> Option<Type> {
-        let mut failed = false;
-        let result = self.distribute_over_union(ty, |member| {
-            let iter_ty = self.fresh_var();
-            let iterable_ty = self
-                .heap
-                .mk_class_type(self.stdlib.async_iterable(iter_ty.to_type(self.heap)));
-            if self.is_subset_eq(member, &iterable_ty) {
-                self.resolve_var(member, iter_ty)
-            } else {
-                failed = true;
-                self.heap.mk_never()
-            }
-        });
-        if failed { None } else { Some(result) }
+        let iter_ty = self.fresh_var();
+        let iterable_ty = self
+            .heap
+            .mk_class_type(self.stdlib.async_iterable(iter_ty.to_type(self.heap)));
+        if self.is_subset_eq(ty, &iterable_ty) {
+            Some(self.resolve_var(ty, iter_ty))
+        } else {
+            None
+        }
     }
 
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
