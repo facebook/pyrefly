@@ -7456,45 +7456,12 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "assert_type(list[int], list[int] | set[int]) failed",
-      "description": "assert_type(list[int], list[int] | set[int]) failed",
-      "line": 43,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 59,
-      "stop_line": 43
-    },
-    {
-      "code": -2,
-      "column": 31,
-      "concise_description": "Argument `set[int]` is not assignable to parameter `y` with type `list[int]` in function `longer`",
-      "description": "Argument `set[int]` is not assignable to parameter `y` with type `list[int]` in function `longer`",
-      "line": 43,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 35,
-      "stop_line": 43
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(list[int], Collection[int]) failed",
-      "description": "assert_type(list[int], Collection[int]) failed",
+      "concise_description": "assert_type(list[int] | set[int], Collection[int]) failed",
+      "description": "assert_type(list[int] | set[int], Collection[int]) failed",
       "line": 44,
       "name": "assert-type",
       "severity": "error",
       "stop_column": 54,
-      "stop_line": 44
-    },
-    {
-      "code": -2,
-      "column": 31,
-      "concise_description": "Argument `set[int]` is not assignable to parameter `y` with type `list[int]` in function `longer`",
-      "description": "Argument `set[int]` is not assignable to parameter `y` with type `list[int]` in function `longer`",
-      "line": 44,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 35,
       "stop_line": 44
     },
     {

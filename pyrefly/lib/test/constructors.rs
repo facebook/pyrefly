@@ -103,7 +103,7 @@ class Box[T]:
         if x:
             return Box(self, self)  # E: `Box[Box[Box[T]]]` is not assignable to parameter `self`
         else:
-            return Box(self, 42)  # E: `Box[Box[Box[T]]]` is not assignable to parameter `self`  # E: Argument `Literal[42]` is not assignable to parameter `y` with type `Self@Box`
+            return Box(self, 42)  # E: `Box[Box[Box[T]]]` is not assignable to parameter `self`
 b = Box[int]("hello", "world")
 assert_type(b, Box[int])
 assert_type(b.wrap(True), Box[Box[int]])

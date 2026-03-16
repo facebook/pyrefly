@@ -2258,3 +2258,13 @@ takes_Type_any(Callable) # E: is not assignable to parameter `x` with type `type
 takes_Type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
 "#,
 );
+
+testcase!(
+    test_min_max_int_and_float,
+    r#"
+from typing import assert_type
+def f(x: float):
+    assert_type(min(0, x), int | float)
+    assert_type(max(0, x), int | float)
+    "#,
+);

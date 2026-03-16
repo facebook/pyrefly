@@ -636,19 +636,17 @@ def add2[T: int | float](x: T, y: T) -> T:
 );
 
 testcase!(
-    bug = "This should succeed with no errors. Pyrefly pins the types too early due to https://github.com/facebook/pyrefly/issues/105",
     test_multiple_args_upper_bound,
     r#"
 from typing import assert_type
 
 def f[T: int | str](x: T, y: T): ...
-f(0, "1") # E: `Literal['1']` is not assignable to parameter `y` with type `int`
+f(0, "1")
 
 class A[T]:
     def __init__(self, x: T, y: T): ...
-# Note: pyright says the type is A[int | str]; mypy says A[object].
-# Either is okay, but A[int] is definitely wrong and we shouldn't emit the not assignable error.
-assert_type(A(0, "1"), A[int | str]) # E: assert_type(A[int], A[int | str]) # E: `Literal['1']` is not assignable to parameter `y` with type `int`
+# Note: pyright says the type is A[int | str]; mypy says A[object]. Either is ok.
+assert_type(A(0, "1"), A[int | str])
     "#,
 );
 
@@ -1194,5 +1192,22 @@ def g(x: AnyStr) -> AnyStr:
 # Concrete calls still promote correctly.
 assert_type(f("hi"), str)
 assert_type(f(b"hi"), bytes)
+    "#,
+);
+
+testcase!(
+    test_do_not_match_multiple_constraints,
+    r#"
+def f[T: (int, str)](x: T, y: T): ...
+f(0, "wrong")  # E: `Literal['wrong']` is not assignable to parameter `y` with type `int`
+    "#,
+);
+
+testcase!(
+    bug = "TODO(https://github.com/facebook/pyrefly/issues/105): error message should also flag `Literal['oops']`",
+    test_multiple_bad_specialization,
+    r#"
+def f[T: int](x: T, y: T): ...
+f("oops", None)  # E: `None` is not assignable to upper bound `int`
     "#,
 );
