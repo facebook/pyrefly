@@ -3140,12 +3140,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     //    second call to expr().
                     let unhinted_ty = self.expr(expr, None, errors);
 
-                    // if the unhinted result is imprecise, fall back to hinted inference.
-                    if unhinted_ty.is_any()
+                    let is_imprecise = unhinted_ty.is_any()
                         || unhinted_ty.is_never()
+                        || unhinted_ty.contains_none()
                         || unhinted_ty.contains_type_variable()
-                        || unhinted_ty.may_contain_quantified_var()
-                    {
+                        || unhinted_ty.may_contain_quantified_var();
+
+                    // if the unhinted result is imprecise, fall back to hinted inference.
+                    if is_imprecise {
                         self.expr(expr, hint, errors)
                     } else if annot_ty
                         .as_ref()

@@ -1056,6 +1056,12 @@ impl Type {
         self.visit_type_variables(&mut f);
         seen
     }
+    /// Returns true if this type is `None` or contains `None` within it's structure (e.g., in a Union or Tuple).
+    pub fn contains_none(&self) -> bool {
+        let mut seen = false;
+        self.visit(&mut |t| seen |= t.is_none());
+        seen
+    }
 
     /// Collect unreplaced references to legacy type variables. Note that references to in-scope
     /// legacy type variables in functions and classes are replaced with Quantified, so unreplaced
