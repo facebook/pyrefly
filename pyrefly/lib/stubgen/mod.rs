@@ -27,10 +27,13 @@ mod tests {
     use crate::test::util::TestEnv;
 
     fn run_stubgen(input: &str) -> String {
-        run_stubgen_with_config(input, &ExtractConfig {
-            include_private: false,
-            include_docstrings: false,
-        })
+        run_stubgen_with_config(
+            input,
+            &ExtractConfig {
+                include_private: false,
+                include_docstrings: false,
+            },
+        )
     }
 
     fn run_stubgen_with_config(input: &str, config: &ExtractConfig) -> String {
