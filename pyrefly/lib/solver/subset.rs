@@ -692,7 +692,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             // Resolve Vars inside Unbounded tuples and re-dispatch.
             (Tuple::Unbounded(box Type::Var(v)), Tuple::Concrete(_)) => {
-                let resolved = self.solver.expand_vars(Type::Var(*v));
+                let resolved = self.solver.expand_vars(self.solver.expand_unwrap(*v));
                 if matches!(resolved, Type::Var(_)) {
                     Err(SubsetError::Other)
                 } else {

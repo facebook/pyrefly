@@ -464,7 +464,7 @@ impl Solver {
         t: &mut Type,
         limit: usize,
         recurser: &VarRecurser,
-        expand_unfinished_quantified: bool,
+        expand_unfinished_variables: bool,
     ) {
         if limit == 0 {
             // TODO: Should probably add an error here, and use any_error,
@@ -479,37 +479,19 @@ impl Solver {
                         *t = ty.clone();
                         drop(variable);
                         drop(lock);
-                        self.expand_with_limit(
-                            t,
-                            limit - 1,
-                            recurser,
-                            expand_unfinished_quantified,
-                        );
+                        self.expand_with_limit(t, limit - 1, recurser, expand_unfinished_variables);
                     }
                     Variable::Quantified {
                         quantified: _,
                         lower_bounds,
-                    } if expand_unfinished_quantified && !lower_bounds.is_empty() => {
-                        *t = self.solve_lower_bounds(lower_bounds.clone());
-                        drop(variable);
-                        drop(lock);
-                        self.expand_with_limit(
-                            t,
-                            limit - 1,
-                            recurser,
-                            expand_unfinished_quantified,
-                        );
                     }
-                    Variable::Unwrap(lower_bounds) if !lower_bounds.is_empty() => {
+                    | Variable::Unwrap(lower_bounds)
+                        if expand_unfinished_variables && !lower_bounds.is_empty() =>
+                    {
                         *t = self.solve_lower_bounds(lower_bounds.clone());
                         drop(variable);
                         drop(lock);
-                        self.expand_with_limit(
-                            t,
-                            limit - 1,
-                            recurser,
-                            expand_unfinished_quantified,
-                        );
+                        self.expand_with_limit(t, limit - 1, recurser, expand_unfinished_variables);
                     }
                     _ => {}
                 }
@@ -518,7 +500,7 @@ impl Solver {
             }
         } else {
             t.recurse_mut(&mut |t| {
-                self.expand_with_limit(t, limit - 1, recurser, expand_unfinished_quantified)
+                self.expand_with_limit(t, limit - 1, recurser, expand_unfinished_variables)
             });
         }
     }
