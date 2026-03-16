@@ -523,6 +523,18 @@ impl Solver {
         }
     }
 
+    /// Expand `Variable::Unwrap` to its answer or its lower bounds accumulated so far.
+    pub fn expand_unwrap(&self, v: Var) -> Type {
+        let variables = self.variables.lock();
+        match &*variables.get(v) {
+            Variable::Answer(t) => t.clone(),
+            Variable::Unwrap(lower_bounds) if !lower_bounds.is_empty() => {
+                self.solve_lower_bounds(lower_bounds.clone())
+            }
+            _ => v.to_type(&self.heap),
+        }
+    }
+
     /// Public wrapper to expand a dimension type by resolving bound Vars.
     /// Used by subset checking to expand Vars before comparing dimension expressions.
     pub fn expand_dimension(&self, dim_ty: &mut Type) {
