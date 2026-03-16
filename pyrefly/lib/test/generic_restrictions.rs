@@ -1045,6 +1045,26 @@ def go() -> None:
 );
 
 testcase!(
+    bug = "Fails to catch TypeVar bound violation",
+    test_nested_call_of_overloaded_function_preserves_bound,
+    r#"
+from typing import Any, overload
+
+@overload
+def unbounded[T, U](a: T, b: U) -> T: ...
+@overload
+def unbounded(**kwargs) -> Any: ...
+def unbounded(*args, **kwargs) -> Any: ...
+
+def bounded_str[T: str](x: T) -> T:
+    return x
+
+def go() -> None:
+    bounded_str(unbounded(1, 2))  # Should error: `int` is not assignable to upper bound `str` of type variable `T`
+    "#,
+);
+
+testcase!(
     bug = "Asserted type is wrong",
     test_typevar_default_is_typevar_in_function,
     r#"
