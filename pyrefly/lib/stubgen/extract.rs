@@ -10,6 +10,29 @@
 //! Walks the module's AST in source order and uses the binding/answer
 //! system to resolve types for each declaration.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use pyrefly_build::handle::Handle;
+use pyrefly_python::module::Module;
+use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::callable::Param;
+use pyrefly_types::types::Type;
+use ruff_python_ast::Expr;
+use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtClassDef;
+use ruff_python_ast::StmtFunctionDef;
+use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
+
+use crate::alt::answers::Answers;
+use crate::alt::types::decorated_function::DecoratedFunction;
+use crate::binding::binding::Key;
+use crate::binding::binding::KeyDecoratedFunction;
+use crate::binding::bindings::Bindings;
+use crate::state::state::Transaction;
+
 // ── Data types ──────────────────────────────────────────────────────
 
 /// A single module's stub content, in source order.
@@ -81,4 +104,559 @@ pub struct StubTypeAlias {
 pub struct ExtractConfig {
     pub include_private: bool,
     pub include_docstrings: bool,
+}
+
+/// Extract a `ModuleStub` from a type-checked module.
+pub fn extract_module_stub(
+    transaction: &Transaction,
+    handle: &Handle,
+    config: &ExtractConfig,
+) -> Option<ModuleStub> {
+    let bindings = transaction.get_bindings(handle)?;
+    let answers = transaction.get_answers(handle)?;
+    let ast = transaction.get_ast(handle)?;
+    let module_info = transaction.get_module_info(handle)?;
+
+    // Pre-build lookup maps from name range -> decorated function.
+    let function_map: HashMap<TextRange, DecoratedFunction> = bindings
+        .keys::<KeyDecoratedFunction>()
+        .map(|idx| {
+            let dec = DecoratedFunction::from_bindings_answers(idx, &bindings, &answers);
+            (dec.id_range(), dec)
+        })
+        .collect();
+
+    let mut ctx = ExtractionContext {
+        bindings: &bindings,
+        answers: &answers,
+        module_info: &module_info,
+        config,
+        uses_incomplete: false,
+        function_map: &function_map,
+    };
+
+    let items = extract_stmts(&ast.body, &mut ctx, false);
+
+    Some(ModuleStub {
+        items,
+        uses_incomplete: ctx.uses_incomplete,
+    })
+}
+
+struct ExtractionContext<'a> {
+    bindings: &'a Bindings,
+    answers: &'a Arc<Answers>,
+    module_info: &'a Module,
+    config: &'a ExtractConfig,
+    uses_incomplete: bool,
+    function_map: &'a HashMap<TextRange, DecoratedFunction>,
+}
+
+/// Extract stub items from a list of statements (top-level or class body).
+fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) -> Vec<StubItem> {
+    let mut items = Vec::new();
+
+    for stmt in stmts {
+        match stmt {
+            Stmt::FunctionDef(func_def) => {
+                if let Some(item) = extract_function(func_def, ctx, in_class) {
+                    items.push(StubItem::Function(item));
+                }
+            }
+            Stmt::ClassDef(class_def) => {
+                if let Some(item) = extract_class(class_def, ctx) {
+                    items.push(StubItem::Class(item));
+                }
+            }
+            Stmt::Import(import) => {
+                let text = source_text(ctx.module_info, import.range()).to_owned();
+                items.push(StubItem::Import(StubImport { text }));
+            }
+            Stmt::ImportFrom(import) => {
+                let text = source_text(ctx.module_info, import.range()).to_owned();
+                items.push(StubItem::Import(StubImport { text }));
+            }
+            Stmt::AnnAssign(ann_assign) => {
+                if let Some(item) = extract_ann_assign(ann_assign, ctx) {
+                    items.push(StubItem::Variable(item));
+                }
+            }
+            Stmt::Assign(assign) => {
+                for item in extract_assign(assign, ctx) {
+                    items.push(StubItem::Variable(item));
+                }
+            }
+            Stmt::TypeAlias(type_alias) => {
+                let text = source_text(ctx.module_info, type_alias.range()).to_owned();
+                items.push(StubItem::TypeAlias(StubTypeAlias { text }));
+            }
+            Stmt::If(if_stmt) => {
+                // Preserve `if TYPE_CHECKING:` blocks.
+                if is_type_checking_guard(&if_stmt.test) {
+                    let body_items = extract_stmts(&if_stmt.body, ctx, in_class);
+                    for item in body_items {
+                        items.push(item);
+                    }
+                }
+            }
+            // Skip all other statements (expressions, loops, try/except, etc.)
+            _ => {}
+        }
+    }
+
+    items
+}
+
+/// Check if an expression is `TYPE_CHECKING` or `typing.TYPE_CHECKING`.
+fn is_type_checking_guard(expr: &Expr) -> bool {
+    match expr {
+        Expr::Name(name) => name.id == "TYPE_CHECKING",
+        Expr::Attribute(attr) => attr.attr.as_str() == "TYPE_CHECKING",
+        _ => false,
+    }
+}
+
+/// Extract a function stub from a `def` statement.
+fn extract_function(
+    func_def: &StmtFunctionDef,
+    ctx: &mut ExtractionContext,
+    in_class: bool,
+) -> Option<StubFunction> {
+    let name = func_def.name.id.as_str();
+    if !should_include_name(name, ctx.config, in_class) {
+        return None;
+    }
+
+    // Try to get type information from the binding system.
+    let decorated = ctx.function_map.get(&func_def.name.range());
+
+    // Extract decorators from source.
+    let decorators: Vec<String> = func_def
+        .decorator_list
+        .iter()
+        .map(|d| format!("@{}", source_text(ctx.module_info, d.expression.range())))
+        .collect();
+
+    // Extract parameters.
+    let params = extract_params(func_def, decorated, ctx);
+
+    // Extract return type.
+    let return_type = extract_return_type(func_def, decorated, ctx);
+
+    // Extract docstring if configured.
+    let docstring = if ctx.config.include_docstrings {
+        extract_docstring(&func_def.body)
+    } else {
+        None
+    };
+
+    Some(StubFunction {
+        name: name.to_owned(),
+        is_async: func_def.is_async,
+        decorators,
+        params,
+        return_type,
+        docstring,
+    })
+}
+
+/// Extract function parameters, enriching with inferred types where available.
+fn extract_params(
+    func_def: &StmtFunctionDef,
+    decorated: Option<&DecoratedFunction>,
+    ctx: &mut ExtractionContext,
+) -> Vec<StubParam> {
+    let ast_params = &func_def.parameters;
+    let mut result = Vec::new();
+
+    // Build a map from parameter name -> resolved Param type.
+    let resolved_map: HashMap<&str, &Param> = decorated
+        .map(|d| {
+            d.undecorated
+                .params
+                .iter()
+                .filter_map(|p| p.name().map(|n| (n.as_str(), p)))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Positional-only parameters.
+    for pwd in &ast_params.posonlyargs {
+        result.push(make_param(
+            "",
+            &pwd.parameter.name.id,
+            pwd.parameter.annotation.as_deref(),
+            pwd.default.as_deref(),
+            resolved_map.get(pwd.parameter.name.id.as_str()).copied(),
+            ctx,
+        ));
+    }
+    if !ast_params.posonlyargs.is_empty() {
+        result.push(StubParam {
+            prefix: "",
+            name: "/".to_owned(),
+            annotation: None,
+            default: None,
+        });
+    }
+
+    // Regular parameters.
+    for pwd in &ast_params.args {
+        result.push(make_param(
+            "",
+            &pwd.parameter.name.id,
+            pwd.parameter.annotation.as_deref(),
+            pwd.default.as_deref(),
+            resolved_map.get(pwd.parameter.name.id.as_str()).copied(),
+            ctx,
+        ));
+    }
+
+    // *args
+    if let Some(vararg) = &ast_params.vararg {
+        result.push(make_param(
+            "*",
+            &vararg.name.id,
+            vararg.annotation.as_deref(),
+            None,
+            resolved_map.get(vararg.name.id.as_str()).copied(),
+            ctx,
+        ));
+    } else if !ast_params.kwonlyargs.is_empty() {
+        // Bare `*` separator.
+        result.push(StubParam {
+            prefix: "",
+            name: "*".to_owned(),
+            annotation: None,
+            default: None,
+        });
+    }
+
+    // Keyword-only parameters.
+    for pwd in &ast_params.kwonlyargs {
+        result.push(make_param(
+            "",
+            &pwd.parameter.name.id,
+            pwd.parameter.annotation.as_deref(),
+            pwd.default.as_deref(),
+            resolved_map.get(pwd.parameter.name.id.as_str()).copied(),
+            ctx,
+        ));
+    }
+
+    // **kwargs
+    if let Some(kwarg) = &ast_params.kwarg {
+        result.push(make_param(
+            "**",
+            &kwarg.name.id,
+            kwarg.annotation.as_deref(),
+            None,
+            resolved_map.get(kwarg.name.id.as_str()).copied(),
+            ctx,
+        ));
+    }
+
+    result
+}
+
+/// Create a single `StubParam`, using the source annotation if present,
+/// otherwise falling back to the inferred type from the binding system.
+fn make_param(
+    prefix: &'static str,
+    name: &Name,
+    source_annotation: Option<&Expr>,
+    default: Option<&Expr>,
+    resolved: Option<&Param>,
+    ctx: &mut ExtractionContext,
+) -> StubParam {
+    // Determine annotation: prefer source annotation, fall back to inferred type.
+    let annotation = if let Some(ann_expr) = source_annotation {
+        Some(source_text(ctx.module_info, ann_expr.range()).to_owned())
+    } else if let Some(param) = resolved {
+        format_param_type(param, ctx)
+    } else {
+        None
+    };
+
+    // Format default value.
+    let default_str = default.map(|d| format_default(d, ctx.module_info));
+
+    StubParam {
+        prefix,
+        name: name.to_string(),
+        annotation,
+        default: default_str,
+    }
+}
+
+/// Format a `Param`'s type for use in a stub, or return `None` for
+/// `self`/`cls` parameters and unresolvable types.
+fn format_param_type(param: &Param, ctx: &mut ExtractionContext) -> Option<String> {
+    let ty = param.as_type();
+    // Skip annotation for self/cls parameters.
+    if let Some(name) = param.name()
+        && (name == "self" || name == "cls")
+    {
+        return None;
+    }
+    format_type(ty, ctx)
+}
+
+/// Format a type for a stub annotation, returning `None` for Any and
+/// `Some("Incomplete")` for unresolvable types.
+fn format_type(ty: &Type, ctx: &mut ExtractionContext) -> Option<String> {
+    if ty.is_any() {
+        ctx.uses_incomplete = true;
+        return Some("Incomplete".to_owned());
+    }
+    let s = ty.to_string();
+    if s.contains("@") || s.contains("Unknown") {
+        ctx.uses_incomplete = true;
+        return Some("Incomplete".to_owned());
+    }
+    Some(s)
+}
+
+/// Format a default value expression for a stub. Uses the source text
+/// for simple literals, `...` for everything else.
+fn format_default(expr: &Expr, module_info: &Module) -> String {
+    match expr {
+        Expr::NoneLiteral(_) => "None".to_owned(),
+        Expr::BooleanLiteral(b) => {
+            if b.value {
+                "True".to_owned()
+            } else {
+                "False".to_owned()
+            }
+        }
+        Expr::NumberLiteral(_) | Expr::StringLiteral(_) | Expr::BytesLiteral(_) => {
+            source_text(module_info, expr.range()).to_owned()
+        }
+        Expr::UnaryOp(u) => {
+            // Handle negative numbers: `-1`, `-3.14`
+            if matches!(u.op, ruff_python_ast::UnaryOp::USub)
+                && matches!(u.operand.as_ref(), Expr::NumberLiteral(_))
+            {
+                source_text(module_info, expr.range()).to_owned()
+            } else {
+                "...".to_owned()
+            }
+        }
+        Expr::Tuple(t) if t.elts.is_empty() => "()".to_owned(),
+        Expr::EllipsisLiteral(_) => "...".to_owned(),
+        _ => "...".to_owned(),
+    }
+}
+
+/// Extract the return type annotation from a function def.
+fn extract_return_type(
+    func_def: &StmtFunctionDef,
+    decorated: Option<&DecoratedFunction>,
+    ctx: &mut ExtractionContext,
+) -> Option<String> {
+    // If there's a source annotation, use it.
+    if let Some(returns) = &func_def.returns {
+        let expr: &Expr = returns;
+        return Some(source_text(ctx.module_info, expr.range()).to_owned());
+    }
+
+    // Try to get the inferred return type from the binding system.
+    if decorated.is_some() {
+        let short_id = ShortIdentifier::new(&func_def.name);
+        let ret_key = Key::ReturnType(short_id);
+        if let Some(idx) = ctx
+            .bindings
+            .key_to_idx_hashed_opt(starlark_map::Hashed::new(&ret_key))
+        {
+            if let Some(ty) = ctx.answers.get_type_at(idx) {
+                return format_type(&ty, ctx);
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract a class stub from a `class` statement.
+fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Option<StubClass> {
+    let name = class_def.name.id.as_str();
+    if !should_include_name(name, ctx.config, false) {
+        return None;
+    }
+
+    // Extract decorators from source.
+    let decorators: Vec<String> = class_def
+        .decorator_list
+        .iter()
+        .map(|d| format!("@{}", source_text(ctx.module_info, d.expression.range())))
+        .collect();
+
+    // Extract base classes from source.
+    let bases = if let Some(args) = &class_def.arguments {
+        let mut parts: Vec<String> = Vec::new();
+        for a in &args.args {
+            let expr: &Expr = a;
+            parts.push(source_text(ctx.module_info, expr.range()).to_owned());
+        }
+        for kw in &args.keywords {
+            let val_expr: &Expr = &kw.value;
+            if let Some(arg) = &kw.arg {
+                parts.push(format!(
+                    "{}={}",
+                    arg.as_str(),
+                    source_text(ctx.module_info, val_expr.range())
+                ));
+            } else {
+                parts.push(format!(
+                    "**{}",
+                    source_text(ctx.module_info, val_expr.range())
+                ));
+            }
+        }
+        parts.join(", ")
+    } else {
+        String::new()
+    };
+
+    // Extract docstring if configured.
+    let docstring = if ctx.config.include_docstrings {
+        extract_docstring(&class_def.body)
+    } else {
+        None
+    };
+
+    // Extract class body.
+    let body = extract_stmts(&class_def.body, ctx, true);
+
+    Some(StubClass {
+        name: name.to_owned(),
+        bases,
+        decorators,
+        body,
+        docstring,
+    })
+}
+
+/// Extract a variable stub from an annotated assignment (`x: int = ...`).
+fn extract_ann_assign(
+    ann_assign: &ruff_python_ast::StmtAnnAssign,
+    ctx: &mut ExtractionContext,
+) -> Option<StubVariable> {
+    let name = match ann_assign.target.as_ref() {
+        Expr::Name(n) => n.id.as_str(),
+        _ => return None,
+    };
+    if !should_include_name(name, ctx.config, false) {
+        return None;
+    }
+
+    let annotation = source_text(ctx.module_info, ann_assign.annotation.range()).to_owned();
+
+    // For simple literal values, preserve them.
+    let value = ann_assign
+        .value
+        .as_deref()
+        .and_then(|v| simple_value_text(v, ctx.module_info));
+
+    Some(StubVariable {
+        name: name.to_owned(),
+        annotation: Some(annotation),
+        value,
+    })
+}
+
+/// Extract variable stubs from an unannotated assignment (`x = ...`).
+fn extract_assign(
+    assign: &ruff_python_ast::StmtAssign,
+    ctx: &mut ExtractionContext,
+) -> Vec<StubVariable> {
+    let mut result = Vec::new();
+
+    for target in &assign.targets {
+        if let Expr::Name(name_expr) = target {
+            let name = name_expr.id.as_str();
+            if !should_include_name(name, ctx.config, false) {
+                continue;
+            }
+
+            // Skip `__all__` assignments; they're metadata, not API.
+            if name == "__all__" {
+                continue;
+            }
+
+            // Try to get the type from the binding system.
+            let short_id = ShortIdentifier::expr_name(name_expr);
+            let def_key = Key::Definition(short_id);
+            let annotation = ctx
+                .bindings
+                .key_to_idx_hashed_opt(starlark_map::Hashed::new(&def_key))
+                .and_then(|idx| ctx.answers.get_type_at(idx))
+                .and_then(|ty| format_type(&ty, ctx));
+
+            let value = simple_value_text(&assign.value, ctx.module_info);
+
+            // Only emit if we have either an annotation or a value.
+            if annotation.is_some() || value.is_some() {
+                result.push(StubVariable {
+                    name: name.to_owned(),
+                    annotation,
+                    value,
+                });
+            }
+        }
+    }
+
+    result
+}
+
+/// For simple literal values, return their text representation suitable
+/// for a stub. Returns `None` for complex expressions.
+fn simple_value_text(expr: &Expr, module_info: &Module) -> Option<String> {
+    match expr {
+        Expr::NoneLiteral(_) => Some("None".to_owned()),
+        Expr::BooleanLiteral(b) => Some(if b.value {
+            "True".to_owned()
+        } else {
+            "False".to_owned()
+        }),
+        Expr::NumberLiteral(_) | Expr::StringLiteral(_) | Expr::BytesLiteral(_) => {
+            Some(source_text(module_info, expr.range()).to_owned())
+        }
+        Expr::EllipsisLiteral(_) => Some("...".to_owned()),
+        _ => None,
+    }
+}
+
+/// Extract a docstring from a statement body, if the first statement
+/// is a string literal expression.
+fn extract_docstring(body: &[Stmt]) -> Option<String> {
+    if let Some(Stmt::Expr(expr_stmt)) = body.first() {
+        if let Expr::StringLiteral(s) = expr_stmt.value.as_ref() {
+            return Some(format!("\"\"\"{}\"\"\"", s.value));
+        }
+    }
+    None
+}
+
+/// Determine whether a name should be included in the stub.
+fn should_include_name(name: &str, config: &ExtractConfig, in_class: bool) -> bool {
+    // Always include dunder names (they're part of the protocol).
+    if name.starts_with("__") && name.ends_with("__") {
+        return true;
+    }
+    // Skip private names (double underscore prefix) unless in a class
+    // (where they're name-mangled but still part of the class API).
+    if name.starts_with("__") && !in_class {
+        return false;
+    }
+    // Skip single-underscore private names unless configured to include them.
+    if name.starts_with('_') && !config.include_private {
+        return false;
+    }
+    true
+}
+
+/// Get source text at a given range.
+fn source_text(module_info: &Module, range: TextRange) -> &str {
+    module_info.code_at(range)
 }
