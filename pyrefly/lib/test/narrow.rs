@@ -2047,7 +2047,6 @@ def lookup_resource(registry: dict[str, str]) -> str | None:
 );
 
 testcase!(
-    bug = "Named builtin containers do not narrow membership by element type",
     test_in_named_builtin_container_narrows_element_type,
     r#"
 from collections import deque
@@ -2055,19 +2054,19 @@ from typing import assert_type
 
 def test_set(x: str | None, values: set[str]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, str)
 
 def test_frozenset(x: str | None, values: frozenset[str]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, str)
 
 def test_list(x: str | None, values: list[str]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, str)
 
 def test_deque(x: str | None, values: deque[str]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, str)
 "#,
 );
 
@@ -2132,7 +2131,6 @@ def test_tuple_control(x: str | None, values: tuple[str, ...]) -> None:
 );
 
 testcase!(
-    bug = "Named container membership does not narrow control flow",
     test_in_named_container_control_flow,
     r#"
 from collections.abc import Container
@@ -2142,11 +2140,11 @@ def test_not_in(x: str | None, values: set[str]) -> None:
     if x not in values:
         assert_type(x, str | None)
     else:
-        assert_type(x, str | None)
+        assert_type(x, str)
 
 def test_union_element(x: str | int | None, values: set[str | int]) -> None:
     if x in values:
-        assert_type(x, str | int | None)
+        assert_type(x, str | int)
 
 def test_nullable_element(x: str | None, values: Container[str | None]) -> None:
     if x in values:
@@ -2179,7 +2177,6 @@ def test_nested_any(event_task: Task[Any], bool_task: Task[bool]) -> None:
 );
 
 testcase!(
-    bug = "Named container narrowing does not account for equality",
     test_in_named_container_respects_equality,
     r#"
 from typing import Generic, Literal, LiteralString, NewType, TypeVar, assert_type
@@ -2195,27 +2192,27 @@ class User:
 
 def test_newtype(x: bytes | None, values: set[ObjectId]) -> None:
     if x in values:
-        assert_type(x, bytes | None)
+        assert_type(x, bytes)
 
 def test_builtin_subclass(x: int | None, values: set[GenericId[User]]) -> None:
     if x in values:
-        assert_type(x, int | None)
+        assert_type(x, int)
 
 def test_numeric(x: float | None, values: set[int]) -> None:
     if x in values:
-        assert_type(x, float | None)
+        assert_type(x, float)
 
 def test_bool(x: bool | None, values: set[int]) -> None:
     if x in values:
-        assert_type(x, bool | None)
+        assert_type(x, bool)
 
 def test_literal(x: str | None, values: set[Literal["x"]]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, Literal["x"])
 
 def test_literal_string(x: str | None, values: set[LiteralString]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, LiteralString)
 "#,
 );
 
@@ -2574,8 +2571,8 @@ def qualified_builtins_frozenset(x: int | str) -> None:
 def non_literal_arg(x: int | str) -> None:
     y = [1, 2]
     if x in frozenset(y):
-        # Can't statically enumerate elements, no narrowing.
-        assert_type(x, int | str)
+        # The element type is known even when the elements cannot be enumerated.
+        assert_type(x, int)
 "#,
 );
 
@@ -2605,6 +2602,96 @@ def test(key: str) -> None:
         assert_type(key, LitA)
     if key in frozenset(("a",)):
         assert_type(key, LitA)
+"#,
+);
+
+testcase!(
+    test_narrow_in_iterable_element_type,
+    r#"
+from typing import assert_type
+
+def generate_missing() -> list[str]:
+    return ["a", "b"]
+
+def takes_string(arg: str) -> None: ...
+
+def test_list(arg: str | None) -> None:
+    missing = generate_missing()
+    if arg in missing:
+        assert_type(arg, str)
+        takes_string(arg)
+
+def test_set(arg: str | None, missing: set[str]) -> None:
+    if arg in missing:
+        assert_type(arg, str)
+        takes_string(arg)
+
+def test_frozenset(arg: str | None, missing: frozenset[str]) -> None:
+    if arg in missing:
+        assert_type(arg, str)
+        takes_string(arg)
+"#,
+);
+
+testcase!(
+    test_narrow_in_does_not_widen,
+    r#"
+from typing import Any, Literal, Mapping, assert_type
+
+list_any: list[Any] = [1]
+list_object: list[object] = [1]
+set_any: set[Any] = {1}
+set_object: set[object] = {1}
+dict_any: dict[Any, int] = {1: 1}
+dict_object: dict[object, int] = {1: 1}
+mapping_any: Mapping[Any, int] = {1: 1}
+mapping_object: Mapping[object, int] = {1: 1}
+
+def test_list(x: Literal[1] | str) -> None:
+    if x in list_any:
+        assert_type(x, Literal[1] | str)
+    if x in list_object:
+        assert_type(x, Literal[1] | str)
+
+def test_list_optional(x: str | None) -> None:
+    if x in list_any:
+        assert_type(x, str | None)
+    if x in list_object:
+        assert_type(x, str | None)
+
+def test_set(x: Literal[1] | str) -> None:
+    if x in set_any:
+        assert_type(x, Literal[1] | str)
+    if x in set_object:
+        assert_type(x, Literal[1] | str)
+
+def test_dict(x: Literal[1] | str) -> None:
+    if x in dict_any:
+        assert_type(x, Literal[1] | str)
+    if x in dict_object:
+        assert_type(x, Literal[1] | str)
+
+def test_mapping(x: Literal[1] | str) -> None:
+    if x in mapping_any:
+        assert_type(x, Literal[1] | str)
+    if x in mapping_object:
+        assert_type(x, Literal[1] | str)
+"#,
+);
+
+testcase!(
+    test_in_abstract_mapping_narrows_key,
+    r#"
+from typing import Mapping, assert_type
+
+def parse_resource_id() -> tuple[str, str] | tuple[None, None]: ...
+
+def lookup_resource(registry: Mapping[str, str]) -> str | None:
+    kind, _obj_id = parse_resource_id()
+    if kind not in registry:
+        return None
+    assert_type(kind, str)
+    return registry[kind]
 "#,
 );
 

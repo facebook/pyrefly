@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::iter::once;
+
 use dupe::Dupe;
 use num_traits::ToPrimitive;
 use pyrefly_config::error_kind::ErrorKind;
@@ -149,10 +151,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Tuple::Unbounded(elt) => self.membership_narrow_type(elt),
             Tuple::Unpacked(unpacked) => {
-                let (prefix, middle, suffix) = unpacked.as_ref();
+                let (prefix, middle, suffix) = unpacked.parts();
                 let members: Option<Vec<_>> = prefix
                     .iter()
-                    .chain(std::iter::once(middle))
+                    .chain(once(middle))
                     .chain(suffix.iter())
                     .map(|elt| self.membership_narrow_type(elt))
                     .collect();
@@ -167,6 +169,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 self.membership_narrow_container_type(&self.solver().force_var(*v))
             }
             Type::Union(union) => {
+                if union
+                    .members
+                    .iter()
+                    .any(|member| matches!(member, Type::TypedDict(_)))
+                {
+                    // The key type is correlated with the active TypedDict union member.
+                    return None;
+                }
                 let members: Option<Vec<_>> = union
                     .members
                     .iter()
@@ -191,19 +201,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if let Some(tuple) = self.as_tuple(class) {
                     return self.membership_narrow_tuple_type(&tuple);
                 }
-                match (
-                    class.class_object().name().as_str(),
-                    class.targs().as_slice(),
-                ) {
-                    ("list" | "set" | "frozenset", [elt]) => self.membership_narrow_type(elt),
-                    ("dict", [key, _]) => self.membership_narrow_type(key),
+                match class.targs().as_slice() {
+                    [elt]
+                        if class.is_builtin("list")
+                            || class.is_builtin("set")
+                            || class.is_builtin("frozenset")
+                            || class.class_object()
+                                == self.stdlib.deque(elt.clone()).class_object() =>
+                    {
+                        (!self.behaves_like_any(elt)).then(|| elt.clone())
+                    }
+                    [key, _] if class.is_builtin("dict") => {
+                        (!self.behaves_like_any(key)).then(|| key.clone())
+                    }
                     _ => None,
                 }
             }
             _ => None,
         }
     }
-
 
     // Get the union of all members of an enum, minus the specified member
     fn subtract_enum_member(&self, instance: Instance, name: &Name) -> Type {
@@ -1579,22 +1595,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     return self.intersect(ty, &member_ty);
                 }
                 if let Some(container_ty) = self.membership_narrow_container_type(&right_ty) {
-                    return self.intersect(ty, &container_ty);
+                    if self.is_subset_eq(ty, &container_ty) {
+                        return ty.clone();
+                    }
+                    return self.narrow_after_equality_match(ty, &container_ty);
                 }
 
                 // Check if the right operand is a mapping (e.g. dict[str, int]).
                 // If so, we can narrow the left operand to the mapping's key type.
                 if !self.behaves_like_any(&right_ty)
                     && let Some((key_ty, _)) = self.unwrap_mapping(&right_ty)
+                    && !self.behaves_like_any(&key_ty)
                 {
                     return self.intersect(ty, &key_ty);
-                }
-
-                if !self.behaves_like_any(&right_ty)
-                    && let Some(iter_ty) = self.unwrap_iterable(&right_ty)
-                    && let Some(iter_ty) = self.membership_narrow_type(&iter_ty)
-                {
-                    return self.intersect(ty, &iter_ty);
                 }
 
                 ty.clone()
