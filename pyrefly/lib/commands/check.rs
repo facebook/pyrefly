@@ -281,6 +281,10 @@ struct OutputArgs {
     )]
     summary: Summary,
 
+    /// Suppress the progress bar during type checking.
+    #[arg(long)]
+    no_progress_bar: bool,
+
     /// When specified, strip this prefix from any paths in the output.
     /// Pass "" to show absolute paths. When omitted, we will use the current working directory.
     #[arg(long)]
@@ -818,11 +822,11 @@ impl CheckArgs {
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         let type_check_start = Instant::now();
-        if self.output.summary != Summary::None {
+        if self.output.summary != Summary::None && !self.output.no_progress_bar {
             transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
         }
         transaction.run(handles, require, None);
-        if self.output.summary != Summary::None {
+        if self.output.summary != Summary::None && !self.output.no_progress_bar {
             transaction.set_subscriber(None);
         }
 
