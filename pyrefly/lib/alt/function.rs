@@ -1285,7 +1285,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // If the decoratee is generic, unwrap the `Forall` so that `call_infer` can treat the
         // type parameters as concrete in the raw inferred result; this avoids us replacing the
         // type vars with partial types.
-        let (tparams_opt, decoratee_arg) = match &decoratee {
+        let (tparams_opt, mut decoratee_arg) = match &decoratee {
             Type::Forall(forall) => (Some(forall.tparams.clone()), forall.body.clone().as_type()),
             _ => (None, decoratee.clone()),
         };
@@ -1293,7 +1293,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // If it works, Self flows through type variables naturally (e.g. `R` binds to `Self@C`).
         // If it fails (e.g. contravariance with a non-generic decorator), fall back to
         // substituting Self with the concrete class type.
-        let mut decoratee_arg = decoratee_arg;
         let base_result = if let Some(cls) = defining_cls
             && decoratee_arg.any(|t| matches!(t, Type::SelfType(_)))
         {
