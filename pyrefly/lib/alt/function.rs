@@ -2137,8 +2137,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                     }
                 }
-                // type[Self] and type[TypeVar] are valid
-                Type::Type(box Type::SelfType(_) | box Type::Quantified(_)) => {}
+                // allow Any, type[Any], type[Self] and type[TypeVar]
+                Type::Type(box Type::SelfType(_) | box Type::Quantified(_) | box Type::Any(_))
+                | Type::Any(_) => {}
                 _ => {
                     errors.add(
                         range,

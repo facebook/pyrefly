@@ -631,7 +631,7 @@ class C[T]:
 testcase!(
     test_new_bad_receiver_annotation,
     r#"
-from typing import Literal, assert_type, overload, Self
+from typing import Literal, assert_type, overload, Self, Any
 
 class A: ...
 class B: ...
@@ -645,6 +645,12 @@ class G:
     def __new__(cls: Self): pass  # E: `__new__` method cls type `Self@G` is not a valid `type[...]` annotation
 class H:
     def __new__(cls: type[Self]): pass
+class I:
+    def __new__(cls: type): pass
+class J:
+    def __new__(cls: Any): pass
+class K:
+    def __new__(cls: type[Any]): pass
 
 class C[T]:
     @overload
