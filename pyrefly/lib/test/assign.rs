@@ -151,6 +151,36 @@ l4: list[Base] = xs + [B()]  # E: `list[A | B]` is not assignable to `list[Base]
 );
 
 testcase!(
+    test_forwarded_union_reassign_subscript_call_uses_unhinted,
+    r#"
+from typing import assert_type
+
+def id1[T](x: T) -> T:
+    return x
+
+def f(flag: bool, y: int | float | None) -> None:
+    if y is None:
+        y = 1
+    callables = {True: id1, False: id1}
+    y = callables[flag](y)
+    assert_type(y, int | float)
+"#,
+);
+
+testcase!(
+    test_forwarded_union_reassign_round_optional,
+    r#"
+from typing import assert_type
+
+def f(x: int | float | None) -> None:
+    if x is None:
+        x = 0
+    x = round(x)
+    assert_type(x, int)
+"#,
+);
+
+testcase!(
     test_assign_at_types,
     r#"
 a: int = 3

@@ -156,7 +156,6 @@ use crate::types::type_var::TypeVar;
 use crate::types::type_var::Variance;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
-use crate::types::types::CalleeKind;
 use crate::types::types::Forallable;
 use crate::types::types::SuperObj;
 use crate::types::types::TParams;
@@ -3119,20 +3118,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 let annot_ty = annot.ty(self.heap, self.stdlib);
                 let hint = annot_ty.as_ref().map(|t| (t, tcc));
-                let is_simple_non_constructor_call = matches!(expr, Expr::Call(call)
-                if matches!(call.func.as_ref(), Expr::Name(_))
-                && !matches!(
-                    self.expr(call.func.as_ref(), None, &self.error_swallower()).callee_kind(),
-                    Some(CalleeKind::Class(_))
-                ));
+                let is_mutating_collection_method_call = matches!(expr, Expr::Call(call)
+                    if matches!(call.func.as_ref(), Expr::Attribute(attr)
+                        if attr.attr.id == dunder::SETITEM || attr.attr.id.as_str() == "append"
+                    )
+                );
                 let expr_ty = if style == &AnnotationStyle::Forwarded
                     && annot_ty.as_ref().is_some_and(|ann| ann.is_union())
-                    // Restrict to simple non-constructor calls like `f(...)`.
-                    // Avoid calls through attribute access (e.g. `module.func(...)`,
-                    // `obj.method(...)`) and class constructor calls, where
-                    // contextual hints are often important and unhinted inference
-                    // has shown to be much riskier.
-                    && is_simple_non_constructor_call
+                    && matches!(expr, Expr::Call(_))
+                    && !is_mutating_collection_method_call
                 {
                     // For forwarded assignments (reassignment to an annotated variable),
                     // first try inferring without the annotation hint. The annotation
