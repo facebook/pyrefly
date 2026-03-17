@@ -3118,6 +3118,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 let annot_ty = annot.ty(self.heap, self.stdlib);
                 let hint = annot_ty.as_ref().map(|t| (t, tcc));
+                let is_attribute_call = matches!(expr, Expr::Call(call)
+                    if matches!(call.func.as_ref(), Expr::Attribute(_))
+                );
                 let is_mutating_collection_method_call = matches!(expr, Expr::Call(call)
                     if matches!(call.func.as_ref(), Expr::Attribute(attr)
                         if attr.attr.id == dunder::SETITEM || attr.attr.id.as_str() == "append"
@@ -3126,6 +3129,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let expr_ty = if style == &AnnotationStyle::Forwarded
                     && annot_ty.as_ref().is_some_and(|ann| ann.is_union())
                     && matches!(expr, Expr::Call(_))
+                    // Method/attribute calls are more context-sensitive (descriptor behavior,
+                    // synthesized/dynamic attributes, and protocol-heavy receiver typing), so
+                    // we keep hinted inference there to avoid unsound narrowing regressions.
+                    && !is_attribute_call
                     && !is_mutating_collection_method_call
                 {
                     // For forwarded assignments (reassignment to an annotated variable),
