@@ -9,11 +9,8 @@ use serde_json::json;
 
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
-use crate::util::ExpectedInlayHint;
-use crate::util::ExpectedTextEdit;
 use crate::util::check_inlay_hint_label_values;
 use crate::util::get_test_files_root;
-use crate::util::inlay_hints_match_expected;
 
 #[test]
 fn test_inlay_hint_default_config() {
@@ -907,7 +904,9 @@ fn test_inlay_hint_typing_literals_have_locations() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
