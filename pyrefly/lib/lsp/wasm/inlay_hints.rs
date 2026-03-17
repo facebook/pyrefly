@@ -179,9 +179,9 @@ impl<'a> Transaction<'a> {
                 let label_parts = once((prefix.to_owned(), None))
                     .chain(type_parts.iter().map(|part| {
                         let location = part.location.clone().or_else(|| {
-                            part.symbol
-                                .as_ref()
-                                .and_then(|symbol| self.resolve_type_symbol_reference(handle, symbol))
+                            part.symbol.as_ref().and_then(|symbol| {
+                                self.resolve_type_symbol_reference(handle, symbol)
+                            })
                         });
                         (part.text.clone(), location)
                     }))
