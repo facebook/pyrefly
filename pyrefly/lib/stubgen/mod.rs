@@ -172,6 +172,11 @@ mod tests {
     }
 
     #[test]
+    fn test_stubgen_dunder_all() {
+        assert_stubgen_snapshot("dunder_all");
+    }
+
+    #[test]
     fn test_stubgen_docstrings() {
         let input = r#"
 def greet(name: str) -> str:
