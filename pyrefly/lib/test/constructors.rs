@@ -847,7 +847,6 @@ class Ok1(Generic[T]):
 );
 
 testcase!(
-    bug = "type(self)() returns Self@C but should return C because __new__ explicitly returns C",
     test_new_returns_concrete_inside_method,
     r#"
 from typing import Self, reveal_type
@@ -856,9 +855,8 @@ class C:
     def __new__(cls) -> "C": ...
 
     def method(self) -> None:
-        # self is Self@C here, so type(self) is type[Self@C] → TypeOfSelf path.
-        # But __new__ explicitly returns C, not Self. Should be C, not Self@C.
-        reveal_type(type(self)())  # E: revealed type: Self@C
+        # __new__ explicitly returns C, not Self, so type(self)() returns C.
+        reveal_type(type(self)())  # E: revealed type: C
 
 class D(C): ...
 
@@ -868,7 +866,6 @@ def check_subclass(d: D) -> None:
 );
 
 testcase!(
-    bug = "type(self)() returns list[C] but should return list[Self@C] to preserve subclass behavior",
     test_new_returns_list_self_inside_method,
     r#"
 from typing import Self, reveal_type
@@ -877,8 +874,8 @@ class C:
     def __new__(cls) -> list[Self]: ...
 
     def method(self) -> None:
-        # __new__ returns list[Self], so type(self)() should preserve Self.
-        reveal_type(type(self)())  # E: revealed type: list[C]
+        # __new__ returns list[Self], so type(self)() preserves Self.
+        reveal_type(type(self)())  # E: revealed type: list[Self@C]
 
 class D(C): ...
 

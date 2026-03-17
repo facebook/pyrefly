@@ -712,9 +712,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         let mut dunder_new_ret = None;
+        let preserve_self = constructor_kind == ConstructorKind::TypeOfSelf;
         let (overrides_new, dunder_new_has_errors) =
-            if let Some(new_method) = self.get_dunder_new(&cls) {
-                let cls_ty = self.heap.mk_type_form(self.heap.mk_class_type(cls.clone()));
+            if let Some(new_method) = self.get_dunder_new(&cls, preserve_self) {
+                let cls_ty = if preserve_self {
+                    self.heap.mk_type_form(self.heap.mk_self_type(cls.clone()))
+                } else {
+                    self.heap.mk_type_form(self.heap.mk_class_type(cls.clone()))
+                };
                 let full_args = iter::once(CallArg::ty(&cls_ty, arguments_range))
                     .chain(args.iter().cloned())
                     .collect::<Vec<_>>();
@@ -822,13 +827,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let result = if let Some(mut ret) = dunder_new_ret {
             ret.subst_mut(&cls.targs().substitution_map());
-            if constructor_kind == ConstructorKind::TypeOfSelf
-                && let Type::ClassType(ret_cls) = &ret
-            {
-                self.heap.mk_self_type(ret_cls.clone())
-            } else {
-                ret
-            }
+            ret
         } else if constructor_kind == ConstructorKind::TypeOfSelf {
             self.heap.mk_self_type(cls)
         } else {
@@ -1356,7 +1355,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         // Check the __new__ method and whether it comes from object or has been overridden
         let (new_attr_ty, overrides_new) = if let Some(t) = self
-            .get_dunder_new(cls)
+            .get_dunder_new(cls, false)
             .and_then(|t| self.bind_dunder_new(&t, cls.clone()))
         {
             if t.callable_return_type(self.heap)
