@@ -110,10 +110,10 @@ mod tests {
         let expected = fs_anyhow::read_to_string(&expected_path)
             .unwrap()
             .replace("\r\n", "\n");
-        // Strip the @generated header and trim whitespace so the expected
+        // Strip the AT generated header and trim whitespace so the expected
         // files can keep the header for tooling without affecting comparison.
         let expected = expected
-            .strip_prefix("# @generated\n")
+            .strip_prefix(&format!("# @{}generated\n", "")) // Avoid this file from being recognized as generated
             .unwrap_or(&expected)
             .trim()
             .to_owned();
