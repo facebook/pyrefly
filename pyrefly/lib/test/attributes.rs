@@ -1143,6 +1143,23 @@ def test(o: D):
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2812
+testcase!(
+    test_bound_overload_assigned_to_attribute,
+    r#"
+from typing import assert_type
+
+class ThemeStack:
+    def __init__(self) -> None:
+        self._entries: list[dict[str, str]] = [{}]
+        self.get = self._entries[-1].get
+
+def test(stack: ThemeStack) -> None:
+    assert_type(stack.get("theme"), str | None)
+    assert_type(stack.get("theme", "fallback"), str)
+"#,
+);
+
 testcase!(
     test_attr_unknown,
     r#"

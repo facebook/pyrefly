@@ -2466,6 +2466,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // (e.g. generic functions assigned to attributes have their own
         // type parameters that should not trigger invalid-type-var errors).
         let mut forall_bound: SmallSet<&Quantified> = SmallSet::new();
+        fn collect_overload_tparams<'a>(
+            overload: &'a Overload,
+            acc: &mut SmallSet<&'a Quantified>,
+        ) {
+            for sig in overload.signatures.iter() {
+                if let OverloadType::Forall(forall) = sig {
+                    for q in forall.tparams.iter() {
+                        acc.insert(q);
+                    }
+                }
+            }
+        }
         fn collect_forall_tparams<'a>(ty: &'a Type, acc: &mut SmallSet<&'a Quantified>) {
             match ty {
                 Type::Forall(forall) => {
@@ -2473,13 +2485,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         acc.insert(q);
                     }
                 }
-                Type::BoundMethod(bm) => {
-                    if let BoundMethodType::Forall(forall) = &bm.func {
+                Type::Overload(overload) => collect_overload_tparams(overload, acc),
+                Type::BoundMethod(bm) => match &bm.func {
+                    BoundMethodType::Forall(forall) => {
                         for q in forall.tparams.iter() {
                             acc.insert(q);
                         }
                     }
-                }
+                    BoundMethodType::Overload(overload) => collect_overload_tparams(overload, acc),
+                    BoundMethodType::Function(_) => {}
+                },
                 _ => {}
             }
             ty.recurse(&mut |inner| collect_forall_tparams(inner, acc));
