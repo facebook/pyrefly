@@ -181,6 +181,36 @@ def f(x: int | float | None) -> None:
 );
 
 testcase!(
+    test_forwarded_union_reassign_keyword_call_uses_hinted,
+    r#"
+from typing import assert_type
+
+def kw_call(x: int | float | None) -> int | float | None:
+    return x
+
+def f() -> None:
+    y: int | float | None = 1
+    y = kw_call(x=y)
+    assert_type(y, int | float | None)
+"#,
+);
+
+testcase!(
+    test_forwarded_union_reassign_core_like_dict_flow,
+    r#"
+def f(state: dict[str, dict[str, str]] | None) -> None:
+    state_dict: dict[str, dict[str, str]] | None = None
+    if state:
+        state_dict = dict(state)
+        if "entity_picture" in state_dict["attributes"]:
+            state_dict["attributes"] = {
+                **state_dict["attributes"],
+                "entity_picture": "REDACTED",
+            }
+"#,
+);
+
+testcase!(
     test_assign_at_types,
     r#"
 a: int = 3
