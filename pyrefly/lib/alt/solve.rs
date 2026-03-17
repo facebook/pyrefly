@@ -3121,6 +3121,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let is_attribute_call = matches!(expr, Expr::Call(call)
                     if matches!(call.func.as_ref(), Expr::Attribute(_))
                 );
+                let is_call_with_keywords = matches!(expr, Expr::Call(call)
+                    if call.arguments.keywords.iter().any(|kw| kw.arg.is_some())
+                );
                 let is_mutating_collection_method_call = matches!(expr, Expr::Call(call)
                     if matches!(call.func.as_ref(), Expr::Attribute(attr)
                         if attr.attr.id == dunder::SETITEM || attr.attr.id.as_str() == "append"
@@ -3133,6 +3136,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // synthesized/dynamic attributes, and protocol-heavy receiver typing), so
                     // we keep hinted inference there to avoid unsound narrowing regressions.
                     && !is_attribute_call
+                    // Keyword-heavy callsites are frequently overload-sensitive (and include
+                    // constructor-style patterns), where contextual typing is important.
+                    && !is_call_with_keywords
                     && !is_mutating_collection_method_call
                 {
                     // For forwarded assignments (reassignment to an annotated variable),
