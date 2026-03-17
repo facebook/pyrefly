@@ -21,4 +21,5 @@
 - [Typing Features and PEPS](python-features-and-peps): Typing features and associated PEPs available in each Python version.
 - [Python Typing 101](python-typing-for-beginners): A gentle, example‑driven introduction to static type hints in Python.
 - [Report](report): Measure type coverage in your Python codebase with the Pyrefly report command.
+- [Stub Generation](stubgen): Generate .pyi stub files from Python source files with Pyrefly stubgen.
 - [Typing for Python Developers](typing-for-python-developers): Get to know Python's Type System with working examples

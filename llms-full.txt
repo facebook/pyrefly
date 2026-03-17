@@ -4705,12 +4705,47 @@ This is equivalent to mypy's `disable_error_code`, though of course the [error c
 
 This table shows the mapping between mypy's [error codes](https://mypy.readthedocs.io/en/stable/error_code_list.html) and pyrefly's [error kinds](error-kinds.mdx).
 
-This table will be expanded as more diagnostics are supported.
-
 | Mypy | Pyrefly |
 | ------- | ------- |
+| abstract | bad-instantiation |
+| arg-type | bad-argument-type |
+| assert-type | assert-type |
+| assignment | bad-assignment |
 | attr-defined | missing-attribute |
+| await-not-async | not-async |
+| call-arg | bad-argument-count |
+| call-overload | no-matching-overload |
+| deprecated | deprecated |
+| dict-item | bad-typed-dict |
+| import | missing-import |
+| import-not-found | missing-import |
+| import-untyped | untyped-import |
+| index | bad-index, unsupported-operation |
+| metaclass | invalid-inheritance |
+| name-defined | unknown-name |
+| no-overload-impl | invalid-overload |
+| no-untyped-def | implicit-any |
+| operator | unsupported-operation |
+| override | bad-override |
+| possibly-undefined | unbound-name |
+| redundant-cast | redundant-cast |
+| redundant-expr | redundant-condition |
+| return | bad-return |
+| return-value | bad-return |
+| syntax | parse-error |
+| top-level-await | not-async |
+| truthy-bool | redundant-condition |
+| truthy-function | redundant-condition |
+| truthy-iterable | redundant-condition |
+| type-arg | implicit-any |
+| type-var | bad-specialization |
+| typeddict-readonly-mutated | read-only |
+| typeddict-unknown-key | bad-typed-dict-key |
 | union-attr | missing-attribute |
+| unused-awaitable | unused-coroutine |
+| unused-coroutine | unused-coroutine |
+| used-before-def | unbound-name |
+| valid-type | invalid-annotation |
 
 
 ---
@@ -4832,12 +4867,39 @@ To allow `pyright: ignore` comments to be used by Pyrefly.
 This table shows the mapping between pyright's [type check diagnostics settings](https://microsoft.github.io/pyright/#/configuration?id=type-check-diagnostics-settings)
 and pyrefly's [error kinds](error-kinds.mdx).
 
-This table will be expanded as more diagnostics are supported.
-
 | Pyright | Pyrefly |
 | ------- | ------- |
+| reportAbstractUsage | bad-instantiation |
+| reportArgumentType | bad-argument-type |
+| reportAssertTypeFailure | assert-type |
+| reportAssignmentType | bad-assignment |
+| reportAttributeAccessIssue | missing-attribute |
+| reportDeprecated | deprecated |
+| reportIncompatibleMethodOverride | bad-override |
+| reportIncompatibleVariableOverride | bad-override |
+| reportInconsistentOverload | inconsistent-overload |
+| reportIndexIssue | bad-index |
+| reportInvalidTypeArguments | bad-specialization |
+| reportInvalidTypeForm | invalid-annotation |
+| reportInvalidTypeVarUse | invalid-type-var |
 | reportMissingImports | missing-import |
-| reportMissingModuleSource | missing-import |
+| reportMissingModuleSource | missing-source |
+| reportMissingParameterType | unannotated-parameter |
+| reportMissingTypeStubs | untyped-import |
+| reportNoOverloadImplementation | invalid-overload |
+| reportOperatorIssue | unsupported-operation |
+| reportPossiblyUnboundVariable | unbound-name |
+| reportPrivateUsage | no-access |
+| reportReturnType | bad-return |
+| reportUnboundVariable | unbound-name |
+| reportUndefinedVariable | unknown-name |
+| reportUninitializedInstanceVariable | implicitly-defined-attribute |
+| reportUnknownArgumentType | implicit-any |
+| reportUnknownMemberType | implicit-any |
+| reportUnknownParameterType | unannotated-parameter |
+| reportUnknownVariableType | implicit-any |
+| reportUnnecessaryCast | redundant-cast |
+| reportUnusedCoroutine | unused-coroutine |
 
 
 ---
@@ -5165,6 +5227,21 @@ description:
  */}
 
 # Pyrefly Frequently Asked Questions
+
+## Why should I use Pyrefly over another type checker or language server?
+
+Here are the main reasons to consider Pyrefly:
+
+* **Rich IDE experience.** Pyrefly's language server includes advanced refactoring capabilities that were previously only available in Pylance or Pycharm. See [IDE Features](./IDE-features.mdx) for the full list of supported features.
+* **Broad type system coverage & strong inference capabilities.** Pyrefly's type system implementation is mature, and the ability to infer types on un-annotated code allows Pyrefly to provide type safety while reducing the need for manual annotations.
+* **Battle-tested at scale.** Pyrefly runs in CI for Instagram and PyTorch, so it's proven on large, real-world codebases. It's also the default Python language server for the Antigravity and Positron editors.
+* **Built-in Pydantic and Django support.** Pyrefly has native support for [Pydantic](./pydantic.mdx) and [Django](./django.mdx), handling special type-checking behavior that can't be expressed in the current type system. Mypy is the only other type checker that supports these packages, via third-party plugins.
+* **Useful peripheral tools:** Pyrefly comes with a suite of useful tools to help you get the most out of your type annotations:
+    * [`pyrefly report`](./report.mdx) to measure type coverage across your codebase.
+    * [Error baselines](./error-suppressions.mdx#baseline-files-experimental) to track and suppress pre-existing errors without modifying source code.
+    * [`pyrefly infer`](./autotype.mdx) to automatically add inferred type annotations to your code.
+    * [`pyrefly init`](./migrating-to-pyrefly.mdx) for automatic config migration from mypy or pyright.
+    * [`pyrefly suppress`](./error-suppressions.mdx#upgrading-pyrefly-and-other-changes-that-introduce-new-type-errors) for automatic bulk error suppression during upgrades.
 
 ## How do I pronounce Pyrefly?
 
@@ -5564,6 +5641,67 @@ A function is considered **fully annotated** if it has a return type annotation 
 A function is considered **type-complete** only if it is fully annotated AND all of its resolved types (return type and parameter types) contain no `Any`. Type-complete functions are always a subset of fully-annotated functions. Tracking both metrics helps you first achieve full annotation coverage, then progressively replace `Any` with more precise types.
 
 You can pipe the output to other tools (e.g. `jq`) or ingest it into dashboards to track annotation coverage over time.
+
+
+---
+
+---
+title: Stub Generation
+description: Generate .pyi stub files from Python source files with Pyrefly stubgen.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Pyrefly Stubgen
+
+:::warning Experimental
+This feature is experimental and under active development. The output format and behavior may change in future releases.
+:::
+
+Pyrefly can generate `.pyi` [stub files](https://typing.readthedocs.io/en/latest/guides/writing_stubs.html) from Python source files using static analysis. Stub files provide type information for modules without requiring the source code to be fully annotated.
+
+Unlike mypy's stubgen, Pyrefly operates entirely through static analysis — it does not inspect code at runtime.
+
+## Usage
+
+```
+pyrefly stubgen path/to/file.py
+# or
+pyrefly stubgen path/to/directory/
+```
+
+By default, generated stubs are written to the `out/` directory, mirroring the source directory structure.
+
+## Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-o, --output-dir` | `out` | Output directory for generated `.pyi` files |
+| `--include-private` | off | Include names with a single leading underscore |
+| `--include-docstrings` | off | Preserve docstrings in generated stubs |
+
+## What gets included
+
+Stubgen extracts the public API of each module:
+
+- **Functions and methods** — signatures with parameter types, defaults, and return types
+- **Classes** — base classes, decorators, attributes, and methods
+- **Variables** — module-level and class-level variables with type annotations
+- **Imports** — preserved from source
+- **Type aliases** — preserved from source
+
+Private names (single leading underscore) are excluded by default. Dunder names (`__init__`, `__repr__`, etc.) are always included.
+
+## Type resolution
+
+Pyrefly uses its type checker to resolve types for declarations that lack explicit annotations. When a type cannot be resolved, it is annotated as `Incomplete` from `_typeshed`, following the convention used by typeshed stubs.
+
+Source annotations are always preferred over inferred types when both are available.
 
 
 ---
