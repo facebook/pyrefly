@@ -13,4 +13,4 @@ class PublicClass:
     def method(self) -> None: ...
 
 
-PUBLIC_VAR: int = 42
+PUBLIC_VAR: int = 20260317
