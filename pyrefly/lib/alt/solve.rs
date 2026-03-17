@@ -3119,9 +3119,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let annot_ty = annot.ty(self.heap, self.stdlib);
                 let hint = annot_ty.as_ref().map(|t| (t, tcc));
                 let expr_ty = if style == &AnnotationStyle::Forwarded
-                    && annot_ty
-                        .as_ref()
-                        .is_some_and(|ann| ann.is_union())
+                    && annot_ty.as_ref().is_some_and(|ann| ann.is_union())
                     && matches!(expr, Expr::Call(_))
                 {
                     // For forwarded assignments (reassignment to an annotated variable),
@@ -3156,8 +3154,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // relative to the annotation (not just equivalent).
                         self.is_subset_eq(&unhinted_ty, ann)
                             && !self.is_subset_eq(ann, &unhinted_ty)
-                    })
-                    {
+                    }) {
                         // accept the precise unhinted result without re-running inference.
                         unhinted_ty
                     } else {
