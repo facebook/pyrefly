@@ -1080,7 +1080,11 @@ impl<'a> TypeDisplayContext<'a> {
                 self.fmt_helper_generic(ty, false, output)
             }
             Type::Concatenate(args, pspec) => {
-                self.maybe_fmt_with_module("typing", "Concatenate", output)?;
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("Concatenate");
+                output.write_builtin("Concatenate", qname)?;
                 output.write_str("[")?;
                 write!(
                     output,
@@ -1130,7 +1134,13 @@ impl<'a> TypeDisplayContext<'a> {
             Type::SpecialForm(x) => write!(output, "{x}"),
             Type::Ellipsis => output.write_str("Ellipsis"),
             Type::Any(style) => match style {
-                AnyStyle::Explicit => self.maybe_fmt_with_module("typing", "Any", output),
+                AnyStyle::Explicit => {
+                    if self.always_display_module_name {
+                        output.write_str("typing.")?;
+                    }
+                    let qname = self.get_special_form_qname("Any");
+                    output.write_builtin("Any", qname)
+                }
                 AnyStyle::Implicit | AnyStyle::Error => output.write_str("Unknown"),
             },
             Type::TypeAlias(ta) => match &**ta {
@@ -1322,6 +1332,7 @@ pub mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::nesting_context::NestingContext;
+    use pyrefly_python::sys_info::PythonVersion;
     use ruff_python_ast::Identifier;
     use ruff_text_size::TextSize;
     use vec1::vec1;
@@ -1334,6 +1345,7 @@ pub mod tests {
     use crate::callable::Param;
     use crate::callable::ParamList;
     use crate::callable::Params;
+    use crate::callable::PrefixParam;
     use crate::callable::Required;
     use crate::class::Class;
     use crate::class::ClassDefIndex;
@@ -1347,6 +1359,7 @@ pub mod tests {
     use crate::quantified::QuantifiedIdentity;
     use crate::quantified::QuantifiedKind;
     use crate::quantified::QuantifiedOrigin;
+    use crate::stdlib::Stdlib;
     use crate::tuple::Tuple;
     use crate::type_alias::TypeAlias;
     use crate::type_alias::TypeAliasData;
@@ -1409,6 +1422,30 @@ pub mod tests {
             None,
             PreInferenceVariance::Invariant,
         )
+    }
+
+    fn fake_module(name: &str) -> Module {
+        Module::new(
+            ModuleName::from_str(name),
+            ModulePath::filesystem(PathBuf::from(name)),
+            Arc::new("1234567890".to_owned()),
+        )
+    }
+
+    fn fake_special_form_stdlib(special_forms: &[(&'static str, u32)]) -> Stdlib {
+        Stdlib::new(PythonVersion::default(), &|_, _| None, &|module, name| {
+            special_forms
+                .iter()
+                .find(|(special_form, _)| {
+                    module == ModuleName::typing() && name.as_str() == *special_form
+                })
+                .map(|(_, range)| {
+                    (
+                        fake_module("typing"),
+                        TextRange::empty(TextSize::new(*range)),
+                    )
+                })
+        })
     }
 
     fn fake_bound_method(method_name: &str, class_name: &str, module_name_str: &str) -> Type {
@@ -2238,6 +2275,10 @@ def overloaded_func[T](
         output.parts().to_vec()
     }
 
+    fn get_parts_with_stdlib(t: &Type, stdlib: &Stdlib) -> Vec<TypeLabelPart> {
+        t.get_types_with_locations(Some(stdlib))
+    }
+
     fn parts_to_string(parts: &[TypeLabelPart]) -> String {
         parts
             .iter()
@@ -2546,6 +2587,37 @@ def overloaded_func[T](
 
         assert_output_contains(&parts, "ParamSpec");
         assert_part_has_location(&parts, "P", "test.module", 75);
+    }
+
+    #[test]
+    fn test_get_types_with_location_explicit_any_special_form() {
+        let stdlib = fake_special_form_stdlib(&[("Any", 101)]);
+        let parts = get_parts_with_stdlib(&Type::any_explicit(), &stdlib);
+
+        assert_part_has_location(&parts, "Any", "typing", 101);
+    }
+
+    #[test]
+    fn test_get_types_with_location_annotated_special_form() {
+        let stdlib = fake_special_form_stdlib(&[("Annotated", 102)]);
+        let parts = get_parts_with_stdlib(
+            &Type::Annotated(Box::new(Type::None), Box::new([])),
+            &stdlib,
+        );
+
+        assert_part_has_location(&parts, "Annotated", "typing", 102);
+    }
+
+    #[test]
+    fn test_get_types_with_location_concatenate_special_form() {
+        let stdlib = fake_special_form_stdlib(&[("Concatenate", 103)]);
+        let t = Type::Concatenate(
+            vec![PrefixParam::new(Type::None, Required::Required)].into_boxed_slice(),
+            Box::new(Type::Ellipsis),
+        );
+        let parts = get_parts_with_stdlib(&t, &stdlib);
+
+        assert_part_has_location(&parts, "Concatenate", "typing", 103);
     }
 
     #[test]
