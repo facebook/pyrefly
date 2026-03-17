@@ -80,6 +80,19 @@ Point3(1)  # E: Missing argument `y` in function `Point3.__new__`
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2811
+testcase!(
+    test_inline_collections_namedtuple_constructor,
+    r#"
+import collections
+from typing import Any, assert_type
+
+device = collections.namedtuple("FakeDevice", ["type", "index"])("lazy-caster", 0)
+assert_type(device.type, Any)
+assert_type(device.index, Any)
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/2734
 // Starred expressions in field lists can't be fully resolved statically,
 // so the namedtuple has dynamic fields. String literals alongside the

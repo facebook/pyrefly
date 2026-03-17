@@ -3039,6 +3039,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut parent_attr_found = false;
         let mut parent_has_any = false;
         let is_typed_dict_field = self.is_typed_dict_field(metadata.as_ref(), field_name);
+        let is_named_tuple_element = metadata
+            .named_tuple_metadata()
+            .is_some_and(|named_tuple| named_tuple.elements.contains(field_name));
 
         let bases_to_check: Box<dyn Iterator<Item = &ClassType>> = if bases.is_empty() {
             // If the class doesn't have any base type, we should just use `object` as base to ensure
@@ -3062,6 +3065,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ErrorInfo::Kind(ErrorKind::BadOverride),
                     format!("Cannot override named tuple element `{field_name}`"),
                 );
+            }
+            if is_named_tuple_element {
+                continue;
             }
             let Some(want_field) = self.get_class_member(parent_cls, field_name) else {
                 continue;

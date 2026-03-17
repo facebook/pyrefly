@@ -8,6 +8,7 @@
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Arguments;
@@ -30,6 +31,7 @@ use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Operator;
 use ruff_python_ast::StringLiteral;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -549,6 +551,49 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    fn bind_inline_functional_named_tuple(&mut self, call: &mut ExprCall) {
+        let Some(kind) = self.as_special_export(&call.func) else {
+            return;
+        };
+        let Some(Expr::StringLiteral(name)) = call.arguments.args.first() else {
+            return;
+        };
+        let class_name = Identifier::new(Name::new(name.value.to_str()), name.range());
+        let parent = NestingContext::toplevel();
+        let class_idx = match kind {
+            SpecialExport::CollectionsNamedTuple => {
+                let Some((_arg_name, members)) = call.arguments.args.split_first_mut() else {
+                    return;
+                };
+                self.synthesize_collections_named_tuple_def(
+                    class_name,
+                    &parent,
+                    &mut call.func,
+                    members,
+                    &mut call.arguments.keywords,
+                    false,
+                )
+            }
+            SpecialExport::TypingNamedTuple => {
+                let Some((_arg_name, members)) = call.arguments.args.split_first_mut() else {
+                    return;
+                };
+                self.synthesize_typing_named_tuple_def(
+                    class_name,
+                    &parent,
+                    &mut call.func,
+                    members,
+                    false,
+                )
+            }
+            _ => return,
+        };
+        self.insert_binding(
+            Key::Anon(call.range),
+            Binding::ClassDef(class_idx, Box::new([])),
+        );
+    }
+
     fn record_yield(&mut self, mut x: ExprYield) {
         let mut yield_link = self.declare_current_idx(Key::YieldLink(x.range));
         let idx = self.idx_for_promise(KeyYield(x.range));
@@ -660,6 +705,14 @@ impl<'a> BindingsBuilder<'a> {
                     self.finish_branch();
                     self.finish_bool_op_fork();
                 }
+            }
+            Expr::Call(call)
+                if matches!(
+                    self.as_special_export(&call.func),
+                    Some(SpecialExport::CollectionsNamedTuple | SpecialExport::TypingNamedTuple)
+                ) && matches!(call.arguments.args.first(), Some(Expr::StringLiteral(_))) =>
+            {
+                self.bind_inline_functional_named_tuple(call);
             }
             Expr::Call(ExprCall {
                 node_index: _,
