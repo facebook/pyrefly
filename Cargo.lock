@@ -2167,7 +2167,7 @@ checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "pyrefly"
-version = "0.57.0"
+version = "0.57.1"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2228,7 +2228,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_build"
-version = "0.57.0"
+version = "0.57.1"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2248,7 +2248,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_bundled"
-version = "0.57.0"
+version = "0.57.1"
 dependencies = [
  "anyhow",
  "sha2",
@@ -2259,7 +2259,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_config"
-version = "0.57.0"
+version = "0.57.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2294,7 +2294,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_derive"
-version = "0.57.0"
+version = "0.57.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2303,7 +2303,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_graph"
-version = "0.57.0"
+version = "0.57.1"
 dependencies = [
  "dupe",
  "pyrefly_util",
@@ -2312,7 +2312,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_python"
-version = "0.57.0"
+version = "0.57.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2339,7 +2339,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_types"
-version = "0.57.0"
+version = "0.57.1"
 dependencies = [
  "compact_str 0.9.0",
  "dupe",
@@ -2359,7 +2359,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_util"
-version = "0.57.0"
+version = "0.57.1"
 dependencies = [
  "anstream",
  "anyhow",
@@ -3554,7 +3554,7 @@ dependencies = [
 
 [[package]]
 name = "tsp_types"
-version = "0.57.0"
+version = "0.57.1"
 dependencies = [
  "lsp-server",
  "serde",
