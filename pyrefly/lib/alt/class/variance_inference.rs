@@ -106,18 +106,6 @@ struct InferenceStatus {
     specified_variance: Option<Variance>,
 }
 
-impl InferenceStatus {
-    /// Return a fresh status with `inferred_variance` reset to its initial
-    /// value. Used at the start of each fixpoint iteration so that variance
-    /// is recomputed from scratch rather than accumulated across iterations.
-    fn reset(self) -> Self {
-        Self {
-            inferred_variance: self.specified_variance.unwrap_or(Variance::Bivariant),
-            has_variance_inferred: self.specified_variance.is_some(),
-            specified_variance: self.specified_variance,
-        }
-    }
-}
 type InferenceMap = SmallMap<Name, InferenceStatus>;
 
 // A map from class name to tparam environment
@@ -328,8 +316,14 @@ fn on_class(
     }
 
     for base_type in get_class_bases(class).iter() {
+        // Base classes are walked at Bivariant position because Bivariant is
+        // the identity for compose: compose(Bi, x) = x. This directly
+        // propagates the base class's type parameter variance without adding
+        // any positional contribution. Using Covariant here would be wrong
+        // because compose(Co, Bi) = Co, which introduces a spurious Covariant
+        // constraint when the base class's variance is still unresolved (Bi).
         on_type(
-            Variance::Covariant,
+            Variance::Bivariant,
             true,
             &heap.mk_class_type(base_type.clone()),
             on_edge,
@@ -585,6 +579,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.fixpoint(environment)
     }
 
+    /// Run the fixpoint to convergence. Each iteration clones the previous
+    /// inferred variances and unions new constraints on top, which is
+    /// monotonic (variance can only increase in the lattice) and therefore
+    /// guaranteed to converge. The lattice has height 3
+    /// (Bivariant < {Covariant, Contravariant} < Invariant), so convergence
+    /// is fast.
     fn fixpoint(&self, mut env: VarianceEnv) -> VarianceEnv {
         let mut changed = true;
 
@@ -593,9 +593,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut new_environment: VarianceEnv = SmallMap::new();
 
             for (my_class, params) in env.iter() {
-                // Recompute variance from scratch each iteration using the latest env.
-                let mut new_params: InferenceMap =
-                    params.iter().map(|(n, s)| (n.clone(), s.reset())).collect();
+                let mut new_params: InferenceMap = params.clone();
 
                 let mut on_var = |name: &Name,
                                   variance: Variance,
@@ -603,12 +601,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                   _: PreInferenceVariance| {
                     if let Some(old_status) = new_params.get_mut(name) {
                         let new_inferred_variance = variance.union(old_status.inferred_variance);
-                        // Mark as inferred if:
-                        // 1. A previous call to on_var in this iteration already marked it, OR
-                        // 2. The caller says this is an injective (reliable) constraint, OR
-                        // 3. The inferred variance is no longer Bivariant (we found a constraint).
-                        //    Case 3 fixes self-referential types where `has_inferred` is always
-                        //    false but we still discover variance constraints through fixpoint.
                         let new_has_variance_inferred = old_status.has_variance_inferred
                             || has_inferred
                             || new_inferred_variance != Variance::Bivariant;
