@@ -3920,7 +3920,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// This lookup skips normal method binding logic (it behaves like a cross
     /// between a classmethod and a constructor; downstream code handles this
     /// using the raw callable type).
-    pub fn get_dunder_new(&self, cls: &ClassType) -> Option<Type> {
+    ///
+    /// When `preserve_self` is true, uses `Instance::of_self_type` so that
+    /// `Self` in the return type is kept as `SelfType(C)` instead of being
+    /// lowered to `ClassType(C)`. This is needed for the `TypeOfSelf`
+    /// constructor path where we want `Self` to flow through naturally.
+    pub fn get_dunder_new(&self, cls: &ClassType, preserve_self: bool) -> Option<Type> {
         let new_member =
             self.get_class_member_with_defining_class(cls.class_object(), &dunder::NEW)?;
         if new_member.is_defined_on("builtins", "object") {
@@ -3928,8 +3933,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // class construction; we only care about `__new__` if it is overridden.
             None
         } else {
-            Arc::unwrap_or_clone(new_member.value)
-                .as_raw_special_method_type(self.heap, &Instance::of_class(cls))
+            let instance = if preserve_self {
+                Instance::of_self_type(cls)
+            } else {
+                Instance::of_class(cls)
+            };
+            Arc::unwrap_or_clone(new_member.value).as_raw_special_method_type(self.heap, &instance)
         }
     }
 

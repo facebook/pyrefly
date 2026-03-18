@@ -195,18 +195,17 @@ class C:
 );
 
 testcase!(
-    bug = "conformance: Should error when returning concrete class instead of Self",
     test_self_return_concrete_class,
     r#"
 from typing import Self
 
 class Shape:
     def method(self) -> Self:
-        return Shape()  # should error: returns Shape, not Self
+        return Shape()  # E: Returned type `Shape` is not assignable to declared return type `Self@Shape`
 
     @classmethod
     def cls_method(cls) -> Self:
-        return Shape()  # should error: returns Shape, not Self
+        return Shape()  # E: Returned type `Shape` is not assignable to declared return type `Self@Shape`
 "#,
 );
 
@@ -310,4 +309,143 @@ class A(Generic[X]):
 class B(A[Y1 | Y2], Generic[Y1, Y2]):
     def __new__(cls, A: A[Y1], B: A[Y2]) -> Self: ...
     "#,
+);
+
+testcase!(
+    test_self_return_in_classmethod,
+    r#"
+from typing import Self
+class C:
+    @classmethod
+    def bar(cls) -> Self:
+        return cls(1)
+
+    def __new__(cls, value: int) -> Self:
+        return cls(1)
+"#,
+);
+
+testcase!(
+    test_type_self_constructor_call,
+    r#"
+from typing import Self
+class C:
+    def foo(self) -> Self:
+        return type(self)()
+"#,
+);
+
+testcase!(
+    bug = "Mypy allows this but Pyright doesn't, we should support it since enums are effectively final classes",
+    test_self_in_enum_classmethod,
+    r#"
+from typing import Self
+from enum import Enum
+
+class E(Enum):
+    A = 1
+
+    @classmethod
+    def f(cls) -> Self:
+        return cls.A # E: Returned type `Literal[E.A]` is not assignable to declared return type `Self@E`
+"#,
+);
+
+// Passing a concrete class to `cls.__new__` is incorrect when `cls` could be a subclass.
+testcase!(
+    test_cls_new_with_concrete_class,
+    r#"
+class C:
+    @classmethod
+    def create(cls) -> C:
+        return cls.__new__(C) # E: Argument `type[C]` is not assignable to parameter `cls` with type `type[Self@C]` in function `object.__new__`
+"#,
+);
+
+// Self is pinned when `[self]` is inferred, so `append(other: C)` fails against `Self@C`.
+testcase!(
+    test_self_in_container_pinning,
+    r#"
+class C:
+    def foo(self, other: C) -> list:
+        xs = [self]
+        xs.append(other) # E: Argument `C` is not assignable to parameter `object` with type `Self@C` in function `list.append`
+        return xs
+"#,
+);
+
+// A type-preserving decorator (_Fn -> _Fn) should not cause Self to be lost in subclasses.
+testcase!(
+    test_decorated_self_method_in_subclass,
+    r#"
+from typing import Self, Callable, TypeVar, Any
+
+_Fn = TypeVar("_Fn", bound=Callable[..., Any])
+def deco(fn: _Fn) -> _Fn:
+    return fn
+
+class Parent:
+    @deco
+    def method(self) -> Self:
+        return self
+
+class Child(Parent):
+    def child_method(self) -> int:
+        return 1
+
+def test(c: Child) -> None:
+    c.method().child_method()
+"#,
+);
+
+// Explicit class references in parameters (e.g. `other: Parent`) must not be converted to Self.
+testcase!(
+    test_decorated_self_method_with_explicit_class_param,
+    r#"
+from typing import Self, Callable, TypeVar, Any
+
+_Fn = TypeVar("_Fn", bound=Callable[..., Any])
+def deco(fn: _Fn) -> _Fn:
+    return fn
+
+class Parent:
+    @deco
+    def merge(self, other: Parent) -> Self:
+        return self
+
+class Child(Parent):
+    def child_method(self) -> int:
+        return 1
+
+def test(c: Child, p: Parent) -> None:
+    c.merge(p).child_method()
+    c.merge(c).child_method()
+"#,
+);
+
+// Non-type-preserving decorators preserve Self when the decorator is generic.
+testcase!(
+    test_non_type_preserving_decorator_self_method,
+    r#"
+from typing import Self, Callable, TypeVar, Any, Concatenate
+
+T = TypeVar("T")
+R = TypeVar("R")
+P = TypeVar("P")
+
+def sig_copy(fn: Callable[Concatenate[T, ...], R]) -> Callable[[T, int], R]:
+    return fn  # type: ignore
+
+class Parent:
+    @sig_copy
+    def method(self, **kwds: Any) -> Self:
+        return self
+
+class Child(Parent):
+    def child_method(self) -> int:
+        return 1
+
+def test(c: Child) -> None:
+    c.method(42).child_method()
+"#,
 );

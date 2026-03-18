@@ -606,6 +606,64 @@ assert_type(C(False), C[B])
 );
 
 testcase!(
+    test_init_bad_receiver_annotation,
+    r#"
+from typing import Literal, assert_type, overload
+
+class A: ...
+class B: ...
+class D:
+    def __init__(self: A): pass # E: `__init__` method self type `A` is not a superclass of class `D`
+class E(A):
+    def __init__(self: A): pass
+
+class C[T]:
+    @overload
+    def __init__(self: A, x: Literal[True]) -> None: ...  # E: `__init__` method self type `A` is not a superclass of class `C`
+    @overload
+    def __init__(self: B, x: Literal[False]) -> None: ...  # E: `__init__` method self type `B` is not a superclass of class `C`
+    def __init__(self, x):
+        pass
+
+    "#,
+);
+
+testcase!(
+    test_new_bad_receiver_annotation,
+    r#"
+from typing import Literal, assert_type, overload, Self, Any
+
+class A: ...
+class B: ...
+class D:
+    def __new__(cls: type[A]): pass  # E: `__new__` method cls type `type[A]` is not a superclass of class `D`
+class E(A):
+    def __new__(cls: type[A]): pass
+class F:
+    def __new__(cls: A): pass  # E: `__new__` method cls type `A` is not a valid `type[...]` annotation
+class G:
+    def __new__(cls: Self): pass  # E: `__new__` method cls type `Self@G` is not a valid `type[...]` annotation
+class H:
+    def __new__(cls: type[Self]): pass
+class I:
+    def __new__(cls: type): pass
+class J:
+    def __new__(cls: Any): pass
+class K:
+    def __new__(cls: type[Any]): pass
+
+class C[T]:
+    @overload
+    def __new__(cls: type[A], x: Literal[True]): ...  # E: `__new__` method cls type `type[A]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> None` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> None`
+    @overload
+    def __new__(cls: type[B], x: Literal[False]): ...  # E: `__new__` method cls type `type[B]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> None` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> None` accepts
+    def __new__(cls, x):
+        pass
+
+    "#,
+);
+
+testcase!(
     test_generic_in_generic,
     r#"
 from typing import Literal, assert_type, overload
@@ -786,6 +844,44 @@ class Ok1(Generic[T]):
     def __init__(self, x: int | str) -> None:
         pass
 "#,
+);
+
+testcase!(
+    test_new_returns_concrete_inside_method,
+    r#"
+from typing import Self, reveal_type
+
+class C:
+    def __new__(cls) -> "C": ...
+
+    def method(self) -> None:
+        # __new__ explicitly returns C, not Self, so type(self)() returns C.
+        reveal_type(type(self)())  # E: revealed type: C
+
+class D(C): ...
+
+def check_subclass(d: D) -> None:
+    reveal_type(type(d)())  # E: revealed type: C
+    "#,
+);
+
+testcase!(
+    test_new_returns_list_self_inside_method,
+    r#"
+from typing import Self, reveal_type
+
+class C:
+    def __new__(cls) -> list[Self]: ...
+
+    def method(self) -> None:
+        # __new__ returns list[Self], so type(self)() preserves Self.
+        reveal_type(type(self)())  # E: revealed type: list[Self@C]
+
+class D(C): ...
+
+def check_subclass(d: D) -> None:
+    reveal_type(type(d)())  # E: revealed type: list[D]
+    "#,
 );
 
 testcase!(
