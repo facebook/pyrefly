@@ -2253,6 +2253,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     match t {
                         Type::ClassDef(_) => true,
                         Type::Type(box Type::ClassType(cls)) => cls.targs().is_empty(),
+                        // `None` is `NoneType` at runtime, which is a plain type that
+                        // doesn't support `__or__` with string literals.
+                        Type::None => true,
                         Type::TypeAlias(ta) => {
                             let ta = me.get_type_alias(&ta);
                             let t = if ta.style == TypeAliasStyle::Scoped {
