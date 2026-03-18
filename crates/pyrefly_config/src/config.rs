@@ -104,10 +104,8 @@ impl schemars::JsonSchema for SubConfig {
 
         // Add the "matches" property
         if let Some(ref mut obj) = schema_obj.object {
-            obj.properties.insert(
-                "matches".to_owned(),
-                generator.subschema_for::<Glob>(),
-            );
+            obj.properties
+                .insert("matches".to_owned(), generator.subschema_for::<Glob>());
             obj.required.insert("matches".to_owned());
         }
 
@@ -642,7 +640,8 @@ impl schemars::JsonSchema for ConfigFile {
                 })),
                 metadata: Some(Box::new(Metadata {
                     description: Some(
-                        "Files that should be counted as sources (e.g. user-space code).".to_owned(),
+                        "Files that should be counted as sources (e.g. user-space code)."
+                            .to_owned(),
                     ),
                     default: Some(serde_json::json!(["**/*.py", "**/*.pyi"])),
                     ..Default::default()
@@ -865,8 +864,7 @@ impl schemars::JsonSchema for ConfigFile {
             metadata: Some(Box::new(Metadata {
                 title: Some("Pyrefly configuration".to_owned()),
                 description: Some(
-                    "Configuration file schema for Pyrefly, a fast Python type checker."
-                        .to_owned(),
+                    "Configuration file schema for Pyrefly, a fast Python type checker.".to_owned(),
                 ),
                 ..Default::default()
             })),

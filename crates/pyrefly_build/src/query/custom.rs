@@ -17,8 +17,30 @@ use vec1::Vec1;
 
 use crate::query::SourceDbQuerier;
 
+/// Generates a JSON schema for Vec1<String>: an array of strings with minItems: 1.
+#[cfg(feature = "jsonschema")]
+fn vec1_string_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    use schemars::schema::*;
+
+    SchemaObject {
+        instance_type: Some(InstanceType::Array.into()),
+        array: Some(Box::new(ArrayValidation {
+            items: Some(SingleOrVec::Single(Box::new(
+                generator.subschema_for::<String>(),
+            ))),
+            min_items: Some(1),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+    .into()
+}
+
 /// Args and settings for querying a custom source DB.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default, Hash)]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub struct CustomQueryArgs {
     /// The command to run.
@@ -33,74 +55,12 @@ pub struct CustomQueryArgs {
     ///
     /// `<arg-flag>` is either `--file` or `--target`, depending on the type
     /// of `<arg>`, and `<arg>` is an absolute path to a file or a build system's target.
+    #[cfg_attr(feature = "jsonschema", schemars(schema_with = "vec1_string_schema"))]
     pub command: Vec1<String>,
 
     /// The root of the repository. Repo roots here will be shared between configs.
     #[serde(default)]
     pub repo_root: Option<PathBuf>,
-}
-
-#[cfg(feature = "jsonschema")]
-impl schemars::JsonSchema for CustomQueryArgs {
-    fn schema_name() -> String {
-        "CustomQueryArgs".to_owned()
-    }
-
-    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
-        use schemars::schema::*;
-
-        let mut properties = schemars::Map::new();
-
-        // command is Vec1<String> — array of strings with minItems: 1
-        properties.insert(
-            "command".to_owned(),
-            SchemaObject {
-                instance_type: Some(InstanceType::Array.into()),
-                array: Some(Box::new(ArrayValidation {
-                    items: Some(SingleOrVec::Single(Box::new(
-                        generator.subschema_for::<String>(),
-                    ))),
-                    min_items: Some(1),
-                    ..Default::default()
-                })),
-                metadata: Some(Box::new(Metadata {
-                    description: Some(
-                        "The command executed to query the build system about available targets."
-                            .to_owned(),
-                    ),
-                    ..Default::default()
-                })),
-                ..Default::default()
-            }
-            .into(),
-        );
-
-        properties.insert(
-            "repo-root".to_owned(),
-            SchemaObject {
-                instance_type: Some(InstanceType::String.into()),
-                metadata: Some(Box::new(Metadata {
-                    description: Some(
-                        "The root directory of the repository for the build system.".to_owned(),
-                    ),
-                    ..Default::default()
-                })),
-                ..Default::default()
-            }
-            .into(),
-        );
-
-        SchemaObject {
-            instance_type: Some(InstanceType::Object.into()),
-            object: Some(Box::new(ObjectValidation {
-                properties,
-                required: ["command".to_owned()].into_iter().collect(),
-                ..Default::default()
-            })),
-            ..Default::default()
-        }
-        .into()
-    }
 }
 
 impl CustomQueryArgs {

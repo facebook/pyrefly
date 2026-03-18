@@ -15,13 +15,20 @@
 //! Redirect to a file to save:
 //!   cargo run -p pyrefly_config --features jsonschema --bin generate_schema > schemas/pyrefly.json
 
-use schemars::r#gen::SchemaSettings;
-
 use pyrefly_config::config::ConfigFile;
+use schemars::r#gen::SchemaSettings;
 
 fn main() {
     let settings = SchemaSettings::draft07().with(|s| {
+        // option_nullable: When true, adds `"nullable": true` to schemas for Option<T> fields
+        // (OpenAPI 3.0 style). We set this to false because JSON Schema Draft-07 doesn't use
+        // the "nullable" keyword - it's an OpenAPI extension.
         s.option_nullable = false;
+
+        // option_add_null_type: When true, Option<T> fields generate a union type like
+        // `{"anyOf": [{"type": "null"}, <T's schema>]}`. We set this to false so that
+        // optional fields simply omit the "required" constraint, and their schema is just
+        // the inner type T's schema. This produces cleaner, more readable schemas.
         s.option_add_null_type = false;
     });
     let generator = settings.into_generator();
