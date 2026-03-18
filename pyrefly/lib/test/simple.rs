@@ -2258,3 +2258,16 @@ takes_Type_any(Callable) # E: is not assignable to parameter `x` with type `type
 takes_Type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
 "#,
 );
+
+testcase!(
+    test_min_max_int_and_float,
+    r#"
+from typing import reveal_type
+def f(x: float):
+    # We use reveal_type rather than assert_type here to verify that the type is exactly float, not
+    # int | float. Even though the two are equivalent, pyrefly doesn't eagerly simplify the union,
+    # so producing the union would cause spurious downstream errors.
+    reveal_type(min(0, x))  # E: revealed type: float
+    reveal_type(max(0, x))  # E: revealed type: float
+    "#,
+);

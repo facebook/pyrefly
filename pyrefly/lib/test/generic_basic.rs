@@ -110,7 +110,6 @@ assert_type(C2[int], type[C2[int, *tuple[()]]])
 );
 
 testcase!(
-    bug = "T is pinned prematurely due to https://github.com/facebook/pyrefly/issues/105",
     test_generics,
     r#"
 from typing import Literal
@@ -118,7 +117,7 @@ class C[T]: ...
 def append[T](x: C[T], y: T):
     pass
 v: C[int] = C()
-append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
+append(v, "test")
 "#,
 );
 testcase!(
@@ -706,5 +705,31 @@ T = TypeVar("T")
 def f(x: TypeVar):
     pass
 f(T)
+    "#,
+);
+
+testcase!(
+    test_list_or_sequence_of_typevar,
+    r#"
+from typing import assert_type, Sequence
+
+def f[T](x: T, y: list[T]) -> T: ...
+def g[T](x: T, y: Sequence[T]) -> T: ...
+
+assert_type(f(0, [""]), int | str)  # E: Argument `list[str]` is not assignable to parameter `y` with type `list[int | str]`
+assert_type(g(0, [""]), int | str)
+    "#,
+);
+
+testcase!(
+    test_any_absorption,
+    r#"
+from typing import Any, assert_type
+
+def f[T](x: T, y: T) -> T: ...
+
+def g(x: Any):
+    # `list[Any]` absorbs `list[int]`
+    assert_type(f([x], [1]), list[Any])
     "#,
 );
