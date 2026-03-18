@@ -717,3 +717,50 @@ assert_type(test1(1, 2), int)
 assert_type(test2(1, 2), int)
 "#,
 );
+
+// Dual-use decorator: can be used as @decorator or @decorator(flag).
+// The decorator function returns a union of the wrapper and the decorator factory,
+// but since the wrapper is an unannotated passthrough, we should preserve the
+// original function's type.
+testcase!(
+    test_dual_use_decorator,
+    r#"
+from functools import wraps
+from typing import assert_type
+
+def optional_debug(func_or_flag=None):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+        return wrapper
+    if callable(func_or_flag):
+        return decorator(func_or_flag)
+    return decorator
+
+@optional_debug
+def compute(x: int, y: int, z: int) -> int:
+    return x + y + z
+
+assert_type(compute(1, 2, 3), int)
+"#,
+);
+
+// Simple unannotated passthrough decorator should preserve the original function's type.
+testcase!(
+    test_unannotated_passthrough_decorator,
+    r#"
+from typing import assert_type
+
+def simple_decorator(func):
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+@simple_decorator
+def compute(x: int, y: int, z: int) -> int:
+    return x + y + z
+
+assert_type(compute(1, 2, 3), int)
+"#,
+);
