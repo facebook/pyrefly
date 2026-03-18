@@ -4791,6 +4791,9 @@ impl Server {
         params: CodeLensParams,
     ) -> Option<Vec<CodeLens>> {
         let uri = &params.text_document.uri;
+        if uri.path().ends_with(".pyi") {
+            return Some(Vec::new());
+        }
         let maybe_cell_idx = self.maybe_get_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(CodeLensRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;

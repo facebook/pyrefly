@@ -79,3 +79,33 @@ fn test_code_lens_for_tests_and_main() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn test_code_lens_ignores_stub_files() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    let test_root = root.path().join("code_lens");
+    interaction.set_root(test_root.clone());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("main_and_tests.pyi");
+
+    let path = test_root.join("main_and_tests.pyi");
+    let uri = Url::from_file_path(&path).unwrap();
+
+    interaction
+        .client
+        .send_request::<CodeLensRequest>(json!({
+            "textDocument": {
+                "uri": uri.to_string()
+            },
+        }))
+        .expect_response_with(|response: Option<Vec<CodeLens>>| {
+            response.is_some_and(|lenses| lenses.is_empty())
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
