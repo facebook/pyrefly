@@ -197,7 +197,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
 
             if let Some(dm) = metadata.django_model_metadata() {
-                inherited_django_metadata = Some(dm);
+                // Prefer the base that has a custom primary key field,
+                // so a later base without one doesn't overwrite it.
+                if inherited_django_metadata
+                    .is_none_or(|prev| prev.custom_primary_key_field.is_none())
+                {
+                    inherited_django_metadata = Some(dm);
+                }
             }
         }
 
