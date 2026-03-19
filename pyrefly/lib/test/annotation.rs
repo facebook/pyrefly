@@ -87,7 +87,7 @@ testcase!(
     test_union_forward_ref_with_builtin_generics,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"
-from typing import List, Dict
+from typing import List, Dict, Type, Any
 # These error at runtime (types.GenericAlias doesn't support __or__ with strings)
 # but pyrefly doesn't flag them because it can't distinguish from List[int]/Dict[str,int]
 ok_but_runtime_error1: "str" | list[int] = "foo"
@@ -97,6 +97,7 @@ ok_but_runtime_error4: "str" | type[int] = "foo"
 # These are OK at runtime (typing._GenericAlias supports __or__ with strings)
 ok1: "str" | List[int] = "foo"
 ok2: "str" | Dict[str, int] = "foo"
+ok3: "str" | Type[Any] = "foo"
 "#,
 );
 
