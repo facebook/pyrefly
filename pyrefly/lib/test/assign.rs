@@ -211,6 +211,18 @@ def f(state: dict[str, dict[str, str]] | None) -> None:
 );
 
 testcase!(
+    test_forwarded_union_reassign_unexpected_none_falls_back,
+    r#"
+def maybe_none(x: int) -> int | None:
+    return x
+
+def f() -> None:
+    y: int | str = "s"
+    y = maybe_none(1)  # E: `int | None` is not assignable to variable `y` with type `int | str`
+"#,
+);
+
+testcase!(
     test_assign_at_types,
     r#"
 a: int = 3

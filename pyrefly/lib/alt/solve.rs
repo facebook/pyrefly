@@ -3168,8 +3168,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         || unhinted_ty.contains_type_variable()
                         || unhinted_ty.may_contain_quantified_var();
 
+                    let introduces_unexpected_none = annot_ty
+                        .as_ref()
+                        .is_some_and(|ann| !ann.contains_none() && unhinted_ty.contains_none());
+
+                    let preserves_optional_none = annot_ty
+                        .as_ref()
+                        .is_some_and(|ann| ann.contains_none() && unhinted_ty.contains_none());
+
                     // if the unhinted result is imprecise, fall back to hinted inference.
-                    if is_imprecise {
+                    if is_imprecise || introduces_unexpected_none || preserves_optional_none {
                         self.expr(expr, hint, errors)
                     } else if annot_ty.as_ref().is_some_and(|ann| {
                         // Accept the unhinted result only when it is a strict narrowing
