@@ -11,13 +11,13 @@ Background:
   `__ror__` for strings, a TypeError is raised.
 
   Types whose metaclass/type supports `__ror__` with strings (OK at runtime):
-    - typing._SpecialForm (Union, Optional, Callable, etc.)
+    - typing._SpecialForm (Union, Optional, Callable, LiteralString, Never, etc.)
     - typing._GenericAlias (List[int], Dict[str,int], Callable[[int],str])
     - typing.TypeVar, typing.ParamSpec
     - typing.Literal[...]
 
   Types whose metaclass/type does NOT support `__ror__` with strings (ERROR):
-    - type (plain classes: int, str, list, user classes, etc.)
+    - type (plain classes: int, str, list, user classes, TypedDict, NamedTuple, Protocol, etc.)
     - types.GenericAlias (list[int], dict[str,int] -- the builtin subscript)
     - NoneType (None)
     - typing.TypeAliasType (from `type X = ...`)
@@ -31,8 +31,8 @@ def test(code: str) -> str:
     try:
         exec(code, {})
         return "OK"
-    except TypeError as e:
-        return f"ERROR"
+    except TypeError:
+        return "ERROR"
     except Exception as e:
         return f"OTHER ({type(e).__name__}: {e})"
 
@@ -61,9 +61,29 @@ cases: list[tuple[str, str, str]] = [
         "ERROR",
     ),
 
+    # === Special class definitions (TypedDict, NamedTuple, Protocol) - all ERROR ===
+    (
+        "TypedDict class",
+        "from typing import TypedDict\nclass TD(TypedDict):\n  x: int\n'str' | TD",
+        "ERROR",
+    ),
+    (
+        "NamedTuple class",
+        "from typing import NamedTuple\nclass NT(NamedTuple):\n  x: int\n'str' | NT",
+        "ERROR",
+    ),
+    (
+        "Protocol class",
+        "from typing import Protocol\nclass P(Protocol):\n  def f(self) -> None: ...\n'str' | P",
+        "ERROR",
+    ),
+
     # === None ===
     ("None", "'str' | None", "ERROR"),
     ("None | 'str'", "None | 'str'", "ERROR"),
+
+    # === Any ===
+    ("Any", "from typing import Any; 'str' | Any", "ERROR"),
 
     # === Builtin parameterized generics (types.GenericAlias) - all ERROR ===
     ("list[int]", "'str' | list[int]", "ERROR"),
@@ -79,12 +99,16 @@ cases: list[tuple[str, str, str]] = [
     ("Tuple[int,...]", "from typing import Tuple; 'str' | Tuple[int,...]", "OK"),
     ("Set[int]", "from typing import Set; 'str' | Set[int]", "OK"),
     ("FrozenSet[int]", "from typing import FrozenSet; 'str' | FrozenSet[int]", "OK"),
+    ("Type[Any]", "from typing import Type, Any; 'str' | Type[Any]", "OK"),
     ("List (bare)", "from typing import List; 'str' | List", "OK"),
     ("Dict (bare)", "from typing import Dict; 'str' | Dict", "OK"),
 
     # === typing special forms - OK ===
     ("Union[int,float]", "from typing import Union; 'str' | Union[int,float]", "OK"),
     ("Optional[int]", "from typing import Optional; 'str' | Optional[int]", "OK"),
+    ("LiteralString", "from typing import LiteralString; 'str' | LiteralString", "OK"),
+    ("Never", "from typing import Never; 'str' | Never", "OK"),
+    ("NoReturn", "from typing import NoReturn; 'str' | NoReturn", "OK"),
 
     # === TypeVar / ParamSpec / TypeVarTuple ===
     ("TypeVar", "from typing import TypeVar; T=TypeVar('T'); 'str' | T", "OK"),
@@ -94,9 +118,6 @@ cases: list[tuple[str, str, str]] = [
         "from typing import TypeVarTuple; Ts=TypeVarTuple('Ts'); 'str' | Ts",
         "ERROR",
     ),
-
-    # === Any ===
-    ("Any", "from typing import Any; 'str' | Any", "ERROR"),
 
     # === Literal ===
     ("Literal[1]", "from typing import Literal; 'str' | Literal[1]", "OK"),
