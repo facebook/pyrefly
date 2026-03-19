@@ -66,8 +66,6 @@ bad: "int" | "list[str]" = 1  # E: `|` union syntax does not work with string li
     "#,
 );
 
-// TypedDict, NamedTuple, and Protocol are all class definitions, so they
-// are plain types that don't support __or__ with strings at runtime.
 testcase!(
     test_union_forward_ref_with_special_classes,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
@@ -89,7 +87,6 @@ bad3: "str" | P = "foo"  # E: `|` union syntax does not work with string literal
 "#,
 );
 
-// Test forward ref with None in function return type (issue #1005)
 testcase!(
     test_union_forward_ref_with_none,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
@@ -105,22 +102,16 @@ class Foo:
 "#,
 );
 
-// Builtin parameterized generics (types.GenericAlias) don't support __or__ with
-// strings at runtime, but pyrefly can't distinguish them from typing module generics
-// (typing._GenericAlias) which do support it, since both resolve to the same type.
 testcase!(
     bug = "list[int] (types.GenericAlias) errors at runtime but List[int] (typing._GenericAlias) does not; pyrefly can't distinguish them",
     test_union_forward_ref_with_builtin_generics,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"
 from typing import List, Dict, Type, Any
-# These error at runtime (types.GenericAlias doesn't support __or__ with strings)
-# but pyrefly doesn't flag them because it can't distinguish from List[int]/Dict[str,int]
 ok_but_runtime_error1: "str" | list[int] = "foo"
 ok_but_runtime_error2: "str" | dict[str, int] = "foo"
 ok_but_runtime_error3: "str" | tuple[int, ...] = "foo"
 ok_but_runtime_error4: "str" | type[int] = "foo"
-# These are OK at runtime (typing._GenericAlias supports __or__ with strings)
 ok1: "str" | List[int] = "foo"
 ok2: "str" | Dict[str, int] = "foo"
 ok3: "str" | Type[Any] = "foo"
