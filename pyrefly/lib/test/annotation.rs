@@ -27,7 +27,7 @@ testcase!(
     test_union_operator_with_bare_string_literal,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"
-from typing import assert_type, TypeVar, Generic
+from typing import assert_type, Any, TypeVar, Generic
 T = TypeVar("T")
 class C(Generic[T]): ...
 bad1: int | "str" = "foo"  # E: `|` union syntax does not work with string literals
@@ -37,6 +37,8 @@ bad4: "str" | int | T = "foo"  # E: `|` union syntax does not work with string l
 bad5: C | "str" = "foo"  # E: `|` union syntax does not work with string literals
 bad6: "str" | None = "foo"  # E: `|` union syntax does not work with string literals
 bad7: None | "str" = "foo"  # E: `|` union syntax does not work with string literals
+bad8: "str" | Any = "foo"  # E: `|` union syntax does not work with string literals
+bad9: Any | "str" = "foo"  # E: `|` union syntax does not work with string literals
 ok1: T | "str" = "foo"  # E: Type variable `T` is not in scope
 ok2: "str" | T = "foo"  # E: Type variable `T` is not in scope
 ok3 = list["str" | T]
@@ -74,6 +76,27 @@ def test() -> "Foo" | None:  # E: `|` union syntax does not work with string lit
 @dataclass
 class Foo:
     bar: int
+"#,
+);
+
+// Builtin parameterized generics (types.GenericAlias) don't support __or__ with
+// strings at runtime, but pyrefly can't distinguish them from typing module generics
+// (typing._GenericAlias) which do support it, since both resolve to the same type.
+testcase!(
+    bug = "builtin parameterized generics like list[int] should be flagged but pyrefly represents them identically to List[int] which is OK at runtime",
+    test_union_forward_ref_with_builtin_generics,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from typing import List, Dict
+# These error at runtime (types.GenericAlias doesn't support __or__ with strings)
+# but pyrefly doesn't flag them because it can't distinguish from List[int]/Dict[str,int]
+ok_but_runtime_error1: "str" | list[int] = "foo"
+ok_but_runtime_error2: "str" | dict[str, int] = "foo"
+ok_but_runtime_error3: "str" | tuple[int, ...] = "foo"
+ok_but_runtime_error4: "str" | type[int] = "foo"
+# These are OK at runtime (typing._GenericAlias supports __or__ with strings)
+ok1: "str" | List[int] = "foo"
+ok2: "str" | Dict[str, int] = "foo"
 "#,
 );
 
