@@ -431,6 +431,26 @@ def test_list_pattern(x: list[int]) -> None:
 );
 
 testcase!(
+    test_sequence_pattern_facet_subject_preserves_base_type,
+    r#"
+from __future__ import annotations
+from typing import assert_type
+
+class C:
+    items: list[C]
+
+    def __init__(self, items: list[C]) -> None:
+        self.items = items
+
+def handle(c: C) -> None:
+    match c.items:
+        case [_]:
+            assert_type(c, C)
+    assert_type(c, C)
+"#,
+);
+
+testcase!(
     test_sequence_pattern_tuple,
     r#"
 from typing import assert_type

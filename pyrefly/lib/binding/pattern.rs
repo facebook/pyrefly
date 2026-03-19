@@ -149,11 +149,10 @@ impl<'a> BindingsBuilder<'a> {
                     // Add the combined narrow op to the returned narrow_ops.
                     // We insert directly instead of using and_all twice to avoid
                     // Placeholder issues when starting from an empty NarrowOps.
-                    let name = match subject {
-                        NarrowingSubject::Name(name) => name.clone(),
-                        NarrowingSubject::Facets(name, _) => name.clone(),
-                    };
-                    narrow_ops.0.insert(name, (combined_narrow_op, x.range));
+                    let name = subject.name().clone();
+                    narrow_ops
+                        .0
+                        .insert(name, (combined_narrow_op.for_subject(subject), x.range));
                 }
                 let mut seen_star = false;
                 for (i, x) in x.patterns.into_iter().enumerate() {
