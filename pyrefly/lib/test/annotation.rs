@@ -27,7 +27,7 @@ testcase!(
     test_union_operator_with_bare_string_literal,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"
-from typing import assert_type, Any, TypeVar, Generic
+from typing import assert_type, Any, TypeVar, Generic, Literal, Callable, LiteralString
 T = TypeVar("T")
 class C(Generic[T]): ...
 bad1: int | "str" = "foo"  # E: `|` union syntax does not work with string literals
@@ -45,6 +45,9 @@ ok3 = list["str" | T]
 ok4 = (int) | (str)
 ok5: "str" | C[int] = "foo"
 ok6: C[int] | "str" = "foo"
+ok7: "str" | Literal[1] = "foo"
+ok8: "str" | Callable[[int], str] = "foo"
+ok9: "str" | LiteralString = "foo"
 "#,
 );
 
@@ -61,6 +64,29 @@ testcase!(
     r#"
 bad: "int" | "list[str]" = 1  # E: `|` union syntax does not work with string literals
     "#,
+);
+
+// TypedDict, NamedTuple, and Protocol are all class definitions, so they
+// are plain types that don't support __or__ with strings at runtime.
+testcase!(
+    test_union_forward_ref_with_special_classes,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from typing import TypedDict, NamedTuple, Protocol
+
+class TD(TypedDict):
+    x: int
+
+class NT(NamedTuple):
+    x: int
+
+class P(Protocol):
+    def f(self) -> None: ...
+
+bad1: "str" | TD = "foo"  # E: `|` union syntax does not work with string literals
+bad2: "str" | NT = NT(x=1)  # E: `|` union syntax does not work with string literals
+bad3: "str" | P = "foo"  # E: `|` union syntax does not work with string literals
+"#,
 );
 
 // Test forward ref with None in function return type (issue #1005)
