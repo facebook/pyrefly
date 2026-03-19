@@ -83,7 +83,7 @@ class Foo:
 // strings at runtime, but pyrefly can't distinguish them from typing module generics
 // (typing._GenericAlias) which do support it, since both resolve to the same type.
 testcase!(
-    bug = "builtin parameterized generics like list[int] should be flagged but pyrefly represents them identically to List[int] which is OK at runtime",
+    bug = "list[int] (types.GenericAlias) errors at runtime but List[int] (typing._GenericAlias) does not; pyrefly can't distinguish them",
     test_union_forward_ref_with_builtin_generics,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"
