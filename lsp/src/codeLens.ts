@@ -19,10 +19,12 @@ type CodeLensPosition = {
 
 type RunMainArgs = {
   uri?: string;
+  cwd?: string;
 };
 
 type RunTestArgs = {
   uri?: string;
+  cwd?: string;
   position?: CodeLensPosition;
   testName?: string;
   className?: string;
@@ -43,10 +45,6 @@ async function interpreterForUri(
 
 function scopeForUri(uri: vscode.Uri): vscode.WorkspaceFolder | vscode.TaskScope {
   return vscode.workspace.getWorkspaceFolder(uri) ?? vscode.TaskScope.Workspace;
-}
-
-function cwdForUri(uri: vscode.Uri): string | undefined {
-  return vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath;
 }
 
 function moduleNameFromPath(uri: vscode.Uri): string | undefined {
@@ -85,6 +83,7 @@ async function runAtCursor(
 
 async function executeProcessTask(
   uri: vscode.Uri,
+  cwd: string | undefined,
   definition: vscode.TaskDefinition,
   label: string,
   command: string,
@@ -98,7 +97,7 @@ async function executeProcessTask(
     label,
     TASK_SOURCE,
     new vscode.ProcessExecution(command, args, {
-      cwd: cwdForUri(uri),
+      cwd,
     }),
   );
   task.presentationOptions = {
@@ -128,6 +127,7 @@ async function runMainFile(
   }
   await executeProcessTask(
     uri,
+    args.cwd,
     {type: TASK_SOURCE, action: 'runMain'},
     'Pyrefly: Run File',
     interpreter,
@@ -143,6 +143,7 @@ async function runTestAtLocation(
     return;
   }
   const uri = vscode.Uri.parse(args.uri);
+  const cwd = args.cwd;
   const className = args.className;
   const testName = args.testName;
 
@@ -175,6 +176,7 @@ async function runTestAtLocation(
     }
     await executeProcessTask(
       uri,
+      cwd,
       {type: TASK_SOURCE, action: 'runUnittest'},
       'Pyrefly: Run Test',
       interpreter,
@@ -192,6 +194,7 @@ async function runTestAtLocation(
   }
   await executeProcessTask(
     uri,
+    cwd,
     {type: TASK_SOURCE, action: 'runPytest'},
     'Pyrefly: Run Test',
     interpreter,

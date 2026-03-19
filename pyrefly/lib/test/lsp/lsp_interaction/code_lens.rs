@@ -65,7 +65,7 @@ fn test_code_lens_for_tests_and_main() {
                     has_run |= lens.range.start.line == 17;
                 }
                 if command.command == "pyrefly.runTest" && command.title == "Test" {
-                    let args = command.arguments.unwrap_or_default();
+                    let args = command.arguments.clone().unwrap_or_default();
                     let Some(Value::Object(obj)) = args.get(0) else {
                         continue;
                     };
@@ -85,6 +85,56 @@ fn test_code_lens_for_tests_and_main() {
             }
 
             has_run && pytest_test && unittest_test && top_level_test
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_code_lens_uses_config_root_for_cwd() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    let test_root = root.path().join("code_lens");
+    interaction.set_root(test_root.clone());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(runnable_code_lens_config())),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("nested_project/main_and_tests.py");
+
+    let path = test_root.join("nested_project/main_and_tests.py");
+    let uri = Url::from_file_path(&path).unwrap();
+    let expected_cwd = test_root
+        .join("nested_project")
+        .to_string_lossy()
+        .into_owned();
+
+    interaction
+        .client
+        .send_request::<CodeLensRequest>(json!({
+            "textDocument": {
+                "uri": uri.to_string()
+            },
+        }))
+        .expect_response_with(|response: Option<Vec<CodeLens>>| {
+            let Some(lenses) = response else {
+                return false;
+            };
+            let mut saw_lens = false;
+            lenses.into_iter().all(|lens| {
+                saw_lens = true;
+                lens.command
+                    .and_then(|command| command.arguments)
+                    .and_then(|args| args.into_iter().next())
+                    .and_then(|arg| arg.get("cwd").and_then(Value::as_str).map(str::to_owned))
+                    .is_some_and(|cwd| cwd == expected_cwd)
+            }) && saw_lens
         })
         .unwrap();
 

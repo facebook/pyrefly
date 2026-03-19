@@ -2490,6 +2490,24 @@ impl Server {
         telemetry.set_file_stats(TelemetryFileStats { uri, config_root });
     }
 
+    fn runnable_code_lens_cwd(&self, path: &std::path::Path) -> Option<String> {
+        let config = self.state.config_finder().python_file(
+            ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+            &ModulePath::filesystem(path.to_path_buf()),
+        );
+        let cwd = config
+            .source
+            .root()
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| {
+                self.workspaces
+                    .get_with(path.to_path_buf(), |(workspace_root, _)| {
+                        workspace_root.cloned()
+                    })
+            })?;
+        Some(cwd.to_string_lossy().into_owned())
+    }
+
     fn send_response(&self, x: Response) {
         self.connection.send(Message::Response(x))
     }
@@ -4797,7 +4815,7 @@ impl Server {
         let path = self.path_for_uri(uri)?;
         let runnable_code_lens = self
             .workspaces
-            .get_with(path, |(_, workspace)| workspace.runnable_code_lens);
+            .get_with(path.clone(), |(_, workspace)| workspace.runnable_code_lens);
         if !runnable_code_lens {
             return Some(Vec::new());
         }
@@ -4805,6 +4823,7 @@ impl Server {
         let handle = self.make_handle_if_enabled(uri, Some(CodeLensRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let entries = transaction.code_lens_entries(&handle)?;
+        let cwd = self.runnable_code_lens_cwd(&path);
 
         let mut lenses = Vec::new();
         for entry in entries {
@@ -4813,14 +4832,20 @@ impl Server {
             }
             let range = info.to_lsp_range(entry.range);
             let (title, command, arguments) = match entry.kind {
-                CodeLensKind::Run => (
-                    "Run",
-                    "pyrefly.runMain",
-                    Some(vec![serde_json::json!({ "uri": uri.to_string() })]),
-                ),
+                CodeLensKind::Run => {
+                    let mut args = serde_json::Map::new();
+                    args.insert("uri".to_owned(), serde_json::json!(uri.to_string()));
+                    if let Some(cwd) = &cwd {
+                        args.insert("cwd".to_owned(), serde_json::json!(cwd));
+                    }
+                    ("Run", "pyrefly.runMain", Some(vec![Value::Object(args)]))
+                }
                 CodeLensKind::Test => {
                     let mut args = serde_json::Map::new();
                     args.insert("uri".to_owned(), serde_json::json!(uri.to_string()));
+                    if let Some(cwd) = &cwd {
+                        args.insert("cwd".to_owned(), serde_json::json!(cwd));
+                    }
                     args.insert(
                         "position".to_owned(),
                         serde_json::json!({
