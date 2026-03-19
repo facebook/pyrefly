@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.2ccc2416.css">
-<script src="/assets/js/runtime~main.442cf28f.js" defer="defer"></script>
-<script src="/assets/js/main.3fe19ca1.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.ae03392c.js" defer="defer"></script>
+<script src="/assets/js/main.317e02b1.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -47,12 +47,15 @@ that an error is related to. Every error has exactly one kind.</p>
 error suppression comments.</p>
 <p>Diagnostics have several possible severity levels, which can be <a href="/en/docs/configuration/#errors">configured</a> in <code>pyrefly.toml</code> or via CLI:</p>
 <ul>
-<li>ignore: the diagnostic is not emitted and does not cause a nonzero exit in the CLI</li>
-<li>info: the diagnostic shows up blue in the IDE and does not cause a nonzero exit in the CLI</li>
-<li>warn: the diagnostic shows up yellow in the IDE and causes a nonzero exit in the CLI</li>
-<li>error: the diagnostic shows up red in the IDE and causes a nonzero exit in the CLI</li>
+<li><strong>ignore</strong>: the diagnostic is not emitted</li>
+<li><strong>info</strong>: the diagnostic shows up blue in the IDE and does not cause a nonzero exit in the CLI</li>
+<li><strong>warn</strong>: the diagnostic shows up yellow in the IDE and does not cause a nonzero exit in the CLI</li>
+<li><strong>error</strong>: the diagnostic shows up red in the IDE and causes a nonzero exit in the CLI</li>
 </ul>
 <p>The default severity for diagnostics is <code>error</code> unless otherwise noted. Diagnostics with default severity <code>ignore</code> must be explicitly enabled to be emitted.</p>
+<p>By default, <code>pyrefly check</code> only displays diagnostics with severity <code>error</code> or higher.
+Use the <a href="/en/docs/configuration/#min-severity"><code>min-severity</code></a> config option or <code>--min-severity</code> CLI flag to also show lower-severity diagnostics (e.g. <code>--min-severity warn</code>).</p>
+<p>In the IDE, diagnostics below <code>error</code> severity are only shown for files that are currently open in the editor.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="abstract-method-call">abstract-method-call<a href="#abstract-method-call" class="hash-link" aria-label="Direct link to abstract-method-call" title="Direct link to abstract-method-call">​</a></h2>
 <p>This error is raised when code attempts to invoke a method decorated with
 <code>@abstractmethod</code>. Abstract methods have no implementation, so calling them is
@@ -178,7 +181,7 @@ base class list is <code>total</code>.</p>
 <p>This warning occurs on usage of a deprecated class or function.</p>
 <p>The default severity of this diagnostic is <code>warn</code>.</p>
 <div class="language-python codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-python codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#F8F8F2"><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">from</span><span class="token plain"> warnings </span><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">import</span><span class="token plain"> deprecated</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token decorator annotation punctuation" style="color:rgb(248, 248, 242)">@deprecated</span><span class="token punctuation" style="color:rgb(248, 248, 242)">(</span><span class="token string" style="color:rgb(255, 121, 198)">&quot;deprecated&quot;</span><span class="token punctuation" style="color:rgb(248, 248, 242)">)</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">def</span><span class="token plain"> </span><span class="token function" style="color:rgb(80, 250, 123)">f</span><span class="token punctuation" style="color:rgb(248, 248, 242)">(</span><span class="token punctuation" style="color:rgb(248, 248, 242)">)</span><span class="token punctuation" style="color:rgb(248, 248, 242)">:</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(248, 248, 242)">.</span><span class="token punctuation" style="color:rgb(248, 248, 242)">.</span><span class="token punctuation" style="color:rgb(248, 248, 242)">.</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">f</span><span class="token punctuation" style="color:rgb(248, 248, 242)">(</span><span class="token punctuation" style="color:rgb(248, 248, 242)">)</span><span class="token plain">  </span><span class="token comment" style="color:rgb(98, 114, 164)"># deprecated!</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn"><span class="copyButtonIcons_eSgA" aria-hidden="true"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N"><path fill="currentColor" d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"></path></svg><svg viewBox="0 0 24 24" class="copyButtonSuccessIcon_LjdS"><path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"></path></svg></span></button></div></div></div>
-<h2 class="anchor anchorWithStickyNavbar_LWe7" id="implicit-abstract-class">implicit-abstract-class<a href="#implicit-abstract-class" class="hash-link" aria-label="Direct link to implicit-abstract-class" title="Direct link to implicit-abstract-class">​</a></h2>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="implicit-abstract-class">implicit-abstract-class<a href="#implicit-abstract-class" class="hash-link" aria-label="Direct link to implicit-abstract-class" title="Direct link to implicit-abstract-class">  ​</a></h2>
 <p>Pyrefly emits this error when a class defines abstract members but is not declared abstract (for example, it does not inherit from <code>abc.ABC</code> or use <code>abc.ABCMeta</code>). Such classes cannot be instantiated because they have unimplemented abstract methods. Add <code>ABC</code> as a base class, adjust the metaclass, or provide concrete implementations to resolve the issue.</p>
 <p>The default severity of this diagnostic is <code>ignore</code>.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="implicit-any">implicit-any<a href="#implicit-any" class="hash-link" aria-label="Direct link to implicit-any" title="Direct link to implicit-any">​</a></h2>
@@ -422,6 +425,7 @@ has items incompatible with the TypedDict it is being unpacked into.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="reveal-type">reveal-type<a href="#reveal-type" class="hash-link" aria-label="Direct link to reveal-type" title="Direct link to reveal-type">​</a></h2>
 <p>Pyrefly uses this diagnostic to communicate the output of the <a href="https://typing.python.org/en/latest/spec/directives.html#reveal-type" target="_blank" rel="noopener noreferrer"><code>reveal_type</code></a> function.</p>
 <p>The default severity of this diagnostic is <code>info</code>.</p>
+<p><code>reveal_type</code> is a <em>directive</em> — it is always shown in CLI output regardless of the <a href="/en/docs/configuration/#min-severity"><code>min-severity</code></a> threshold, and is never subject to suppression or baseline exclusion. To hide it, set <code>reveal-type = &quot;ignore&quot;</code> in the <a href="/en/docs/configuration/#errors"><code>errors</code></a> table.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="unannotated-attribute">unannotated-attribute<a href="#unannotated-attribute" class="hash-link" aria-label="Direct link to unannotated-attribute" title="Direct link to unannotated-attribute">​</a></h2>
 <p>This error is raised when a class attribute is missing a type annotation and is initialized with the <code>None</code> literal. Without an explicit annotation, Pyrefly infers the type as <code>Any | None</code>, which reduces type safety. To fix it, add an explicit type annotation to the attribute.</p>
 <p>The default severity of this diagnostic is <code>ignore</code>.</p>

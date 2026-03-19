@@ -453,6 +453,35 @@ more details on how baseline files work.
     - Errors suppressed by the baseline file are still shown in the IDE.
     - Errors are matched with the baseline by file, error code, and column number.
 
+### `min-severity`
+
+The minimum severity level for diagnostics to be displayed by `pyrefly check`. Diagnostics
+below this threshold are hidden from output and do not affect the exit code.
+
+```toml
+# pyrefly.toml — show warnings and errors
+min-severity = "warn"
+```
+
+```toml
+# pyproject.toml
+[tool.pyrefly]
+min-severity = "warn"
+```
+
+- Type: `"ignore"` | `"info"` | `"warn"` | `"error"`
+- Default: `"error"`
+- Flag equivalent: `--min-severity`
+- Notes:
+    - `min-severity` is a **project-level setting** and cannot be overridden in
+      [`sub-config`](#sub-configs) sections.
+    - This setting controls CLI display only. To change the severity of individual
+      error kinds, use the [`errors`](#errors) table instead.
+    - In the IDE, diagnostics below error severity are only shown for files that
+      are currently open in the editor, regardless of this setting.
+    - Directives such as [`reveal_type`](../error-kinds#reveal-type) are always
+      shown regardless of this threshold.
+
 ### `errors`
 
 Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.

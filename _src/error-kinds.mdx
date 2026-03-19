@@ -20,12 +20,17 @@ The main use of error kinds is as short names ("slugs") that can be used in
 error suppression comments.
 
 Diagnostics have several possible severity levels, which can be [configured](../configuration#errors) in `pyrefly.toml` or via CLI:
-- ignore: the diagnostic is not emitted and does not cause a nonzero exit in the CLI
-- info: the diagnostic shows up blue in the IDE and does not cause a nonzero exit in the CLI
-- warn: the diagnostic shows up yellow in the IDE and causes a nonzero exit in the CLI
-- error: the diagnostic shows up red in the IDE and causes a nonzero exit in the CLI
+- **ignore**: the diagnostic is not emitted
+- **info**: the diagnostic shows up blue in the IDE and does not cause a nonzero exit in the CLI
+- **warn**: the diagnostic shows up yellow in the IDE and does not cause a nonzero exit in the CLI
+- **error**: the diagnostic shows up red in the IDE and causes a nonzero exit in the CLI
 
 The default severity for diagnostics is `error` unless otherwise noted. Diagnostics with default severity `ignore` must be explicitly enabled to be emitted.
+
+By default, `pyrefly check` only displays diagnostics with severity `error` or higher.
+Use the [`min-severity`](../configuration#min-severity) config option or `--min-severity` CLI flag to also show lower-severity diagnostics (e.g. `--min-severity warn`).
+
+In the IDE, diagnostics below `error` severity are only shown for files that are currently open in the editor.
 
 ## abstract-method-call
 
@@ -1196,6 +1201,8 @@ The default severity of this diagnostic is `warn`.
 Pyrefly uses this diagnostic to communicate the output of the [`reveal_type`](https://typing.python.org/en/latest/spec/directives.html#reveal-type) function.
 
 The default severity of this diagnostic is `info`.
+
+`reveal_type` is a *directive* — it is always shown in CLI output regardless of the [`min-severity`](../configuration#min-severity) threshold, and is never subject to suppression or baseline exclusion. To hide it, set `reveal-type = "ignore"` in the [`errors`](../configuration#errors) table.
 
 ## unannotated-attribute
 
