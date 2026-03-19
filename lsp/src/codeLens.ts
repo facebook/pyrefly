@@ -34,11 +34,11 @@ const TASK_SOURCE = 'pyrefly';
 async function interpreterForUri(
   uri: vscode.Uri,
   pythonExtension: PythonExtension,
-): Promise<string> {
+): Promise<string | undefined> {
   const envPath = await pythonExtension.environments.getActiveEnvironmentPath(
     uri,
   );
-  return envPath.path.length > 0 ? envPath.path : 'python';
+  return envPath.path.length > 0 ? envPath.path : undefined;
 }
 
 function scopeForUri(uri: vscode.Uri): vscode.WorkspaceFolder | vscode.TaskScope {
@@ -120,6 +120,12 @@ async function runMainFile(
   }
   const uri = vscode.Uri.parse(args.uri);
   const interpreter = await interpreterForUri(uri, pythonExtension);
+  if (!interpreter) {
+    void vscode.window.showErrorMessage(
+      'Pyrefly could not determine a Python interpreter for this file.',
+    );
+    return;
+  }
   await executeProcessTask(
     uri,
     {type: TASK_SOURCE, action: 'runMain'},
@@ -146,6 +152,12 @@ async function runTestAtLocation(
   }
 
   const interpreter = await interpreterForUri(uri, pythonExtension);
+  if (!interpreter) {
+    void vscode.window.showErrorMessage(
+      'Pyrefly could not determine a Python interpreter for this file.',
+    );
+    return;
+  }
   if (args.isUnittest === true) {
     const moduleName = moduleNameFromPath(uri);
     if (!moduleName) {

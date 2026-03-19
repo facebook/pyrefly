@@ -4794,6 +4794,13 @@ impl Server {
         if uri.path().ends_with(".pyi") {
             return Some(Vec::new());
         }
+        let path = self.path_for_uri(uri)?;
+        let runnable_code_lens = self
+            .workspaces
+            .get_with(path, |(_, workspace)| workspace.runnable_code_lens);
+        if !runnable_code_lens {
+            return Some(Vec::new());
+        }
         let maybe_cell_idx = self.maybe_get_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(CodeLensRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;

@@ -15,6 +15,14 @@ use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
 use crate::util::get_test_files_root;
 
+fn runnable_code_lens_config() -> serde_json::Value {
+    json!([{
+        "pyrefly": {
+            "runnableCodeLens": true
+        }
+    }])
+}
+
 #[test]
 fn test_code_lens_for_tests_and_main() {
     let root = get_test_files_root();
@@ -22,7 +30,10 @@ fn test_code_lens_for_tests_and_main() {
     let test_root = root.path().join("code_lens");
     interaction.set_root(test_root.clone());
     interaction
-        .initialize(InitializeSettings::default())
+        .initialize(InitializeSettings {
+            configuration: Some(Some(runnable_code_lens_config())),
+            ..Default::default()
+        })
         .unwrap();
 
     interaction.client.did_open("main_and_tests.py");
@@ -87,12 +98,48 @@ fn test_code_lens_ignores_stub_files() {
     let test_root = root.path().join("code_lens");
     interaction.set_root(test_root.clone());
     interaction
-        .initialize(InitializeSettings::default())
+        .initialize(InitializeSettings {
+            configuration: Some(Some(runnable_code_lens_config())),
+            ..Default::default()
+        })
         .unwrap();
 
     interaction.client.did_open("main_and_tests.pyi");
 
     let path = test_root.join("main_and_tests.pyi");
+    let uri = Url::from_file_path(&path).unwrap();
+
+    interaction
+        .client
+        .send_request::<CodeLensRequest>(json!({
+            "textDocument": {
+                "uri": uri.to_string()
+            },
+        }))
+        .expect_response_with(|response: Option<Vec<CodeLens>>| {
+            response.is_some_and(|lenses| lenses.is_empty())
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_code_lens_disabled_by_default() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    let test_root = root.path().join("code_lens");
+    interaction.set_root(test_root.clone());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{}]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("main_and_tests.py");
+
+    let path = test_root.join("main_and_tests.py");
     let uri = Url::from_file_path(&path).unwrap();
 
     interaction
