@@ -1043,6 +1043,17 @@ impl Type {
         matches!(self, Type::Any(_))
     }
 
+    /// Returns `true` if this type is an unannotated passthrough wrapper callable,
+    /// i.e. a function/callable with only `*args`/`**kwargs` params and all implicit
+    /// `Any` types. See `Callable::is_unannotated_passthrough`.
+    pub fn is_unannotated_passthrough(&self) -> bool {
+        match self {
+            Type::Function(f) => f.signature.is_unannotated_passthrough(),
+            Type::Callable(c) => c.is_unannotated_passthrough(),
+            _ => false,
+        }
+    }
+
     pub fn is_typed_dict(&self) -> bool {
         matches!(self, Type::TypedDict(_) | Type::PartialTypedDict(_))
     }

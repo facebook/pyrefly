@@ -46,6 +46,29 @@ pub struct Callable {
     pub ret: Type,
 }
 
+impl Callable {
+    /// Returns `true` if this callable looks like an unannotated passthrough wrapper,
+    /// i.e. it has only `*args` and/or `**kwargs` parameters with implicit `Any` types
+    /// and an implicit `Any` return type. This pattern arises from unannotated decorators
+    /// like `def wrapper(*args, **kwargs): return func(*args, **kwargs)`.
+    pub fn is_unannotated_passthrough(&self) -> bool {
+        if !self.ret.is_any() {
+            return false;
+        }
+        match &self.params {
+            Params::List(params) => {
+                let items = params.items();
+                !items.is_empty()
+                    && items.iter().all(|p| match p {
+                        Param::VarArg(_, ty) | Param::Kwargs(_, ty) => ty.is_any(),
+                        _ => false,
+                    })
+            }
+            _ => false,
+        }
+    }
+}
+
 impl Display for Callable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use crate::display::TypeDisplayContext;

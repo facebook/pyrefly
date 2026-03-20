@@ -1337,6 +1337,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped") => {
                 original_decoratee.clone()
             }
+            // Unannotated decorator passthrough: if the decorator returns a type that
+            // looks like an unannotated wrapper (only *args/**kwargs with implicit Any
+            // types), or a union containing such a wrapper, preserve the original
+            // function's type. This handles common patterns like dual-use decorators
+            // (usable as @deco or @deco(flag)) where the inferred return type is a
+            // union of the wrapper and the decorator factory, but the wrapper branch
+            // is just an unannotated passthrough.
+            returned_ty if returned_ty.is_unannotated_passthrough() => {
+                original_decoratee.clone()
+            }
+            Type::Union(box Union { ref members, .. })
+                if members.iter().any(|m| m.is_unannotated_passthrough()) =>
+            {
+                original_decoratee.clone()
+            }
             returned_ty => returned_ty,
         }
     }
