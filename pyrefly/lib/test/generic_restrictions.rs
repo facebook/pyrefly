@@ -1213,7 +1213,6 @@ assert_type(f(b"hi"), bytes)
 );
 
 testcase!(
-    bug = "Should not produce a type error; https://github.com/facebook/pyrefly/issues/2644",
     test_anystr_none_passthrough_classmethod,
     r#"
 from typing import AnyStr
@@ -1223,7 +1222,7 @@ class A:
     def create(cls, x: AnyStr | None): ...
 
 def test(x: AnyStr | None):
-    A.create(x)  # E: Argument `AnyStr | None` is not assignable to parameter `x` with type `str | None` in function `A.create`
+    A.create(x)
     "#,
 );
 

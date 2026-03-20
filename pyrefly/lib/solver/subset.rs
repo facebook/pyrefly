@@ -1268,9 +1268,23 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (Type::Quantified(q), u)
                 if let Restriction::Constraints(constraints) = q.restriction()
-                    && constraints
-                        .iter()
-                        .all(|constraint| self.is_subset_eq(constraint, u).is_ok()) =>
+                    && constraints.iter().all(|constraint| {
+                        // When u is a union containing solver variables, check each
+                        // constraint only against concrete (non-var) members. The
+                        // `.all()` iterator can partially pin vars: e.g. for AnyStr
+                        // <: Var(T) | None, `str <: Var(T)` pins T=str, then `bytes
+                        // <: str|None` fails, leaving T irreversibly pinned to str.
+                        if let Type::Union(box Union { members, .. }) = u
+                            && u.may_contain_quantified_var()
+                        {
+                            members
+                                .iter()
+                                .filter(|m| !m.may_contain_quantified_var())
+                                .any(|m| self.is_subset_eq(constraint, m).is_ok())
+                        } else {
+                            self.is_subset_eq(constraint, u).is_ok()
+                        }
+                    }) =>
             {
                 Ok(())
             }
