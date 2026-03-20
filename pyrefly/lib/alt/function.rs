@@ -848,9 +848,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             FunctionParameter::Annotated(idx) => {
                 // If the parameter is annotated, we check the default value against the annotation
                 let param_ty = self.get_idx(*idx).annotation.get_type().clone();
+                // For parameter default validation, substitute TypeVars that have
+                // defaults with their default types. This allows `def f[S=None](x: S = None)`
+                // to pass: the check becomes `None <: None` instead of `None <: S`.
+                let check_ty;
+                let check_ref = if default.is_some() {
+                    check_ty = param_ty.clone().transform(&mut |t| {
+                        if let Type::Quantified(q) = &*t
+                            && q.default().is_some()
+                        {
+                            let gradual = q.as_gradual_type();
+                            *t = gradual;
+                        }
+                    });
+                    &check_ty
+                } else {
+                    &param_ty
+                };
                 let required = self.get_requiredness(
                     default,
-                    Some((&param_ty, &|| {
+                    Some((check_ref, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::FunctionParameterDefault(
                             name.id.clone(),
                         ))
