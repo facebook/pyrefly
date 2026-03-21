@@ -335,7 +335,10 @@ def classify_with_llm(
             raw_response=result,
         )
 
-    reason = classification.get("reason", "No reason provided")
+    reason_val = classification.get("reason", "No reason provided")
+    # The LLM sometimes returns a dict for "reason" instead of a string.
+    # If so, serialize it so downstream code always sees a string.
+    reason = json.dumps(reason_val) if isinstance(reason_val, dict) else str(reason_val)
 
     # Parse per-category reasoning (no verdicts in pass 1)
     categories: list[CategoryVerdict] = []
