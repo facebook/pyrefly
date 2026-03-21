@@ -345,6 +345,14 @@ impl Transaction<'_> {
         position: TextSize,
         completions: &mut Vec<RankedCompletion>,
     ) {
+        if let Some(mod_module) = self.get_ast(handle) {
+            self.add_typed_dict_constructor_kwargs_completions(
+                handle,
+                mod_module.as_ref(),
+                position,
+                completions,
+            );
+        }
         if let Some(CallInfo {
             callables,
             provided_arg_ranges,
@@ -482,6 +490,24 @@ impl Transaction<'_> {
                 }));
             }
         }
+    }
+
+    pub(crate) fn expected_call_argument_type(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Option<Type> {
+        let CallInfo {
+            callables,
+            chosen_overload_index,
+            active_argument,
+            ..
+        } = self.get_callables_from_call(handle, position)?;
+        let callable = callables.get(chosen_overload_index.unwrap_or(0))?.clone();
+        let params = Self::normalize_singleton_function_type_into_params(callable)?;
+        let arg_index = Self::active_parameter_index(&params, &active_argument)?;
+        let param = params.get(arg_index)?;
+        Some(param.as_type().clone())
     }
 
     fn is_incompatible_with_expected_type(
