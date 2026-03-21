@@ -377,6 +377,15 @@ impl Transaction<'_> {
         position: TextSize,
         completions: &mut Vec<RankedCompletion>,
     ) {
+        let mut seen = SmallSet::new();
+        if let Some(mod_module) = self.get_ast(handle)
+            && let Some(fields) =
+                self.typed_dict_constructor_kwargs(handle, mod_module.as_ref(), position)
+        {
+            for (name, ty) in fields {
+                push_kwarg_completion(&Name::new(name), &ty, &mut seen, completions);
+            }
+        }
         if let Some(CallInfo {
             callables,
             provided_arg_ranges,
@@ -385,7 +394,6 @@ impl Transaction<'_> {
         {
             let callables =
                 self.filter_compatible_overloads(handle, callables, &provided_arg_ranges);
-            let mut seen = SmallSet::new();
             for callable in callables {
                 if let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
                 {
