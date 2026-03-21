@@ -698,10 +698,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let hint = None; // discard hint
         let class_metadata = self.get_metadata_for_class(cls.class_object());
+        let metaclass_dunder_call = self.get_metaclass_dunder_call(&cls);
         if let Some(ret) =
             self.call_metaclass(&cls, arguments_range, args, keywords, errors, context, hint)
         {
-            if let Some(metaclass_dunder_call) = self.get_metaclass_dunder_call(&cls) {
+            if let Some(metaclass_dunder_call) = metaclass_dunder_call.clone() {
                 if let Some(callee_range) = callee_range
                     && let Some(metaclass) = class_metadata.custom_metaclass()
                 {
@@ -774,7 +775,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         callee_range,
                     );
                 }
-                self.record_resolved_trace(arguments_range, new_method);
+                if metaclass_dunder_call.is_none() {
+                    self.record_resolved_trace(arguments_range, new_method);
+                }
                 if self.is_compatible_constructor_return(&ret, cls.class_object()) {
                     dunder_new_ret = Some(ret);
                 } else if !matches!(ret, Type::Any(AnyStyle::Error | AnyStyle::Implicit)) {
@@ -829,7 +832,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     callee_range,
                 );
             }
-            self.record_resolved_trace(arguments_range, init_method);
+            if !overrides_new && metaclass_dunder_call.is_none() {
+                self.record_resolved_trace(arguments_range, init_method);
+            }
         }
         if class_metadata.is_pydantic_model()
             && let Some(dataclass) = class_metadata.dataclass_metadata()

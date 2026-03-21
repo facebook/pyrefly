@@ -935,6 +935,31 @@ Signature Help Result: active=0
 }
 
 #[test]
+fn namedtuple_constructor_signature_shows_namedtuple_fields() {
+    let code = r#"
+from typing import NamedTuple
+
+class Test(NamedTuple):
+    a: str
+    b: int
+
+Test()
+#    ^
+Test(a="", )
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("a: str") && report.contains("b: int") && report.contains("-> Test"),
+        "Expected NamedTuple signature help to show field parameters, got: {report}"
+    );
+    assert!(
+        !report.contains("*Unknown") && !report.contains("**Unknown"),
+        "NamedTuple signature help should not fall back to variadic Unknown params, got: {report}"
+    );
+}
+
+#[test]
 fn direct_init_call_shows_none() {
     let code = r#"
 class Person:

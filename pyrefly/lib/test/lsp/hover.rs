@@ -1072,6 +1072,29 @@ Person("Alice", 25)
 }
 
 #[test]
+fn hover_on_namedtuple_constructor_shows_field_signature() {
+    let code = r#"
+from typing import NamedTuple
+
+class Test(NamedTuple):
+    a: str
+    b: int
+
+Test()
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("a: str") && report.contains("b: int") && report.contains("-> Test"),
+        "Expected NamedTuple constructor hover to show field parameters, got: {report}"
+    );
+    assert!(
+        !report.contains("*Unknown") && !report.contains("**Unknown"),
+        "NamedTuple constructor hover should not fall back to variadic Unknown params, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_in_keyword_in_for_loop() {
     let code = r#"
 for x in [1, 2, 3]:
