@@ -363,6 +363,113 @@ def classify_with_llm(
     )
 
 
+def _build_critique_system_prompt() -> str:
+    """Build the system prompt for pass 1.5: self-critique of reasoning."""
+    return """You are reviewing reasoning about pyrefly type checker changes for factual accuracy. Pyrefly is a Python type checker.
+
+You will receive the original errors, source code context, and a prior analysis. Your job is to check the analysis for factual errors and correct them. Focus on:
+
+1. **Type system facts**: Verify all claims about what Python types support. Check whether types actually implement the protocols/methods the analysis claims they do or don't. Use your knowledge of the Python type system and standard library.
+2. **Inheritance and class hierarchy**: Verify inheritance claims against the source code. Check whether attributes, methods, or protocols are inherited from parent classes that the analysis may have missed.
+3. **Code behavior**: Verify that the analysis correctly describes what the source code does. Check variable types, return values, control flow, and assignments against the actual code provided.
+4. **Generic type reasoning**: When the analysis reasons about TypeVars, generics, or parameterized types, verify that ALL constraints or bounds are checked, not just a subset.
+5. **Logical consistency**: Check that the reasoning does not contradict itself. The conclusion must follow from the evidence presented.
+
+If you find factual errors, provide corrected reasoning. If the reasoning is factually correct, return it unchanged.
+
+Respond with JSON only:
+{"corrected": true/false, "corrections": "description of what was wrong (empty string if nothing was wrong)", "reason": "the corrected reasoning (or original if no corrections needed)", "categories": [{"category": "short label", "reason": "corrected reasoning"}, ...]}
+
+The "categories" field is optional — omit it if there are no categories. When present, each entry should match a category from the original reasoning."""
+
+
+def _build_critique_prompt(
+    reason: str,
+    categories: list[CategoryVerdict],
+    errors_text: str,
+    source_context: Optional[str],
+) -> str:
+    """Build the user prompt for pass 1.5: the reasoning to critique."""
+    parts = [f"Original analysis to review:\n{reason}\n"]
+    if categories:
+        parts.append("Per-category reasoning:")
+        for cat in categories:
+            parts.append(f"- {cat.category}: {cat.reason}")
+        parts.append("")
+    parts.append(f"Original errors:\n{errors_text}\n")
+    if source_context:
+        parts.append(f"Source code context:\n{source_context}\n")
+    else:
+        parts.append("Source code: not available\n")
+    return "\n".join(parts)
+
+
+def critique_reasoning(
+    reason: str,
+    categories: list[CategoryVerdict],
+    errors_text: str,
+    source_context: Optional[str] = None,
+    model: Optional[str] = None,
+) -> tuple[str, list[CategoryVerdict]]:
+    """Pass 1.5: Self-critique the reasoning from Pass 1 for factual errors.
+
+    Catches hallucinations like "dicts are not iterable" or incorrect
+    inheritance claims. Returns (corrected_reason, corrected_categories).
+    """
+    backend, api_key = _get_backend()
+    if backend == "none":
+        raise LLMError(
+            "No API key found. Set LLAMA_API_KEY (Meta internal) "
+            "or CLASSIFIER_API_KEY / ANTHROPIC_API_KEY."
+        )
+
+    system_prompt = _build_critique_system_prompt()
+    user_prompt = _build_critique_prompt(
+        reason, categories, errors_text, source_context
+    )
+
+    print(
+        f"Using {backend} backend for self-critique (pass 1.5)",
+        file=sys.stderr,
+    )
+
+    if backend == "llama":
+        result = _call_llama_api(api_key, system_prompt, user_prompt, model)
+    else:
+        result = _call_anthropic_api(api_key, system_prompt, user_prompt, model)
+
+    text = _extract_text_from_response(backend, result)
+    parsed = _parse_classification(text)
+
+    corrected = parsed.get("corrected", False)
+    corrections = parsed.get("corrections", "")
+    if corrected and corrections:
+        print(f"  Self-critique found errors: {corrections}", file=sys.stderr)
+
+    corrected_reason = parsed.get("reason", reason)
+
+    # Update category reasoning if corrections were provided
+    corrected_categories = list(categories)
+    if corrected:
+        cat_data_list = parsed.get("categories", [])
+        if cat_data_list:
+            cat_by_name = {c.get("category", ""): c for c in cat_data_list}
+            corrected_categories = []
+            for cat in categories:
+                if cat.category in cat_by_name:
+                    corrected_categories.append(
+                        CategoryVerdict(
+                            category=cat.category,
+                            verdict="",
+                            reason=cat_by_name[cat.category].get("reason", cat.reason),
+                        )
+                    )
+                else:
+                    corrected_categories.append(cat)
+
+    return corrected_reason, corrected_categories
+
+
 def _build_verdict_system_prompt() -> str:
     """Build the system prompt for pass 2: assigning a verdict from reasoning."""
     return """You are assigning a verdict based on reasoning about pyrefly type checker changes. Pyrefly is a Python type checker. You are evaluating whether pyrefly got BETTER or WORSE.
@@ -394,6 +501,25 @@ def _build_verdict_prompt(reason: str, categories: list[CategoryVerdict]) -> str
     return "\n".join(parts)
 
 
+_VERDICT_VOTES = 5  # Number of verdict votes for majority voting
+
+
+def _single_verdict_call(
+    backend: str,
+    api_key: str,
+    system_prompt: str,
+    user_prompt: str,
+    model: Optional[str],
+) -> dict:
+    """Make a single verdict API call and return the parsed classification."""
+    if backend == "llama":
+        result = _call_llama_api(api_key, system_prompt, user_prompt, model)
+    else:
+        result = _call_anthropic_api(api_key, system_prompt, user_prompt, model)
+    text = _extract_text_from_response(backend, result)
+    return _parse_classification(text)
+
+
 def assign_verdict_with_llm(
     reason: str,
     categories: list[CategoryVerdict],
@@ -401,9 +527,12 @@ def assign_verdict_with_llm(
 ) -> tuple[str, list[CategoryVerdict]]:
     """Pass 2: Assign a verdict based on the reasoning from pass 1.
 
-    Makes a small, cheap API call (~500 tokens in, ~100 tokens out) that
-    reads the reasoning and assigns verdicts. Returns (overall_verdict,
-    categories_with_verdicts).
+    Uses majority voting: makes multiple cheap API calls (~100 tokens out
+    each) and takes the most common verdict. This reduces non-determinism
+    where the same reasoning could be classified as either "improvement"
+    or "regression" on different runs.
+
+    Returns (overall_verdict, categories_with_verdicts).
     """
     backend, api_key = _get_backend()
     if backend == "none":
@@ -415,32 +544,66 @@ def assign_verdict_with_llm(
     system_prompt = _build_verdict_system_prompt()
     user_prompt = _build_verdict_prompt(reason, categories)
 
-    print(f"Using {backend} backend for verdict assignment (pass 2)", file=sys.stderr)
+    print(
+        f"Using {backend} backend for verdict assignment "
+        f"(pass 2, {_VERDICT_VOTES} votes)",
+        file=sys.stderr,
+    )
 
-    if backend == "llama":
-        result = _call_llama_api(api_key, system_prompt, user_prompt, model)
-    else:
-        result = _call_anthropic_api(api_key, system_prompt, user_prompt, model)
+    # Collect multiple verdict votes
+    votes: list[dict] = []
+    for i in range(_VERDICT_VOTES):
+        try:
+            parsed = _single_verdict_call(
+                backend, api_key, system_prompt, user_prompt, model
+            )
+            votes.append(parsed)
+        except LLMError as e:
+            print(
+                f"  Warning: verdict vote {i + 1}/{_VERDICT_VOTES} failed: {e}",
+                file=sys.stderr,
+            )
 
-    text = _extract_text_from_response(backend, result)
-    parsed = _parse_classification(text)
+    if not votes:
+        raise LLMError("All verdict votes failed")
 
-    verdict = parsed.get("verdict", "").lower().strip()
-    if verdict not in ("regression", "improvement", "neutral"):
+    # Count overall verdict votes
+    verdict_counts: dict[str, int] = {}
+    valid_verdicts = ("regression", "improvement", "neutral")
+    for parsed in votes:
+        v = parsed.get("verdict", "").lower().strip()
+        if v in valid_verdicts:
+            verdict_counts[v] = verdict_counts.get(v, 0) + 1
+
+    if not verdict_counts:
         print(
-            f"Warning: verdict pass returned unexpected verdict '{verdict}', "
-            "treating as ambiguous",
+            "Warning: no valid verdicts from any vote, treating as ambiguous",
             file=sys.stderr,
         )
         verdict = "neutral"
+    else:
+        verdict = max(verdict_counts, key=lambda v: verdict_counts[v])
 
-    # Merge per-category verdicts back into the category objects
+    # Log vote distribution for transparency
+    vote_summary = ", ".join(f"{v}={c}" for v, c in sorted(verdict_counts.items()))
+    print(f"  Verdict votes: {vote_summary} → {verdict}", file=sys.stderr)
+
+    # Count per-category verdict votes across all votes
+    category_vote_counts: dict[str, dict[str, int]] = {}
+    for parsed in votes:
+        for cat_data in parsed.get("categories", []):
+            cat_name = cat_data.get("category", "")
+            cat_verdict = cat_data.get("verdict", "").lower().strip()
+            if cat_verdict in valid_verdicts:
+                if cat_name not in category_vote_counts:
+                    category_vote_counts[cat_name] = {}
+                counts = category_vote_counts[cat_name]
+                counts[cat_verdict] = counts.get(cat_verdict, 0) + 1
+
+    # Pick majority verdict for each category
     verdict_by_category: dict[str, str] = {}
-    for cat_data in parsed.get("categories", []):
-        cat_verdict = cat_data.get("verdict", "").lower().strip()
-        if cat_verdict not in ("regression", "improvement", "neutral"):
-            cat_verdict = "neutral"
-        verdict_by_category[cat_data.get("category", "")] = cat_verdict
+    for cat_name, counts in category_vote_counts.items():
+        verdict_by_category[cat_name] = max(counts, key=lambda v: counts[v])
 
     updated_categories = []
     for cat in categories:

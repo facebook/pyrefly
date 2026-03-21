@@ -44,7 +44,7 @@ LLAMA_DEFAULT_MODEL = "Llama-4-Maverick-17B-128E-Instruct-FP8"
 
 # ── Anthropic API ────────────────────────────────────────────────────
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_DEFAULT_MODEL = "claude-opus-4-20250514"
+ANTHROPIC_DEFAULT_MODEL = "claude-opus-4-6"
 ANTHROPIC_API_VERSION = "2023-06-01"
 
 
