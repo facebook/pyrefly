@@ -351,6 +351,44 @@ cfg: Config = {"": 1}
 }
 
 #[test]
+fn dict_key_completion_from_incomplete_typed_dict_literal() {
+    let code = r#"
+from typing import TypedDict
+
+class Config(TypedDict):
+    name: str
+    age: int
+
+cfg: Config = {""}
+#              ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(report.contains("- (Field) age: int"), "{report}");
+    assert!(report.contains("- (Field) name: str"), "{report}");
+}
+
+#[test]
+fn kwargs_completion_from_typed_dict_dict_constructor() {
+    let code = r#"
+from typing import TypedDict
+
+class Config(TypedDict):
+    name: str
+    age: int
+
+cfg: Config = dict(
+#                 ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(report.contains("- (Variable) age=: int"), "{report}");
+    assert!(report.contains("- (Variable) name=: str"), "{report}");
+}
+
+#[test]
 fn dot_complete_with_deprecated_method() {
     let code = r#"
 from warnings import deprecated
