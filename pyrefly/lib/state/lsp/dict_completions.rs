@@ -212,7 +212,8 @@ impl<'a> Transaction<'a> {
             self.dict_key_string_literal_at(handle, module, position)
         {
             Some(DictKeyLiteralContext::KeyAccess { base_expr, literal })
-        } else if let Some((range, literal)) = Self::dict_literal_string_literal_at(module, position)
+        } else if let Some((range, literal)) =
+            Self::dict_literal_string_literal_at(module, position)
         {
             Some(DictKeyLiteralContext::DictLiteral { range, literal })
         } else {

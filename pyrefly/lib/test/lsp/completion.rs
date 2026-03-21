@@ -389,6 +389,30 @@ cfg: Config = dict(
 }
 
 #[test]
+fn dict_key_completion_from_incomplete_typed_dict_call_argument() {
+    let code = r#"
+from typing import TypedDict
+
+class Box(TypedDict):
+    x: float
+    y: float
+    z: float
+
+def take(box: Box):
+    return
+
+take({""})
+#      ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(report.contains("- (Field) x: float"), "{report}");
+    assert!(report.contains("- (Field) y: float"), "{report}");
+    assert!(report.contains("- (Field) z: float"), "{report}");
+}
+
+#[test]
 fn dot_complete_with_deprecated_method() {
     let code = r#"
 from warnings import deprecated
