@@ -575,6 +575,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let ps = ParamList::everything();
                     ps.prepend_types(&prefix).into_owned()
                 }
+                // The ParamSpec Var resolved to another quantified ParamSpec (e.g.,
+                // one generic helper forwarding `*args: P.args, **kwargs: P.kwargs`
+                // to another). There are no concrete parameters to contribute;
+                // treat it permissively like `...` so the forwarded args pass through.
+                Type::Quantified(q) if q.is_param_spec() => ParamList::everything(),
                 t => {
                     error(
                         call_errors,
