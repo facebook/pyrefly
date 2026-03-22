@@ -93,8 +93,8 @@ use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 
 mod dict_completions;
-mod extra_extensions;
 mod endpoint_support;
+mod extra_extensions;
 mod pytest;
 mod quick_fixes;
 
@@ -2624,12 +2624,7 @@ impl<'a> Transaction<'a> {
             }
             None => {
                 if let Some(res) = self.find_definition_for_endpoint_literal(handle, position) {
-                    return Vec1::try_from_vec(res).map_err(|_| {
-                        EmptyResponseReason::DefinitionNotFound {
-                            name: "endpoint".to_owned(),
-                            context: DefinitionContext::NameUse,
-                        }
-                    });
+                    return Ok(res);
                 }
                 // Check if this is a None literal, if so, resolve to NoneType class
                 if covering_nodes
