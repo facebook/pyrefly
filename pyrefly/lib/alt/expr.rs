@@ -415,7 +415,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     Vec::new()
                 };
-                let param_vars = self.allocate_lambda_param_vars(&param_ids);
+                let mut inserted_param_ids = Vec::new();
+                let param_vars =
+                    self.allocate_lambda_param_vars(&param_ids, &mut inserted_param_ids);
 
                 // Pass any contextual information to the parameter bindings used in the lambda body as a side
                 // effect, by setting an answer for the vars created at binding time.
@@ -440,14 +442,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 if let Some(parameters) = &lambda.parameters {
                     params.extend(parameters.vararg.iter().map(|x| {
-                        let var = self.get_or_create_lambda_param_var(
-                            self.bindings().get_lambda_param_id(&x.name),
+                        let id = self.bindings().get_lambda_param_id(&x.name);
+                        self.clear_completed_lambda_param_var(id);
+                        let var = self.get_or_create_active_lambda_param_var_with_tracking(
+                            id,
+                            &mut inserted_param_ids,
                         );
                         Param::Varargs(Some(x.name.id.clone()), self.solver().force_var(var))
                     }));
                     params.extend(parameters.kwarg.iter().map(|x| {
-                        let var = self.get_or_create_lambda_param_var(
-                            self.bindings().get_lambda_param_id(&x.name),
+                        let id = self.bindings().get_lambda_param_id(&x.name);
+                        self.clear_completed_lambda_param_var(id);
+                        let var = self.get_or_create_active_lambda_param_var_with_tracking(
+                            id,
+                            &mut inserted_param_ids,
                         );
                         Param::Kwargs(Some(x.name.id.clone()), self.solver().force_var(var))
                     }));
@@ -482,6 +490,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     ret
                 };
+                for (_, id) in &param_ids {
+                    if let Some(var) = self.get_active_lambda_param_var(*id) {
+                        self.set_completed_lambda_param_var(*id, var);
+                    }
+                }
+                if let Some(parameters) = &lambda.parameters {
+                    for x in parameters.vararg.iter() {
+                        let id = self.bindings().get_lambda_param_id(&x.name);
+                        if let Some(var) = self.get_active_lambda_param_var(id) {
+                            self.set_completed_lambda_param_var(id, var);
+                        }
+                    }
+                    for x in parameters.kwarg.iter() {
+                        let id = self.bindings().get_lambda_param_id(&x.name);
+                        if let Some(var) = self.get_active_lambda_param_var(id) {
+                            self.set_completed_lambda_param_var(id, var);
+                        }
+                    }
+                }
+                for id in inserted_param_ids {
+                    self.clear_active_lambda_param_var(id);
+                }
                 self.heap.mk_callable(params, ret)
             }
             Expr::Tuple(x) => self.tuple_infer(x, hint, errors),
@@ -2909,13 +2939,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn get_or_create_active_lambda_param_var_with_tracking(
+        &self,
+        id: LambdaParamId,
+        inserted_param_ids: &mut Vec<LambdaParamId>,
+    ) -> Var {
+        if let Some(var) = self.get_active_lambda_param_var(id) {
+            var
+        } else {
+            let var = self.solver().fresh_unwrap(self.uniques);
+            self.set_active_lambda_param_var(id, var);
+            inserted_param_ids.push(id);
+            var
+        }
+    }
+
     fn allocate_lambda_param_vars<'b>(
         &self,
         param_ids: &[(&'b Name, LambdaParamId)],
+        inserted_param_ids: &mut Vec<LambdaParamId>,
     ) -> Vec<(&'b Name, Var)> {
         param_ids
             .iter()
-            .map(|(name, id)| (*name, self.get_or_create_lambda_param_var(*id)))
+            .map(|(name, id)| {
+                self.clear_completed_lambda_param_var(*id);
+                (
+                    *name,
+                    self.get_or_create_active_lambda_param_var_with_tracking(
+                        *id,
+                        inserted_param_ids,
+                    ),
+                )
+            })
             .collect()
     }
 }
