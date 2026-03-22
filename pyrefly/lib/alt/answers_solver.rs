@@ -1587,11 +1587,16 @@ pub struct ThreadState {
     /// which checks before pushing its own frame).
     partial_answers: RefCell<FxHashMap<(Idx<Key>, usize), Arc<TypeInfo>>>,
     /// Solve-time mapping from per-module lambda parameter IDs to the
-    /// thread-local Var that represents that parameter in the current solve.
+    /// thread-local Var that represents that parameter while its owner lambda
+    /// is actively being solved.
     ///
     /// The `ModulePath` is needed to distinguish the in-memory and on-disk
     /// versions of the same module, which can coexist in the IDE (issue #3789).
-    lambda_param_vars: RefCell<FxHashMap<(ModuleName, ModulePath, LambdaParamId), Var>>,
+    active_lambda_param_vars: RefCell<FxHashMap<(ModuleName, ModulePath, LambdaParamId), Var>>,
+    /// The most recent completed Var for a lambda parameter ID. This allows a
+    /// `Binding::LambdaParameter` that forces its owner first to reuse the
+    /// finished parameter Var after the owner lambda returns.
+    completed_lambda_param_vars: RefCell<FxHashMap<(ModuleName, ModulePath, LambdaParamId), Var>>,
     /// Active trace side-effect sink for the current calculation.
     /// Set before `K::solve`, taken after. `None` when tracing is disabled
     /// or between calculations. Saved sinks form a stack to handle recursive
@@ -1611,7 +1616,8 @@ impl ThreadState {
             debug: RefCell::new(false),
             recursion_limit_config,
             partial_answers: RefCell::new(FxHashMap::default()),
-            lambda_param_vars: RefCell::new(FxHashMap::default()),
+            active_lambda_param_vars: RefCell::new(FxHashMap::default()),
+            completed_lambda_param_vars: RefCell::new(FxHashMap::default()),
             trace_sink: RefCell::new(None),
             trace_sink_stack: RefCell::new(Vec::new()),
         }
@@ -1869,31 +1875,67 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.answers.get_class_fields(cls)
     }
 
-    pub(crate) fn set_lambda_param_var(&self, id: LambdaParamId, var: Var) {
+    pub(crate) fn set_active_lambda_param_var(&self, id: LambdaParamId, var: Var) {
         self.thread_state
-            .lambda_param_vars
+            .active_lambda_param_vars
             .borrow_mut()
             .insert((self.module().name(), self.module().path().dupe(), id), var);
     }
 
     pub(crate) fn clear_lambda_param_vars(&self) {
-        self.thread_state.lambda_param_vars.borrow_mut().clear();
+        self.thread_state
+            .active_lambda_param_vars
+            .borrow_mut()
+            .clear();
+        self.thread_state
+            .completed_lambda_param_vars
+            .borrow_mut()
+            .clear();
     }
 
-    pub(crate) fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
+    pub(crate) fn clear_active_lambda_param_var(&self, id: LambdaParamId) {
         self.thread_state
-            .lambda_param_vars
+            .active_lambda_param_vars
+            .borrow_mut()
+            .remove(&(self.module().name(), self.module().path().dupe(), id));
+    }
+
+    pub(crate) fn get_active_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
+        self.thread_state
+            .active_lambda_param_vars
             .borrow()
             .get(&(self.module().name(), self.module().path().dupe(), id))
             .copied()
     }
 
-    pub(crate) fn get_or_create_lambda_param_var(&self, id: LambdaParamId) -> Var {
-        if let Some(var) = self.get_lambda_param_var(id) {
+    pub(crate) fn set_completed_lambda_param_var(&self, id: LambdaParamId, var: Var) {
+        self.thread_state
+            .completed_lambda_param_vars
+            .borrow_mut()
+            .insert((self.module().name(), self.module().path().dupe(), id), var);
+    }
+
+    pub(crate) fn clear_completed_lambda_param_var(&self, id: LambdaParamId) {
+        self.thread_state
+            .completed_lambda_param_vars
+            .borrow_mut()
+            .remove(&(self.module().name(), self.module().path().dupe(), id));
+    }
+
+    pub(crate) fn get_completed_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
+        self.thread_state
+            .completed_lambda_param_vars
+            .borrow()
+            .get(&(self.module().name(), self.module().path().dupe(), id))
+            .copied()
+    }
+
+    pub(crate) fn get_or_create_active_lambda_param_var(&self, id: LambdaParamId) -> Var {
+        if let Some(var) = self.get_active_lambda_param_var(id) {
             var
         } else {
             let var = self.solver().fresh_unwrap(self.uniques);
-            self.set_lambda_param_var(id, var);
+            self.set_active_lambda_param_var(id, var);
             var
         }
     }
@@ -1908,13 +1950,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         id: LambdaParamId,
         owner: Option<Idx<Key>>,
     ) -> Var {
-        if let Some(var) = self.get_lambda_param_var(id) {
+        if let Some(var) = self.get_active_lambda_param_var(id) {
+            return var;
+        }
+        if let Some(var) = self.get_completed_lambda_param_var(id) {
             return var;
         }
         if let Some(owner_idx) = owner {
             let _ = self.get_idx(owner_idx);
         }
-        self.get_or_create_lambda_param_var(id)
+        self.get_active_lambda_param_var(id)
+            .or_else(|| self.get_completed_lambda_param_var(id))
+            .unwrap_or_else(|| self.get_or_create_active_lambda_param_var(id))
     }
 
     pub fn stack(&self) -> &CalcStack {
