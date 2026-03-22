@@ -635,7 +635,6 @@ struct LspProgressSubscriber<'a> {
 struct LspProgressState {
     started: u64,
     finished: u64,
-    began: bool,
     ended: bool,
     last_report: Instant,
     last_percentage: u32,
@@ -668,19 +667,25 @@ impl<'a> LspProgressSubscriber<'a> {
         server.send_request::<WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
             token: token.clone(),
         });
-        Some(Self {
+        let me = Self {
             server,
             token,
             title,
             state: Mutex::new(LspProgressState {
                 started: 0,
                 finished: 0,
-                began: false,
                 ended: false,
                 last_report: Instant::now(),
                 last_percentage: 0,
             }),
-        })
+        };
+        me.send_progress(WorkDoneProgress::Begin(WorkDoneProgressBegin {
+            title: me.title.to_owned(),
+            cancellable: None,
+            message: Some("0/0".to_owned()),
+            percentage: Some(0),
+        }));
+        Some(me)
     }
 
     fn send_progress(&self, value: WorkDoneProgress) {
@@ -701,37 +706,20 @@ impl<'a> LspProgressSubscriber<'a> {
                 return;
             }
             update(&mut state);
-            if state.started == 0 {
-                return;
-            }
-            let send_begin = !state.began;
-            if send_begin {
-                state.began = true;
-            }
-            let should_report =
-                send_begin || now.duration_since(state.last_report) >= PROGRESS_REPORT_INTERVAL;
+            let should_report = now.duration_since(state.last_report) >= PROGRESS_REPORT_INTERVAL;
             if !should_report {
                 return;
             }
             state.last_report = now;
             let (message, percentage) = state.snapshot();
-            Some((send_begin, message, percentage))
+            Some((message, percentage))
         };
-        if let Some((send_begin, message, percentage)) = outcome {
-            if send_begin {
-                self.send_progress(WorkDoneProgress::Begin(WorkDoneProgressBegin {
-                    title: self.title.to_owned(),
-                    cancellable: None,
-                    message: Some(message),
-                    percentage: Some(percentage),
-                }));
-            } else {
-                self.send_progress(WorkDoneProgress::Report(WorkDoneProgressReport {
-                    cancellable: None,
-                    message: Some(message),
-                    percentage: Some(percentage),
-                }));
-            }
+        if let Some((message, percentage)) = outcome {
+            self.send_progress(WorkDoneProgress::Report(WorkDoneProgressReport {
+                cancellable: None,
+                message: Some(message),
+                percentage: Some(percentage),
+            }));
         }
     }
 }
@@ -750,7 +738,7 @@ impl Drop for LspProgressSubscriber<'_> {
     fn drop(&mut self) {
         let message = {
             let mut state = self.state.lock();
-            if state.ended || !state.began {
+            if state.ended {
                 return;
             }
             state.ended = true;
