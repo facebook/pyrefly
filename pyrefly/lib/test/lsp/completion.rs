@@ -1462,6 +1462,37 @@ Completion Results:
 }
 
 #[test]
+fn completion_match_class_keyword_dataclass() {
+    let code = r#"
+from dataclasses import dataclass
+
+@dataclass
+class A:
+    a: int
+    b: int
+
+x = object()
+match x:
+    case A(  ): ...
+#           ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
+    let completion_labels: Vec<_> = completions.iter().map(|c| c.label.as_str()).collect();
+
+    for expected in ["a=", "b="] {
+        assert!(
+            completion_labels.contains(&expected),
+            "missing {expected} in completions: {:?}",
+            completion_labels
+        );
+    }
+}
+
+#[test]
 fn completion_literal_union_alias() {
     let code = r#"
 from typing import Literal, Union
