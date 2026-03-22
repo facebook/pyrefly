@@ -777,7 +777,8 @@ fn definition_relative_import_outside_search_path() {
         .client
         .hover(init_file, 0, 21)
         .expect_hover_response_with_markup(|value| {
-            value.is_some_and(|text| text.contains("(class) MyClass: type[MyClass]"))
+            value
+                .is_some_and(|text| text.contains("(class) MyClass: def MyClass() -> MyClass: ..."))
         })
         .unwrap();
 
