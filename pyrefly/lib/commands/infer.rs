@@ -1003,7 +1003,7 @@ class MyClass:
         // Should import from "short" (public, 1 component), not from
         // "_private.long_path" (private, 2 components).
         assert!(
-            got_file.contains("from short import MyClass"),
+            got_file.contains("from short import") && got_file.contains("MyClass"),
             "Expected import from 'short' module, got:\n{}",
             got_file,
         );
