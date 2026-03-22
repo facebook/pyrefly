@@ -353,6 +353,46 @@ fn expand_callable_kwargs_for_hover<'a>(
     }
 }
 
+fn class_constructor_display(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+    kind: Option<SymbolKind>,
+    type_: &Type,
+    name: Option<&str>,
+) -> Option<String> {
+    if kind != Some(SymbolKind::Class)
+        || transaction
+            .identifier_at(handle, position)
+            .is_some_and(|id| matches!(id.context, IdentifierContext::ClassDef { .. }))
+    {
+        return None;
+    }
+    transaction.ad_hoc_solve(handle, "hover_class_constructor_display", {
+        let ty = type_.clone();
+        let fallback_name = name.map(str::to_owned);
+        move |solver| {
+            let mut constructor = match ty {
+                Type::ClassDef(ref cls) => solver.type_order().constructor_to_callable(
+                    &solver.promote_nontypeddict_silently_to_classtype(cls),
+                ),
+                Type::Type(box Type::ClassType(ref cls)) => {
+                    solver.type_order().constructor_to_callable(cls)
+                }
+                _ => return None,
+            };
+            constructor
+                .transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(&solver, c));
+            Some(
+                constructor.as_lsp_string_with_fallback_name(
+                    fallback_name.as_deref(),
+                    LspDisplayMode::Hover,
+                ),
+            )
+        }
+    })?
+}
+
 fn parameter_documentation_for_callee(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -582,15 +622,26 @@ pub fn get_hover(
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
     let name_for_display = name.clone();
-    let type_display = transaction.ad_hoc_solve(handle, "hover_display", {
-        let mut cloned = type_.clone();
-        move |solver| {
-            cloned.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(&solver, c));
-            cloned.as_lsp_string_with_fallback_name(
-                name_for_display.as_deref(),
-                LspDisplayMode::Hover,
-            )
-        }
+    let type_display = class_constructor_display(
+        transaction,
+        handle,
+        position,
+        kind,
+        &type_,
+        name_for_display.as_deref(),
+    )
+    .or_else(|| {
+        transaction.ad_hoc_solve(handle, "hover_display", {
+            let mut cloned = type_.clone();
+            move |solver| {
+                cloned
+                    .transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(&solver, c));
+                cloned.as_lsp_string_with_fallback_name(
+                    name_for_display.as_deref(),
+                    LspDisplayMode::Hover,
+                )
+            }
+        })
     });
 
     let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {

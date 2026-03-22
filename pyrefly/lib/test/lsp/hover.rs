@@ -905,6 +905,35 @@ from lib import bar as baz
 }
 
 #[test]
+fn hover_on_imported_class_shows_constructor_signature_and_docstring() {
+    let lib = r#"
+class Person:
+    """Test docstring"""
+    def __init__(self, name: str, age: int) -> None: ...
+"#;
+    let code = r#"
+from lib import Person
+#                ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert!(
+        report.contains("def __init__(")
+            && report.contains("name: str")
+            && report.contains("age: int"),
+        "Expected imported class hover to show constructor signature, got: {report}"
+    );
+    assert!(
+        report.contains("-> Person"),
+        "Expected imported class hover to show constructor return type, got: {report}"
+    );
+    assert!(
+        report.contains("Test docstring"),
+        "Expected imported class hover to show class docstring, got: {report}"
+    );
+}
+
+#[test]
 fn hover_on_first_component_of_multi_part_import() {
     let mymod_init = r#"# mymod/__init__.py
 def version() -> str: ...
