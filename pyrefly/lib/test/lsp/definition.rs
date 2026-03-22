@@ -100,6 +100,28 @@ client.get("/users")
 }
 
 #[test]
+fn endpoint_definition_ignores_non_http_get_calls() {
+    let code = r#"
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/users")
+def list_users():
+    return {"ok": True}
+
+data = {}
+data.get("/users")
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Definition Result: None"),
+        "expected no endpoint definition for dict.get(), got:\n{report}"
+    );
+}
+
+#[test]
 fn ignored_test() {
     let code = r#"
 x = 1 # go-to-definition is unsupported for literals
