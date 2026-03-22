@@ -2166,7 +2166,7 @@ impl<'a> Transaction<'a> {
             }
             None => {
                 if let Some(res) = self.find_definition_for_endpoint_literal(handle, position) {
-                    return res;
+                    return Ok(res);
                 }
                 // Check if this is a None literal, if so, resolve to NoneType class
                 if covering_nodes
