@@ -521,6 +521,36 @@ def wrap(f: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
 );
 
 testcase!(
+    test_paramspec_forwarding_between_generic_helpers,
+    r#"
+from typing import Callable, ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def run_and_get_code(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def run_and_get_kernels(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    return run_and_get_code(fn, *args, **kwargs)
+"#,
+);
+
+testcase!(
+    test_paramspec_forwarding_extra_concrete_arg,
+    r#"
+from typing import Callable, ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def inner(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def outer(fn: Callable[P, R], extra: int, *args: P.args, **kwargs: P.kwargs) -> R:
+    return inner(fn, *args, **kwargs)
+"#,
+);
+
+testcase!(
     test_param_spec_ellipsis,
     r#"
 from typing import Callable
