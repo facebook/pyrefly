@@ -234,12 +234,14 @@ impl<'a> TypeDisplayContext<'a> {
     }
 
     pub(crate) fn fmt_targs(&self, targs: &TArgs, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if !targs.is_empty() {
+        let display_count = targs.display_count();
+        if display_count > 0 {
             write!(
                 f,
                 "[{}]",
                 commas_iter(|| targs
                     .iter_paired()
+                    .take(display_count)
                     .map(|(param, arg)| Fmt(|f| self.fmt_targ(param, arg, f))))
             )
         } else {
@@ -417,6 +419,10 @@ impl<'a> TypeDisplayContext<'a> {
                 }
             },
             Type::Tensor(tensor) => output.write_str(&format!("{}", tensor)),
+            Type::NNModule(module) => {
+                // Display as the class name (e.g., MaxPool2d)
+                self.fmt_helper_generic(&Type::ClassType(module.class.clone()), false, output)
+            }
             Type::Size(dim) => {
                 // Display dimension value directly without Literal wrapper
                 output.write_str(&format!("{}", dim))
@@ -871,6 +877,16 @@ impl<'a> TypeDisplayContext<'a> {
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
+            Type::Annotated(ty) => {
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("Annotated");
+                output.write_builtin("Annotated", qname)?;
+                output.write_str("[")?;
+                self.fmt_helper_generic(ty, false, output)?;
+                output.write_str("]")
+            }
             Type::Unpack(box ty @ Type::TypedDict(_)) => {
                 if self.always_display_module_name {
                     output.write_str("typing.")?;
@@ -1149,7 +1165,6 @@ pub mod tests {
             NestingContext::toplevel(),
             mi,
             None,
-            SmallMap::new(),
         )
     }
 

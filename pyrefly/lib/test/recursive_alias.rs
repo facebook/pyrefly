@@ -86,13 +86,16 @@ def f(x: X) -> Y:
 );
 
 testcase!(
-    bug = "C.X attribute ref not intercepted at binding time",
+    bug =
+        "Iterative fixpoint reports non-convergent-recursion for recursive class attribute aliases",
     test_class_attr,
     r#"
 class C:
-    type X = int | list[C.X]
+    # We get a fixpoint iteration error here because, when we can't resolve the type alias pointers at binding
+    # time, we wind up with the recursive structure growing in a fixpoint.
+    type X = int | list[C.X]  # E: Fixpoint iteration did not converge. Inferred type `TypeAlias[X, type[int | list[X]]]`. Adding annotations may help.
 x1: C.X = [[1]]
-x2: C.X = [["oops"]]
+x2: C.X = [["oops"]]  # E: `list[list[str]]` is not assignable to `int | list[X]`
     "#,
 );
 
@@ -237,12 +240,11 @@ def f(x: X[str]) -> X[int]:
 );
 
 testcase!(
-    bug = "We should report the bound violation in `C[R]`",
     test_check_class_tparam_bound,
     r#"
 class A: pass
 class C[T: A]: pass
-type R = int | C[R]
+type R = int | C[R]  # E: `R` is not assignable to upper bound `A` of type variable `T`
     "#,
 );
 

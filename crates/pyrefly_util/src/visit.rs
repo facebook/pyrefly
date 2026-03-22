@@ -66,8 +66,12 @@ pub trait Visit<To = Self>: Sized {
     /// Is `recurse` a no-op.
     const RECURSE_CONTAINS: bool = true;
 
+    /// Whether `To` and `Self` are the same type, evaluated at compile time.
+    /// Used to avoid expensive runtime string comparison in `visit`/`visit_mut`.
+    const TYPE_EQ: bool = type_eq::<To, Self>();
+
     /// Is `visit` a no-op.
-    const VISIT_CONTAINS: bool = Self::RECURSE_CONTAINS || type_eq::<To, Self>();
+    const VISIT_CONTAINS: bool = Self::RECURSE_CONTAINS || Self::TYPE_EQ;
 
     /// Should call the function on all the `To` children of `Self`.
     ///
@@ -76,8 +80,8 @@ pub trait Visit<To = Self>: Sized {
 
     /// Like `visit`, but if `To == Self` then calls the function directly.
     fn visit<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
-        if type_eq::<To, Self>() {
-            // SAFETY: type_eq verifies To and Self are the same type by type_name comparison.
+        if Self::TYPE_EQ {
+            // SAFETY: TYPE_EQ verifies To and Self are the same type by type_name comparison.
             let to: &'a To = unsafe { &*(self as *const Self as *const To) };
             f(to);
         } else if Self::RECURSE_CONTAINS {
@@ -89,7 +93,11 @@ pub trait Visit<To = Self>: Sized {
 /// Like `Visit`, but mutably.
 pub trait VisitMut<To = Self>: Sized {
     const RECURSE_CONTAINS: bool = true;
-    const VISIT_CONTAINS: bool = Self::RECURSE_CONTAINS || type_eq::<To, Self>();
+
+    /// Whether `To` and `Self` are the same type, evaluated at compile time.
+    const TYPE_EQ: bool = type_eq::<To, Self>();
+
+    const VISIT_CONTAINS: bool = Self::RECURSE_CONTAINS || Self::TYPE_EQ;
 
     /// In contrast to `visit`, we don't have a guarantee that the results will be in
     /// the original structure. This decision is pragmatic - it's rare to mutate _and_
@@ -99,8 +107,8 @@ pub trait VisitMut<To = Self>: Sized {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To));
 
     fn visit_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
-        if type_eq::<To, Self>() {
-            // SAFETY: type_eq verifies To and Self are the same type by type_name comparison.
+        if Self::TYPE_EQ {
+            // SAFETY: TYPE_EQ verifies To and Self are the same type by type_name comparison.
             let to: &mut To = unsafe { &mut *(self as *mut Self as *mut To) };
             f(to);
         } else {

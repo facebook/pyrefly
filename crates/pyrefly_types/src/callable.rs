@@ -33,6 +33,7 @@ use vec1::vec1;
 
 use crate::class::Class;
 use crate::class::ClassType;
+use crate::display::TypeDisplayContext;
 use crate::equality::TypeEq;
 use crate::keywords::DataclassTransformMetadata;
 use crate::type_output::TypeOutput;
@@ -91,6 +92,7 @@ impl ArgCount {
 pub struct ArgCounts {
     pub positional: ArgCount,
     pub keyword: ArgCount,
+    pub overall: ArgCount,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -244,24 +246,30 @@ impl Params {
                 let mut counts = ArgCounts {
                     positional: ArgCount::none_allowed(),
                     keyword: ArgCount::none_allowed(),
+                    overall: ArgCount::none_allowed(),
                 };
                 for param in params.items() {
                     match param {
                         Param::PosOnly(_, _, req) => {
                             counts.positional.add_arg(req);
+                            counts.overall.add_arg(req);
                         }
-                        Param::Pos(..) => {
+                        Param::Pos(_, _, req) => {
                             counts.positional.add_arg(&Required::Optional(None));
                             counts.keyword.add_arg(&Required::Optional(None));
+                            counts.overall.add_arg(req);
                         }
                         Param::KwOnly(_, _, req) => {
                             counts.keyword.add_arg(req);
+                            counts.overall.add_arg(req);
                         }
                         Param::VarArg(..) => {
                             counts.positional.max = None;
+                            counts.overall.max = None;
                         }
                         Param::Kwargs(..) => {
                             counts.keyword.max = None;
+                            counts.overall.max = None;
                         }
                     }
                 }
@@ -270,6 +278,7 @@ impl Params {
             Self::Ellipsis | Self::Materialization => ArgCounts {
                 positional: ArgCount::any_allowed(),
                 keyword: ArgCount::any_allowed(),
+                overall: ArgCount::any_allowed(),
             },
             Self::ParamSpec(prefix, _) => ArgCounts {
                 positional: ArgCount {
@@ -277,6 +286,10 @@ impl Params {
                     max: None,
                 },
                 keyword: ArgCount::any_allowed(),
+                overall: ArgCount {
+                    min: prefix.len(),
+                    max: None,
+                },
             },
         }
     }
@@ -397,6 +410,15 @@ pub struct FuncFlags {
     /// `dataclass_transform` call. See
     /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
     pub dataclass_transform_metadata: Option<DataclassTransformMetadata>,
+}
+
+impl FuncFlags {
+    /// Whether the function lacks a runtime implementation and is not defined in a stub file.
+    /// This indicates a method that cannot actually be called at runtime (e.g. an abstract
+    /// method or protocol method with a `...` or `pass` body in a `.py` file).
+    pub fn lacks_runtime_implementation(&self) -> bool {
+        self.lacks_implementation && !self.defined_in_stub_file
+    }
 }
 
 /// The index of a function definition (`def ..():` statement) within the module,
@@ -831,7 +853,7 @@ impl Param {
     ///
     /// This is similar to the `Display` impl, but allows passing in a `TypeDisplayContext`
     /// for context-aware formatting (e.g., disambiguating types with the same name).
-    pub fn format_for_signature(&self, type_ctx: &crate::display::TypeDisplayContext) -> String {
+    pub fn format_for_signature(&self, type_ctx: &TypeDisplayContext) -> String {
         use pyrefly_util::display::Fmt;
 
         use crate::type_output::DisplayOutput;

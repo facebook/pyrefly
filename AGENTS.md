@@ -55,9 +55,9 @@ Coding style: All code must be clean, documented and minimal. That means:
   complicated work at all.
 - If some code looks heavyweight, perhaps with lots of conditionals, then think
   harder for a more elegant way of achieving it.
-- Code should have comments, and functions should have docstrings. The best
+- Code should have comments and functions should have docstrings. The best
   comments are ones that introduce invariants, or prove that invariants are
-  being upheld, or indicate which invariants the code relies upon.
+  being upheld, or indicate which invariants the code relies upon. Don't duplicate comments, or write unnecessary comments for code that is obvious.
 - **Unreachable states must panic, not silently degrade.** Do not use defensive
   programming to handle states that should be impossible. If a match arm, Option,
   or Result should never occur given the surrounding invariants, use
@@ -115,6 +115,11 @@ The internal (Meta) checkout always uses Sapling. The GitHub checkout uses Git.
 - **With buck (internal):** `buck test pyrefly:pyrefly_library -- <name of test>`
   (from within the project folder)
 - **With cargo (external):** `cargo test <name of test>`
+
+Note: The heavyweight `lsp_interaction` tests live in a separate
+`rust_unittest` target for faster iteration. Run them with
+`buck test pyrefly:pyrefly_lsp_interaction_tests -- <name of test>`.
+Running `buck test pyrefly:pyrefly` triggers both test targets.
 
 ### Running the full test suite
 

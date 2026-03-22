@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use pyrefly_graph::calculation::Calculation;
 use pyrefly_python::docstring::Docstring;
+use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
@@ -119,7 +120,7 @@ impl Display for Exports {
 }
 
 impl Exports {
-    pub fn new(x: &[Stmt], module_info: &ModuleInfo, sys_info: &SysInfo) -> Self {
+    pub fn new(x: &[Stmt], module_info: &ModuleInfo, sys_info: SysInfo) -> Self {
         let mut definitions = Definitions::new(
             x,
             module_info.name(),
@@ -292,6 +293,10 @@ impl Exports {
     ) -> Vec<(TextRange, Name)> {
         // Only validate if __all__ was explicitly defined and resolvable
         if self.definitions.dunder_all.kind != DunderAllKind::Specified {
+            return Vec::new();
+        }
+        // If the module defines __getattr__, any name could be dynamically provided
+        if self.definitions.definitions.contains_key(&dunder::GETATTR) {
             return Vec::new();
         }
         let mut invalid = Vec::new();
@@ -483,7 +488,7 @@ mod tests {
             path,
             Arc::new(contents.to_owned()),
         );
-        Arc::new(Exports::new(&ast.body, &module_info, &SysInfo::default()))
+        Arc::new(Exports::new(&ast.body, &module_info, SysInfo::default()))
     }
 
     fn eq_wildcards(exports: &Exports, lookup: &dyn LookupExport, all: &[&str]) {

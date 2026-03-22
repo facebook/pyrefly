@@ -111,6 +111,42 @@ def _linkify_files_in_text(text: str) -> str:
     return result
 
 
+def _format_reason(reason: str) -> str:
+    """Format a reason string for display, handling raw JSON dicts.
+
+    When the LLM returns a JSON dict as the reason (with fields like
+    spec_check, runtime_behavior, etc.), format it into readable text
+    instead of dumping raw JSON.
+    """
+    if not reason or not reason.strip().startswith("{"):
+        return reason
+    try:
+        parsed = json.loads(reason)
+        if not isinstance(parsed, dict):
+            return reason
+    except (json.JSONDecodeError, ValueError):
+        return reason
+
+    # Format known analysis fields into readable text
+    _FIELD_LABELS = {
+        "spec_check": "Spec check",
+        "runtime_behavior": "Runtime behavior",
+        "mypy_pyright": "Mypy/pyright comparison",
+        "removal_assessment": "Removal assessment",
+        "pr_attribution": "PR attribution",
+        "reason": "Reasoning",
+    }
+    parts = []
+    for key, label in _FIELD_LABELS.items():
+        val = parsed.get(key)
+        if val and val != "N/A":
+            parts.append(f"**{label}:** {val}")
+    # Fall back to the "reason" field if nothing else was formatted
+    if not parts:
+        return parsed.get("reason", reason)
+    return "\n> ".join(parts)
+
+
 def _extract_root_cause(c) -> str:
     """Extract a linkified root cause string from a classification's pr_attribution.
 
@@ -233,7 +269,17 @@ def format_markdown(result: ClassificationResult) -> str:
         parts.append(f"{_VERDICT_EMOJI['neutral']} {result.neutrals} neutral")
     if result.ambiguous:
         parts.append(f"{_VERDICT_EMOJI['ambiguous']} {result.ambiguous} needs review")
-    lines.append(" | ".join(parts) + f" | {result.total_projects} project(s) total\n")
+
+    # Total error delta across all projects
+    total_added = sum(c.added_count for c in result.classifications)
+    total_removed = sum(c.removed_count for c in result.classifications)
+    delta_str = _format_change_counts(total_added, total_removed)
+
+    lines.append(
+        " | ".join(parts)
+        + f" | {result.total_projects} project(s) total"
+        + f" | **{delta_str} errors**\n"
+    )
 
     # High-level summary: aggregate the common patterns across projects
     lines.append(_build_high_level_summary(result))
@@ -282,7 +328,7 @@ def format_markdown(result: ClassificationResult) -> str:
                     )
                 lines.append("")
             else:
-                lines.append(f"> {c.reason}")
+                lines.append(f"> {_format_reason(c.reason)}")
                 if c.pr_attribution and c.pr_attribution != "N/A":
                     lines.append(
                         f"> **Attribution:** "
@@ -292,9 +338,10 @@ def format_markdown(result: ClassificationResult) -> str:
 
     lines.append("</details>\n")
 
-    # Suggested Fixes (Pass 3)
+    # Suggested Fixes (Pass 3) — collapsed by default
     if result.suggestion and result.suggestion.suggestions:
-        lines.append("### Suggested Fix\n")
+        lines.append("<details>")
+        lines.append("<summary>Suggested fixes</summary>\n")
         lines.append(f"**Summary:** {result.suggestion.summary}\n")
         for i, s in enumerate(result.suggestion.suggestions, 1):
             lines.append(f"**{i}. {_linkify_files_in_text(s.description)}**")
@@ -311,6 +358,7 @@ def format_markdown(result: ClassificationResult) -> str:
                 lines.append(f"> Fixes: {kinds_str}")
             lines.append(f"> {_linkify_files_in_text(s.reasoning)}")
             lines.append("")
+        lines.append("</details>\n")
 
     # Footer
     lines.append("---")
@@ -347,6 +395,8 @@ def _method_summary(result: ClassificationResult) -> str:
 
 def format_json(result: ClassificationResult) -> str:
     """Render classification results as JSON."""
+    total_added = sum(c.added_count for c in result.classifications)
+    total_removed = sum(c.removed_count for c in result.classifications)
     data = {
         "summary": {
             "total_projects": result.total_projects,
@@ -354,6 +404,8 @@ def format_json(result: ClassificationResult) -> str:
             "improvements": result.improvements,
             "neutrals": result.neutrals,
             "ambiguous": result.ambiguous,
+            "total_added": total_added,
+            "total_removed": total_removed,
         },
         "classifications": [
             {

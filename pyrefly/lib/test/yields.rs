@@ -121,11 +121,11 @@ def bar() -> Generator[Y, S2, None]:
     assert_type(r, R)
 
 def baz() -> Generator[Y2, S2, None]:
-    s = yield from bar() # E: Cannot yield from `Generator[Y, S2, None]`, which is not assignable to declared return type `Generator[Y2, S2, Unknown]`
+    s = yield from bar() # E: Cannot yield from `Generator[Y, S2]`, which is not assignable to declared return type `Generator[Y2, S2, Unknown]`
     assert_type(s, None)
 
 def qux() -> Generator[Y, S, None]:
-    s = yield from bar() # E: Cannot yield from `Generator[Y, S2, None]`, which is not assignable to declared return type `Generator[Y, S, Unknown]`
+    s = yield from bar() # E: Cannot yield from `Generator[Y, S2]`, which is not assignable to declared return type `Generator[Y, S, Unknown]`
     assert_type(s, None)
 "#,
 );
@@ -405,8 +405,60 @@ async def test() -> None:
         assert_type(x, int)
     async for y in [1, 2, 3]:  # E: Type `list[int]` is not an async iterable
         pass
-    for z in gen():  # E: Type `AsyncGenerator[int, None]` is not iterable
+    for z in gen():  # E: Type `AsyncGenerator[int]` is not iterable
         pass
+"#,
+);
+
+testcase!(
+    test_async_generator_yield_in_if_false,
+    r#"
+from collections.abc import AsyncGenerator
+from typing import assert_type
+
+class BaseBlock:
+    async def run(self, data: dict[str, str]) -> AsyncGenerator[tuple[str, str], None]:
+        if False:
+            yield ("name", "value")
+        raise NotImplementedError
+
+    async def run_once(self, data: dict[str, str]) -> str:
+        async for name, value in self.run(data):
+            if name == "output":
+                return value
+        raise ValueError("No output produced")
+
+assert_type(BaseBlock().run({}), AsyncGenerator[tuple[str, str], None])
+"#,
+);
+
+testcase!(
+    test_sync_generator_yield_in_if_false,
+    r#"
+from typing import Generator, assert_type
+
+def gen() -> Generator[int, None, None]:
+    if False:
+        yield 1
+    raise NotImplementedError
+
+assert_type(gen(), Generator[int, None, None])
+for x in gen():
+    assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_async_generator_yield_in_if_false_simple,
+    r#"
+from typing import AsyncGenerator, assert_type
+
+async def gen() -> AsyncGenerator[int, None]:
+    if False:
+        yield 1
+    raise NotImplementedError
+
+assert_type(gen(), AsyncGenerator[int, None])
 "#,
 );
 
@@ -547,4 +599,15 @@ def f(start, iterable: Iterable[_T], step) ->  Iterator[_T]:
             next_i += step
 
     "#,
+);
+
+testcase!(
+    test_yield_union_of_iterators,
+    r#"
+from collections.abc import Iterator
+def f() -> Iterator[str] | Iterator[int]: ...
+
+def g():
+  yield from f()
+"#,
 );

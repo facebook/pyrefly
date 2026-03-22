@@ -6,12 +6,12 @@
  */
 
 use lsp_types::Url;
+use pyrefly::commands::lsp::IndexingMode;
 use serde_json::json;
 
-use crate::commands::lsp::IndexingMode;
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_references_for_usage_with_config() {

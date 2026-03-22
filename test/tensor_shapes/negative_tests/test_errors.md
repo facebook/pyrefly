@@ -103,13 +103,13 @@ ERROR Returned type `Tensor[(M * N)]` is not assignable to declared return type 
    |            ^
    |
   Size mismatch: expected K, got (M * N)
- INFO revealed type: Dim[@_] [reveal-type]
+ INFO revealed type: Dim [reveal-type]
   --> *test_check_symbolic_binding.py:64:16 (glob)
    |
 64 |     reveal_type(n)
    |                ---
    |
- INFO revealed type: Tensor[@_] [reveal-type]
+ INFO revealed type: Tensor[Unknown] [reveal-type]
   --> *test_check_symbolic_binding.py:71:16 (glob)
    |
 71 |     reveal_type(t)
@@ -202,26 +202,26 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_concat_flatten_types.py"
 27 |     reveal_type(x)
    |                ---
    |
- INFO revealed type: Tensor[(5 + 2), 3] [reveal-type]
+ INFO revealed type: Tensor[7, 3] [reveal-type]
   --> *test_concat_flatten_types.py:36:16 (glob)
    |
 36 |     reveal_type(z)  # Expected: Tensor[7, 3], but might be Tensor[N + M, 3]?
    |                ---
    |
-ERROR Returned type `Tensor[(5 + 2), 3]` is not assignable to declared return type `Tensor[100, 3]` [bad-return]
+ERROR Returned type `Tensor[7, 3]` is not assignable to declared return type `Tensor[100, 3]` [bad-return]
   --> *test_concat_flatten_types.py:39:12 (glob)
    |
 39 |     return z  # Should ERROR if z is Tensor[7, 3]
    |            ^
    |
   Size mismatch: expected 100, got 7
- INFO revealed type: Tensor[((2 * 4) * 3)] [reveal-type]
+ INFO revealed type: Tensor[24] [reveal-type]
   --> *test_concat_flatten_types.py:46:16 (glob)
    |
 46 |     reveal_type(y)  # Expected: Tensor[24], but might be Tensor[B * N * M]?
    |                ---
    |
-ERROR Returned type `Tensor[((2 * 4) * 3)]` is not assignable to declared return type `Tensor[999]` [bad-return]
+ERROR Returned type `Tensor[24]` is not assignable to declared return type `Tensor[999]` [bad-return]
   --> *test_concat_flatten_types.py:49:12 (glob)
    |
 49 |     return y  # Should ERROR if y is Tensor[24]
@@ -434,11 +434,11 @@ ERROR Returned type `Tensor[(M + N), 3]` is not assignable to declared return ty
     |            ^
     |
   Size mismatch: expected (M * N), got (M + N)
-ERROR Argument `Tensor[2, 3]` is not assignable to parameter `x` with type `Tensor[4, 3]` in function `tensor_generic_identity` [bad-argument-type]
-   --> *test_tensor_subtyping.py:123:36 (glob)
+ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[4, 3]` [bad-return]
+   --> *test_tensor_subtyping.py:123:12 (glob)
     |
 123 |     return tensor_generic_identity(x)  # ERROR
-    |                                    ^
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
     |
   Size mismatch: expected 4, got 2
 [1]
@@ -449,16 +449,16 @@ ERROR Argument `Tensor[2, 3]` is not assignable to parameter `x` with type `Tens
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_indexing.py"
 ERROR Returned type `Tensor[20]` is not assignable to declared return type `Tensor[10, 20]` [bad-return]
-   --> *test_tensor_indexing.py:256:12 (glob)
+   --> *test_tensor_indexing.py:317:12 (glob)
     |
-256 |     return x[0]  # ERROR: Tensor[20] not assignable to Tensor[10, 20]
+317 |     return x[0]  # ERROR: Tensor[20] not assignable to Tensor[10, 20]
     |            ^^^^
     |
   Tensor rank mismatch: expected 2 dimensions, got 1 dimensions
 ERROR Returned type `Tensor[5, 20]` is not assignable to declared return type `Tensor[3, 20]` [bad-return]
-   --> *test_tensor_indexing.py:261:12 (glob)
+   --> *test_tensor_indexing.py:322:12 (glob)
     |
-261 |     return x[:5]  # ERROR: Tensor[5, 20] not assignable to Tensor[3, 20]
+322 |     return x[:5]  # ERROR: Tensor[5, 20] not assignable to Tensor[3, 20]
     |            ^^^^^
     |
   Size mismatch: expected 3, got 5
@@ -521,21 +521,21 @@ ERROR Cannot broadcast tensor shapes: Cannot broadcast variadic shapes: incompat
 
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_generic_exprs.py"
-ERROR Returned type `Tensor[(3 + 2)]` is not assignable to declared return type `Tensor[6]` [bad-return]
+ERROR Returned type `Tensor[5]` is not assignable to declared return type `Tensor[6]` [bad-return]
    --> *test_tensor_generic_exprs.py:122:12 (glob)
     |
 122 |     return sum_dims(x)  # ERROR
     |            ^^^^^^^^^^^
     |
   Size mismatch: expected 6, got 5
-ERROR Returned type `Tensor[(3 * 2)]` is not assignable to declared return type `Tensor[5]` [bad-return]
+ERROR Returned type `Tensor[6]` is not assignable to declared return type `Tensor[5]` [bad-return]
    --> *test_tensor_generic_exprs.py:127:12 (glob)
     |
 127 |     return product_dims(x)  # ERROR
     |            ^^^^^^^^^^^^^^^
     |
   Size mismatch: expected 5, got 6
-ERROR Returned type `Tensor[(2 * 4), 5]` is not assignable to declared return type `Tensor[4, 5]` [bad-return]
+ERROR Returned type `Tensor[8, 5]` is not assignable to declared return type `Tensor[4, 5]` [bad-return]
    --> *test_tensor_generic_exprs.py:132:12 (glob)
     |
 132 |     return double_first(x)  # ERROR
@@ -577,18 +577,19 @@ ERROR Returned type `Tensor[5, 4]` is not assignable to declared return type `Te
 
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_variadic.py"
-ERROR Argument `Tensor[10, 20]` is not assignable to parameter `x` with type `Tensor[10, 30]` in function `variadic_identity` [bad-argument-type]
-  --> *test_tensor_variadic.py:97:30 (glob)
+ERROR Returned type `Tensor[10, 20]` is not assignable to declared return type `Tensor[10, 30]` [bad-return]
+  --> *test_tensor_variadic.py:97:12 (glob)
    |
 97 |     return variadic_identity(x)
-   |                              ^
+   |            ^^^^^^^^^^^^^^^^^^^^
    |
   Size mismatch: expected 30, got 20
-ERROR Argument `Tensor[1, 2, 3, 4]` is not assignable to parameter `x` with type `Tensor[1, 2, 3]` in function `split_first_rest` [bad-argument-type]
-   --> *test_tensor_variadic.py:104:29 (glob)
+ERROR Returned type `tuple[Tensor[1], Tensor[2, 3, 4]]` is not assignable to declared return type `tuple[Tensor[1], Tensor[2, 3]]` [bad-return]
+   --> *test_tensor_variadic.py:104:12 (glob)
     |
 104 |     return split_first_rest(x)
-    |                             ^
+    |            ^^^^^^^^^^^^^^^^^^^
     |
+  Tensor rank mismatch: expected 2 dimensions, got 3 dimensions
 [1]
 ```

@@ -14,18 +14,18 @@ use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::Initialize;
 use lsp_types::request::Request as _;
 use lsp_types::request::WorkspaceConfiguration;
+use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly::lsp::non_wasm::protocol::Notification;
+use pyrefly::lsp::non_wasm::protocol::Request;
 use pyrefly_util::stdlib::register_stdlib_paths;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::commands::lsp::IndexingMode;
-use crate::lsp::non_wasm::protocol::Message;
-use crate::lsp::non_wasm::protocol::Notification;
-use crate::lsp::non_wasm::protocol::Request;
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::object_model::LspMessageError;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::object_model::LspMessageError;
+use crate::util::get_test_files_root;
 
 fn require_markdown_initialize(interaction: &LspInteraction) {
     let settings = InitializeSettings {
@@ -286,7 +286,6 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
 /// Test opening a file while a recheck for another file is happening.
 /// Start with only b open, then open file d while a recheck for b is happening.
 #[test]
-#[ignore] // TODO: flaky
 fn test_open_file_during_recheck() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");

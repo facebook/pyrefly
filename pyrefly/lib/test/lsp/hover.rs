@@ -1020,7 +1020,7 @@ from mymod.submod.deep import Bar
 }
 
 #[test]
-fn hover_on_constructor_shows_instance_type() {
+fn hover_on_constructor() {
     let code = r#"
 class Person:
     def __init__(self, name: str, age: int) -> None: ...
@@ -1030,8 +1030,9 @@ Person()
 "#;
     let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
     assert!(
-        report
-            .contains("def Person(\n    self: Person,\n    name: str,\n    age: int\n) -> Person"),
+        report.contains(
+            "def __init__(\n    self: Person,\n    name: str,\n    age: int\n) -> Person"
+        ),
         "Expected constructor hover to show complete signature with -> Person, got: {report}"
     );
 }

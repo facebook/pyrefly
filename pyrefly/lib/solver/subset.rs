@@ -41,6 +41,7 @@ use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
 use crate::solver::solver::OpenTypedDictSubsetError;
 use crate::solver::solver::Subset;
+use crate::solver::solver::SubsetCacheEntry;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypedDictSubsetError;
 use crate::types::callable::Function;
@@ -86,6 +87,19 @@ fn has_any_args_and_kwargs(args: &[Param]) -> bool {
         .iter()
         .any(|p| matches!(p, Param::Kwargs(_, Type::Any(_))));
     has_vararg_any && has_kwargs_any
+}
+
+fn params_have_any_args_and_kwargs(params: &Params) -> bool {
+    match params {
+        Params::List(args) => has_any_args_and_kwargs(args.items()),
+        Params::Ellipsis | Params::Materialization => false,
+        Params::ParamSpec(_prefix, pspec) => {
+            matches!(
+                pspec,
+                Type::ParamSpecValue(args) if has_any_args_and_kwargs(args.items())
+            )
+        }
+    }
 }
 
 fn all<T>(
@@ -435,7 +449,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         l_params: &Params,
         u_params: &Params,
     ) -> Result<(), SubsetError> {
-        match (l_params, u_params) {
+        let result = match (l_params, u_params) {
             (Params::Ellipsis, Params::ParamSpec(_, pspec)) => {
                 self.is_subset_eq(&Type::Ellipsis, pspec)
             }
@@ -459,6 +473,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (_, Params::Materialization) => {
                 self.is_subset_params(l_params, &Params::List(ParamList::everything()))
             }
+        };
+        match result {
+            Err(_)
+                if !self.solver.strict_callable_subtyping
+                    && (params_have_any_args_and_kwargs(l_params)
+                        || params_have_any_args_and_kwargs(u_params)) =>
+            {
+                Ok(())
+            }
+            _ => result,
         }
     }
 
@@ -666,7 +690,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 )?;
                 Ok(())
             }
-            _ => Err(SubsetError::Other),
+            // Resolve Vars inside Unbounded tuples and re-dispatch.
+            (Tuple::Unbounded(box Type::Var(v)), Tuple::Concrete(_)) => {
+                let resolved = self.solver.expand_vars(self.solver.expand_unwrap(*v));
+                if matches!(resolved, Type::Var(_)) {
+                    Err(SubsetError::Other)
+                } else {
+                    self.is_subset_tuple(&Tuple::Unbounded(Box::new(resolved)), want)
+                }
+            }
+            (Tuple::Unbounded(_), Tuple::Concrete(_)) => Err(SubsetError::Other),
         }
     }
 
@@ -803,7 +836,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 )));
             }
             // Non-ReadOnly fields are invariant
-            (false, false) => self.is_equal(&got_v.ty, &want_v.ty).map_err(|_| {
+            (false, false) => self.is_consistent(&got_v.ty, &want_v.ty).map_err(|_| {
                 SubsetError::TypedDict(Box::new(TypedDictSubsetError::InvariantFieldMismatch {
                     got: got_name.clone(),
                     got_field_ty: got_v.ty.clone(),
@@ -1111,21 +1144,53 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     /// Implementation of subset equality for Type, other than Var.
+    ///
+    /// For potentially-recursive checks (protocols and recursive type aliases),
+    /// this uses `subset_cache` to both detect cycles (coinductive reasoning) and
+    /// memoize results (preventing exponential blowup). On failure, entries added
+    /// during the failing computation are rolled back by popping the map back to
+    /// the saved size, invalidating intermediate results that may have relied on
+    /// a coinductive assumption that turned out to be false.
     pub fn is_subset_eq_impl(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
-        let recursive_check = if self.can_be_recursive(got, want) {
-            Some((got.clone(), want.clone()))
+        let cache_key = if self.can_be_recursive(got, want) {
+            let key = (got.clone(), want.clone());
+            if let Some(entry) = self.subset_cache.get(&key) {
+                return match entry {
+                    SubsetCacheEntry::InProgress | SubsetCacheEntry::Ok => Ok(()),
+                    SubsetCacheEntry::Err(err) => Err(err.clone()),
+                };
+            }
+            Some(key)
         } else {
             None
         };
-        if let Some(check) = &recursive_check
-            && !self.recursive_assumptions.insert(check.clone())
-        {
-            // Assume recursive checks are true
-            return Ok(());
-        }
+        let cache_size = if let Some(key) = &cache_key {
+            let size = self.subset_cache.len();
+            self.subset_cache
+                .insert(key.clone(), SubsetCacheEntry::InProgress);
+            Some(size)
+        } else {
+            None
+        };
         let res = self.is_subset_eq_no_recursive_check(got, want);
-        if let Some(check) = &recursive_check {
-            self.recursive_assumptions.shift_remove(check);
+        if let Some(key) = cache_key {
+            match &res {
+                Ok(()) => {
+                    self.subset_cache.insert(key, SubsetCacheEntry::Ok);
+                }
+                Err(err) => {
+                    // Roll back entries added during our computation. These entries
+                    // may have depended on a coinductive assumption (our InProgress
+                    // entry being treated as Ok) that this failure invalidates.
+                    // Entries from before our computation are preserved — they are
+                    // independent and not tainted by our failure.
+                    while self.subset_cache.len() > cache_size.unwrap() {
+                        self.subset_cache.pop();
+                    }
+                    self.subset_cache
+                        .insert(key, SubsetCacheEntry::Err(err.clone()));
+                }
+            }
         }
         res
     }
@@ -1135,21 +1200,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         got: &Type,
         want: &Type,
     ) -> Result<(), SubsetError> {
-        if matches!(got, Type::Materialization) {
-            return self.is_subset_eq(
-                &self
-                    .solver
-                    .heap
-                    .mk_class_type(self.type_order.stdlib().object().clone()),
-                want,
-            );
-        } else if matches!(want, Type::Materialization) {
-            return self.is_subset_eq(got, &self.solver.heap.mk_never());
-        }
         match (got, want) {
             (Type::Any(_), _) => {
-                // Special case in Python, because we want `x: int = Any` to be valid,
-                // as Any is more the lack of information, rather than the actual union it is modelled to be.
+                for var in want.collect_maybe_quantified_vars() {
+                    // Variables in `want` now have `Any` as a lower bound.
+                    self.solver
+                        .add_lower_bound(var, got.clone(), &mut |got, want| {
+                            self.is_subset_eq(got, want).is_ok()
+                        });
+                }
                 Ok(())
             }
             (_, Type::Any(_)) => Ok(()),
@@ -1487,9 +1546,23 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 &tensor.base_class.clone().to_type(),
                 &Type::ClassType(cls.clone()),
             ),
-            // Type::Dim is a subtype of int
-            // This allows Dim[N] values to be passed where int parameters are expected
-            (Type::Dim(_), Type::ClassType(cls)) if cls.is_builtin("int") => Ok(()),
+            // NNModule is subtype of its class
+            (Type::NNModule(module), Type::ClassType(cls)) => self.is_subset_eq(
+                &Type::ClassType(module.class.clone()),
+                &Type::ClassType(cls.clone()),
+            ),
+            // NNModule-to-NNModule: delegate to class subtyping
+            (Type::NNModule(got), Type::NNModule(want)) => self.is_subset_eq(
+                &Type::ClassType(got.class.clone()),
+                &Type::ClassType(want.class.clone()),
+            ),
+            // Type::Dim is a subtype of int and float (numeric tower: Dim <: int <: float)
+            // This allows Dim[N] values to be passed where int or float parameters are expected
+            (Type::Dim(_), Type::ClassType(cls))
+                if cls.is_builtin("int") || cls.is_builtin("float") =>
+            {
+                Ok(())
+            }
             (Type::Kwargs(_), _) => {
                 // We know kwargs will always be a dict w/ str keys
                 self.is_subset_eq(
@@ -1596,6 +1669,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.type_order.has_superclass(got, want),
                 SubsetError::Other,
             ),
+            // Annotated[T, ...] is not a class object; it cannot be assigned to type[T].
+            (Type::Annotated(_), Type::Type(_)) => Err(SubsetError::Other),
             // Although the object created by a NewType call behaves like a class for type-checking
             // purposes, it isn't one at runtime, so don't allow it to match `type`.
             (Type::ClassDef(got), Type::Type(_)) if self.type_order.is_new_type(got) => {
@@ -1857,6 +1932,72 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 )
             }
             (_, Type::Forall(forall)) => self.is_subset_eq(got, &forall.body.clone().as_type()),
+            (Type::TypeVar(l), Type::TypeVar(u)) => {
+                // Two raw, unreplaced type variables being compared to each other should not happen
+                // in error-free code. But if we encounter it, we might as well do the right thing.
+                if l == u {
+                    Ok(())
+                } else {
+                    Err(SubsetError::Other)
+                }
+            }
+            (Type::TypeVar(_), _) => {
+                self.is_subset_eq(&self.type_order.stdlib().type_var().clone().to_type(), want)
+            }
+            (_, Type::TypeVar(_)) => {
+                self.is_subset_eq(got, &self.type_order.stdlib().type_var().clone().to_type())
+            }
+            (Type::ParamSpec(l), Type::ParamSpec(u)) => {
+                // Two raw, unreplaced type variables being compared to each other should not happen
+                // in error-free code. But if we encounter it, we might as well do the right thing.
+                if l == u {
+                    Ok(())
+                } else {
+                    Err(SubsetError::Other)
+                }
+            }
+            (Type::ParamSpec(_), _) => self.is_subset_eq(
+                &self.type_order.stdlib().param_spec().clone().to_type(),
+                want,
+            ),
+            (_, Type::ParamSpec(_)) => self.is_subset_eq(
+                got,
+                &self.type_order.stdlib().param_spec().clone().to_type(),
+            ),
+            (Type::TypeVarTuple(l), Type::TypeVarTuple(u)) => {
+                // Two raw, unreplaced type variables being compared to each other should not happen
+                // in error-free code. But if we encounter it, we might as well do the right thing.
+                if l == u {
+                    Ok(())
+                } else {
+                    Err(SubsetError::Other)
+                }
+            }
+            (Type::TypeVarTuple(_), _) => self.is_subset_eq(
+                &self.type_order.stdlib().type_var_tuple().clone().to_type(),
+                want,
+            ),
+            (_, Type::TypeVarTuple(_)) => self.is_subset_eq(
+                got,
+                &self.type_order.stdlib().type_var_tuple().clone().to_type(),
+            ),
+            (Type::QuantifiedValue(l), Type::QuantifiedValue(u)) => {
+                // Two raw, unreplaced type variables being compared to each other should not happen
+                // in error-free code. But if we encounter it, we might as well do the right thing.
+                if l == u {
+                    Ok(())
+                } else {
+                    Err(SubsetError::Other)
+                }
+            }
+            (Type::QuantifiedValue(q), _) => self.is_subset_eq(
+                &q.class_type(self.type_order.stdlib()).clone().to_type(),
+                want,
+            ),
+            (_, Type::QuantifiedValue(q)) => self.is_subset_eq(
+                got,
+                &q.class_type(self.type_order.stdlib()).clone().to_type(),
+            ),
             _ => Err(SubsetError::Other),
         }
     }
@@ -1890,7 +2031,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
         for (got_arg, want_arg, param) in izip!(got, want, params.iter()) {
             if param.kind() == QuantifiedKind::TypeVarTuple {
-                self.is_equal(got_arg, want_arg)?;
+                self.is_consistent(got_arg, want_arg)?;
             } else {
                 match variances.get(param.name()) {
                     Variance::Covariant => self.is_subset_eq(got_arg, want_arg)?,
@@ -1899,7 +2040,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     // subset check. However, this leads to confusing and unintuitive behavior,
                     // so we treat bivariant type parameters as invariant instead.
                     Variance::Invariant | Variance::Bivariant => {
-                        self.is_equal(got_arg, want_arg)?
+                        self.is_consistent(got_arg, want_arg)?
                     }
                 }
             }

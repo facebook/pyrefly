@@ -6,14 +6,12 @@
 
 """LLM client for classifying primer diff entries.
 
-Supports two backends:
-1. Meta's Llama API (native format at api.llama.com)
-   - Set LLAMA_API_KEY to your Llama API key
-2. Anthropic Claude API
-   - Set CLASSIFIER_API_KEY or ANTHROPIC_API_KEY
+Classification-specific logic: system prompts, response parsing with
+strict key validation, and the classify / verdict / suggestion passes.
 
-Llama API is preferred when LLAMA_API_KEY is set. Falls back to Anthropic.
-No pip dependencies — uses only urllib.
+Low-level API transport (backend detection, HTTP calls, retries) lives in
+``llm_transport`` so that both primer_classifier and issue_ranker can
+share it without depending on each other's internals.
 """
 
 from __future__ import annotations
@@ -22,25 +20,20 @@ import json
 import os
 import re
 import sys
-import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .ssl_utils import get_ssl_context
-
-MAX_RETRIES = 4
-RETRY_BASE_DELAY = 2.0  # seconds, doubles each retry
-
-# Llama API (native format)
-LLAMA_API_URL = "https://api.llama.com/v1/chat/completions"
-LLAMA_DEFAULT_MODEL = "Llama-4-Maverick-17B-128E-Instruct-FP8"
-
-# Anthropic API
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514"
-ANTHROPIC_API_VERSION = "2023-06-01"
+# Import shared LLM transport layer.  We keep the old private names so
+# that primer_classifier/test_classifier.py (which patches and imports
+# them by name) continues to work without changes.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from llm_transport import (
+    LLMError,
+    get_backend as _get_backend,
+    call_llama_api as _call_llama_api,
+    call_anthropic_api as _call_anthropic_api,
+    extract_text as _extract_text_from_response,
+)
 
 
 @dataclass
@@ -64,30 +57,6 @@ class LLMResponse:
     )  # file paths the LLM wants to see
     pr_attribution: str = ""  # which part of the PR diff caused the change
     raw_response: Optional[dict] = None
-
-
-class LLMError(Exception):
-    """Raised when the LLM API call fails."""
-
-    pass
-
-
-def _get_backend() -> tuple[str, str]:
-    """Determine which backend to use and return (backend_name, api_key).
-
-    Priority: LLAMA_API_KEY > CLASSIFIER_API_KEY > ANTHROPIC_API_KEY
-    """
-    llama_key = os.environ.get("LLAMA_API_KEY")
-    if llama_key:
-        return "llama", llama_key
-
-    anthropic_key = os.environ.get("CLASSIFIER_API_KEY") or os.environ.get(
-        "ANTHROPIC_API_KEY"
-    )
-    if anthropic_key:
-        return "anthropic", anthropic_key
-
-    return "none", ""
 
 
 def _build_system_prompt() -> str:
@@ -168,7 +137,11 @@ Your explanations will be read by experienced engineers reviewing PRs. Factual e
 
 You MUST cite the relevant typing spec section with a link (https://typing.readthedocs.io/en/latest/spec/...) when your verdict depends on type system rules. BEFORE applying a type system rule, verify from the spec that the rule applies in this specific context — check all preconditions and scope limitations of the rule.
 
-CRITICAL — MYPY/PYRIGHT CROSS-CHECK: Before classifying a new error as "improvement", ask yourself: would mypy and pyright also flag this exact pattern? If they would NOT — if pyrefly is enforcing a rule more strictly than the ecosystem standard — then the error is a REGRESSION regardless of whether the code has a theoretical type issue. Pyrefly being stricter than established tools creates false positive noise. Use your training data knowledge of mypy/pyright behavior to make this determination.
+CRITICAL — MYPY/PYRIGHT CROSS-CHECK: Each error is annotated with whether mypy and pyright also flag the same file:line (matched semantically — same issue, possibly different line/wording). Use these as one signal among many — they inform but do not override your code analysis.
+- Errors marked [pyrefly-only]: Neither mypy nor pyright flag these. This suggests pyrefly may be too strict or has an inference bug, BUT pyrefly could also be correctly catching something others miss. Analyze the actual error to decide.
+- Errors marked [mypy: yes] and/or [pyright: yes]: Co-reported by other checkers. This is strong evidence the error is a real bug in the user's code, not a pyrefly false positive. Do NOT classify co-reported errors as false positives unless you have specific evidence that all three checkers are wrong.
+- IMPORTANT: Cross-check annotations apply to individual errors, NOT the overall project verdict. The net impact matters most: if a project removes 138 errors and adds 14 (even if pyrefly-only), that is a net improvement — the project has 124 fewer false positives. Do NOT let a few pyrefly-only additions override a large net reduction in errors.
+- If no cross-check annotations are present, fall back to your training data knowledge of mypy/pyright behavior.
 
 INTENTIONAL REGRESSIONS vs SPEC COMPLIANCE: Sometimes a PR intentionally introduces stricter behavior to comply with the typing spec. When the PR description states conformance intent AND cites a specific spec section:
 - If the spec clearly supports the new check, classify as "improvement" — the projects producing new errors were relying on a bug in pyrefly. The old (lenient) behavior was the bug, not the new (correct) behavior.
@@ -190,7 +163,7 @@ If you cannot confidently determine the answer because you need to see source co
 Use the project's file paths (e.g., "dulwich/objects.py", "discord/permissions.py"). Request at most 3 files. Only request files when you genuinely need them to verify the conclusion — if the pattern is clear enough (e.g., 100+ missing-attribute errors on core classes of a well-tested project), classify directly without requesting files.
 
 If you have enough context, respond with your analysis. IMPORTANT: reason through the evidence fully:
-{"spec_check": "which typing spec rule applies, with a link, AND what is its scope — which constructs does it apply to?", "runtime_behavior": "would this cause an actual runtime error or crash? trace the execution path", "mypy_pyright": "would mypy/pyright flag this? yes/no and why", "removal_assessment": "For removed errors ('-'): were they correct (catching real bugs) or incorrect (false positives/too strict)? State which and why. Write 'N/A' if there are no removed errors.", "pr_attribution": "Which specific change(s) in the pyrefly PR diff caused this project's errors to change? Reference specific files, functions, or code patterns from the diff. Write 'N/A' if no PR diff was provided.", "reason": "explanation — if a typing spec rule is relevant, include the link (e.g., https://typing.readthedocs.io/en/latest/spec/...) so reviewers can verify", "categories": [{"category": "short label", "reason": "explanation"}, ...]}
+{"spec_check": "which typing spec rule applies, with a link, AND what is its scope — which constructs does it apply to?", "runtime_behavior": "would this cause an actual runtime error or crash? trace the execution path", "mypy_pyright": "what do the mypy/pyright cross-check annotations show? summarize the data and its implications", "removal_assessment": "For removed errors ('-'): were they correct (catching real bugs) or incorrect (false positives/too strict)? State which and why. Write 'N/A' if there are no removed errors.", "pr_attribution": "Which specific change(s) in the pyrefly PR diff caused this project's errors to change? Reference specific files, functions, or code patterns from the diff. Write 'N/A' if no PR diff was provided.", "reason": "explanation — if a typing spec rule is relevant, include the link (e.g., https://typing.readthedocs.io/en/latest/spec/...) so reviewers can verify", "categories": [{"category": "short label", "reason": "explanation"}, ...]}
 
 The "spec_check", "runtime_behavior", and "mypy_pyright" fields force you to think through the evidence. If the spec doesn't require the check here AND there's no runtime impact AND mypy/pyright wouldn't flag it, it's almost certainly "too strict". The "categories" field is optional — omit it for small diffs with no categories. When present, each entry should correspond to an error category from the input.
 
@@ -213,9 +186,7 @@ def _build_user_prompt(
         f"Errors:\n{errors_text}\n",
     ]
     if pr_description:
-        parts.append(
-            f"PR description (author's stated intent):\n{pr_description}\n"
-        )
+        parts.append(f"PR description (author's stated intent):\n{pr_description}\n")
     if structural_signals:
         parts.append(f"\n{structural_signals}\n")
     if source_context:
@@ -232,130 +203,55 @@ def _build_user_prompt(
     return "\n".join(parts)
 
 
-def _call_llama_api(
-    api_key: str,
-    system_prompt: str,
-    user_prompt: str,
-    model: Optional[str],
-) -> dict:
-    """Call Meta's Llama API with retry on rate limiting."""
-    payload = {
-        "model": model or LLAMA_DEFAULT_MODEL,
-        "temperature": 0,
-        "max_completion_tokens": 2048,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
+# Keys expected in classifier JSON responses.  Used by _parse_classification
+# to distinguish real classification output from random JSON the LLM quotes.
+_CLASSIFICATION_KEYS = frozenset(
+    {
+        "verdict",
+        "needs_files",
+        "reason",
+        "suggestions",
+        "categories",
+        "spec_check",
+        "runtime_behavior",
+        "mypy_pyright",
+        "removal_assessment",
+        "pr_attribution",
+        "summary",
     }
-
-    data = json.dumps(payload).encode("utf-8")
-    ctx = get_ssl_context()
-    last_error: Optional[Exception] = None
-
-    for attempt in range(MAX_RETRIES + 1):
-        req = urllib.request.Request(
-            LLAMA_API_URL,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-            if e.code == 429 and attempt < MAX_RETRIES:
-                delay = RETRY_BASE_DELAY * (2**attempt)
-                print(
-                    f"  Rate limited, retrying in {delay:.0f}s (attempt {attempt + 1}/{MAX_RETRIES})...",
-                    file=sys.stderr,
-                )
-                time.sleep(delay)
-                last_error = LLMError(f"Llama API returned {e.code}: {body}")
-                continue
-            raise LLMError(f"Llama API returned {e.code}: {body}") from e
-        except urllib.error.URLError as e:
-            raise LLMError(f"Llama API network error: {e.reason}") from e
-
-    raise last_error or LLMError("Llama API failed after retries")
-
-
-def _call_anthropic_api(
-    api_key: str,
-    system_prompt: str,
-    user_prompt: str,
-    model: Optional[str],
-) -> dict:
-    """Call the Anthropic Messages API."""
-    payload = {
-        "model": model or ANTHROPIC_DEFAULT_MODEL,
-        "temperature": 0,
-        "max_tokens": 2048,
-        "system": system_prompt,
-        "messages": [
-            {"role": "user", "content": user_prompt},
-        ],
-    }
-
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        ANTHROPIC_API_URL,
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": ANTHROPIC_API_VERSION,
-        },
-        method="POST",
-    )
-
-    try:
-        ctx = get_ssl_context()
-        with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-        raise LLMError(f"Anthropic API returned {e.code}: {body}") from e
-    except urllib.error.URLError as e:
-        raise LLMError(f"Anthropic API network error: {e.reason}") from e
-
-
-def _extract_text_from_response(backend: str, result: dict) -> str:
-    """Extract the generated text from the API response."""
-    try:
-        if backend == "llama":
-            # Llama native format: completion_message.content.text
-            content = result["completion_message"]["content"]
-            if isinstance(content, dict):
-                return content["text"]
-            return str(content)
-        else:
-            # Anthropic format: content[0].text
-            return result["content"][0]["text"]
-    except (KeyError, IndexError) as e:
-        raise LLMError(f"Unexpected {backend} API response structure: {result}") from e
+)
 
 
 def _parse_classification(text: str) -> dict:
-    """Parse the JSON classification from the LLM response text.
+    """Parse a classification JSON from the LLM response text.
 
-    Handles cases where the LLM wraps JSON in markdown fences or
-    surrounds it with analysis text.
+    Strict variant: only accepts JSON objects containing at least one
+    expected classification key.  This distinguishes classifier JSON
+    from random JSON that may appear in the LLM's reasoning text
+    (e.g., a code snippet the LLM quotes).
+
+    Use ``llm_transport.parse_json()`` when you want generic JSON
+    extraction without key validation.
     """
+
+    def _is_classification(d: dict) -> bool:
+        """Return True if *d* looks like a classifier response."""
+        return any(k in d for k in _CLASSIFICATION_KEYS)
+
     # Try the full text first
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
+        if isinstance(parsed, dict) and _is_classification(parsed):
+            return parsed
     except json.JSONDecodeError:
         pass
 
     # Strip markdown code fences
     stripped = re.sub(r"```(?:json)?\s*", "", text).strip()
     try:
-        return json.loads(stripped)
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict) and _is_classification(parsed):
+            return parsed
     except json.JSONDecodeError:
         pass
 
@@ -372,18 +268,13 @@ def _parse_classification(text: str) -> dict:
                         candidate = text[i : j + 1]
                         try:
                             parsed = json.loads(candidate)
-                            if isinstance(parsed, dict) and (
-                                "verdict" in parsed
-                                or "needs_files" in parsed
-                                or "reason" in parsed
-                                or "suggestions" in parsed
-                            ):
+                            if isinstance(parsed, dict) and _is_classification(parsed):
                                 return parsed
                         except json.JSONDecodeError:
                             pass
                         break
 
-    raise LLMError(f"Could not parse LLM response as JSON: {text}")
+    raise LLMError(f"Could not parse LLM response as classification JSON: {text}")
 
 
 def classify_with_llm(
@@ -413,11 +304,18 @@ def classify_with_llm(
 
     system_prompt = _build_system_prompt()
     user_prompt = _build_user_prompt(
-        errors_text, source_context, change_type, structural_signals, pyrefly_diff,
+        errors_text,
+        source_context,
+        change_type,
+        structural_signals,
+        pyrefly_diff,
         pr_description,
     )
 
-    print(f"Using {backend} backend for classification (pass 1: reasoning)", file=sys.stderr)
+    print(
+        f"Using {backend} backend for classification (pass 1: reasoning)",
+        file=sys.stderr,
+    )
 
     if backend == "llama":
         result = _call_llama_api(api_key, system_prompt, user_prompt, model)
@@ -437,7 +335,10 @@ def classify_with_llm(
             raw_response=result,
         )
 
-    reason = classification.get("reason", "No reason provided")
+    reason_val = classification.get("reason", "No reason provided")
+    # The LLM sometimes returns a dict for "reason" instead of a string.
+    # If so, serialize it so downstream code always sees a string.
+    reason = json.dumps(reason_val) if isinstance(reason_val, dict) else str(reason_val)
 
     # Parse per-category reasoning (no verdicts in pass 1)
     categories: list[CategoryVerdict] = []
@@ -569,8 +470,17 @@ ACTIONABILITY REQUIREMENTS — your suggestions MUST be specific:
 BAD (vague): "Add a guard condition to the override checking logic"
 GOOD (actionable): "In check_override_compatibility() in solver/subset.rs, add a short-circuit: when the overriding method has (*args: Any, **kwargs: Any), treat it as compatible with any parameter signature. This eliminates 8 bad-override errors across jax, bokeh, poetry, and artigraph."
 
+CROSS-CHECK DATA: Each project's errors include cross-check stats showing how many
+errors are also reported by mypy/pyright. Use this to prioritize:
+- "pyrefly-only" errors (not in mypy or pyright) are the PRIMARY targets for fixes.
+  These indicate pyrefly is enforcing a rule more strictly than the ecosystem standard.
+- Errors co-reported by mypy/pyright are real bugs in the project code — do NOT
+  suggest pyrefly changes for these.
+- If ALL regression errors are co-reported by mypy/pyright, the regression is likely
+  a real improvement being misclassified — say so instead of suggesting a fix.
+
 Rules:
-- Focus on regressions. Improvements are fine — don't suggest reverting them.
+- Focus on pyrefly-only regressions. Co-reported errors are NOT pyrefly bugs.
 - For intentional/conformance improvements: do NOT suggest reverting or weakening spec-compliant behavior. The ecosystem needs to adapt to the spec, not the other way around.
 - If a rule is applied too broadly (e.g., a protocol-only check applied to regular classes), suggest narrowing its scope with a guard condition, naming the specific function.
 - If type inference regressed, identify which inference path changed and suggest restoring the previous behavior for the affected cases.
@@ -630,6 +540,9 @@ def _build_suggestion_user_prompt(
             parts.append(f"  Reason: {c.reason}")
             if c.pr_attribution and c.pr_attribution != "N/A":
                 parts.append(f"  Attribution: {c.pr_attribution}")
+            # Include cross-check stats for the project
+            if c.cross_check_stats:
+                parts.append(f"  Cross-check: {c.cross_check_stats}")
             if c.categories:
                 for cat in c.categories:
                     parts.append(

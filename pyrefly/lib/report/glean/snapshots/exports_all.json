@@ -724,6 +724,114 @@
                 "start": 55
               },
               "target": {
+                "file": {
+                  "id": 0,
+                  "key": "exports_all.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "exports_all.x"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 60
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "exports_all.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "exports_all.U"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 60
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "typing.Union"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 78
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "exports_all.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "exports_all.y"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 19
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Union"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 5
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.xrefs.XRefsByFile.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "exports_all.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 1,
+                "start": 55
+              },
+              "target": {
                 "id": 0,
                 "key": "exports_all.x"
               }
@@ -977,6 +1085,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "835e529061f1429222e801fbfe85f209"
+    "schema_id": "8f24e877367cad77ea2a10942e644b42"
   }
 ]

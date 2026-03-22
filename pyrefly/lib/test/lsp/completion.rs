@@ -90,7 +90,7 @@ fn get_test_report(
             ..
         } in state
             .transaction()
-            .completion(handle, position, import_format, true)
+            .completion(handle, position, import_format, true, None)
         {
             let is_deprecated = if let Some(tags) = tags {
                 tags.contains(&lsp_types::CompletionItemTag::DEPRECATED)
@@ -138,7 +138,7 @@ fn get_test_report(
 }
 
 fn dict_field_labels(txn: &Transaction<'_>, handle: &Handle, position: TextSize) -> Vec<String> {
-    txn.completion(handle, position, ImportFormat::Absolute, true)
+    txn.completion(handle, position, ImportFormat::Absolute, true, None)
         .into_iter()
         .filter(|item| item.kind == Some(CompletionItemKind::FIELD))
         .map(|item| item.label)
@@ -698,18 +698,18 @@ from foo imp
                ^
 Completion Results:
 - (Variable) imperial_guard
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
+- (Constant) __annotations__
+- (Constant) __builtins__
+- (Constant) __cached__
+- (Constant) __debug__
+- (Constant) __dict__
+- (Constant) __doc__
+- (Constant) __file__
+- (Constant) __loader__
+- (Constant) __name__
+- (Constant) __package__
+- (Constant) __path__
+- (Constant) __spec__
 
 
 # foo.py
@@ -777,20 +777,20 @@ Completion Results:
                         ^
 Completion Results:
 - (Variable) deprecated
-- (Variable) func_ok
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
-- (Variable) [DEPRECATED] func_not_ok
+- (Function) func_ok
+- (Constant) __annotations__
+- (Constant) __builtins__
+- (Constant) __cached__
+- (Constant) __debug__
+- (Constant) __dict__
+- (Constant) __doc__
+- (Constant) __file__
+- (Constant) __loader__
+- (Constant) __name__
+- (Constant) __package__
+- (Constant) __path__
+- (Constant) __spec__
+- (Function) [DEPRECATED] func_not_ok
 
 
 # foo.py
@@ -824,18 +824,18 @@ Completion Results:
                            ^
 Completion Results:
 - (Variable) imperial_guard
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
+- (Constant) __annotations__
+- (Constant) __builtins__
+- (Constant) __cached__
+- (Constant) __debug__
+- (Constant) __dict__
+- (Constant) __doc__
+- (Constant) __file__
+- (Constant) __loader__
+- (Constant) __name__
+- (Constant) __package__
+- (Constant) __path__
+- (Constant) __spec__
 
 
 # foo.py
@@ -865,18 +865,18 @@ from .foo import imperial
                             ^
 Completion Results:
 - (Variable) imperial_guard
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
+- (Constant) __annotations__
+- (Constant) __builtins__
+- (Constant) __cached__
+- (Constant) __debug__
+- (Constant) __dict__
+- (Constant) __doc__
+- (Constant) __file__
+- (Constant) __loader__
+- (Constant) __name__
+- (Constant) __package__
+- (Constant) __path__
+- (Constant) __spec__
 
 
 # foo.py
@@ -1904,7 +1904,7 @@ T = spio
     let completions =
         state
             .transaction()
-            .completion(handle, position, ImportFormat::Absolute, true);
+            .completion(handle, position, ImportFormat::Absolute, true, None);
     let autoimport = completions
         .iter()
         .find(|item| item.label == "spio")
@@ -1946,7 +1946,7 @@ T = np
     let completions =
         state
             .transaction()
-            .completion(handle, position, ImportFormat::Absolute, true);
+            .completion(handle, position, ImportFormat::Absolute, true, None);
     let autoimport = completions
         .iter()
         .find(|item| item.label == "np")
@@ -2091,7 +2091,7 @@ T = foooooo
     let completions =
         state
             .transaction()
-            .completion(handle, position, ImportFormat::Absolute, true);
+            .completion(handle, position, ImportFormat::Absolute, true, None);
     let autoimport = completions
         .into_iter()
         .find(|item| item.label == "foooooo")
@@ -2106,7 +2106,7 @@ T = foooooo
     let completions =
         state
             .transaction()
-            .completion(handle, position, ImportFormat::Absolute, false);
+            .completion(handle, position, ImportFormat::Absolute, false, None);
     completions
         .into_iter()
         .find(|item| item.label == "foooooo")
@@ -2440,20 +2440,20 @@ class Foo: pass
 2 | from lib imp
                ^
 Completion Results:
-- (Variable) Foo
+- (Class) Foo
 - (Keyword) import
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
+- (Constant) __annotations__
+- (Constant) __builtins__
+- (Constant) __cached__
+- (Constant) __debug__
+- (Constant) __dict__
+- (Constant) __doc__
+- (Constant) __file__
+- (Constant) __loader__
+- (Constant) __name__
+- (Constant) __package__
+- (Constant) __path__
+- (Constant) __spec__
 
 
 # lib.py
@@ -2781,7 +2781,8 @@ x = sys.version
     let txn = state.transaction();
 
     // Position 0: inside comment - should return empty
-    let comment_completions = txn.completion(handle, positions[0], ImportFormat::Absolute, true);
+    let comment_completions =
+        txn.completion(handle, positions[0], ImportFormat::Absolute, true, None);
     assert!(
         comment_completions.is_empty(),
         "Expected no completions in comment, but got {} completions",
@@ -2789,7 +2790,8 @@ x = sys.version
     );
 
     // Position 1: normal code - should return completions
-    let normal_completions = txn.completion(handle, positions[1], ImportFormat::Absolute, true);
+    let normal_completions =
+        txn.completion(handle, positions[1], ImportFormat::Absolute, true, None);
     assert!(
         !normal_completions.is_empty(),
         "Expected completions in normal code but got none"
@@ -2823,7 +2825,7 @@ needs_base(val)
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();
-    let completions = txn.completion(handle, position, ImportFormat::Absolute, true);
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
 
     let exact_index = completions
         .iter()
@@ -2913,7 +2915,7 @@ class Constraint:
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();
-    let completions = txn.completion(handle, position, ImportFormat::Absolute, true);
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
 
     let completion_labels: Vec<_> = completions.iter().map(|c| c.label.as_str()).collect();
 
@@ -2925,4 +2927,30 @@ class Constraint:
          Got completions: {:?}",
         completion_labels
     );
+}
+
+#[test]
+fn completion_namedtuple_spread_fields() {
+    let code = r#"
+import collections
+
+BaseFieldInfo = collections.namedtuple("BaseFieldInfo", ["name", "type_code", "size"])
+ExtendedFieldInfo = collections.namedtuple(
+    "ExtendedFieldInfo",
+    [*BaseFieldInfo._fields, "extra", "comment"],
+)
+
+info = ExtendedFieldInfo()
+info.
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let trimmed = report.trim();
+    for expected in ["- (Field) extra", "- (Field) comment"] {
+        assert!(
+            trimmed.contains(expected),
+            "missing {expected} in completions:\n{trimmed}"
+        );
+    }
 }

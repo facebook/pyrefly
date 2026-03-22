@@ -660,7 +660,7 @@ testcase!(
     test_bad_keyword,
     r#"
 from dataclasses import dataclass
-@dataclass(flibbertigibbet=True)  # E: No matching overload found
+@dataclass(flibbertigibbet=True)  # E: Unexpected keyword argument `flibbertigibbet`
 class C:
     pass
     "#,
@@ -789,6 +789,21 @@ import dataclasses
 class C:
     replace: ClassVar = dataclasses.replace
 C()
+    "#,
+);
+
+testcase!(
+    test_frozen_classvar_class_assignment,
+    r#"
+import dataclasses
+from typing import ClassVar
+
+@dataclasses.dataclass(frozen=True)
+class C:
+    x: ClassVar[bool] = True
+
+    def set_x(self) -> None:
+        self.__class__.x = False
     "#,
 );
 
@@ -1740,7 +1755,7 @@ class DC2:
     def __init__(self):
         self.x = 3
         # should error: y is not in slots
-        self.y = 3  # E: Object of class `DC2` has no attribute `y`
+        self.y = 3  # E: not declared in `__slots__`
 
 @dataclass(slots=False)
 class DC3:
@@ -1750,7 +1765,7 @@ class DC3:
     def __init__(self):
         self.x = 3
         # should error: y is not in slots
-        self.y = 3  # E: Object of class `DC3` has no attribute `y`
+        self.y = 3  # E: not declared in `__slots__`
 "#,
 );
 

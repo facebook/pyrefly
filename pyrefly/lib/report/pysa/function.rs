@@ -11,11 +11,9 @@ use std::ops::Not;
 use std::sync::Arc;
 
 use dupe::Dupe;
-use pyrefly_build::handle::Handle;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
@@ -26,14 +24,10 @@ use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::Type;
 use pyrefly_types::types::Union;
-use pyrefly_util::thread_pool::ThreadPool;
-use rayon::iter::IntoParallelRefIterator;
-use rayon::iter::ParallelIterator;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
 use serde::Serialize;
-use starlark_map::Hashed;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::decorated_function::DecoratedFunction;
@@ -51,19 +45,14 @@ use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::class::get_all_classes;
 use crate::report::pysa::class::get_class_field_declaration;
 use crate::report::pysa::class::get_class_fields;
+use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleId;
-use crate::report::pysa::module::ModuleIds;
-use crate::report::pysa::module::ModuleKey;
-use crate::report::pysa::override_graph::WholeProgramReversedOverrideGraph;
+use crate::report::pysa::override_graph::ModuleReversedOverrideGraph;
 use crate::report::pysa::scope::ScopeParent;
 use crate::report::pysa::scope::get_scope_parent;
-use crate::report::pysa::slow_fun_monitor::slow_fun_monitor_scope;
-use crate::report::pysa::step_logger::StepLogger;
 use crate::report::pysa::types::PysaType;
 use crate::report::pysa::types::is_callable_like;
-use crate::state::lsp::FindDefinitionItemWithDocstring;
-use crate::state::state::Transaction;
 
 /// Represents a unique identifier for a function **within a module**.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -116,7 +105,10 @@ pub struct FunctionRef {
 }
 
 impl FunctionRef {
-    pub fn from_decorated_function(function: &DecoratedFunction, context: &ModuleContext) -> Self {
+    pub fn from_decorated_function(
+        function: &DecoratedFunction,
+        context: &ModuleAnswersContext,
+    ) -> Self {
         assert_decorated_function_in_context(function, context);
         assert!(should_export_decorated_function(function, context));
         let name = function.metadata().kind.function_name().into_owned();
@@ -219,10 +211,6 @@ pub struct FunctionBaseDefinition {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// If this is a method, record the class it is defined in.
     pub defining_class: Option<ClassRef>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// If the method directly overrides a method in a parent class, we record that class.
-    /// This is used for building overriding graphs.
-    pub overridden_base_method: Option<FunctionRef>,
 }
 
 impl FunctionBaseDefinition {
@@ -240,6 +228,10 @@ pub struct FunctionDefinition {
     pub captured_variables: Vec<CapturedVariableRef<FunctionRef>>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub decorator_callees: HashMap<PysaLocation, Vec<Target<FunctionRef>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// If the method directly overrides a method in a parent class, we record that class.
+    /// This is used for building overriding graphs.
+    pub overridden_base_method: Option<FunctionRef>,
 }
 
 impl FunctionDefinition {
@@ -296,7 +288,7 @@ impl FunctionDefinition {
 
     #[cfg(test)]
     pub fn with_overridden_base_method(mut self, overridden_base_method: FunctionRef) -> Self {
-        self.base.overridden_base_method = Some(overridden_base_method);
+        self.overridden_base_method = Some(overridden_base_method);
         self
     }
 }
@@ -311,32 +303,13 @@ impl<GenericFunctionDefinition> ModuleFunctionDefinitions<GenericFunctionDefinit
         ModuleFunctionDefinitions(HashMap::new())
     }
 
+    pub fn get(&self, function_id: &FunctionId) -> Option<&GenericFunctionDefinition> {
+        self.0.get(function_id)
+    }
+
     #[cfg(test)]
     pub fn iter(&self) -> impl Iterator<Item = (&FunctionId, &GenericFunctionDefinition)> {
         self.0.iter()
-    }
-}
-
-pub struct WholeProgramFunctionDefinitions<FunctionDefinition>(
-    dashmap::ReadOnlyView<ModuleId, ModuleFunctionDefinitions<FunctionDefinition>>,
-);
-
-impl<GenericFunctionDefinition> WholeProgramFunctionDefinitions<GenericFunctionDefinition> {
-    pub fn get<'a>(
-        &'a self,
-        module_id: ModuleId,
-        function_id: &FunctionId,
-    ) -> Option<&'a GenericFunctionDefinition> {
-        self.0
-            .get(&module_id)
-            .and_then(|functions| functions.0.get(function_id))
-    }
-
-    pub fn get_for_module(
-        &self,
-        module_id: ModuleId,
-    ) -> Option<&ModuleFunctionDefinitions<GenericFunctionDefinition>> {
-        self.0.get(&module_id)
     }
 }
 
@@ -383,7 +356,10 @@ fn export_function_parameters(params: &Params, context: &ModuleContext) -> Funct
 }
 
 // For many function implementations, we need to pass the module context where the function is defined.
-fn assert_decorated_function_in_context(function: &DecoratedFunction, context: &ModuleContext) {
+fn assert_decorated_function_in_context(
+    function: &DecoratedFunction,
+    context: &ModuleAnswersContext,
+) {
     match &function.undecorated.metadata.kind {
         FunctionKind::Def(func_id) => {
             assert_eq!(func_id.module, context.module_info);
@@ -394,7 +370,7 @@ fn assert_decorated_function_in_context(function: &DecoratedFunction, context: &
 
 pub fn should_export_decorated_function(
     function: &DecoratedFunction,
-    context: &ModuleContext,
+    context: &ModuleAnswersContext,
 ) -> bool {
     assert_decorated_function_in_context(function, context);
     // We only want to export one function when we have an @overload chain.
@@ -409,7 +385,7 @@ pub fn should_export_decorated_function(
 pub fn get_exported_decorated_function(
     key_decorated_function: Idx<KeyDecoratedFunction>,
     skip_property_getter: bool,
-    context: &ModuleContext,
+    context: &ModuleAnswersContext,
 ) -> DecoratedFunction {
     // Follow the successor chain to find either the last function, or a function that is not an overload,
     // or a property setter when `skip_property_getter` is true.
@@ -514,7 +490,7 @@ pub enum FunctionNode {
 
 impl FunctionNode {
     // For many function implementations, we need to pass the module context where the function is defined.
-    fn assert_in_context(&self, context: &ModuleContext) {
+    fn assert_in_context(&self, context: &ModuleAnswersContext) {
         match self {
             FunctionNode::DecoratedFunction(function) => {
                 assert_decorated_function_in_context(function, context)
@@ -525,7 +501,7 @@ impl FunctionNode {
         }
     }
 
-    pub fn should_export(&self, context: &ModuleContext) -> bool {
+    pub fn should_export(&self, context: &ModuleAnswersContext) -> bool {
         match self {
             FunctionNode::DecoratedFunction(function) => {
                 should_export_decorated_function(function, context)
@@ -552,7 +528,7 @@ impl FunctionNode {
     }
 
     // Return the function type, considering decorators and overloads.
-    fn get_decorated_type(&self, context: &ModuleContext) -> Type {
+    fn get_decorated_type(&self, context: &ModuleAnswersContext) -> Type {
         self.assert_in_context(context);
         match self {
             FunctionNode::DecoratedFunction(function) => {
@@ -570,14 +546,18 @@ impl FunctionNode {
                 // We need the list of raw parameters, ignoring decorators.
                 // For overloads, we need the list of all overloads, not just the current one.
                 // To get it, we check if `get_function_type` returns `Type::Overload`.
-                let decorated_type = self.get_decorated_type(context);
+                let decorated_type = self.get_decorated_type(&context.answers_context);
                 match decorated_type {
                     Type::Overload(overload) => export_overload_signatures(&overload, context),
                     _ => {
                         let return_binding = Key::ReturnType(function.undecorated.identifier);
-                        let idx = context.bindings.key_to_idx(&return_binding);
-                        let undecorated_return_type =
-                            context.answers.get_idx(idx).unwrap().arc_clone_ty();
+                        let idx = context.answers_context.bindings.key_to_idx(&return_binding);
+                        let undecorated_return_type = context
+                            .answers_context
+                            .answers
+                            .get_idx(idx)
+                            .unwrap()
+                            .arc_clone_ty();
                         vec![FunctionSignature {
                             parameters: FunctionParameters::List(
                                 function
@@ -605,7 +585,7 @@ impl FunctionNode {
         class: &Class,
         field_name: &Name,
         class_field: Arc<ClassField>,
-        context: &ModuleContext,
+        context: &ModuleAnswersContext,
     ) -> Option<Self> {
         let function_node = match get_class_field_declaration(class, field_name, context) {
             // Class field is a `def` statement.
@@ -640,27 +620,7 @@ impl FunctionNode {
         }
     }
 
-    pub fn exported_function_from_definition_item_with_docstring<'a>(
-        item: &FindDefinitionItemWithDocstring,
-        skip_property_getter: bool,
-        context: &ModuleContext<'a>,
-    ) -> Option<(Self, ModuleContext<'a>)> {
-        let handle = Handle::new(
-            item.module.name(),
-            item.module.path().dupe(),
-            context.handle.sys_info().dupe(),
-        );
-        let context = ModuleContext::create(handle, context.transaction, context.module_ids)?;
-        let key_decorated_function =
-            KeyDecoratedFunction(ShortIdentifier::from_text_range(item.definition_range));
-        context
-            .bindings
-            .key_to_idx_hashed_opt(Hashed::new(&key_decorated_function))
-            .map(|idx| get_exported_decorated_function(idx, skip_property_getter, &context))
-            .map(|exported_function| (FunctionNode::DecoratedFunction(exported_function), context))
-    }
-
-    pub fn as_function_ref(&self, context: &ModuleContext) -> FunctionRef {
+    pub fn as_function_ref(&self, context: &ModuleAnswersContext) -> FunctionRef {
         self.assert_in_context(context);
         assert!(self.should_export(context));
 
@@ -680,7 +640,7 @@ impl FunctionNode {
         }
     }
 
-    fn get_scope_parent(&self, context: &ModuleContext) -> ScopeParent {
+    fn get_scope_parent(&self, context: &ModuleAnswersContext) -> ScopeParent {
         self.assert_in_context(context);
         match self {
             FunctionNode::DecoratedFunction(function) => match &function.undecorated.defining_cls {
@@ -763,7 +723,10 @@ impl FunctionNode {
         }
     }
 
-    fn get_define_stmt<'a>(&self, context: &'a ModuleContext) -> Option<&'a StmtFunctionDef> {
+    fn get_define_stmt<'a>(
+        &self,
+        context: &'a ModuleAnswersContext,
+    ) -> Option<&'a StmtFunctionDef> {
         self.assert_in_context(context);
         match self {
             FunctionNode::DecoratedFunction(function) => {
@@ -783,15 +746,10 @@ impl FunctionNode {
 
     fn get_decorator_callees(
         &self,
-        function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
         context: &ModuleContext,
     ) -> HashMap<PysaLocation, Vec<Target<FunctionRef>>> {
-        if let Some(function_def) = self.get_define_stmt(context) {
-            resolve_decorator_callees(
-                &function_def.decorator_list,
-                function_base_definitions,
-                context,
-            )
+        if let Some(function_def) = self.get_define_stmt(&context.answers_context) {
+            resolve_decorator_callees(&function_def.decorator_list, context)
         } else {
             HashMap::new()
         }
@@ -800,7 +758,7 @@ impl FunctionNode {
 
 /// Return all functions defined with a `def` statement.
 pub fn get_all_decorated_functions(
-    context: &ModuleContext,
+    context: &ModuleAnswersContext,
 ) -> impl Iterator<Item = DecoratedFunction> {
     context.bindings.keys::<KeyDecoratedFunction>().map(|idx| {
         DecoratedFunction::from_bindings_answers(idx, &context.bindings, &context.answers)
@@ -808,7 +766,7 @@ pub fn get_all_decorated_functions(
 }
 
 /// Return all function defined in the module.
-pub fn get_all_functions(context: &ModuleContext) -> impl Iterator<Item = FunctionNode> {
+pub fn get_all_functions(context: &ModuleAnswersContext) -> impl Iterator<Item = FunctionNode> {
     let decorated_functions = context.bindings.keys::<KeyDecoratedFunction>().map(|idx| {
         FunctionNode::DecoratedFunction(DecoratedFunction::from_bindings_answers(
             idx,
@@ -844,8 +802,7 @@ pub fn get_all_functions(context: &ModuleContext) -> impl Iterator<Item = Functi
 }
 
 pub fn export_all_functions(
-    reversed_override_graph: &WholeProgramReversedOverrideGraph,
-    context: &ModuleContext,
+    context: &ModuleAnswersContext,
 ) -> ModuleFunctionDefinitions<FunctionBaseDefinition> {
     let mut function_base_definitions = ModuleFunctionDefinitions::new();
 
@@ -871,12 +828,11 @@ pub fn export_all_functions(
                         is_property_setter: function.is_property_setter(),
                         is_stub: function.is_stub(),
                         is_def_statement: function.is_def_statement(),
-                        defining_class: function
-                            .defining_cls()
-                            .map(|class| ClassRef::from_class(class, context.module_ids)),
-                        overridden_base_method: reversed_override_graph
-                            .get(&current_function)
-                            .cloned(),
+                        defining_class: function.defining_cls().map(|class| ClassRef {
+                            module_id: context.module_id,
+                            class_id: ClassId::from_class(class),
+                            class: class.clone(),
+                        }),
                     }
                 )
                 .is_none(),
@@ -888,24 +844,23 @@ pub fn export_all_functions(
 }
 
 pub fn export_function_definitions(
-    function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
     captured_variables: &HashMap<FunctionRef, Vec<CapturedVariableRef<FunctionRef>>>,
+    reversed_override_graph: &ModuleReversedOverrideGraph,
     context: &ModuleContext,
 ) -> ModuleFunctionDefinitions<FunctionDefinition> {
     let mut function_definitions = ModuleFunctionDefinitions::new();
-    let function_base_definitions_for_module = function_base_definitions
-        .get_for_module(context.module_id)
-        .unwrap();
 
-    for function in get_all_functions(context) {
-        if !function.should_export(context) {
+    for function in get_all_functions(&context.answers_context) {
+        if !function.should_export(&context.answers_context) {
             continue;
         }
-        let current_function = function.as_function_ref(context);
-        let function_base_definition = function_base_definitions_for_module
+        let current_function = function.as_function_ref(&context.answers_context);
+        let current_module_solutions = context.resolver.current_module_solutions();
+        let function_base_definition = current_module_solutions
+            .function_base_definitions
             .0
             .get(&current_function.function_id)
-            .unwrap();
+            .expect("FunctionId missing from function_base_definitions");
         let undecorated_signatures = function.get_undecorated_signatures(context);
 
         let captured_variables = captured_variables
@@ -913,7 +868,7 @@ pub fn export_function_definitions(
             .cloned()
             .unwrap_or_default();
 
-        let decorator_callees = function.get_decorator_callees(function_base_definitions, context);
+        let decorator_callees = function.get_decorator_callees(context);
 
         assert!(
             function_definitions
@@ -921,10 +876,13 @@ pub fn export_function_definitions(
                 .insert(
                     current_function.function_id.clone(),
                     FunctionDefinition {
-                        base: function_base_definition.to_owned(),
+                        base: function_base_definition.clone(),
                         undecorated_signatures,
                         captured_variables,
                         decorator_callees,
+                        overridden_base_method: reversed_override_graph
+                            .get(&current_function)
+                            .cloned(),
                     },
                 )
                 .is_none(),
@@ -933,40 +891,4 @@ pub fn export_function_definitions(
     }
 
     function_definitions
-}
-
-pub fn collect_function_base_definitions(
-    handles: &Vec<Handle>,
-    transaction: &Transaction,
-    module_ids: &ModuleIds,
-    reversed_override_graph: &WholeProgramReversedOverrideGraph,
-) -> WholeProgramFunctionDefinitions<FunctionBaseDefinition> {
-    let step = StepLogger::start(
-        "Indexing function definitions",
-        "Indexed function definitions",
-    );
-
-    let base_definitions = dashmap::DashMap::new();
-
-    ThreadPool::new().install(|| {
-        slow_fun_monitor_scope(|slow_function_monitor| {
-            handles.par_iter().for_each(|handle| {
-                let module_id = module_ids.get(ModuleKey::from_handle(handle)).unwrap();
-                let context =
-                    ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
-                let base_definitions_for_module = slow_function_monitor.monitor_function(
-                    || export_all_functions(reversed_override_graph, &context),
-                    format!(
-                        "Indexing function definitions for {}",
-                        handle.module().as_str(),
-                    ),
-                    /* max_time_in_seconds */ 4,
-                );
-                base_definitions.insert(module_id, base_definitions_for_module);
-            });
-        })
-    });
-
-    step.finish();
-    WholeProgramFunctionDefinitions(base_definitions.into_read_only())
 }

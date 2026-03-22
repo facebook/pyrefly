@@ -550,7 +550,7 @@ impl SemanticTokenBuilder {
 
 fn collect_disabled_ranges_from_block(
     stmts: &[Stmt],
-    sys_info: &SysInfo,
+    sys_info: SysInfo,
     reachable: bool,
     ranges: &mut Vec<TextRange>,
 ) {
@@ -561,7 +561,7 @@ fn collect_disabled_ranges_from_block(
 
 fn collect_disabled_ranges_from_stmt(
     stmt: &Stmt,
-    sys_info: &SysInfo,
+    sys_info: SysInfo,
     reachable: bool,
     ranges: &mut Vec<TextRange>,
 ) {
@@ -623,7 +623,7 @@ fn collect_disabled_ranges_from_stmt(
     }
 }
 
-pub(crate) fn disabled_ranges_for_module(ast: &ModModule, sys_info: &SysInfo) -> Vec<TextRange> {
+pub(crate) fn disabled_ranges_for_module(ast: &ModModule, sys_info: SysInfo) -> Vec<TextRange> {
     let mut ranges = Vec::new();
     collect_disabled_ranges_from_block(&ast.body, sys_info, true, &mut ranges);
     ranges

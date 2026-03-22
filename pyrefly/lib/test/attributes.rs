@@ -320,7 +320,6 @@ def foo(x: Callable[[int], str], c: C, c2: C2, c3: C3):
 );
 
 testcase!(
-    bug = "classmethod bound object w/o targs is default-instantiated, solves T to Any",
     test_bound_classmethod_explicit_targs,
     r#"
 from typing import assert_type
@@ -333,7 +332,7 @@ class A[T]:
         return cls(x)
 
 assert_type(A[int].m(0), A[int])
-assert_type(A.m(0), A[int]) # TODO # E: assert_type(A[Any], A[int]) failed
+assert_type(A.m(0), A[int])
 
 def test_typevar_bounds[T: A[int]](x: type[T]):
     assert_type(x.m(0), A[int])
@@ -519,6 +518,16 @@ class C:
         pass
 C().f(C())  # OK
 C().f(0)    # E: Argument `Literal[0]` is not assignable to parameter `x` with type `C`
+    "#,
+);
+
+testcase!(
+    test_bad_bound_on_self,
+    r#"
+class C:
+    def f[T: int](self: T) -> T:
+        return self
+C().f()  # E: `C` is not assignable to upper bound `int`
     "#,
 );
 
@@ -1107,6 +1116,33 @@ class C2[R]:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2204
+testcase!(
+    test_generic_function_assigned_to_attribute,
+    r#"
+from typing import reveal_type, assert_type
+def f[T](x: T) -> T:
+    return x
+
+class C:
+    def m[U](self, x: U) -> U:
+        return x
+
+class D:
+    def __init__(self, c: C):
+        self.f = f
+        self.g = c.m
+        self.h = C.m
+
+def test(o: D):
+    reveal_type(o.f) # E: [T](x: T) -> T
+    assert_type(o.f(1), int)
+
+    reveal_type(o.g) # E: [U](self: C, x: U) -> U
+    assert_type(o.g(1), int)
+"#,
+);
+
 testcase!(
     test_attr_unknown,
     r#"
@@ -1641,6 +1677,23 @@ class A[T]:
 reveal_type(A.f) # E: revealed type: Overload[\n  (x: None = ...) -> None\n  [T](x: T) -> T\n]
 assert_type(A.f(), None)
 assert_type(A.f(0), int)
+    "#,
+);
+
+testcase!(
+    test_parametrized_class_init_call,
+    r#"
+from typing import reveal_type
+
+class Foo[T]:
+    def __init__(self, /) -> None:
+        pass
+
+class Bar[S](Foo[S]):
+    def __init__(self, /) -> None:
+        Foo[S].__init__(self)
+
+Foo[int].__init__(Foo[int]())
     "#,
 );
 
@@ -2314,4 +2367,32 @@ class B(A[None]):
         if not foo:
             pass
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/417
+testcase!(
+    test_classmethod_inherited_no_missing_attribute,
+    r#"
+class Base:
+    @classmethod
+    def from_pretrained(cls, name: str) -> "Base":
+        return cls()
+
+class Derived(Base):
+    pass
+
+Derived.from_pretrained("model")
+"#,
+);
+
+testcase!(
+    test_classmethod_vararg_does_not_bind_self,
+    r#"
+class C:
+    @classmethod
+    def create(*args, **kwargs): ...
+
+C.create(42)
+C.create(a=42)
+"#,
 );

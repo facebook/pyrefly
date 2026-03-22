@@ -6,6 +6,8 @@
  */
 
 use std::any::Any;
+use std::cell::RefCell;
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -20,6 +22,7 @@ use std::sync::Arc;
 use std::sync::MutexGuard;
 use std::sync::RwLockReadGuard;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -27,6 +30,7 @@ use std::time::Duration;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
 use enum_iterator::Sequence;
+use fxhash::FxHashMap;
 use itertools::Itertools;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
@@ -38,6 +42,7 @@ use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::fs_anyhow;
+use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::locked_map::LockedMap;
@@ -67,6 +72,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
+use crate::alt::answers::TraceSideEffects;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::CalcId;
 use crate::alt::answers_solver::ThreadState;
@@ -86,6 +92,7 @@ use crate::binding::binding::Keyed;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
+use crate::binding::metadata::BindingsMetadata;
 use crate::binding::table::TableKeyed;
 use crate::config::config::ConfigFile;
 use crate::config::error_kind::ErrorKind;
@@ -102,9 +109,9 @@ use crate::module::bundled::BundledStub;
 use crate::module::finder::find_import_prefixes;
 use crate::module::typeshed::BundledTypeshedStdlib;
 use crate::solver::solver::VarRecurser;
-use crate::state::dirty::AtomicDirty;
 use crate::state::epoch::Epoch;
 use crate::state::errors::Errors;
+use crate::state::errors::sorted_multi_line_fstring_ranges;
 use crate::state::load::FileContents;
 use crate::state::load::Load;
 use crate::state::loader::FindingOrError;
@@ -119,12 +126,14 @@ use crate::state::module::ModuleStateReader;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::steps::Context;
+use crate::state::steps::PysaContext;
 use crate::state::steps::Step;
 use crate::state::steps::StepsMut;
 use crate::state::subscriber::Subscriber;
 use crate::types::callable::Deprecation;
 use crate::types::class::Class;
 use crate::types::class::ClassDefIndex;
+use crate::types::class::ClassFields;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::TParams;
 use crate::types::types::Type;
@@ -182,6 +191,8 @@ pub enum ModuleDep {
     NameMetadata(Name),
     // Depend on the set of wildcard exported names
     Wildcard,
+    // Depend on a class definition (fields, metadata, etc.)
+    Class(ClassDefIndex),
 }
 
 impl ModuleChanges {
@@ -286,6 +297,9 @@ impl ModuleDeps {
             }
             ModuleDep::Wildcard => {
                 self.wildcard = true;
+            }
+            ModuleDep::Class(idx) => {
+                self.classes.insert(idx);
             }
         }
     }
@@ -494,18 +508,20 @@ pub(crate) struct TransactionData<'a> {
     dirty: Mutex<SmallSet<ArcId<ModuleDataMut>>>,
     /// Thing to tell about each action.
     subscriber: Option<Box<dyn Subscriber + 'a>>,
+    /// When set, pysa reporting is done during answer solving and before memory eviction.
+    pysa_reporter: Option<Box<crate::report::pysa::PysaReporter>>,
 }
 
 impl<'a> TransactionData<'a> {
     /// Convert saved transaction data back into a full transaction. We can only restore if the
     /// underlying state is unchanged, otherwise the transaction data might make inconsistent
     /// assumptions, in particular about deps/rdeps.
-    pub(crate) fn restore(self) -> Option<Transaction<'a>> {
+    pub(crate) fn restore(self) -> Result<Transaction<'a>, Duration> {
         let start = Instant::now();
         let readable = self.state.state.read();
         let state_lock_blocked = start.elapsed();
         if self.base == readable.now {
-            Some(Transaction {
+            Ok(Transaction {
                 data: self,
                 stats: Mutex::new(TelemetryTransactionStats {
                     state_lock_blocked,
@@ -515,7 +531,7 @@ impl<'a> TransactionData<'a> {
                 readable,
             })
         } else {
-            None
+            Err(state_lock_blocked)
         }
     }
 }
@@ -545,7 +561,9 @@ impl<'a> Transaction<'a> {
             readable,
         } = self;
         drop(readable);
-        telemetry.set_transaction_stats(stats.into_inner());
+        let mut stats = stats.into_inner();
+        stats.cancelled = data.todo.get_cancellation_handle().is_cancelled();
+        telemetry.set_transaction_stats(stats);
         data
     }
 
@@ -553,9 +571,39 @@ impl<'a> Transaction<'a> {
         self.data.subscriber = subscriber;
     }
 
+    /// Set the pysa reporter for inline extraction during type checking.
+    pub fn set_pysa_reporter(&mut self, reporter: Option<Box<crate::report::pysa::PysaReporter>>) {
+        self.data.pysa_reporter = reporter;
+    }
+
+    /// Take the pysa reporter out of the transaction, consuming ownership.
+    pub fn take_pysa_reporter(&mut self) -> Option<Box<crate::report::pysa::PysaReporter>> {
+        self.data.pysa_reporter.take()
+    }
+
     /// Mark this transaction as freshly created (not restored from saved state).
     pub fn set_fresh(&mut self) {
         self.stats.lock().fresh = true;
+    }
+
+    /// Whether the stdlib computation was entirely cached (no work done).
+    pub fn compute_stdlib_cached(&self) -> bool {
+        self.stats.lock().compute_stdlib_cached
+    }
+
+    /// Time spent in the parallel pre-warming phase of `compute_stdlib`.
+    /// Returns `Duration::ZERO` when the stdlib was cached (no pre-warming needed).
+    pub fn compute_stdlib_prewarm_time(&self) -> Duration {
+        self.stats.lock().compute_stdlib_prewarm_time
+    }
+
+    pub fn add_locked_blocking_duration(&self, duration: Duration) {
+        self.stats.lock().state_lock_blocked += duration;
+    }
+
+    /// Returns a handle that can be used to cancel ongoing work in this transaction.
+    pub fn get_cancellation_handle(&self) -> CancellationHandle {
+        self.data.todo.get_cancellation_handle()
     }
 
     /// Sets a callback that will be invoked immediately each time an ad-hoc solve completes,
@@ -579,6 +627,17 @@ impl<'a> Transaction<'a> {
         self.with_module_inner(handle, |x| x.get_answers().map(|a| a.1.dupe()))
     }
 
+    /// Look up the `ClassFields` for a class, which may be defined in another module.
+    pub fn get_class_fields(&self, source_handle: &Handle, class: &Class) -> Option<ClassFields> {
+        let handle = Handle::new(
+            class.module_name(),
+            class.module_path().dupe(),
+            source_handle.sys_info().dupe(),
+        );
+        let bindings = self.get_bindings(&handle)?;
+        bindings.get_class_fields(class.index()).cloned()
+    }
+
     pub fn get_ast(&self, handle: &Handle) -> Option<Arc<ruff_python_ast::ModModule>> {
         self.with_module_inner(handle, |x| x.get_ast())
     }
@@ -598,7 +657,12 @@ impl<'a> Transaction<'a> {
                 .into_iter()
                 .filter_map(|handle| {
                     self.with_module_config_inner(handle, |config, x| {
-                        Some((x.get_load()?, config.dupe()))
+                        let load = x.get_load()?;
+                        let fstring_ranges = x
+                            .get_ast()
+                            .map(|ast| sorted_multi_line_fstring_ranges(&ast, &load.module_info))
+                            .unwrap_or_default();
+                        Some((load, config.dupe(), fstring_ranges))
                     })
                 })
                 .collect(),
@@ -606,13 +670,28 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn get_all_errors(&self) -> Errors {
+        /// Extract f-string ranges from the AST if available.
+        fn fstring_ranges_from(
+            state: &dyn ModuleStateReader,
+            load: &Load,
+        ) -> Vec<(LineNumber, LineNumber)> {
+            state
+                .get_ast()
+                .map(|ast| sorted_multi_line_fstring_ranges(&ast, &load.module_info))
+                .unwrap_or_default()
+        }
+
         if self.data.updated_modules.is_empty() {
             // Optimized path
             return Errors::new(
                 self.readable
                     .modules
                     .values()
-                    .filter_map(|x| Some((x.state.get_load()?, x.config.dupe())))
+                    .filter_map(|x| {
+                        let load = x.state.get_load()?;
+                        let ranges = fstring_ranges_from(&x.state, &load);
+                        Some((load, x.config.dupe(), ranges))
+                    })
                     .collect(),
             );
         }
@@ -620,13 +699,18 @@ impl<'a> Transaction<'a> {
             .data
             .updated_modules
             .iter_unordered()
-            .filter_map(|x| Some((x.1.state.get_load()?, x.1.config.read().dupe())))
+            .filter_map(|x| {
+                let load = x.1.state.get_load()?;
+                let ranges = fstring_ranges_from(&x.1.state, &load);
+                Some((load, x.1.config.read().dupe(), ranges))
+            })
             .collect::<Vec<_>>();
         for (k, v) in self.readable.modules.iter() {
             if self.data.updated_modules.get(k).is_none()
                 && let Some(load) = v.state.get_load()
             {
-                res.push((load, v.config.dupe()));
+                let ranges = fstring_ranges_from(&v.state, &load);
+                res.push((load, v.config.dupe(), ranges));
             }
         }
         Errors::new(res)
@@ -642,16 +726,22 @@ impl<'a> Transaction<'a> {
     pub fn search_exports<V: Send + Sync>(
         &self,
         searcher: impl Fn(&Handle, &Exports, &SmallMap<Name, ExportLocation>) -> Vec<V> + Sync,
-    ) -> Vec<V> {
+        custom_thread_pool: Option<&ThreadPool>,
+    ) -> Result<Vec<V>, Cancelled> {
         // Make sure all the modules are in updated_modules.
         // We have to get a mutable module data to do the lookup we need anyway.
         for x in self.readable.modules.keys() {
+            if self.data.todo.get_cancellation_handle().is_cancelled() {
+                return Err(Cancelled);
+            }
             self.get_module(x);
         }
 
         let all_results = Mutex::new(Vec::new());
+        let transaction_cancelled = &self.data.todo.get_cancellation_handle();
 
         let tasks = TaskHeap::new();
+        let local_cancelled = tasks.get_cancellation_handle();
         // It's very fast to find whether a module contains an export, but the cost will
         // add up for a large codebase. Therefore, we will parallelize the work. The work is
         // distributed in the task heap above.
@@ -659,12 +749,23 @@ impl<'a> Transaction<'a> {
         for chunk in &self.data.updated_modules.iter_unordered().chunks(1000) {
             tasks.push((), chunk.collect_vec(), false);
         }
-        self.data.state.threads.spawn_many(|| {
-            tasks.work_without_cancellation(|_, modules| {
+        let pool = custom_thread_pool.unwrap_or(&self.data.state.threads);
+        let search_start = Instant::now();
+        let max_dispatch_nanos = AtomicU64::new(0);
+        pool.spawn_many(|| {
+            let dispatch_nanos = search_start.elapsed().as_nanos() as u64;
+            max_dispatch_nanos.fetch_max(dispatch_nanos, Ordering::Relaxed);
+            let _ = tasks.work(|_, modules| {
+                // Propagate transaction-level cancellation to the local TaskHeap
+                // so `work()` will stop popping chunks.
+                if transaction_cancelled.is_cancelled() {
+                    local_cancelled.cancel();
+                    return;
+                }
                 let mut thread_local_results = Vec::new();
                 for (handle, module_data) in modules {
                     let exports_data = self.lookup_export(module_data);
-                    let exports = exports_data.exports(&self.lookup(module_data.dupe()));
+                    let exports = exports_data.exports(&self.lookup(module_data));
                     thread_local_results.extend(searcher(handle, &exports_data, &exports));
                 }
                 if !thread_local_results.is_empty() {
@@ -672,8 +773,15 @@ impl<'a> Transaction<'a> {
                 }
             });
         });
+        let mut stats = self.stats.lock();
+        stats.search_exports_time += search_start.elapsed();
+        stats.search_exports_dispatch_time +=
+            Duration::from_nanos(max_dispatch_nanos.load(Ordering::Relaxed));
 
-        all_results.into_inner().into_iter().flatten().collect()
+        if transaction_cancelled.is_cancelled() {
+            return Err(Cancelled);
+        }
+        Ok(all_results.into_inner().into_iter().flatten().collect())
     }
 
     pub fn get_config_errors(&self) -> Vec<ConfigError> {
@@ -977,43 +1085,51 @@ impl<'a> Transaction<'a> {
     /// mutable dependency cycles are detected), see `invalidate_rdeps`.
     fn demand(&self, module_data: &ArcId<ModuleDataMut>, step: Step) {
         let mut computed = false;
+
+        // Clean the module if it hasn't been cleaned in this epoch.
+        // If try_start_clean returns None, the module is already checked.
+        // Once checked, it stays checked for the duration of the epoch.
+        // We check the the epoch optimistically before calling try_start_clean
+        // to avoid taking the computing mutex.
+        if !module_data.state.is_checked(self.data.now)
+            && let Some(guard) = module_data.state.try_start_clean(self.data.now)
+        {
+            self.clean(module_data, guard);
+            computed = true;
+        }
+
         loop {
-            // Check if the module has been cleaned in this epoch.
-            if !module_data.state.is_checked(self.data.now) {
-                if let Some(guard) = module_data.state.try_start_clean() {
-                    self.clean(module_data, guard);
-                    // We might have done some cleaning
-                    computed = true;
-                }
-                continue;
+            // Check if next step needs computing. We check this optimistically
+            // before calling try_start_compute to avoid taking the computing mutex.
+            if module_data.state.next_step().is_none_or(|s| s > step) {
+                break;
             }
 
-            // Check if next step needs computing.
-            let todo = match module_data.state.next_step() {
-                Some(todo) if todo <= step => todo,
-                _ => break,
-            };
-
-            // Try to acquire exclusive compute access for this step.
-            let guard = match module_data.state.try_start_compute(todo) {
+            // Try to acquire exclusive compute access for the next step.
+            let guard = match module_data.state.try_start_compute(step) {
                 Some(guard) => guard,
                 None => {
-                    // Another thread is computing this step; check again.
-                    continue;
+                    // Another thread finished computing the step, we're done.
+                    break;
                 }
             };
 
-            // Re-check next_step under exclusive access, since another thread
-            // may have completed the step between our check and lock acquisition.
-            let todo = match guard.next_step() {
-                Some(todo) if todo <= step => todo,
-                _ => break,
-            };
+            // The step we are going to compute. This makes progress toward computing `step`.
+            let todo = guard.todo();
 
             computed = true;
             let require = guard.require();
             let stdlib = self.get_stdlib(&module_data.handle);
             let config = module_data.config.read();
+            let pysa_context = self
+                .data
+                .pysa_reporter
+                .as_ref()
+                .map(|reporter| PysaContext {
+                    handle: &module_data.handle,
+                    module_ids: &reporter.module_ids,
+                    stdlib: stdlib.dupe(),
+                });
             let ctx = Context {
                 require,
                 module: module_data.handle.module(),
@@ -1022,102 +1138,109 @@ impl<'a> Transaction<'a> {
                 memory: &self.memory_lookup(),
                 uniques: &self.data.state.uniques,
                 stdlib: &stdlib,
-                lookup: &self.lookup(module_data.dupe()),
-                untyped_def_behavior: config
-                    .untyped_def_behavior(module_data.handle.path().as_path()),
+                lookup: &self.lookup(module_data),
+                check_unannotated_defs: config
+                    .check_unannotated_defs(module_data.handle.path().as_path()),
+                infer_return_types: config.infer_return_types(module_data.handle.path().as_path()),
                 infer_with_first_use: config
                     .infer_with_first_use(module_data.handle.path().as_path()),
                 tensor_shapes: config.tensor_shapes(module_data.handle.path().as_path()),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(module_data.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
+                pysa_context,
             };
 
-            guard.compute(todo, &ctx);
-            {
-                let mut load_result = None;
-                // Compute which exports changed for fine-grained invalidation.
-                // All diffing is done at the Solutions step, using old data
-                // saved during reset_for_rebuild().
-                let mut changed = ModuleChanges::default();
-                if todo == Step::Solutions {
-                    // Take old data saved during reset_for_rebuild (swap clears slot).
-                    let old_exports = guard.take_old_exports();
-                    let old_answers = guard.take_old_answers();
-                    let old_solutions = guard.take_old_solutions();
+            // Compute the step. This stores the result and advances current_step,
+            // then releases the computing flag and notifies waiting threads.
+            // Post-compute work (diffing, invalidation, eviction) runs without
+            // the flag held.
+            let post = guard.compute(&ctx);
 
-                    // Exports diffing: compare old vs new exports.
-                    if let Some(old_exp) = old_exports {
-                        let new_exports = module_data
-                            .state
-                            .get_exports()
-                            .expect("exports must exist after computing Solutions");
-                        old_exp.changed_exports(&new_exports, ctx.lookup, &mut changed);
-                    }
+            let mut load_result = None;
+            // Compute which exports changed for fine-grained invalidation.
+            // All diffing is done at the Solutions step, using old data
+            // saved during reset_for_rebuild().
+            let mut changed = ModuleChanges::default();
+            if todo == Step::Solutions {
+                // Take old data saved during reset_for_rebuild (swap clears slot).
+                let old_exports = post.take_old_exports();
+                let old_answers = post.take_old_answers();
+                let old_solutions = post.take_old_solutions();
 
-                    // Solutions diffing: compare old vs new solutions.
-                    let new_solutions = module_data
+                // Exports diffing: compare old vs new exports.
+                if let Some(old_exp) = old_exports {
+                    let new_exports = module_data
                         .state
-                        .get_solutions()
-                        .expect("solutions must exist after computing Solutions");
-                    if let Some(old_sol) = old_solutions {
-                        old_sol.changed_exports(&new_solutions, &mut changed);
-                    } else if let Some(old_ans) = old_answers {
-                        // Old solutions were None but old exports existed — module
-                        // was previously computed to Answers but not Solutions.
-                        // Diff new solutions against old answers.
-                        new_solutions.changed_exports_vs_answers(
-                            &old_ans.0,
-                            &old_ans.1,
-                            &mut changed,
-                        );
-                    }
+                        .get_exports()
+                        .expect("exports must exist after computing Solutions");
+                    old_exp.changed_exports(&new_exports, ctx.lookup, &mut changed);
                 }
-                if !changed.is_empty() {
-                    debug!(
-                        "Exports changed for `{}`: {:?}",
-                        module_data.handle.module(),
-                        changed
-                    );
-                }
-                if todo == Step::Answers && !require.keep_ast() {
-                    // We have captured the Ast, and must have already built Exports (we do it serially),
-                    // so won't need the Ast again.
-                    guard.evict_ast();
-                } else if todo == Step::Solutions {
-                    if !require.keep_bindings() && !require.keep_answers() {
-                        // From now on we can use the answers directly, so evict the bindings/answers.
-                        guard.evict_answers();
-                    }
-                    load_result = module_data.state.get_load();
-                }
-                if !changed.is_empty() {
-                    self.data
-                        .changed
-                        .lock()
-                        .push((module_data.dupe(), changed.clone()));
-                    let mut dirtied = Vec::new();
-                    // We clone so we drop the lock immediately
-                    let rdeps: Vec<Handle> = module_data.rdeps.lock().iter().cloned().collect();
-                    for rdep_handle in rdeps.iter() {
-                        let rdep_module = self.get_module(rdep_handle);
-                        let should_invalidate = rdep_module
-                            .get_depends_on(&module_data.handle)
-                            .is_none_or(|d| d.invalidated_by(&changed));
-                        if !should_invalidate {
-                            continue;
-                        }
-                        self.try_mark_module_dirty(&rdep_module, &mut dirtied);
-                    }
 
-                    self.stats.lock().dirty_rdeps += dirtied.len();
-                    self.data.dirty.lock().extend(dirtied);
+                // Solutions diffing: compare old vs new solutions.
+                let new_solutions = module_data
+                    .state
+                    .get_solutions()
+                    .expect("solutions must exist after computing Solutions");
+                if let Some(old_sol) = old_solutions {
+                    old_sol.changed_exports(&new_solutions, &mut changed);
+                } else if let Some(old_ans) = old_answers {
+                    // Old solutions were None but old exports existed — module
+                    // was previously computed to Answers but not Solutions.
+                    // Diff new solutions against old answers.
+                    new_solutions.changed_exports_vs_answers(&old_ans.0, &old_ans.1, &mut changed);
                 }
-                if let Some(load) = load_result
-                    && let Some(subscriber) = &self.data.subscriber
-                {
-                    subscriber.finish_work(self, &module_data.handle, &load, !changed.is_empty());
+            }
+            if !changed.is_empty() {
+                debug!(
+                    "Exports changed for `{}`: {:?}",
+                    module_data.handle.module(),
+                    changed
+                );
+            }
+            if todo == Step::Answers && !require.keep_ast() && self.data.pysa_reporter.is_none() {
+                // We have captured the Ast, and must have already built Exports (we do it serially),
+                // so won't need the Ast again.
+                post.evict_ast();
+            } else if todo == Step::Solutions {
+                if let Some(pysa_reporter) = self.data.pysa_reporter.as_ref() {
+                    pysa_reporter.report_module(&module_data.handle, self);
+                    // With pysa, we delayed AST eviction past Answers (needed for
+                    // report_module). Evict it now that report_module has completed.
+                    post.evict_ast();
                 }
+                if !require.keep_bindings() && !require.keep_answers() {
+                    // From now on we can use the answers directly, so evict the bindings/answers.
+                    post.evict_answers();
+                }
+                load_result = module_data.state.get_load();
+            }
+            if !changed.is_empty() {
+                self.data
+                    .changed
+                    .lock()
+                    .push((module_data.dupe(), changed.clone()));
+                let mut dirtied = Vec::new();
+                // We clone so we drop the lock immediately
+                let rdeps: Vec<Handle> = module_data.rdeps.lock().iter().cloned().collect();
+                for rdep_handle in rdeps.iter() {
+                    let rdep_module = self.get_module(rdep_handle);
+                    let should_invalidate = rdep_module
+                        .get_depends_on(&module_data.handle)
+                        .is_none_or(|d| d.invalidated_by(&changed));
+                    if !should_invalidate {
+                        continue;
+                    }
+                    self.try_mark_module_dirty(rdep_module, &mut dirtied);
+                }
+
+                self.stats.lock().dirty_rdeps += dirtied.len();
+                self.data.dirty.lock().extend(dirtied);
+            }
+            if let Some(load) = load_result
+                && let Some(subscriber) = &self.data.subscriber
+            {
+                subscriber.finish_work(self, &module_data.handle, &load, !changed.is_empty());
             }
             if todo == step {
                 break; // Fast path - avoid asking again since we just did it.
@@ -1200,17 +1323,17 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn get_module(&self, handle: &Handle) -> ArcId<ModuleDataMut> {
+    fn get_module(&self, handle: &Handle) -> &ArcId<ModuleDataMut> {
         self.get_module_ex(handle, self.data.default_require).0
     }
 
     /// Get a module discovered via an import.
-    fn get_imported_module(&self, handle: &Handle) -> ArcId<ModuleDataMut> {
+    fn get_imported_module(&self, handle: &Handle) -> &ArcId<ModuleDataMut> {
         self.get_module_ex(handle, self.data.default_require).0
     }
 
     /// Return the module, plus true if the module was newly created.
-    fn get_module_ex(&self, handle: &Handle, require: Require) -> (ArcId<ModuleDataMut>, bool) {
+    fn get_module_ex(&self, handle: &Handle, require: Require) -> (&ArcId<ModuleDataMut>, bool) {
         let mut created = false;
         let (res, inserted) = self.data.updated_modules.ensure(handle, || {
             if let Some(m) = self.readable.modules.get(handle) {
@@ -1234,7 +1357,7 @@ impl<'a> Transaction<'a> {
                 subscriber.start_work(handle);
             }
         }
-        (res.dupe(), created)
+        (res, created)
     }
 
     fn add_error(
@@ -1248,10 +1371,12 @@ impl<'a> Transaction<'a> {
         load.errors.add(range, ErrorInfo::Kind(kind), vec1![msg]);
     }
 
-    fn lookup<'b>(&'b self, module_data: ArcId<ModuleDataMut>) -> TransactionHandle<'b> {
+    fn lookup<'b>(&'b self, module_data: &'b ArcId<ModuleDataMut>) -> TransactionHandle<'b> {
         TransactionHandle {
             transaction: self,
             module_data,
+            deferred_deps: RefCell::new(FxHashMap::default()),
+            metadata_cache: UnsafeCell::new(FxHashMap::default()),
         }
     }
 
@@ -1263,12 +1388,12 @@ impl<'a> Transaction<'a> {
     ) -> Option<(Class, Arc<TParams>)> {
         let module_data = self.get_module(handle);
         if !self
-            .lookup_export(&module_data)
-            .exports(&self.lookup(module_data.dupe()))
+            .lookup_export(module_data)
+            .exports(&self.lookup(module_data))
             .contains_key(name)
         {
             self.add_error(
-                &module_data,
+                module_data,
                 TextRange::default(),
                 format!(
                     "Stdlib import failure, was expecting `{}` to contain `{name}`",
@@ -1279,12 +1404,12 @@ impl<'a> Transaction<'a> {
             return None;
         }
 
-        let t = self.lookup_answer(module_data.dupe(), &KeyExport(name.clone()), thread_state);
+        let t = self.lookup_answer(module_data, &KeyExport(name.clone()), thread_state);
         let class = match t.as_deref() {
             Some(Type::ClassDef(cls)) => Some(cls.dupe()),
             ty => {
                 self.add_error(
-                    &module_data,
+                    module_data,
                     TextRange::default(),
                     format!(
                         "Did not expect non-class type `{}` for stdlib import `{}.{name}`",
@@ -1300,7 +1425,7 @@ impl<'a> Transaction<'a> {
             let tparams = match class.precomputed_tparams() {
                 Some(tparams) => tparams.dupe(),
                 None => self
-                    .lookup_answer(module_data.dupe(), &KeyTParams(class.index()), thread_state)
+                    .lookup_answer(module_data, &KeyTParams(class.index()), thread_state)
                     .unwrap_or_default(),
             };
             (class, tparams)
@@ -1317,8 +1442,8 @@ impl<'a> Transaction<'a> {
     /// Returns the module and text range where the name is defined.
     fn lookup_export_location(&self, handle: &Handle, name: &Name) -> Option<(Module, TextRange)> {
         let module_data = self.get_module(handle);
-        let exports = self.lookup_export(&module_data);
-        let export_map = exports.exports(&self.lookup(module_data.dupe()));
+        let exports = self.lookup_export(module_data);
+        let export_map = exports.exports(&self.lookup(module_data));
 
         match export_map.get(name)? {
             ExportLocation::ThisModule(export) => {
@@ -1339,7 +1464,7 @@ impl<'a> Transaction<'a> {
 
     fn lookup_answer<'b, K: Solve<TransactionHandle<'b>> + Exported>(
         &'b self,
-        module_data: ArcId<ModuleDataMut>,
+        module_data: &'b ArcId<ModuleDataMut>,
         key: &K,
         thread_state: &ThreadState,
     ) -> Option<Arc<<K as Keyed>::Answer>>
@@ -1350,45 +1475,44 @@ impl<'a> Transaction<'a> {
     {
         let key = Hashed::new(key);
 
-        // Either: We have solutions (use that), or we have answers (calculate that), or we have none (demand and try again)
-        // Check; demand; check - the second check is guaranteed to work.
-        for _ in 0..2 {
-            if module_data.state.is_checked(self.data.now) {
-                // Only use existing solutions or answers if the module data is current.
-                // Otherwise, the module might be dirty and require computation.
-                if let Some(solutions) = module_data.state.get_solutions()
-                    && module_data.state.last_step() == Some(Step::Solutions)
-                {
-                    return solutions.get_hashed_opt(key).duped();
-                } else if let Some(answers) = module_data.state.get_answers() {
-                    // Fast path: check if the answer is already computed in the
-                    // Calculation cell. This avoids duping Arcs and constructing
-                    // a TransactionHandle when the value is cached.
-                    if let Some(idx) = answers.0.key_to_idx_hashed_opt(key)
-                        && let Some(v) = answers.1.get_idx(idx)
-                    {
-                        return Some(v);
-                    }
-                    // Slow path: need full solve_exported_key for computation.
-                    let load = module_data.state.get_load().unwrap();
-                    let stdlib = self.get_stdlib(&module_data.handle);
-                    let lookup = self.lookup(module_data);
-                    let result = answers.1.solve_exported_key(
-                        &lookup,
-                        &lookup,
-                        &answers.0,
-                        &load.errors,
-                        &stdlib,
-                        &self.data.state.uniques,
-                        key,
-                        thread_state,
-                    );
-                    return result;
-                }
-            }
-            self.demand(&module_data, Step::Answers);
+        // Ensure answers (or solutions) are computed. Cheap if already done.
+        self.demand(module_data, Step::Answers);
+
+        // Load answers via Guard to avoid Arc refcount operations.
+        // The Guard borrows from the ArcSwap without incrementing the refcount.
+        let answers_guard = module_data.state.load_answers();
+        let Some(answers) = answers_guard.as_ref() else {
+            // If answers is None, solutions must exist.
+            let solutions = module_data
+                .state
+                .get_solutions()
+                .expect("answers evicted implies solutions exist");
+            return solutions.get_hashed_opt(key).duped();
+        };
+
+        // Fast path: check if the answer is already computed in the
+        // Calculation cell. This avoids duping Arcs and constructing
+        // a TransactionHandle when the value is cached.
+        if let Some(idx) = answers.0.key_to_idx_hashed_opt(key)
+            && let Some(v) = answers.1.get_idx(idx)
+        {
+            return Some(v);
         }
-        unreachable!("We demanded the answers, either answers or solutions should be present");
+
+        // Slow path: need full solve_exported_key for computation.
+        let load = module_data.state.get_load().unwrap();
+        let stdlib = self.get_stdlib(&module_data.handle);
+        let lookup = self.lookup(module_data);
+        answers.1.solve_exported_key(
+            &lookup,
+            &lookup,
+            &answers.0,
+            &load.errors,
+            &stdlib,
+            &self.data.state.uniques,
+            key,
+            thread_state,
+        )
     }
 
     fn memory_lookup<'b>(&'b self) -> MemoryFilesLookup<'b> {
@@ -1415,22 +1539,36 @@ impl<'a> Transaction<'a> {
         self.data.stdlib.get(handle.sys_info()).unwrap().dupe()
     }
 
-    fn compute_stdlib(&mut self, sys_infos: SmallSet<SysInfo>) {
+    /// Compute the `Stdlib` for each requested `SysInfo`.
+    ///
+    /// Stdlib is derived from bundled (immutable) typeshed stubs, so the result
+    /// is deterministic for a given `SysInfo`. We skip recomputation for any
+    /// `SysInfo` already present in the stdlib map — this avoids 80-150 ms of
+    /// redundant single-threaded work on rechecks and multi-epoch runs.
+    ///
+    /// Returns `true` if all entries were already cached (no work done).
+    fn compute_stdlib(&mut self, sys_infos: SmallSet<SysInfo>) -> bool {
+        // Filter out SysInfos that already have a computed stdlib.
+        let missing: SmallSet<SysInfo> = sys_infos
+            .into_iter()
+            .filter(|k| !self.data.stdlib.contains_key(k))
+            .collect();
+        if missing.is_empty() {
+            return true;
+        }
         let loader = self.get_cached_loader(&BundledTypeshedStdlib::config());
         // Use defaults (disabled) for stdlib - depth limiting is for user code
         let thread_state = ThreadState::new(None);
-        for k in sys_infos.into_iter_hashed() {
+        for k in missing.into_iter_hashed() {
             self.data
                 .stdlib
                 .insert_hashed(k.to_owned(), Arc::new(Stdlib::for_bootstrapping()));
             let v = Arc::new(Stdlib::new(
                 k.version(),
-                // Existing lookup_class callback
                 &|module, name| {
                     let path = loader.find_import(module, None).finding()?;
                     self.lookup_stdlib(&Handle::new(module, path, (*k).dupe()), name, &thread_state)
                 },
-                // New lookup_export_location callback
                 &|module, name| {
                     let path = loader.find_import(module, None).finding()?;
                     let handle = Handle::new(module, path, (*k).dupe());
@@ -1439,6 +1577,7 @@ impl<'a> Transaction<'a> {
             ));
             self.data.stdlib.insert_hashed(k, v);
         }
+        false
     }
 
     fn work(&self) -> Result<(), Cancelled> {
@@ -1448,18 +1587,15 @@ impl<'a> Transaction<'a> {
         })
     }
 
-    fn run_step(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
+    fn run_step(
+        &mut self,
+        handles: &[Handle],
+        require: Require,
+        custom_thread_pool: Option<&ThreadPool>,
+    ) -> Result<(), Cancelled> {
         let run_start = Instant::now();
 
         self.data.now.next();
-        let sys_infos = handles
-            .iter()
-            .map(|x| x.sys_info().dupe())
-            .collect::<SmallSet<_>>();
-        let stdlib_start = Instant::now();
-        self.compute_stdlib(sys_infos);
-        let compute_stdlib_time = stdlib_start.elapsed();
-        self.stats.lock().compute_stdlib_time += compute_stdlib_time;
 
         let mut todo_count = 0;
         let dirty_count;
@@ -1469,8 +1605,8 @@ impl<'a> Transaction<'a> {
             for h in handles {
                 let (m, created) = self.get_module_ex(h, require);
                 let dirty_require = m.state.increase_require(require);
-                if (created || dirty_require) && !dirty.contains(&m) {
-                    self.data.todo.push_fifo(Step::first(), m);
+                if (created || dirty_require) && !dirty.contains(m) {
+                    self.data.todo.push_fifo(Step::first(), m.dupe());
                     todo_count += 1;
                 }
             }
@@ -1490,7 +1626,8 @@ impl<'a> Transaction<'a> {
         if todo_count == 0 {
             cancelled.fetch_or(self.work().is_err(), Ordering::Relaxed);
         } else {
-            self.data.state.threads.spawn_many(|| {
+            let pool = custom_thread_pool.unwrap_or(&self.data.state.threads);
+            pool.spawn_many(|| {
                 cancelled.fetch_or(self.work().is_err(), Ordering::Relaxed);
             });
         }
@@ -1544,13 +1681,36 @@ impl<'a> Transaction<'a> {
         let mut dirty_set: std::sync::MutexGuard<'_, SmallSet<ArcId<ModuleDataMut>>> =
             self.data.dirty.lock();
         for x in dirty.into_values() {
-            x.state.dirty.set_deps();
+            x.state.set_dirty_deps();
             dirty_set.insert(x);
         }
     }
 
-    fn run_internal(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
+    fn run_internal(
+        &mut self,
+        handles: &[Handle],
+        require: Require,
+        custom_thread_pool: Option<&ThreadPool>,
+    ) -> Result<(), Cancelled> {
         let run_number = self.data.state.run_count.fetch_add(1, Ordering::SeqCst);
+        // Compute stdlib once before the epoch loop. Stdlib is deterministic for a
+        // given SysInfo and does not depend on user code, so it only needs to run once.
+        let sys_infos = handles
+            .iter()
+            .map(|x| x.sys_info().dupe())
+            .collect::<SmallSet<_>>();
+        let stdlib_start = Instant::now();
+        let stdlib_cached = self.compute_stdlib(sys_infos);
+        let compute_stdlib_time = stdlib_start.elapsed();
+        {
+            let mut stats = self.stats.lock();
+            stats.compute_stdlib_time += compute_stdlib_time;
+            stats.compute_stdlib_cached = stdlib_cached;
+            if !stdlib_cached {
+                stats.compute_stdlib_prewarm_time += compute_stdlib_time;
+            }
+        }
+
         // We first compute all the modules that are either new or have changed.
         // Then we repeatedly compute all the modules who depend on modules that changed.
         //
@@ -1578,7 +1738,7 @@ impl<'a> Transaction<'a> {
 
         for i in 1..=MAX_EPOCHS {
             debug!("Running epoch {i} of run {run_number}");
-            self.run_step(handles, require)?;
+            self.run_step(handles, require, custom_thread_pool)?;
             let changed = mem::take(&mut *self.data.changed.lock());
             if changed.is_empty() {
                 return Ok(());
@@ -1601,7 +1761,7 @@ impl<'a> Transaction<'a> {
                 // Just invalidate everything in the cycle and recompute it all.
                 // Use coarse-grained invalidation to ensure all cyclic modules reach stable state
                 self.invalidate_rdeps(changed.into_map(|(m, _)| m));
-                return self.run_step(handles, require);
+                return self.run_step(handles, require, custom_thread_pool);
             }
 
             // No cycle detected. Merge the new deps into our tracking set.
@@ -1625,11 +1785,16 @@ impl<'a> Transaction<'a> {
         );
         let changed = mem::take(&mut *self.data.changed.lock());
         self.invalidate_rdeps(changed.into_map(|(m, _)| m));
-        self.run_step(handles, require)
+        self.run_step(handles, require, custom_thread_pool)
     }
 
-    pub fn run(&mut self, handles: &[Handle], require: Require) {
-        let _ = self.run_internal(handles, require);
+    pub fn run(
+        &mut self,
+        handles: &[Handle],
+        require: Require,
+        custom_thread_pool: Option<&ThreadPool>,
+    ) {
+        let _ = self.run_internal(handles, require, custom_thread_pool);
     }
 
     pub(crate) fn ad_hoc_solve<R: Sized, F: FnOnce(AnswersSolver<TransactionHandle>) -> R>(
@@ -1639,7 +1804,7 @@ impl<'a> Transaction<'a> {
         solve: F,
     ) -> Option<R> {
         let module_data = self.get_module(handle);
-        let lookup = self.lookup(module_data.dupe());
+        let lookup = self.lookup(module_data);
         let load = module_data.state.get_load()?;
         let answers = module_data.state.get_answers()?;
         let errors = &load.errors;
@@ -1668,21 +1833,21 @@ impl<'a> Transaction<'a> {
         Some(result)
     }
 
-    fn invalidate(&mut self, pred: impl Fn(&Handle) -> bool, dirty: impl Fn(&AtomicDirty)) {
+    fn invalidate(&mut self, pred: impl Fn(&Handle) -> bool, dirty: impl Fn(&ModuleStateMut)) {
         let mut dirty_set = self.data.dirty.lock();
         // We need to mark as dirty all those in updated_modules, and lift those in readable.modules up if they are dirty.
         // Most things in updated are also in readable, so we are likely to set them twice - but it's not too expensive.
         // Make sure we do updated first, as doing readable will cause them all to move to dirty.
         for (handle, module_data) in self.data.updated_modules.iter_unordered() {
             if pred(handle) {
-                dirty(&module_data.state.dirty);
+                dirty(&module_data.state);
                 dirty_set.insert(module_data.dupe());
             }
         }
         for handle in self.readable.modules.keys() {
             if pred(handle) {
                 let module_data = self.get_module(handle);
-                dirty(&module_data.state.dirty);
+                dirty(&module_data.state);
                 dirty_set.insert(module_data.dupe());
             }
         }
@@ -1721,7 +1886,7 @@ impl<'a> Transaction<'a> {
         }
         self.data.updated_loaders = new_loaders;
 
-        self.invalidate(|_| true, |dirty| dirty.set_find());
+        self.invalidate(|_| true, |state| state.set_dirty_find());
     }
 
     /// The data returned by the ConfigFinder might have changed. Note: invalidate find is not also required to run. When
@@ -1738,7 +1903,7 @@ impl<'a> Transaction<'a> {
             let config2 = self.data.state.get_config(handle);
             if config2 != *module_data.config.read() {
                 *module_data.config.write() = config2;
-                module_data.state.dirty.set_find();
+                module_data.state.set_dirty_find();
                 dirty_set.insert(module_data.dupe());
             }
         }
@@ -1748,7 +1913,7 @@ impl<'a> Transaction<'a> {
                 if module_data.config != config2 {
                     let module_data = self.get_module(handle);
                     *module_data.config.write() = config2;
-                    module_data.state.dirty.set_find();
+                    module_data.state.set_dirty_find();
                     dirty_set.insert(module_data.dupe());
                 }
             }
@@ -1785,7 +1950,7 @@ impl<'a> Transaction<'a> {
         let mut dirty_set = self.data.dirty.lock();
         for module_data in self.data.updated_modules.values() {
             if configs.contains(&*module_data.config.read()) {
-                module_data.state.dirty.set_find();
+                module_data.state.set_dirty_find();
                 dirty_set.insert(module_data.dupe());
             }
         }
@@ -1794,7 +1959,7 @@ impl<'a> Transaction<'a> {
                 && configs.contains(&module_data.config)
             {
                 let module_data = self.get_module(handle);
-                module_data.state.dirty.set_find();
+                module_data.state.set_dirty_find();
                 dirty_set.insert(module_data.dupe());
             }
         }
@@ -1816,7 +1981,7 @@ impl<'a> Transaction<'a> {
         }
         self.invalidate(
             |handle| changed.contains(handle.path()),
-            |dirty| dirty.set_load(),
+            |state| state.set_dirty_load(),
         );
     }
 
@@ -1835,7 +2000,7 @@ impl<'a> Transaction<'a> {
             .collect::<SmallSet<_>>();
         self.invalidate(
             |handle| files.contains(handle.path()),
-            |dirty| dirty.set_load(),
+            |state| state.set_dirty_load(),
         );
     }
 
@@ -1880,13 +2045,15 @@ impl<'a> Transaction<'a> {
                 memory: &self.memory_lookup(),
                 uniques: &self.data.state.uniques,
                 stdlib: &stdlib,
-                lookup: &self.lookup(m.dupe()),
-                untyped_def_behavior: config.untyped_def_behavior(m.handle.path().as_path()),
+                lookup: &self.lookup(m),
+                check_unannotated_defs: config.check_unannotated_defs(m.handle.path().as_path()),
+                infer_return_types: config.infer_return_types(m.handle.path().as_path()),
                 infer_with_first_use: config.infer_with_first_use(m.handle.path().as_path()),
                 tensor_shapes: config.tensor_shapes(m.handle.path().as_path()),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(m.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
+                pysa_context: None,
             };
             while let Some(step) = alt.next_step() {
                 let start = Instant::now();
@@ -1960,24 +2127,75 @@ impl<'a> Transaction<'a> {
 
     pub fn get_exports(&self, handle: &Handle) -> Arc<SmallMap<Name, ExportLocation>> {
         let module_data = self.get_module(handle);
-        self.lookup_export(&module_data)
+        self.lookup_export(module_data)
             .exports(&self.lookup(module_data))
     }
 
     pub(crate) fn get_exports_data(&self, handle: &Handle) -> Arc<Exports> {
         let module_data = self.get_module(handle);
-        self.lookup_export(&module_data)
+        self.lookup_export(module_data)
     }
 
     pub fn get_module_docstring_range(&self, handle: &Handle) -> Option<TextRange> {
         let module_data = self.get_module(handle);
-        self.lookup_export(&module_data).docstring_range()
+        self.lookup_export(module_data).docstring_range()
+    }
+
+    /// Demand that a module reaches Solutions and return its PysaSolutions.
+    pub fn resolve_pysa_solutions(
+        &self,
+        handle: &Handle,
+    ) -> Arc<crate::report::pysa::PysaSolutions> {
+        let module_data = self.get_module(&handle);
+        self.demand(module_data, Step::last());
+        module_data
+            .state
+            .get_solutions()
+            .expect("solutions must exist after demand")
+            .pysa_solutions()
+            .expect("pysa_solutions must exist when pysa reporting is enabled")
+            .clone()
     }
 }
 
 pub(crate) struct TransactionHandle<'a> {
     transaction: &'a Transaction<'a>,
-    module_data: ArcId<ModuleDataMut>,
+    module_data: &'a ArcId<ModuleDataMut>,
+    /// Locally accumulated deps, flushed to `module_data.deps` on drop.
+    /// This batches N lock acquisitions per handle lifetime into 1.
+    /// Keyed by ModulePath (cheap to hash — discriminant + interned u64) rather
+    /// than Handle, since ModulePath uniquely identifies the target module within
+    /// a TransactionHandle (module name is derivable, sys_info is invariant).
+    deferred_deps: RefCell<FxHashMap<ModulePath, (Handle, ModuleDeps)>>,
+    /// Cache of cross-module `BindingsMetadata` for class field lookups.
+    /// Keyed by `ArcId::id()` (pointer-as-usize) to avoid atomic refcount
+    /// operations and to get a cheap 8-byte hash key.
+    /// Uses `UnsafeCell` because we need to return `&ClassFields` references
+    /// into the cached `Arc<BindingsMetadata>` values. This is safe because:
+    ///   1. `TransactionHandle` is single-threaded (not `Sync`).
+    ///   2. The cache is append-only — entries are never removed or replaced,
+    ///      so references into existing entries remain valid.
+    metadata_cache: UnsafeCell<FxHashMap<usize, Arc<BindingsMetadata>>>,
+}
+
+/// Result of looking up a target module's `Answers` for a cross-module
+/// operation (commit or solve). See `TransactionHandle::lookup_target_answers`.
+enum TargetAnswers<'a> {
+    /// The target module was not found (e.g., import resolution failed or the
+    /// module has been invalidated). The caller should return `false`.
+    ModuleNotFound,
+    /// The target module's `Answers` are available. The caller should perform
+    /// its operation (commit or solve) using the contained data.
+    Available {
+        bindings: Bindings,
+        answers: Arc<Answers>,
+        load: Option<Arc<Load>>,
+        module_data: &'a ArcId<ModuleDataMut>,
+    },
+    /// The target module's `Answers` have been evicted but `Solutions` exist.
+    /// This is a benign race: another thread already solved everything, so the
+    /// caller's operation is redundant and can be safely skipped (return `true`).
+    Evicted,
 }
 
 impl<'a> TransactionHandle<'a> {
@@ -1986,7 +2204,7 @@ impl<'a> TransactionHandle<'a> {
         module: ModuleName,
         path: Option<&ModulePath>,
         dep: ModuleDep,
-    ) -> FindingOrError<ArcId<ModuleDataMut>> {
+    ) -> FindingOrError<&'a ArcId<ModuleDataMut>> {
         let handle = match path {
             Some(path) => {
                 // Explicit path — already resolved. Bypass imports entirely.
@@ -2026,17 +2244,12 @@ impl<'a> TransactionHandle<'a> {
 
         handle.map(|handle| {
             let res = self.transaction.get_imported_module(&handle);
-            let mut deps = self.module_data.deps.write();
-            match deps.entry(handle) {
-                Entry::Occupied(mut e) => {
-                    e.get_mut().add_dep(dep);
-                }
-                Entry::Vacant(e) => {
-                    e.insert(ModuleDeps::default().with_dep(dep));
-                    let inserted = res.rdeps.lock().insert(self.module_data.handle.dupe());
-                    assert!(inserted);
-                }
-            }
+            self.deferred_deps
+                .borrow_mut()
+                .entry(handle.path().dupe())
+                .or_insert_with(|| (handle, ModuleDeps::default()))
+                .1
+                .add_dep(dep);
             res
         })
     }
@@ -2049,12 +2262,104 @@ impl<'a> TransactionHandle<'a> {
         dep: ModuleDep,
     ) -> Option<T> {
         let module_data = self.get_module(module, None, dep).finding()?;
-        let exports = self.transaction.lookup_export(&module_data);
+        let exports = self.transaction.lookup_export(module_data);
         let lookup = TransactionHandle {
             transaction: self.transaction,
             module_data,
+            deferred_deps: RefCell::new(FxHashMap::default()),
+            metadata_cache: UnsafeCell::new(FxHashMap::default()),
         };
         Some(f(&exports, &lookup))
+    }
+
+    /// Look up a target module's Answers for a cross-module operation.
+    ///
+    /// Both `commit_to_module` and `solve_idx_erased` need to:
+    ///   1. Resolve the target module from a `CalcId`.
+    ///   2. Read the module's `Steps` under a read lock.
+    ///   3. Handle the case where Answers have been evicted but Solutions
+    ///      exist (a benign race — see `TargetAnswers::Evicted` docs).
+    ///
+    /// This helper centralizes that logic and returns a `TargetAnswers`
+    /// enum so callers only need to handle the "answers available" case.
+    fn lookup_target_answers(&self, calc_id: &CalcId) -> TargetAnswers<'a> {
+        let CalcId(ref bindings, _) = *calc_id;
+        let module = bindings.module().name();
+        let path = bindings.module().path();
+
+        // Look up the target module. Use default ModuleDep since cross-module
+        // operations don't establish new dependencies.
+        let module_data = match self
+            .get_module(module, Some(path), ModuleDep::Exists)
+            .finding()
+        {
+            Some(data) => data,
+            None => return TargetAnswers::ModuleNotFound,
+        };
+
+        if let Some(answers_pair) = module_data.state.get_answers() {
+            let bindings = answers_pair.0.dupe();
+            let answers = answers_pair.1.dupe();
+            let load = module_data.state.get_load();
+            TargetAnswers::Available {
+                bindings,
+                answers,
+                load,
+                module_data,
+            }
+        } else if module_data.state.get_solutions().is_some()
+            && module_data.state.last_step() == Some(Step::Solutions)
+        {
+            // The target module's Answers have been evicted, but Solutions
+            // exist. This is a benign race: another thread ran
+            // `demand(Step::Solutions)` on the target module concurrently
+            // with our SCC resolution. The sequence is:
+            //
+            //   1. Our thread duped the target's Arc<Answers> (in
+            //      `lookup_answer`) and dropped the module state lock.
+            //   2. While our thread was solving the SCC using that duped
+            //      Arc, another thread acquired the exclusive lock on the
+            //      target module and ran `step_solutions`, which solves
+            //      all keys independently (Calculation cells allow
+            //      multi-thread parallel compute via `propose_calculation`).
+            //   3. After computing Solutions, `demand` evicted the Answers
+            //      as a memory optimization (`steps.answers.take()`),
+            //      then released the exclusive lock.
+            //   4. Our cross-module operation now reads `steps.answers`
+            //      and finds None — but the Calculation cells were already
+            //      filled by the other thread's `step_solutions`, so no
+            //      data is lost. Our operation is redundant and can be
+            //      safely skipped.
+            TargetAnswers::Evicted
+        } else {
+            TargetAnswers::ModuleNotFound
+        }
+    }
+}
+
+impl Drop for TransactionHandle<'_> {
+    /// Flush locally accumulated deps to the shared `module_data.deps` lock
+    /// and update `rdeps` for any newly discovered dependencies.
+    fn drop(&mut self) {
+        // get_mut() avoids RefCell runtime borrow check since drop has &mut self.
+        let deferred = mem::take(self.deferred_deps.get_mut());
+        if deferred.is_empty() {
+            return;
+        }
+        let mut deps_lock = self.module_data.deps.write();
+        for (_path, (target_handle, new_deps)) in deferred {
+            match deps_lock.entry(target_handle.dupe()) {
+                Entry::Occupied(mut e) => {
+                    e.get_mut().merge(new_deps);
+                }
+                Entry::Vacant(e) => {
+                    e.insert(new_deps);
+                    let target = self.transaction.get_module(&target_handle);
+                    let inserted = target.rdeps.lock().insert(self.module_data.handle.dupe());
+                    assert!(inserted);
+                }
+            }
+        }
     }
 }
 
@@ -2082,7 +2387,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
     fn module_exists(&self, module: ModuleName) -> FindingOrError<()> {
         self.get_module(module, None, ModuleDep::Exists)
             .map(|module_data| {
-                self.transaction.lookup_export(&module_data);
+                self.transaction.lookup_export(module_data);
             })
     }
 
@@ -2264,67 +2569,144 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         answer: Arc<dyn Any + Send + Sync>,
         errors: Option<Arc<ErrorCollector>>,
     ) -> bool {
-        let CalcId(ref bindings, ref any_idx) = calc_id;
-        let module = bindings.module().name();
-        let path = bindings.module().path();
-
-        // Look up the target module. Use default ModuleDep since cross-module
-        // commits don't establish new dependencies.
-        let module_data = match self
-            .get_module(module, Some(path), ModuleDep::Exists)
-            .finding()
-        {
-            Some(data) => data,
-            None => return false,
-        };
-
-        // Access the target module's Answers and commit the answer.
-        if let Some(answers_pair) = module_data.state.get_answers() {
-            let answers = answers_pair.1.dupe();
-            // Get the target module's error collector for error propagation.
-            let target_load = module_data.state.get_load();
-            let did_write = answers.commit_preliminary(any_idx, answer);
-            // Only extend errors if this write won the first-write-wins race.
-            if did_write && let (Some(errors), Some(target_load)) = (errors, target_load) {
-                // The errors Arc should have refcount 1 here: batch_commit_scc
-                // consumes the Scc (moved into the method), and each NodeState::Done
-                // is destructured by the for loop, so no other references remain.
-                // If this invariant is violated, something is holding an unexpected
-                // reference to the error collector, which could cause silent error
-                // loss and nondeterministic output.
-                let errors = Arc::try_unwrap(errors).expect(
-                    "cross-module batch commit: errors Arc has unexpected extra references; \
-                         the SCC should have been consumed, giving us sole ownership",
-                );
-                target_load.errors.extend(errors);
+        let CalcId(_, ref any_idx) = calc_id;
+        match self.lookup_target_answers(&calc_id) {
+            TargetAnswers::ModuleNotFound => false,
+            TargetAnswers::Evicted => true,
+            TargetAnswers::Available { answers, load, .. } => {
+                let did_write = answers.commit_preliminary(any_idx, answer);
+                // Only extend errors if this write won the first-write-wins race.
+                if did_write && let (Some(errors), Some(target_load)) = (errors, load) {
+                    // The errors Arc should have refcount 1 here: batch_commit_scc
+                    // consumes the Scc (moved into the method), and each NodeState::Done
+                    // is destructured by the for loop, so no other references remain.
+                    // If this invariant is violated, something is holding an unexpected
+                    // reference to the error collector, which could cause silent error
+                    // loss and nondeterministic output.
+                    let errors = Arc::try_unwrap(errors).expect(
+                        "cross-module batch commit: errors Arc has unexpected extra references; \
+                             the SCC should have been consumed, giving us sole ownership",
+                    );
+                    target_load.errors.extend(errors);
+                }
+                true
             }
-            true
-        } else if module_data.state.get_solutions().is_some()
-            && module_data.state.last_step() == Some(Step::Solutions)
-        {
-            // The target module's Answers have been evicted, but Solutions
-            // exist. This is a benign race: another thread ran
-            // `demand(Step::Solutions)` on the target module concurrently
-            // with our SCC resolution. The sequence is:
-            //
-            //   1. Our thread duped the target's Arc<Answers> (in
-            //      `lookup_answer`) and dropped the module state lock.
-            //   2. While our thread was solving the SCC using that duped
-            //      Arc, another thread acquired the exclusive lock on the
-            //      target module and ran `step_solutions`, which solves
-            //      all keys independently (Calculation cells allow
-            //      multi-thread parallel compute via `propose_calculation`).
-            //   3. After computing Solutions, `demand` evicted the Answers
-            //      as a memory optimization (`steps.answers.take()`),
-            //      then released the exclusive lock.
-            //   4. Our batch commit now reads `steps.answers` and finds
-            //      None — but the Calculation cells were already filled
-            //      by the other thread's `step_solutions`, so no data is
-            //      lost. Our commit is redundant and can be safely skipped.
-            true
-        } else {
-            false
         }
+    }
+
+    fn solve_idx_erased(&self, calc_id: &CalcId, thread_state: &ThreadState) -> bool {
+        let CalcId(_, ref any_idx) = *calc_id;
+        match self.lookup_target_answers(calc_id) {
+            TargetAnswers::ModuleNotFound => false,
+            TargetAnswers::Evicted => true,
+            TargetAnswers::Available {
+                bindings: target_bindings,
+                answers: target_answers,
+                load,
+                module_data,
+            } => {
+                let target_load = load.expect(
+                    "target module has Answers but no Load; this should be unreachable \
+                     because Load is computed before Answers",
+                );
+                let stdlib = self.transaction.get_stdlib(&module_data.handle);
+                let lookup = self.transaction.lookup(module_data);
+                target_answers.solve_idx_erased(
+                    any_idx,
+                    &lookup,
+                    &target_bindings,
+                    &lookup,
+                    &target_load.errors,
+                    &stdlib,
+                    &self.transaction.data.state.uniques,
+                    thread_state,
+                );
+                true
+            }
+        }
+    }
+
+    fn write_lock_in_module(&self, calc_id: &CalcId) -> bool {
+        let CalcId(_, ref any_idx) = *calc_id;
+        match self.lookup_target_answers(calc_id) {
+            TargetAnswers::ModuleNotFound => false,
+            TargetAnswers::Evicted => false,
+            TargetAnswers::Available { answers, .. } => answers.write_lock_preliminary(any_idx),
+        }
+    }
+
+    fn write_unlock_in_module(
+        &self,
+        calc_id: CalcId,
+        answer: Arc<dyn Any + Send + Sync>,
+        errors: Option<Arc<ErrorCollector>>,
+        traces: Option<TraceSideEffects>,
+    ) -> bool {
+        let CalcId(_, ref any_idx) = calc_id;
+        match self.lookup_target_answers(&calc_id) {
+            TargetAnswers::ModuleNotFound | TargetAnswers::Evicted => false,
+            TargetAnswers::Available { answers, load, .. } => {
+                let did_write = answers.write_unlock_preliminary(any_idx, answer);
+                if did_write {
+                    if let (Some(errors), Some(target_load)) = (errors, load) {
+                        let errors = Arc::try_unwrap(errors).expect(
+                            "cross-module write_unlock: errors Arc has unexpected extra references",
+                        );
+                        target_load.errors.extend(errors);
+                    }
+                    if let Some(traces) = traces {
+                        answers.merge_trace_side_effects(traces);
+                    }
+                }
+                did_write
+            }
+        }
+    }
+
+    fn write_unlock_empty_in_module(&self, calc_id: &CalcId) {
+        let CalcId(_, ref any_idx) = *calc_id;
+        match self.lookup_target_answers(calc_id) {
+            TargetAnswers::ModuleNotFound | TargetAnswers::Evicted => {}
+            TargetAnswers::Available { answers, .. } => {
+                answers.write_unlock_empty_preliminary(any_idx);
+            }
+        }
+    }
+
+    fn get_class_fields(&self, cls: &Class) -> Option<&ClassFields> {
+        // Register a class-level dependency via get_module, which handles
+        // both module resolution and dep tracking through deferred_deps.
+        let module_data = self
+            .get_module(
+                cls.module_name(),
+                Some(cls.module_path()),
+                ModuleDep::Class(cls.index()),
+            )
+            .finding()
+            .unwrap();
+
+        // Load metadata into cache (once per module), keyed by ArcId pointer
+        // to avoid atomic refcount ops and get a cheap 8-byte hash key.
+        // SAFETY: TransactionHandle is single-threaded and the cache is
+        // append-only, so references into existing entries remain valid.
+        let cache = unsafe { &mut *self.metadata_cache.get() };
+        let metadata = cache.entry(module_data.id()).or_insert_with(|| {
+            self.transaction.demand(module_data, Step::Answers);
+
+            let answers_guard = module_data.state.load_answers();
+            if let Some(answers) = answers_guard.as_ref() {
+                return answers.0.metadata().dupe();
+            }
+            let solutions_guard = module_data.state.load_solutions();
+            let solutions = solutions_guard
+                .as_ref()
+                .expect("answers evicted implies solutions exist");
+            solutions.metadata().dupe()
+        });
+        // ClassDefIndex may be stale if the target module was rebuilt with
+        // fewer classes during this epoch (transient inconsistency that
+        // resolves in the next epoch when rdeps are invalidated).
+        Some(&metadata.get_class_checked(cls.index())?.fields)
     }
 }
 
@@ -2341,13 +2723,24 @@ impl<'a> AsMut<Transaction<'a>> for CommittingTransaction<'a> {
     }
 }
 
+impl<'a> AsRef<Transaction<'a>> for CommittingTransaction<'a> {
+    fn as_ref(&self) -> &Transaction<'a> {
+        &self.transaction
+    }
+}
+
 /// A thin wrapper around `Transaction`, so that the ability to cancel the transaction is only
 /// exposed for this struct.
 pub struct CancellableTransaction<'a>(Transaction<'a>);
 
 impl CancellableTransaction<'_> {
-    pub fn run(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
-        self.0.run_internal(handles, require)
+    pub fn run(
+        &mut self,
+        handles: &[Handle],
+        require: Require,
+        custom_thread_pool: Option<&ThreadPool>,
+    ) -> Result<(), Cancelled> {
+        self.0.run_internal(handles, require, custom_thread_pool)
     }
 
     pub fn get_cancellation_handle(&self) -> CancellationHandle {
@@ -2444,6 +2837,7 @@ impl State {
                 changed: Default::default(),
                 dirty: Default::default(),
                 subscriber,
+                pysa_reporter: None,
             },
         }
     }
@@ -2513,6 +2907,7 @@ impl State {
                             changed: _,
                             dirty,
                             subscriber: _,
+                            pysa_reporter: _,
                         },
                 },
             committing_transaction_guard,
@@ -2554,6 +2949,19 @@ impl State {
                 .loaders
                 .insert(loader_id.dupe(), additional_loader.dupe());
         }
+
+        // Garbage-collect stale loader entries. Loaders are keyed by ArcId<ConfigFile>
+        // which uses pointer-identity equality, so config reloads (via invalidate_config)
+        // create new ArcId keys and old entries accumulate without this cleanup.
+        let active_configs: HashSet<usize> =
+            state.modules.values().map(|m| m.config.id()).collect();
+        let old_loaders = std::mem::take(&mut state.loaders);
+        for (config, loader) in old_loaders {
+            if active_configs.contains(&config.id()) {
+                state.loaders.insert(config, loader);
+            }
+        }
+
         drop(committing_transaction_guard)
     }
 
@@ -2563,9 +2971,12 @@ impl State {
         require: RequireLevels,
         subscriber: Option<Box<dyn Subscriber>>,
         telemetry: Option<&mut TelemetryEvent>,
+        custom_thread_pool: Option<&ThreadPool>,
     ) {
         let mut transaction = self.new_committable_transaction(require.default, subscriber);
-        transaction.transaction.run(handles, require.specified);
+        transaction
+            .transaction
+            .run(handles, require.specified, custom_thread_pool);
         self.commit_transaction(transaction, telemetry);
     }
 
@@ -2575,8 +2986,11 @@ impl State {
         handles: &[Handle],
         require: Require,
         telemetry: Option<&mut TelemetryEvent>,
+        custom_thread_pool: Option<&ThreadPool>,
     ) {
-        transaction.transaction.run(handles, require);
+        transaction
+            .transaction
+            .run(handles, require, custom_thread_pool);
         self.commit_transaction(transaction, telemetry);
     }
 }

@@ -40,6 +40,7 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
             handle,
             TextRange::new(position, position),
             ImportFormat::Absolute,
+            None,
         )
         .unwrap_or_default()
     {
@@ -134,8 +135,14 @@ fn compute_extract_actions(
     Vec<Vec<(Module, TextRange, String)>>,
     Vec<String>,
 ) {
-    let (handles, state) =
-        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let pytest_stub = r#"
+def fixture(*args, **kwargs):
+    ...
+"#;
+    let (handles, state) = mk_multi_file_state_assert_no_errors(
+        &[("main", code), ("pytest", pytest_stub)],
+        Require::Everything,
+    );
     let handle = handles.get("main").unwrap();
     let transaction = state.transaction();
     let module_info = transaction.get_module_info(handle).unwrap();
@@ -308,6 +315,33 @@ fn apply_first_inline_parameter_action(code: &str) -> Option<String> {
     let selection = cursor_selection(code);
     let actions = transaction
         .inline_parameter_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
+}
+
+fn apply_first_safe_delete_action(code: &str) -> Option<String> {
+    apply_first_safe_delete_action_multi(&[("main", code)], "main")
+}
+
+/// Multi-file variant of `apply_first_safe_delete_action`. The cursor marker
+/// is expected inside the `target_module` source.
+fn apply_first_safe_delete_action_multi(
+    modules: &[(&'static str, &str)],
+    target_module: &'static str,
+) -> Option<String> {
+    let (handles, state) = mk_multi_file_state_assert_no_errors(modules, Require::Everything);
+    let handle = handles.get(target_module).unwrap();
+    let mut transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let target_code = modules
+        .iter()
+        .find(|(name, _)| *name == target_module)
+        .unwrap()
+        .1;
+    let selection = cursor_selection(target_code);
+    let actions = transaction
+        .safe_delete_code_actions(handle, selection)
         .unwrap_or_default();
     let edits = actions.first()?.edits.clone();
     Some(apply_refactor_edits_for_module(&module_info, &edits))
@@ -725,6 +759,7 @@ np
             handle,
             TextRange::new(position, position),
             ImportFormat::Absolute,
+            None,
         )
         .unwrap_or_default();
     let (_, _, _, insert_text) = actions
@@ -1020,6 +1055,7 @@ fn redundant_cast_action_after(code: &str, cursor_offset: usize) -> Option<Strin
             handle,
             TextRange::new(position, position),
             ImportFormat::Absolute,
+            None,
         )
         .unwrap_or_default();
     let (_, module, range, patch) = actions
@@ -3877,4 +3913,264 @@ def compute():
     return add(1)
 "#;
     assert_eq!(expected, updated);
+}
+
+#[test]
+fn safe_delete_removes_unused_function() {
+    let code = r#"
+def foo():
+#   ^
+    return 1
+def bar():
+    return 2
+"#;
+    let updated = apply_first_safe_delete_action(code).expect("expected safe delete action");
+    let expected = r#"
+def bar():
+    return 2
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn safe_delete_inserts_pass_for_empty_class() {
+    let code = r#"
+class Foo:
+    def bar(self):
+#       ^
+        return 1
+"#;
+    let updated = apply_first_safe_delete_action(code).expect("expected safe delete action");
+    let expected = r#"
+class Foo:
+    pass
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn safe_delete_rejects_referenced_symbol() {
+    let code = r#"
+def foo():
+#   ^
+    return 1
+foo()
+"#;
+    assert!(apply_first_safe_delete_action(code).is_none());
+}
+
+#[test]
+fn safe_delete_type_alias_no_refs() {
+    let code = r#"
+type MyType = int
+#    ^
+def keep(): ...
+"#;
+    let updated = apply_first_safe_delete_action(code).expect("expected safe delete action");
+    let expected = r#"
+#    ^
+def keep(): ...
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn safe_delete_type_alias_with_refs() {
+    let code = r#"
+type MyType = int
+#    ^
+x: MyType = 1
+"#;
+    assert!(apply_first_safe_delete_action(code).is_none());
+}
+
+#[test]
+fn safe_delete_constant_no_refs() {
+    let code = r#"
+MY_CONST = 42
+# ^
+def keep(): ...
+"#;
+    let updated = apply_first_safe_delete_action(code).expect("expected safe delete action");
+    let expected = r#"
+# ^
+def keep(): ...
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn safe_delete_constant_with_refs() {
+    let code = r#"
+MY_CONST = 42
+# ^
+x = MY_CONST
+"#;
+    assert!(apply_first_safe_delete_action(code).is_none());
+}
+
+#[test]
+fn safe_delete_annotated_attribute_no_refs() {
+    let code = r#"
+class Foo:
+    x: int = 1
+    y: int = 2
+#   ^
+"#;
+    let updated = apply_first_safe_delete_action(code).expect("expected safe delete action");
+    let expected = r#"
+class Foo:
+    x: int = 1
+#   ^
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn safe_delete_only_attribute_inserts_pass() {
+    let code = r#"
+class Foo:
+    """A class."""
+    x: int = 1
+#   ^
+"#;
+    let updated = apply_first_safe_delete_action(code).expect("expected safe delete action");
+    let expected = r#"
+class Foo:
+    """A class."""
+    pass
+#   ^
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn safe_delete_nested_function_no_refs() {
+    let code = r#"
+def outer():
+    def inner():
+#       ^
+        return 1
+    return 2
+"#;
+    let updated = apply_first_safe_delete_action(code).expect("expected safe delete action");
+    let expected = r#"
+def outer():
+    return 2
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn safe_delete_nested_function_with_refs() {
+    let code = r#"
+def outer():
+    def inner():
+#       ^
+        return 1
+    return inner()
+"#;
+    assert!(apply_first_safe_delete_action(code).is_none());
+}
+
+#[test]
+fn safe_delete_multiple_assignment_targets() {
+    // `a = b = 1` has two assignment targets, so `find_definition_context`
+    // returns None (the `matches_definition` check requires exactly one target).
+    let code = r#"
+a = b = 1
+# ^
+"#;
+    assert!(apply_first_safe_delete_action(code).is_none());
+}
+
+#[test]
+fn safe_delete_child_impl_blocks_deletion() {
+    // A child class overriding Base.method counts as a reference,
+    // so safe-delete should be rejected.
+    let code = r#"
+class Base:
+    def method(self) -> int:
+#       ^
+        return 1
+
+class Child(Base):
+    def method(self) -> int:
+        return 2
+"#;
+    assert!(apply_first_safe_delete_action(code).is_none());
+}
+
+#[test]
+fn pytest_fixture_type_annotation_code_actions() {
+    let conftest = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def answer():
+    return 42
+"#;
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def user():
+    return "alice"
+
+def test_one(answer, user):
+    print(answer, user)
+"#;
+    let (handles, state) = mk_multi_file_state_assert_no_errors(
+        &[("main", code), ("conftest", conftest)],
+        Require::Everything,
+    );
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let cursor = TextSize::try_from(code.find("answer, user").unwrap()).unwrap();
+    let selection = TextRange::new(cursor, cursor);
+
+    let actions = transaction
+        .pytest_fixture_type_annotation_code_actions(handle, selection, ImportFormat::Absolute)
+        .unwrap_or_default();
+    let titles: Vec<String> = actions.iter().map(|action| action.title.clone()).collect();
+    assert!(
+        titles.contains(&"Add pytest fixture parameter type annotation".to_owned()),
+        "expected single fixture parameter annotation action"
+    );
+    assert!(
+        titles.contains(&"Add all pytest fixture parameter type annotations".to_owned()),
+        "expected add-all fixture parameter annotation action"
+    );
+
+    let single_action = actions
+        .iter()
+        .find(|action| action.title == "Add pytest fixture parameter type annotation")
+        .expect("missing single fixture parameter annotation action");
+    let updated_single = apply_refactor_edits_for_module(&module_info, &single_action.edits);
+    assert!(
+        updated_single.contains("def test_one(answer: int, user):"),
+        "expected single action to annotate conftest fixture parameter"
+    );
+    assert!(
+        !updated_single.contains("def test_one(answer: int, user: str):"),
+        "single action should not annotate other fixture parameters"
+    );
+
+    let all_action = actions
+        .iter()
+        .find(|action| action.title == "Add all pytest fixture parameter type annotations")
+        .expect("missing add-all fixture parameter annotation action");
+    let updated_all = apply_refactor_edits_for_module(&module_info, &all_action.edits);
+    let expected = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def user():
+    return "alice"
+
+def test_one(answer: int, user: str):
+    print(answer, user)
+"#;
+    assert_eq!(expected.trim(), updated_all.trim());
 }

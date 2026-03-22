@@ -1296,7 +1296,7 @@ class TestSuggestionInMarkdownOutput:
             ),
         )
         md = format_markdown(result)
-        assert "Suggested Fix" in md
+        assert "Suggested fixes" in md
         assert "Restore protocol guard" in md
         assert "github.com/facebook/pyrefly" in md
         assert "pyrefly/lib/alt/class/variance.rs" in md
@@ -1676,7 +1676,7 @@ class TestGroundTruthFormatterNewFields:
         # New table format assertions
         assert "| Project |" in md
         assert "<details>" in md
-        assert "Suggested Fix" in md
+        assert "Suggested fixes" in md
         # Function name should be linkified in the suggestion
         assert "calculate_abstract_members()" in md
         assert "github.com" in md

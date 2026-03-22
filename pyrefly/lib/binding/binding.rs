@@ -28,7 +28,6 @@ use pyrefly_util::assert_bytes;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
-use pyrefly_util::display::commas_iter;
 use pyrefly_util::display::intersperse_iter;
 use pyrefly_util::uniques::Unique;
 use pyrefly_util::visit::VisitMut;
@@ -47,7 +46,6 @@ use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
 use crate::alt::class::class_field::ClassField;
@@ -65,18 +63,20 @@ use crate::alt::types::yields::YieldFromResult;
 use crate::alt::types::yields::YieldResult;
 use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassGeneric;
+use crate::binding::bindings::BindingEntry;
+use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::django::DjangoFieldInfo;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowingSubject;
 use crate::binding::pydantic::PydanticConfigDict;
+use crate::binding::table::TableKeyed;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
 use crate::types::annotation::Annotation;
 use crate::types::callable::FuncDefIndex;
 use crate::types::class::Class;
 use crate::types::class::ClassDefIndex;
-use crate::types::class::ClassFieldProperties;
 use crate::types::equality::TypeEq;
 use crate::types::globals::ImplicitGlobal;
 use crate::types::quantified::QuantifiedKind;
@@ -86,7 +86,6 @@ use crate::types::type_info::TypeInfo;
 use crate::types::types::AnyStyle;
 use crate::types::types::TParams;
 use crate::types::types::Type;
-use crate::types::types::Var;
 
 assert_words!(Key, 2);
 assert_bytes!(KeyExpect, 12);
@@ -110,9 +109,9 @@ assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 6);
 assert_words!(BindingExpect, 16);
-assert_words!(BindingTypeAlias, 6);
+assert_words!(BindingTypeAlias, 7);
 assert_words!(BindingAnnotation, 15);
-assert_words!(BindingClass, 15);
+assert_words!(BindingClass, 11);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 9);
@@ -359,11 +358,18 @@ pub enum AnyExportedKey {
 /// Any key that sets `EXPORTED` to `true` should not include positions
 /// Incremental updates depend on knowing when a file's exports changed, which uses equality between exported keys
 /// Moving code around should not cause all dependencies to be re-checked
-pub trait Keyed: Hash + Eq + Clone + DisplayWith<ModuleInfo> + Debug + Ranged + 'static {
+pub trait Keyed: Hash + Eq + Clone + DisplayWith<ModuleInfo> + Debug + 'static {
     const EXPORTED: bool = false;
     type Value: Debug + DisplayWith<Bindings>;
     type Answer: Clone + Debug + Display + TypeEq + VisitMut<Type> + Send + Sync;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx;
+
+    /// Resolve the source range for this key, given access to the bindings.
+    /// Keys with a real source position can ignore bindings and return
+    /// `self.range()`. Keys without a position should look up their binding.
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>;
 
     /// Convert this key to an AnyExportedKey if it is an exported key.
     /// Returns None for non-exported keys.
@@ -384,12 +390,24 @@ impl Keyed for Key {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::Key(idx)
     }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(idx).range()
+    }
 }
 impl Keyed for KeyExpect {
     type Value = BindingExpect;
     type Answer = EmptyAnswer;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyExpect(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(idx).range()
     }
 }
 impl Keyed for KeyTypeAlias {
@@ -398,6 +416,16 @@ impl Keyed for KeyTypeAlias {
     type Answer = TypeAlias;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyTypeAlias(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        match bindings.get(idx) {
+            BindingTypeAlias::Legacy { range, .. }
+            | BindingTypeAlias::Scoped { range, .. }
+            | BindingTypeAlias::TypeAliasType { range, .. } => *range,
+        }
     }
 }
 impl Exported for KeyTypeAlias {
@@ -411,12 +439,24 @@ impl Keyed for KeyConsistentOverrideCheck {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyConsistentOverrideCheck(idx)
     }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).class_key).range()
+    }
 }
 impl Keyed for KeyClass {
     type Value = BindingClass;
     type Answer = NoneIfRecursive<Class>;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClass(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(idx).range()
     }
 }
 impl Keyed for KeyTParams {
@@ -425,6 +465,12 @@ impl Keyed for KeyTParams {
     type Answer = TParams;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyTParams(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.get(idx).name.range()
     }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         Some(AnyExportedKey::KeyTParams(self.clone()))
@@ -442,6 +488,12 @@ impl Keyed for KeyClassBaseType {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassBaseType(idx)
     }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
+    }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         Some(AnyExportedKey::KeyClassBaseType(self.clone()))
     }
@@ -457,6 +509,12 @@ impl Keyed for KeyClassField {
     type Answer = ClassField;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassField(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.get(idx).range
     }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         Some(AnyExportedKey::KeyClassField(self.clone()))
@@ -474,6 +532,12 @@ impl Keyed for KeyClassSynthesizedFields {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassSynthesizedFields(idx)
     }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).0).range()
+    }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         Some(AnyExportedKey::KeyClassSynthesizedFields(self.clone()))
     }
@@ -489,6 +553,12 @@ impl Keyed for KeyVariance {
     type Answer = VarianceMap;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyVariance(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).class_key).range()
     }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         Some(AnyExportedKey::KeyVariance(self.clone()))
@@ -506,6 +576,12 @@ impl Keyed for KeyVarianceCheck {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyVarianceCheck(idx)
     }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
+    }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         None
     }
@@ -516,6 +592,12 @@ impl Keyed for KeyExport {
     type Answer = Type;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyExport(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).key_idx()).range()
     }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         Some(AnyExportedKey::KeyExport(self.clone()))
@@ -532,12 +614,24 @@ impl Keyed for KeyDecorator {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyDecorator(idx)
     }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(idx).range()
+    }
 }
 impl Keyed for KeyDecoratedFunction {
     type Value = BindingDecoratedFunction;
     type Answer = Type;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyDecoratedFunction(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(idx).range()
     }
 }
 impl Keyed for KeyUndecoratedFunction {
@@ -546,12 +640,24 @@ impl Keyed for KeyUndecoratedFunction {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyUndecoratedFunction(idx)
     }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(idx).range()
+    }
 }
 impl Keyed for KeyUndecoratedFunctionRange {
     type Value = BindingUndecoratedFunctionRange;
     type Answer = UndecoratedFunctionRangeAnswer;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyUndecoratedFunctionRange(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.get(idx).0.range()
     }
 }
 impl Keyed for KeyAnnotation {
@@ -560,6 +666,12 @@ impl Keyed for KeyAnnotation {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyAnnotation(idx)
     }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(idx).range()
+    }
 }
 impl Keyed for KeyClassMetadata {
     const EXPORTED: bool = true;
@@ -567,6 +679,12 @@ impl Keyed for KeyClassMetadata {
     type Answer = ClassMetadata;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassMetadata(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
     }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         Some(AnyExportedKey::KeyClassMetadata(self.clone()))
@@ -584,6 +702,12 @@ impl Keyed for KeyClassMro {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassMro(idx)
     }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
+    }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         Some(AnyExportedKey::KeyClassMro(self.clone()))
     }
@@ -600,6 +724,12 @@ impl Keyed for KeyAbstractClassCheck {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyAbstractClassCheck(idx)
     }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
+    }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         Some(AnyExportedKey::KeyAbstractClassCheck(self.clone()))
     }
@@ -615,6 +745,12 @@ impl Keyed for KeyLegacyTypeParam {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyLegacyTypeParam(idx)
     }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(idx).range()
+    }
 }
 impl Keyed for KeyYield {
     type Value = BindingYield;
@@ -622,12 +758,24 @@ impl Keyed for KeyYield {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyYield(idx)
     }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(idx).range()
+    }
 }
 impl Keyed for KeyYieldFrom {
     type Value = BindingYieldFrom;
     type Answer = YieldFromResult;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyYieldFrom(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(idx).range()
     }
 }
 
@@ -684,14 +832,6 @@ pub enum Key {
     Definition(ShortIdentifier),
     /// I am a mutable capture (`global` or `nonlocal`) declared at this location.
     MutableCapture(ShortIdentifier),
-    /// I am the pinned version of a definition corresponding to a name assignment.
-    ///
-    /// See [Binding::CompletedPartialType] for more details.
-    CompletedPartialType(ShortIdentifier),
-    /// I am a wrapper around a assignment that is also a first use of some other name assign.
-    ///
-    /// See [Binding::PartialTypeWithUpstreamCompleted] for more details.
-    PartialTypeWithUpstreamsCompleted(ShortIdentifier),
     /// I am a name with possible attribute/subscript narrowing coming from an assignment at this location.
     FacetAssign(ShortIdentifier),
     /// The type at a specific return point.
@@ -753,11 +893,14 @@ impl Ranged for Key {
     fn range(&self) -> TextRange {
         match self {
             Self::Import(x) => x.1,
+            // ImplicitGlobals (e.g. __file__, __name__) are synthesized and have no
+            // source text. TextRange::default() (0..0) points to the start of the
+            // file, which is a valid byte position and can be targeted by suppression
+            // comments. Do not copy this pattern for other keys — nearly all keys
+            // should carry a real source range.
             Self::ImplicitGlobal(_) => TextRange::default(),
             Self::Definition(x) => x.range(),
             Self::MutableCapture(x) => x.range(),
-            Self::PartialTypeWithUpstreamsCompleted(x) => x.range(),
-            Self::CompletedPartialType(x) => x.range(),
             Self::FacetAssign(x) => x.range(),
             Self::ReturnExplicit(r) => *r,
             Self::ReturnImplicit(x) => x.range(),
@@ -791,10 +934,6 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::ImplicitGlobal(n) => write!(f, "Key::Global({n})"),
             Self::Definition(x) => write!(f, "Key::Definition({})", short(x)),
             Self::MutableCapture(x) => write!(f, "Key::MutableCapture({})", short(x)),
-            Self::CompletedPartialType(x) => write!(f, "Key::CompletedPartialType({})", short(x)),
-            Self::PartialTypeWithUpstreamsCompleted(x) => {
-                write!(f, "Key::PartialTypeWithUpstreamsCompleted({})", short(x))
-            }
             Self::FacetAssign(x) => write!(f, "Key::FacetAssign({})", short(x)),
             Self::BoundName(x) => write!(f, "Key::BoundName({})", short(x)),
             Self::Anon(r) => write!(f, "Key::Anon({})", ctx.display(r)),
@@ -902,12 +1041,6 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyTypeAlias(pub TypeAliasIndex);
-
-impl Ranged for KeyTypeAlias {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
 
 impl DisplayWith<ModuleInfo> for KeyTypeAlias {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
@@ -1112,15 +1245,21 @@ pub enum BindingTypeAlias {
     /// until we resolve their RHS in the answers phase.
     Legacy {
         name: Name,
+        range: TextRange,
         annotation: Option<(AnnotationStyle, Idx<KeyAnnotation>)>,
         expr: Box<Expr>,
         is_explicit: bool,
     },
     /// Scoped type aliases, like `type X = list[int]`.
-    Scoped { name: Name, expr: Box<Expr> },
+    Scoped {
+        name: Name,
+        range: TextRange,
+        expr: Box<Expr>,
+    },
     /// Calls to TypeAliasType, like `X = TypeAliasType('X', list[int])`.
     TypeAliasType {
         name: Name,
+        range: TextRange,
         annotation: Option<Idx<KeyAnnotation>>,
         expr: Option<Box<Expr>>,
     },
@@ -1168,12 +1307,6 @@ where
 /// If it has an annotation, only the annotation will be returned.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyExport(pub Name);
-
-impl Ranged for KeyExport {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
 
 impl DisplayWith<ModuleInfo> for KeyExport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _: &ModuleInfo) -> fmt::Result {
@@ -1241,12 +1374,6 @@ impl DisplayWith<ModuleInfo> for KeyUndecoratedFunction {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyUndecoratedFunctionRange(pub FuncDefIndex);
 
-impl Ranged for KeyUndecoratedFunctionRange {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
-
 impl DisplayWith<ModuleInfo> for KeyUndecoratedFunctionRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyUndecoratedFunctionRange({})", self.0)
@@ -1303,12 +1430,6 @@ impl DisplayWith<ModuleInfo> for KeyClass {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyTParams(pub ClassDefIndex);
 
-impl Ranged for KeyTParams {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
-
 impl DisplayWith<ModuleInfo> for KeyTParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyTParams({})", self.0)
@@ -1319,12 +1440,6 @@ impl DisplayWith<ModuleInfo> for KeyTParams {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyClassBaseType(pub ClassDefIndex);
 
-impl Ranged for KeyClassBaseType {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
-
 impl DisplayWith<ModuleInfo> for KeyClassBaseType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyClassBaseType({})", self.0)
@@ -1334,12 +1449,6 @@ impl DisplayWith<ModuleInfo> for KeyClassBaseType {
 /// A reference to a field in a class.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyClassField(pub ClassDefIndex, pub Name);
-
-impl Ranged for KeyClassField {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
 
 impl DisplayWith<ModuleInfo> for KeyClassField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
@@ -1353,12 +1462,6 @@ impl DisplayWith<ModuleInfo> for KeyClassField {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyClassSynthesizedFields(pub ClassDefIndex);
 
-impl Ranged for KeyClassSynthesizedFields {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
-
 impl DisplayWith<ModuleInfo> for KeyClassSynthesizedFields {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyClassSynthesizedFields(class{})", self.0)
@@ -1368,12 +1471,6 @@ impl DisplayWith<ModuleInfo> for KeyClassSynthesizedFields {
 // A key that denotes the variance of a type parameter
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyVariance(pub ClassDefIndex);
-
-impl Ranged for KeyVariance {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
 
 impl DisplayWith<ModuleInfo> for KeyVariance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
@@ -1385,12 +1482,6 @@ impl DisplayWith<ModuleInfo> for KeyVariance {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyVarianceCheck(pub ClassDefIndex);
 
-impl Ranged for KeyVarianceCheck {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
-
 impl DisplayWith<ModuleInfo> for KeyVarianceCheck {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyVarianceCheck(class{})", self.0)
@@ -1400,12 +1491,6 @@ impl DisplayWith<ModuleInfo> for KeyVarianceCheck {
 // An expectation that attributes in this class need checking for inconsistent override
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyConsistentOverrideCheck(pub ClassDefIndex);
-
-impl Ranged for KeyConsistentOverrideCheck {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
 
 impl DisplayWith<ModuleInfo> for KeyConsistentOverrideCheck {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
@@ -1452,12 +1537,6 @@ impl DisplayWith<ModuleInfo> for KeyAnnotation {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyClassMetadata(pub ClassDefIndex);
 
-impl Ranged for KeyClassMetadata {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
-
 impl DisplayWith<ModuleInfo> for KeyClassMetadata {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyClassMetadata(class{})", self.0)
@@ -1469,12 +1548,6 @@ impl DisplayWith<ModuleInfo> for KeyClassMetadata {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyClassMro(pub ClassDefIndex);
 
-impl Ranged for KeyClassMro {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
-
 impl DisplayWith<ModuleInfo> for KeyClassMro {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyClassMro(class{})", self.0)
@@ -1483,12 +1556,6 @@ impl DisplayWith<ModuleInfo> for KeyClassMro {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyAbstractClassCheck(pub ClassDefIndex);
-
-impl Ranged for KeyAbstractClassCheck {
-    fn range(&self) -> TextRange {
-        TextRange::default()
-    }
-}
 
 impl DisplayWith<ModuleInfo> for KeyAbstractClassCheck {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
@@ -1712,16 +1779,6 @@ pub struct ClassBinding {
     pub def: ClassDefData,
     pub def_index: ClassDefIndex,
     pub parent: NestingContext,
-    /// The fields are all the names declared on the class that we were able to detect
-    /// from an AST traversal, which includes:
-    /// - any name defined in the class body (e.g. by assignment or a def statement)
-    /// - attributes annotated in the class body (but not necessarily defined)
-    /// - anything assigned to something we think is a `self` or `cls` argument
-    ///
-    /// The last case may include names that are actually declared in a parent class,
-    /// because at binding time we cannot know that so we have to treat assignment
-    /// as potentially defining a field that would not otherwise exist.
-    pub fields: SmallMap<Name, ClassFieldProperties>,
     /// Were we able to determine, using only syntactic analysis at bindings time,
     /// that there can be no legacy tparams? If no, we need a `BindingTParams`, if yes
     /// we can directly compute the `TParams` from the class def.
@@ -1899,6 +1956,10 @@ pub struct NameAssign {
     pub expr: Box<Expr>,
     pub legacy_tparams: Option<Box<[Idx<KeyLegacyTypeParam>]>>,
     pub is_in_function_scope: bool,
+    pub first_use: FirstUse,
+    /// The Definition idx for this NameAssign, if infer_with_first_use is enabled.
+    /// Used at solve time for inline first-use pinning and partial answer storage.
+    pub def_idx: Option<Idx<Key>>,
 }
 
 /// Data for a type alias binding.
@@ -1928,16 +1989,18 @@ pub struct AssignToAttribute {
 }
 
 /// Data for an exhaustiveness check binding.
+///
+/// Contains multiple narrow entries `(Idx<Key>, Box<NarrowOp>, TextRange)`. At solve time,
+/// if ANY entry narrows to `Never`, the construct is exhaustive. This enables multi-subject
+/// and isinstance-based exhaustiveness without complex subject-extraction logic.
 #[derive(Clone, Debug)]
 pub struct ExhaustiveBinding {
     pub kind: ExhaustivenessKind,
-    pub subject_idx: Idx<Key>,
-    pub subject_range: TextRange,
-    /// Narrowing information needed to check exhaustiveness. None if we couldn't
-    /// determine the narrowing subject (e.g., complex expressions) or couldn't
-    /// accumulate narrow ops for it.
-    pub exhaustiveness_info: Option<(NarrowingSubject, (Box<NarrowOp>, TextRange))>,
+    pub narrow_entries: Vec<(Idx<Key>, Box<NarrowOp>, TextRange)>,
 }
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct LambdaParamId(pub u32);
 
 #[derive(Clone, Debug)]
 pub enum Binding {
@@ -1963,10 +2026,12 @@ pub enum Binding {
     ReturnImplicit(ReturnImplicit),
     /// The return type of a function.
     ReturnType(Box<ReturnType>),
-    /// A value in an iterable expression, e.g. IterableValue(\[1\]) represents 1.
-    /// The second argument is the expression being iterated.
-    /// The third argument indicates whether iteration is async or not.
-    IterableValue(Option<Idx<KeyAnnotation>>, Box<Expr>, IsAsync),
+    /// A value in an iterable expression from a comprehension.
+    /// The `TextRange` is the position of the comprehension target, used for go-to-def.
+    IterableValueComprehension(Box<Expr>, IsAsync, TextRange),
+    /// A value in an iterable expression from a for-loop,
+    /// e.g. `for x in items`. Keeps the optional annotation from the loop target.
+    IterableValueLoop(Option<Idx<KeyAnnotation>>, Box<Expr>, IsAsync),
     /// A value produced by entering a context manager.
     /// The second argument is the expression of the context manager and its range.
     /// The fourth argument indicates whether the context manager is async or not.
@@ -2016,6 +2081,10 @@ pub enum Binding {
     ClassDef(Idx<KeyClass>, Box<[Idx<KeyDecorator>]>),
     /// A forward reference to another binding.
     Forward(Idx<Key>),
+    /// A forward reference produced during first-use resolution of a partial type.
+    /// Behaves identically to `Forward` but marks that this indirection came from
+    /// the partial-type / first-use machinery.
+    ForwardToFirstUse(Idx<Key>),
     /// A phi node, representing the union of several alternative keys.
     /// Each BranchInfo contains the value key and optional termination key from one branch.
     Phi(JoinStyle<Idx<Key>>, Box<[BranchInfo]>),
@@ -2054,7 +2123,10 @@ pub enum Binding {
     /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean flag is true) clause
     ExceptionHandler(Box<Expr>, bool),
     /// Binding for a lambda parameter.
-    LambdaParameter(Var),
+    /// The optional owner is the binding whose expression contains this lambda.
+    /// If the parameter is solved before that owner has established thread-local
+    /// lambda vars, we can force the owner to solve first.
+    LambdaParameter(LambdaParamId, Option<Idx<Key>>),
     /// Binding for a function parameter. We either have an annotation, or we will determine the
     /// parameter type when solving the function type.
     FunctionParameter(Box<FunctionParameter>),
@@ -2074,51 +2146,6 @@ pub enum Binding {
     /// later synthesize the correct `Type::SelfType` (this binding is needed
     /// because we need access to the current class to do so).
     SelfTypeLiteral(Idx<KeyClass>, TextRange),
-    /// Binding used to pin placeholder types from `NameAssign` bindings, which
-    /// can produce partial types that have `Var`s representing still-unknown
-    /// type parameters not determine by the initial assignment (e.g. empty
-    /// containers).
-    ///
-    /// The first entry should always correspond to a `Key::Definition` from a
-    /// name assignment and the second entry tells us if and where this
-    /// definition is first used.
-    ///
-    /// For example, in
-    /// ```python
-    /// x = []
-    /// x.append(1)
-    /// y = []
-    /// print(y)
-    /// z = []
-    /// ```
-    /// all three of the raw `NameAssign`s will result in a partial type `list[@_]`,
-    /// and downstream:
-    /// - the `Pin` for `x` will depend on the `Binding::Expr` for `x.append(1)`, which
-    ///   will force the type to `list[int]`.
-    /// - the `Pin` for `y` will depend on the `Binding::Expr` for `print(y)`, which
-    ///   will not force anything. Then the `Pin` itself will pin placeholders,
-    ///   resulting in `list[Any]`
-    /// - the `Pin` for `z` will have an empty `FirstUse`, so as with `y` it will
-    ///   simply force the placeholder and produce list[`Any`]
-    CompletedPartialType(Idx<Key>, FirstUse),
-    /// Binding used to pin any *upstream* placeholder types for a NameAssign that is also
-    /// a first use. Any first use of the name defined here depend on this binding rather
-    /// than directly on the `NameAssign` so that upstream `Var`s cannot leak into the
-    /// partial type into them but `Var`s originating from this assignment can.
-    ///
-    /// The Idx is the upstream raw `NameAssign`, and the slice has `Idx`s that point at
-    /// all the `Pin`s for which that raw `NameAssign` was the first use.
-    ///
-    /// For example:
-    /// ```python
-    /// x = []
-    /// y = [], x
-    /// ```
-    /// the raw `NameAssign` for `y` will produce `tuple[list[@0], list[@1]]`,
-    /// but the `PartialTypeWithUpstreamsCompleted` for `y` will use the "completed"
-    /// partial type of `x` (which it achieves by forcing the `Binding::Pin` for
-    /// `x` before expanding types) and result in `tuple[list[@_], Any]`.
-    PartialTypeWithUpstreamsCompleted(Idx<Key>, Box<[Idx<Key>]>),
     /// `del` statement
     Delete(Box<Expr>),
     /// A name in the class body that wasn't found in the static scope
@@ -2126,9 +2153,7 @@ pub enum Binding {
     /// We'll find out which when we solve the class
     ClassBodyUnknownName(Box<(Idx<KeyClass>, Identifier, Option<Name>)>),
     /// A match statement or if/elif chain that may be type-exhaustive.
-    /// Resolves to Never if exhaustive, None otherwise.
-    /// When `exhaustiveness_info` is None, we couldn't determine narrowing info,
-    /// so we conservatively assume the statement is not exhaustive.
+    /// Resolves to Never if ANY narrow entry narrows to Never, None otherwise.
     Exhaustive(Box<ExhaustiveBinding>),
 }
 
@@ -2179,8 +2204,16 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::ReturnImplicit(_) => write!(f, "ReturnImplicit(_)"),
             Self::ReturnType(_) => write!(f, "ReturnType(_)"),
-            Self::IterableValue(a, x, sync) => {
-                write!(f, "IterableValue({}, {}, {sync:?})", ann(a), m.display(x))
+            Self::IterableValueComprehension(x, sync, _) => {
+                write!(f, "IterableValueComprehension({}, {sync:?})", m.display(x))
+            }
+            Self::IterableValueLoop(a, x, sync) => {
+                write!(
+                    f,
+                    "IterableValueLoop({}, {}, {sync:?})",
+                    ann(a),
+                    m.display(x)
+                )
             }
             Self::ExceptionHandler(x, b) => write!(f, "ExceptionHandler({}, {b:?})", m.display(x)),
             Self::ContextValue(a, x, _, kind) => {
@@ -2218,6 +2251,9 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::ClassDef(x, _) => write!(f, "ClassDef({})", ctx.display(*x)),
             Self::Forward(k) => write!(f, "Forward({})", ctx.display(*k)),
+            Self::ForwardToFirstUse(k) => {
+                write!(f, "ForwardToFirstUse({})", ctx.display(*k))
+            }
             Self::AugAssign(a, s) => write!(f, "AugAssign({}, {})", ann(a), m.display(s)),
             Self::None => write!(f, "None"),
             Self::Any(style) => write!(f, "Any({style:?})"),
@@ -2314,7 +2350,9 @@ impl DisplayWith<Bindings> for Binding {
                     ctx.display(*key),
                 )
             }
-            Self::LambdaParameter(x) => write!(f, "LambdaParameter({x})"),
+            Self::LambdaParameter(id, owner) => {
+                write!(f, "LambdaParameter(id={id:?}, owner={owner:?})")
+            }
             Self::FunctionParameter(x) => write!(
                 f,
                 "FunctionParameter({})",
@@ -2374,23 +2412,6 @@ impl DisplayWith<Bindings> for Binding {
                     m.display(r)
                 )
             }
-            Self::CompletedPartialType(k, first_use) => {
-                write!(f, "CompletedPartialType({}, ", ctx.display(*k),)?;
-                match first_use {
-                    FirstUse::Undetermined => write!(f, "Undetermined")?,
-                    FirstUse::DoesNotPin => write!(f, "DoesNotPin")?,
-                    FirstUse::UsedBy(idx) => write!(f, "UsedBy {}", ctx.display(*idx))?,
-                }
-                write!(f, ")")
-            }
-            Self::PartialTypeWithUpstreamsCompleted(k, first_used_by) => {
-                write!(
-                    f,
-                    "PartialTypeWithUpstreamsCompleted({}, [{}])",
-                    ctx.display(*k),
-                    commas_iter(|| first_used_by.iter().map(|x| ctx.display(*x)))
-                )
-            }
             Self::Delete(x) => write!(f, "Delete({})", m.display(x)),
             Self::ClassBodyUnknownName(x) => {
                 let (class_key, name, suggestion) = x.as_ref();
@@ -2406,13 +2427,20 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, ")")
             }
             Self::Exhaustive(x) => {
-                write!(
-                    f,
-                    "Exhaustive({:?}, {}, {})",
-                    x.kind,
-                    ctx.display(x.subject_idx),
-                    ctx.module().display(&x.subject_range)
-                )
+                write!(f, "Exhaustive({:?}, [", x.kind)?;
+                for (i, (idx, op, range)) in x.narrow_entries.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(
+                        f,
+                        "({}, {}, {})",
+                        ctx.display(*idx),
+                        m.display(op),
+                        m.display(range)
+                    )?;
+                }
+                write!(f, "])")
             }
         }
     }
@@ -2458,11 +2486,14 @@ impl Binding {
                     Some(SymbolKind::Variable)
                 }
             }
-            Binding::LambdaParameter(_) | Binding::FunctionParameter(_) => {
+            Binding::LambdaParameter(..) | Binding::FunctionParameter(_) => {
                 Some(SymbolKind::Parameter)
             }
-            Binding::IterableValue(_, _, _) => Some(SymbolKind::Variable),
+            Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
+                Some(SymbolKind::Variable)
+            }
             Binding::UnpackedValue(_, _, _, _) => Some(SymbolKind::Variable),
+            Binding::AugAssign(_, _) => Some(SymbolKind::Variable),
             Binding::Expr(_, _)
             | Binding::StmtExpr(_, _)
             | Binding::MultiTargetAssign(_, _, _)
@@ -2471,10 +2502,10 @@ impl Binding {
             | Binding::ReturnType(_)
             | Binding::ContextValue(_, _, _, _)
             | Binding::AnnotatedType(_, _)
-            | Binding::AugAssign(_, _)
             | Binding::None
             | Binding::Any(_)
             | Binding::Forward(_)
+            | Binding::ForwardToFirstUse(_)
             | Binding::Phi(_, _)
             | Binding::LoopPhi(_, _)
             | Binding::Narrow(_, _, _)
@@ -2487,8 +2518,6 @@ impl Binding {
             | Binding::UsageLink(_)
             | Binding::SelfTypeLiteral(..)
             | Binding::AssignToSubscript(_)
-            | Binding::CompletedPartialType(..)
-            | Binding::PartialTypeWithUpstreamsCompleted(..)
             | Binding::Delete(_)
             | Binding::ClassBodyUnknownName(_)
             | Binding::Exhaustive(_) => None,
@@ -2496,12 +2525,36 @@ impl Binding {
     }
 }
 
+/// An export binding. Every export is a forward reference to a `Key`, optionally
+/// with an annotation.
 #[derive(Clone, Debug)]
-pub struct BindingExport(pub Binding);
+pub enum BindingExport {
+    Forward(Idx<Key>),
+    AnnotatedForward(Idx<KeyAnnotation>, Idx<Key>),
+}
+
+impl BindingExport {
+    /// The forwarded key index that this export points to.
+    pub fn key_idx(&self) -> Idx<Key> {
+        match self {
+            Self::Forward(idx) | Self::AnnotatedForward(_, idx) => *idx,
+        }
+    }
+}
 
 impl DisplayWith<Bindings> for BindingExport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        DisplayWith::fmt(&self.0, f, ctx)
+        match self {
+            Self::Forward(idx) => write!(f, "BindingExport::Forward({})", ctx.display(*idx)),
+            Self::AnnotatedForward(ann, idx) => {
+                write!(
+                    f,
+                    "BindingExport::AnnotatedForward({}, {})",
+                    ctx.display(*ann),
+                    ctx.display(*idx)
+                )
+            }
+        }
     }
 }
 
@@ -2631,19 +2684,14 @@ impl DisplayWith<Bindings> for BindingAnnotation {
 #[derive(Clone, Debug)]
 pub enum BindingClass {
     ClassDef(ClassBinding),
-    FunctionalClassDef(
-        ClassDefIndex,
-        Identifier,
-        NestingContext,
-        SmallMap<Name, ClassFieldProperties>,
-    ),
+    FunctionalClassDef(ClassDefIndex, Identifier, NestingContext),
 }
 
 impl DisplayWith<Bindings> for BindingClass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &Bindings) -> fmt::Result {
         match self {
             Self::ClassDef(c) => write!(f, "ClassDef({})", c.def.name),
-            Self::FunctionalClassDef(_, id, _, _) => write!(f, "FunctionalClassDef({id})"),
+            Self::FunctionalClassDef(_, id, _) => write!(f, "FunctionalClassDef({id})"),
         }
     }
 }
@@ -2685,8 +2733,14 @@ impl DisplayWith<Bindings> for BindingClassBaseType {
 /// Represents everything we know about a class field definition at binding time.
 #[derive(Clone, Debug)]
 pub enum ClassFieldDefinition {
-    /// Declared by an annotation, with no assignment
-    DeclaredByAnnotation { annotation: Idx<KeyAnnotation> },
+    /// Declared by an annotation, with no assignment.
+    /// `initialized_in_recognized_method` is true if the field is assigned in a recognized
+    /// instance attribute-defining method (e.g., `__init__`), meaning a Final field
+    /// declared here is legally initialized even without a class-body value.
+    DeclaredByAnnotation {
+        annotation: Idx<KeyAnnotation>,
+        initialized_in_recognized_method: bool,
+    },
     /// Declared with no annotation or assignment (this is impossible
     /// in a normal class, but can happen with some synthesized classes).
     DeclaredWithoutAnnotation,
@@ -2722,11 +2776,15 @@ pub enum ClassFieldDefinition {
 impl DisplayWith<Bindings> for ClassFieldDefinition {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         match self {
-            Self::DeclaredByAnnotation { annotation } => {
+            Self::DeclaredByAnnotation {
+                annotation,
+                initialized_in_recognized_method,
+            } => {
                 write!(
                     f,
-                    "ClassFieldDefinition::DeclaredByAnnotation({})",
+                    "ClassFieldDefinition::DeclaredByAnnotation({}, initialized_in_recognized_method={})",
                     ctx.display(*annotation),
+                    initialized_in_recognized_method,
                 )
             }
             Self::DeclaredWithoutAnnotation => {

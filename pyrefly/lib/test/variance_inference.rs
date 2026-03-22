@@ -321,6 +321,23 @@ foo_union: FooInferred[int | str] = foo_int | foo_str
 "#,
 );
 
+// Regression test: this previously caused an infinite loop in variance inference.
+// The self parameter is excluded from variance inference to avoid self-referential
+// cycles. T only appears through C[T] in `a`, giving bivariant, which is treated
+// as invariant in practice (following mypy/pyright).
+testcase!(
+    test_self_referential_no_hang,
+    r#"
+class C[T]:
+    def f(self, a: C[T]) -> None:
+        pass
+
+good: C[int] = C[int]()
+bad1: C[float] = C[int]()  # E:
+bad2: C[int] = C[float]()  # E:
+"#,
+);
+
 // Test variance inference with stdlib generic that has covariant type parameter
 testcase!(
     test_class_variance_with_mapping,
@@ -626,6 +643,24 @@ class Contra(Generic[T_contra]): ...
 class Foo(
     Contra[Contra[Contra[T_co]]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
 ): ...
+"#,
+);
+
+testcase!(
+    test_inherited_contravariance_from_parent,
+    r#"
+from typing import Self
+
+class SupportsLT[ComparableT]:  # contravariant
+    def __lt__(self, other: ComparableT, /) -> Self: ...
+
+def upcast_lt(arg: SupportsLT[object]) -> SupportsLT[float]:
+    return arg
+
+class Impl[T](SupportsLT[T]):  ...  # contravariant via inheritance
+
+def upcast(x: Impl[object]) -> Impl[float]:
+    return x
 "#,
 );
 

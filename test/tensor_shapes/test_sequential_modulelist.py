@@ -63,8 +63,8 @@ def test_sequential_construction():
     x: Tensor[16, 5] = torch.randn(16, 5)
     y = seq(x)
 
-    # Check what type we get back
-    assert_type(y, Tensor)
+    # Check what type we get back — shape-aware Sequential chains through each module
+    assert_type(y, Tensor[16, 10])
 
 
 # ============================================================================

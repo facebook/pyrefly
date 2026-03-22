@@ -454,6 +454,84 @@ def f9(c1: C[int, str], c2: C[str]):
     "#,
 );
 
+// WYSIWYG display tests for issue #2461:
+// When generic type params have defaults, display should omit trailing
+// args that match their defaults.
+
+testcase!(
+    test_wysiwyg_bare_generic_all_defaults,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T', default=int)
+U = TypeVar('U', default=str)
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass) -> None:
+    reveal_type(x)  # E: revealed type: MyClass
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_partial_generic_one_default,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T')
+U = TypeVar('U', default=int)
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass[float]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass[float]
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_fully_specified_generic,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T', default=int)
+U = TypeVar('U', default=str)
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass[float, bool]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass[float, bool]
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_no_defaults_shows_all,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T')
+U = TypeVar('U')
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass[int, str]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass[int, str]
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_middle_default_not_stripped,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T')
+U = TypeVar('U', default=int)
+V = TypeVar('V')
+class MyClass(Generic[T, U, V]):  # E: Type parameter `V` without a default cannot follow type parameter `U` with a default
+    ...
+def f(x: MyClass[str, int, bool]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass[str, int, bool]
+    "#,
+);
+
+testcase!(
+    test_wysiwyg_explicit_args_match_defaults,
+    r#"
+from typing import Generic, TypeVar, reveal_type
+T = TypeVar('T', default=int)
+U = TypeVar('U', default=str)
+class MyClass(Generic[T, U]): ...
+def f(x: MyClass[int, str]) -> None:
+    reveal_type(x)  # E: revealed type: MyClass
+    "#,
+);
+
 testcase!(
     test_bad_default_order,
     r#"
@@ -498,6 +576,7 @@ reveal_type(TypeForm)  # E: revealed type: type[type[T]]
 );
 
 testcase!(
+    bug = "TODO(https://github.com/facebook/pyrefly/issues/105): collect upper bounds on typevars",
     test_generics_legacy_unqualified,
     r#"
 from typing import TypeVar, Generic
@@ -506,11 +585,12 @@ class C(Generic[T]): ...
 def append(x: C[T], y: T):
     pass
 v: C[int] = C()
-append(v, "test")  # E: Argument `Literal['test']` is not assignable to parameter `y` with type `int`
+append(v, "test")  # should error
 "#,
 );
 
 testcase!(
+    bug = "TODO(https://github.com/facebook/pyrefly/issues/105): collect upper bounds on typevars",
     test_generics_legacy_qualified,
     r#"
 import typing
@@ -519,7 +599,7 @@ class C(typing.Generic[T]): ...
 def append(x: C[T], y: T):
     pass
 v: C[int] = C()
-append(v, "test")  # E: Argument `Literal['test']` is not assignable to parameter `y` with type `int`
+append(v, "test")  # should error
 "#,
 );
 

@@ -13,9 +13,14 @@ use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lined_buffer::LineNumber;
+use pyrefly_util::visit::Visit;
+use ruff_python_ast::Expr;
+use ruff_python_ast::ModModule;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
@@ -29,24 +34,71 @@ use crate::error::error::Error;
 use crate::error::expectation::Expectation;
 use crate::state::load::Load;
 
+/// Extracts `(start_line, end_line)` ranges for all multi-line f-strings and
+/// t-strings from the AST. Single-line f/t-strings (where start == end) are
+/// excluded. The returned list is sorted by start_line.
+pub fn sorted_multi_line_fstring_ranges(
+    ast: &ModModule,
+    module: &Module,
+) -> Vec<(LineNumber, LineNumber)> {
+    let mut ranges = Vec::new();
+    ast.visit(&mut |expr: &Expr| {
+        let text_range = match expr {
+            Expr::FString(x) => Some(x.range),
+            Expr::TString(x) => Some(x.range),
+            _ => None,
+        };
+        if let Some(range) = text_range {
+            let display = module.display_range(range);
+            let start = display.start.line_within_file();
+            let end = display.end.line_within_file();
+            if start != end {
+                ranges.push((start, end));
+            }
+        }
+    });
+    ranges.sort();
+    ranges
+}
+
+/// Binary search over sorted f-string ranges to find the range containing `line`.
+pub fn find_containing_range(
+    ranges: &[(LineNumber, LineNumber)],
+    line: LineNumber,
+) -> Option<(LineNumber, LineNumber)> {
+    let idx = ranges.partition_point(|(start, _)| *start <= line);
+    if idx == 0 {
+        return None;
+    }
+    let (start, end) = ranges[idx - 1];
+    if line >= start && line <= end {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
 /// The errors from a collection of modules.
 #[derive(Debug)]
 pub struct Errors {
     // Sorted by module name and path (so deterministic display order)
-    loads: Vec<(Arc<Load>, ArcId<ConfigFile>)>,
+    loads: Vec<(Arc<Load>, ArcId<ConfigFile>, Vec<(LineNumber, LineNumber)>)>,
 }
 
 impl Errors {
-    pub fn new(mut loads: Vec<(Arc<Load>, ArcId<ConfigFile>)>) -> Self {
+    pub fn new(
+        mut loads: Vec<(Arc<Load>, ArcId<ConfigFile>, Vec<(LineNumber, LineNumber)>)>,
+    ) -> Self {
         loads.sort_by_key(|x| (x.0.module_info.name(), x.0.module_info.path().dupe()));
         Self { loads }
     }
 
     pub fn collect_errors(&self) -> CollectedErrors {
         let mut errors = CollectedErrors::default();
-        for (load, config) in &self.loads {
+        for (load, config, fstring_ranges) in &self.loads {
             let error_config = config.get_error_config(load.module_info.path().as_path());
-            load.errors.collect_into(&error_config, &mut errors);
+            load.errors
+                .collect_into(&error_config, fstring_ranges, &mut errors);
         }
         errors
     }
@@ -60,14 +112,14 @@ impl Errors {
         if let Some(baseline_path) = baseline_path
             && let Ok(processor) = BaselineProcessor::from_file(baseline_path)
         {
-            processor.process_errors(&mut errors.shown, &mut errors.baseline, relative_to);
+            processor.process_errors(&mut errors.ordinary, &mut errors.baseline, relative_to);
         }
         errors
     }
 
     pub fn collect_ignores(&self) -> SmallMap<&ModulePath, &Ignore> {
         let mut ignore_collection: SmallMap<&ModulePath, &Ignore> = SmallMap::new();
-        for (load, _) in &self.loads {
+        for (load, _, _) in &self.loads {
             let module_path = load.module_info.path();
             let ignores = load.module_info.ignore();
             ignore_collection.insert(module_path, ignores);
@@ -89,19 +141,56 @@ impl Errors {
             SmallMap<LineNumber, SmallSet<String>>,
         > = SmallMap::new();
 
+        // Build per-module lookup maps for f-string ranges and enabled ignores.
+        let fstring_ranges_by_module: SmallMap<&ModulePath, &[(LineNumber, LineNumber)]> = self
+            .loads
+            .iter()
+            .map(|(load, _, ranges)| (load.module_info.path(), ranges.as_slice()))
+            .collect();
+
+        let enabled_ignores_by_module: SmallMap<&ModulePath, SmallSet<Tool>> = self
+            .loads
+            .iter()
+            .map(|(load, config, _)| {
+                let path = load.module_info.path();
+                (path, config.enabled_ignores(path.as_path()).clone())
+            })
+            .collect();
+
         for error in &collected.suppressed {
-            if error.is_ignored(&Tool::default_enabled()) {
+            let module_path = error.path();
+            let enabled_ignores = enabled_ignores_by_module
+                .get(&module_path)
+                .cloned()
+                .unwrap_or_else(Tool::default_enabled);
+            if error.is_ignored(&enabled_ignores) {
                 let module_path = error.path();
                 let start_line = error.display_range().start.line_within_file();
                 let end_line = error.display_range().end.line_within_file();
                 let error_code = error.error_kind().to_name().to_owned();
 
-                // Track the error code for all lines the error spans
+                let module_codes = suppressed_codes_by_module.entry(module_path).or_default();
+
+                // Track the error code for all lines the error spans.
                 for line_idx in start_line.to_zero_indexed()..=end_line.to_zero_indexed() {
-                    suppressed_codes_by_module
-                        .entry(module_path)
-                        .or_default()
+                    module_codes
                         .entry(LineNumber::from_zero_indexed(line_idx))
+                        .or_default()
+                        .insert(error_code.clone());
+                }
+
+                // If the error is inside a multi-line f/t-string, also track
+                // the code at the f-string's start and end lines so that a
+                // suppression comment placed there is recognized as "used".
+                if let Some(ranges) = fstring_ranges_by_module.get(&module_path)
+                    && let Some((fs_start, fs_end)) = find_containing_range(ranges, start_line)
+                {
+                    module_codes
+                        .entry(fs_start)
+                        .or_default()
+                        .insert(error_code.clone());
+                    module_codes
+                        .entry(fs_end)
                         .or_default()
                         .insert(error_code.clone());
                 }
@@ -109,29 +198,57 @@ impl Errors {
         }
 
         // Iterate over each module and check for unused ignores
-        for (load, _) in &self.loads {
+        for (load, config, _) in &self.loads {
             let module = &load.module_info;
             let module_path = module.path();
             let ignore = module.ignore();
+            let enabled_ignores = config.enabled_ignores(module_path.as_path());
 
             // Get the suppressed codes for this module (if any)
             let module_suppressed_codes = suppressed_codes_by_module.get(&module_path);
 
             for (applies_to_line, suppressions) in ignore.iter() {
                 for supp in suppressions {
-                    // Only check pyrefly suppressions
-                    if supp.tool() != Tool::Pyrefly {
+                    let tool = supp.tool();
+                    // Only check tools that are enabled and that we support
+                    // reporting unused ignores for (Pyrefly and Pyre).
+                    if !enabled_ignores.contains(&tool) {
                         continue;
                     }
-
-                    let declared_codes: SmallSet<String> =
-                        supp.error_codes().iter().cloned().collect();
+                    match tool {
+                        Tool::Pyrefly | Tool::Pyre => {}
+                        _ => continue,
+                    }
 
                     // Get the error codes actually suppressed on this line
                     let used_codes: SmallSet<String> = module_suppressed_codes
                         .and_then(|m| m.get(applies_to_line))
                         .cloned()
                         .unwrap_or_default();
+
+                    // For Tool::Pyre, error code filtering is not enforced
+                    // (any Pyre suppression suppresses all errors on the line),
+                    // so we only report it as unused when no errors at all were
+                    // suppressed on its line.
+                    if tool == Tool::Pyre {
+                        if !used_codes.is_empty() {
+                            continue; // Pyre suppression is used
+                        }
+                        let comment_line = supp.comment_line();
+                        let line_start = module.lined_buffer().line_start(comment_line);
+                        let range = TextRange::new(line_start, line_start + TextSize::new(1));
+                        unused_errors.push(Error::new(
+                            module.dupe(),
+                            range,
+                            vec1!["Unused pyre-fixme comment".to_owned()],
+                            ErrorKind::UnusedIgnore,
+                        ));
+                        continue;
+                    }
+
+                    // Tool::Pyrefly: check individual error codes
+                    let declared_codes: SmallSet<String> =
+                        supp.error_codes().iter().cloned().collect();
 
                     // Determine if the suppression is unused
                     let unused_codes: SmallSet<String> = if declared_codes.is_empty() {
@@ -188,23 +305,25 @@ impl Errors {
 
     /// Collects unused ignore errors for display, respecting severity configuration.
     /// Unlike `collect_unused_ignore_errors()`, this applies severity filtering so
-    /// errors with `Severity::Ignore` are not included in the shown results.
+    /// errors with `Severity::Ignore` are not included in the ordinary results.
     pub fn collect_unused_ignore_errors_for_display(&self) -> CollectedErrors {
         let unused_errors = self.collect_unused_ignore_errors();
         let mut result = CollectedErrors::default();
 
         for error in unused_errors {
             // Find the config for this error's module
-            for (load, config) in &self.loads {
+            for (load, config, _) in &self.loads {
                 if load.module_info.path() == error.path() {
                     let error_config = config.get_error_config(error.path().as_path());
                     let severity = error_config
                         .display_config
                         .severity(ErrorKind::UnusedIgnore);
                     match severity {
-                        Severity::Error => result.shown.push(error.with_severity(Severity::Error)),
-                        Severity::Warn => result.shown.push(error.with_severity(Severity::Warn)),
-                        Severity::Info => result.shown.push(error.with_severity(Severity::Info)),
+                        Severity::Error => {
+                            result.ordinary.push(error.with_severity(Severity::Error))
+                        }
+                        Severity::Warn => result.ordinary.push(error.with_severity(Severity::Warn)),
+                        Severity::Info => result.ordinary.push(error.with_severity(Severity::Info)),
                         Severity::Ignore => result.disabled.push(error),
                     }
                     break;
@@ -216,10 +335,16 @@ impl Errors {
     }
 
     pub fn check_against_expectations(&self) -> anyhow::Result<()> {
-        for (load, config) in &self.loads {
+        for (load, config, fstring_ranges) in &self.loads {
             let error_config = config.get_error_config(load.module_info.path().as_path());
+            let mut result = CollectedErrors::default();
+            load.errors
+                .collect_into(&error_config, fstring_ranges, &mut result);
+            let mut output_errors = result.ordinary;
+            output_errors.extend(result.directives);
+            output_errors.sort_by_key(|e| (e.range().start(), e.range().end()));
             Expectation::parse(load.module_info.dupe(), load.module_info.contents())
-                .check(&load.errors.collect(&error_config).shown)?;
+                .check(&output_errors)?;
         }
         Ok(())
     }
@@ -250,9 +375,9 @@ mod tests {
     impl Errors {
         pub fn check_var_leak(&self) -> anyhow::Result<()> {
             let regex = Regex::new(r"@\d+").unwrap();
-            for (load, config) in &self.loads {
+            for (load, config, _) in &self.loads {
                 let error_config = config.get_error_config(load.module_info.path().as_path());
-                let errors = load.errors.collect(&error_config).shown;
+                let errors = load.errors.collect(&error_config).ordinary;
                 for error in errors {
                     let msg = error.msg();
                     if regex.is_match(&msg) {
@@ -295,7 +420,7 @@ mod tests {
             get_path(&tdir),
             Some(Arc::new(FileContents::from_source(contents.to_owned()))),
         )]);
-        transaction.run(&[handle.dupe()], Require::Everything);
+        transaction.run(&[handle.dupe()], Require::Everything, None);
         (transaction.get_errors([handle.clone()].iter()), tdir)
     }
 

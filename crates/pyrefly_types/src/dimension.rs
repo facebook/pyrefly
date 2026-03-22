@@ -364,19 +364,45 @@ fn canonicalize_product(left: Type, right: Type) -> Type {
     }
 
     // Step 4: Separate literals from non-literals
-    let (literal_product, mut non_literal_factors) = separate_literal_factors(factors);
+    let (literal_product, non_literal_factors) = separate_literal_factors(factors);
 
-    // Step 5: Sort factors by canonical order
+    // Step 5: Distributive law — c * (a + b) → c*a + c*b
+    // When we have a literal coefficient and exactly one non-literal factor that is
+    // a sum, distribute the coefficient across the sum terms. This enables like-term
+    // cancellation at the caller's sum level.
+    if literal_product != 1
+        && non_literal_factors.len() == 1
+        && matches!(&non_literal_factors[0], Type::Size(SizeExpr::Add(_, _)))
+    {
+        let sum = non_literal_factors.into_iter().next().unwrap();
+        let mut terms = Vec::new();
+        collect_terms(sum, &mut terms);
+        // Multiply each term by the literal coefficient and re-canonicalize
+        let distributed_terms: Vec<Type> = terms
+            .into_iter()
+            .map(|term| {
+                let product = Type::Size(SizeExpr::Mul(
+                    Box::new(Type::Size(SizeExpr::Literal(literal_product))),
+                    Box::new(term),
+                ));
+                canonicalize_inner(product)
+            })
+            .collect();
+        return rebuild_sum(distributed_terms);
+    }
+
+    // Step 6: Sort factors by canonical order
+    let mut non_literal_factors = non_literal_factors;
     non_literal_factors.sort_by(compare_type);
 
-    // Step 6: Add literal coefficient if not 1
+    // Step 7: Add literal coefficient if not 1
     let mut all_factors = Vec::new();
     if literal_product != 1 {
         all_factors.push(Type::Size(SizeExpr::Literal(literal_product)));
     }
     all_factors.extend(non_literal_factors);
 
-    // Step 7: Build result
+    // Step 8: Build result
     if all_factors.is_empty() {
         Type::Size(SizeExpr::Literal(1))
     } else {
@@ -428,6 +454,55 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
         // Both literals: compute
         (Type::Size(SizeExpr::Literal(n)), Type::Size(SizeExpr::Literal(d))) if *d != 0 => {
             Type::Size(SizeExpr::Literal(n / d))
+        }
+
+        // Literal term extraction from sum numerator:
+        // (a + k*d + b) // d  →  k + (a + b) // d
+        // Sound because (k*d + r) // d = k + r // d for all integers k, d, r (d ≠ 0).
+        // Enables: (H - 2) // 2 + 1  →  -1 + H // 2 + 1  →  H // 2
+        (Type::Size(SizeExpr::Add(_, _)), Type::Size(SizeExpr::Literal(d))) if *d != 0 => {
+            let d = *d;
+            let mut terms = Vec::new();
+            collect_terms(canonical_num, &mut terms);
+            let original_count = terms.len();
+
+            // Partition into extractable (literal multiples of d) and remaining
+            let mut extracted_sum: i64 = 0;
+            let mut remaining = Vec::new();
+            for term in terms {
+                if let Type::Size(SizeExpr::Literal(n)) = &term
+                    && n % d == 0
+                {
+                    extracted_sum += n / d;
+                    continue;
+                }
+                remaining.push(term);
+            }
+
+            if extracted_sum == 0 && remaining.len() == original_count {
+                // Nothing extracted — fall through to cancellation
+                let (new_num, new_den) =
+                    try_cancel_common_factors(rebuild_sum(remaining), canonical_den);
+                if matches!(new_den, Type::Size(SizeExpr::Literal(1))) {
+                    new_num
+                } else {
+                    Type::Size(SizeExpr::FloorDiv(Box::new(new_num), Box::new(new_den)))
+                }
+            } else if remaining.is_empty() {
+                // All terms extracted — result is just the extracted literal
+                Type::Size(SizeExpr::Literal(extracted_sum))
+            } else {
+                // Some terms extracted: extracted_sum + remaining // d
+                let remainder_div = Type::Size(SizeExpr::FloorDiv(
+                    Box::new(rebuild_sum(remaining)),
+                    Box::new(Type::Size(SizeExpr::Literal(d))),
+                ));
+                if extracted_sum == 0 {
+                    remainder_div
+                } else {
+                    canonicalize_sum(Type::Size(SizeExpr::Literal(extracted_sum)), remainder_div)
+                }
+            }
         }
 
         // Try cancellation
@@ -628,6 +703,10 @@ pub enum ShapeError {
 
     /// Too many indices for tensor rank
     TooManyIndices { got: usize, max: usize },
+
+    /// Operation not supported on variadic shapes.
+    /// Triggers fixture fallback instead of a user-visible error.
+    Unsupported { message: String },
 }
 
 impl Display for ShapeError {
@@ -670,6 +749,9 @@ impl Display for ShapeError {
                     "Too many indices for tensor: got {}, expected at most {}",
                     got, max
                 )
+            }
+            Self::Unsupported { message } => {
+                write!(f, "Unsupported: {}", message)
             }
         }
     }

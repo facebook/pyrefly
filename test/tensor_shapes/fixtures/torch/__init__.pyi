@@ -22,6 +22,14 @@ from typing import Any, overload, Self
 __all__ = ["Tensor"]
 
 # ============================================================================
+# Device Type
+# ============================================================================
+
+class device:
+    """Represents the device on which a Tensor is or will be allocated."""
+    def __init__(self, type: str, index: int = 0) -> None: ...
+
+# ============================================================================
 # Tensor Class
 # ============================================================================
 
@@ -93,6 +101,10 @@ class Tensor[*Shape]:
 
     # Power operations
     def __pow__(self, other: Tensor | float | int) -> Self: ...
+
+    # Unary operations
+    def __neg__(self) -> Self: ...
+    def __abs__(self) -> Self: ...
 
     # ==== Comparison Operations ====
     # Return boolean tensors with the same shape
@@ -171,6 +183,10 @@ class Tensor[*Shape]:
         """Expand tensor. Shape inference via meta-shape: torch.Tensor.expand"""
         ...
 
+    def expand_as[*S](self: Tensor, other: Tensor[*S]) -> Tensor[*S]:
+        """Expand tensor to match the shape of `other`."""
+        ...
+
     def contiguous(self) -> Self:
         """Returns a contiguous tensor. Shape inference via generic fixture signature."""
         ...
@@ -181,6 +197,50 @@ class Tensor[*Shape]:
 
     def detach(self) -> Self:
         """Returns detached tensor. Shape inference via generic fixture signature."""
+        ...
+
+    # ==== Tensor Creation Methods ====
+    # These create new tensors; shape depends on size args, not self's shape.
+
+    def new_zeros(
+        self,
+        *size: builtins.int,
+        dtype: Any = None,
+        device: Any = None,
+        requires_grad: builtins.bool = False,
+    ) -> Tensor:
+        """Create zero-filled tensor with same dtype/device."""
+        ...
+
+    def new_ones(
+        self,
+        *size: builtins.int,
+        dtype: Any = None,
+        device: Any = None,
+        requires_grad: builtins.bool = False,
+    ) -> Tensor:
+        """Create one-filled tensor with same dtype/device."""
+        ...
+
+    def new_empty(
+        self,
+        *size: builtins.int,
+        dtype: Any = None,
+        device: Any = None,
+        requires_grad: builtins.bool = False,
+    ) -> Tensor:
+        """Create uninitialized tensor with same dtype/device."""
+        ...
+
+    def new_full(
+        self,
+        size: tuple[builtins.int, ...],
+        fill_value: builtins.float | builtins.int,
+        dtype: Any = None,
+        device: Any = None,
+        requires_grad: builtins.bool = False,
+    ) -> Tensor:
+        """Create tensor filled with fill_value, same dtype/device."""
         ...
 
     # ==== Dtype Conversion Methods ====
@@ -1181,7 +1241,9 @@ def arange(
     """Create 1D tensor with range [start, end) with step. Shape inference via meta-shape: torch.arange"""
     ...
 
-def linspace(start: float, end: float, steps: int) -> Tensor:
+def linspace(
+    start: float, end: float, steps: int, *, dtype: Any = None, device: Any = None
+) -> Tensor:
     """Create 1D tensor with linearly spaced values. Shape inference via meta-shape: torch.linspace"""
     ...
 
@@ -1520,6 +1582,10 @@ def sqrt[*Shape](input: Tensor[*Shape]) -> Tensor[*Shape]:
 
 def tanh[*Shape](input: Tensor[*Shape]) -> Tensor[*Shape]:
     """Element-wise hyperbolic tangent. Shape inference via generic fixture signature."""
+    ...
+
+def sigmoid[*Shape](input: Tensor[*Shape]) -> Tensor[*Shape]:
+    """Element-wise sigmoid. Shape inference via generic fixture signature."""
     ...
 
 # Comparison operations
@@ -1933,6 +1999,18 @@ def tensor(
     """Create tensor from data. Returns shapeless tensor (shape depends on input data)."""
     ...
 
+def randint(
+    low: int,
+    high: int,
+    size: tuple[int, ...],
+    *,
+    dtype: Any = None,
+    device: Any = None,
+    requires_grad: bool = False,
+) -> Tensor:
+    """Create tensor of random integers. Returns shapeless tensor (shape depends on size arg)."""
+    ...
+
 # ==============================================================================
 # Additional Math Operations
 # ==============================================================================
@@ -1947,6 +2025,33 @@ def outer(self: Tensor, vec2: Tensor) -> Tensor:
 
 def polar[*Shape](abs: Tensor[*Shape], angle: Tensor[*Shape]) -> Tensor[*Shape]:
     """Construct complex tensor from polar coordinates. Shape-preserving operation."""
+    ...
+
+def addmm[N, K, M](
+    input: Tensor[N, M],
+    mat1: Tensor[N, K],
+    mat2: Tensor[K, M],
+    *,
+    beta: float = 1,
+    alpha: float = 1,
+) -> Tensor[N, M]:
+    """Matrix multiply with add: beta * input + alpha * (mat1 @ mat2)."""
+    ...
+
+def cross[*B](
+    input: Tensor[*B, 3],
+    other: Tensor[*B, 3],
+    dim: int = -1,
+) -> Tensor[*B, 3]:
+    """Cross product of two tensors along a dimension of size 3."""
+    ...
+
+def flatten(
+    self: Tensor,
+    start_dim: int = 0,
+    end_dim: int = -1,
+) -> Tensor:
+    """Flatten a contiguous range of dims. Shape computed by meta-shape DSL."""
     ...
 
 # Context managers
@@ -1967,3 +2072,11 @@ class no_grad:
     def __enter__(self) -> None: ...
     def __exit__(self, exc_type, exc_value, traceback) -> None: ...
     def __call__(self, func) -> Any: ...  # For decorator usage
+
+def meshgrid(*tensors: Tensor, indexing: str = "ij") -> tuple[Tensor, ...]:
+    """Create coordinate grids from 1D input tensors.
+
+    For N input tensors, returns N tensors each with N dimensions.
+    Shape inference depends on input tensor shapes; returns shapeless tuple.
+    """
+    ...

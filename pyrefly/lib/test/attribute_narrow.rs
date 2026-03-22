@@ -628,3 +628,20 @@ def test(c: C):
         assert_type(c.x, Any)  # E: Object of class `C` has no attribute `x`
     "#,
 );
+
+testcase!(
+    test_hasattr_narrowing_preserves_attr_type,
+    r#"
+from typing import assert_type, Any
+
+class A:
+    x: int
+class B:
+    pass
+
+def f(v: A | B):
+    if hasattr(v, "x"):
+        # The facet should preserve `int` from A.x, not widen to bare Any.
+        assert_type(v.x, int | Any)
+    "#,
+);

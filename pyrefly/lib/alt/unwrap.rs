@@ -81,8 +81,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// check we just ran. If it was not, return `None`.
     fn resolve_var_opt(&self, ty: &Type, var: Var) -> Option<Type> {
         let res = self.resolve_var(ty, var);
-        // TODO: Really want to check if the Var is constrained in any way.
-        // No way to do that currently, but this is close.
         if matches!(res, Type::Var(..)) {
             None
         } else {
@@ -117,7 +115,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match ty {
             Type::Any(style) => self.heap.mk_any(*style),
             Type::Never(style) => self.heap.mk_never_style(*style),
-            _ => self.solver().expand_vars(var.to_type(self.heap)),
+            _ => self.solver().expand_unwrap(var),
         }
     }
 
@@ -278,19 +276,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .mk_class_type(self.stdlib.async_iterable(iter_ty.to_type(self.heap)));
         if self.is_subset_eq(ty, &iterable_ty) {
             Some(self.resolve_var(ty, iter_ty))
-        } else {
-            None
-        }
-    }
-
-    /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
-    pub fn unwrap_async_iterator(&self, ty: &Type) -> Option<Type> {
-        let var = self.fresh_var();
-        let iterator_ty = self
-            .heap
-            .mk_class_type(self.stdlib.async_iterator(var.to_type(self.heap)));
-        if self.is_subset_eq(ty, &iterator_ty) {
-            Some(self.resolve_var(ty, var))
         } else {
             None
         }

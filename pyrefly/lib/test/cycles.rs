@@ -8,36 +8,19 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
-/*
-Leaky loop tests: Some of these are genuinely nondeterministic in cargo (they
-normally pass, but might not when run in the full test suite with threading
-because the check of `main` can race the check of `leaky_loop`) and so they are
-commented out.
+// Leaky loop tests: These demonstrate that loop recursion can create cycles
+// in the definition of variables. The loop creates a cycle in `x`, and with
+// iterative fixpoint solving we get deterministic answers regardless of which
+// variable we force first or where we enter the cycle.
 
-They demonstrate that we get nondeterminism from loop recursion, even with
-no placeholder types involved. The loop creates a cycle in the definition of
-`x`, and depending where we start the cycle we can get different answers.
-
-The one I've left uncommented is the one where there's no race condition.
-*/
-
-/* Improving loop handling in D85922045 made these tests once again
- * nondeterministic in cargo tests, because some percentage of the time
- * the type check for `y, x = f(x)` passes.
- *
- * This is occurring because it is entrypoint-dependent whether we type
- * check that binding once or twice, and if we type check it twice then
- * the second type check can produce a different answer due to
- * non-idempotence
-
- fn env_leaky_loop() -> TestEnv {
+fn env_leaky_loop() -> TestEnv {
     TestEnv::one(
         "leaky_loop",
         r#"
 x = None
 def f(_: str | None) -> tuple[str, str]: ...
 def g(_: int | None) -> tuple[int, int]: ...
-while True: # E: Pyrefly detected conflicting types while breaking a dependency cycle: `int | None` is not assignable to `str | None`.
+while True:
     y, x = f(x)  # E: Argument `int | None` is not assignable to parameter `_` with type `str | None` in function `f`
     z, x = g(x)  # E: Argument `str` is not assignable to parameter `_` with type `int | None` in function `g`
 "#,
@@ -45,7 +28,6 @@ while True: # E: Pyrefly detected conflicting types while breaking a dependency 
 }
 
 testcase!(
-    bug = "If we don't force anything, x will come back as `int`.",
     try_leaky_loop_and_import_x,
     env_leaky_loop(),
     r#"
@@ -56,7 +38,6 @@ assert_type(x, int | None)
 );
 
 testcase!(
-    bug = "Forcing `y` first gives us `int` for `x`",
     try_leaky_loop_and_import_y,
     env_leaky_loop(),
     r#"
@@ -67,14 +48,8 @@ from leaky_loop import x
 assert_type(x, int | None)
 "#,
 );
-*/
-
-/*
-The variant of this test that exercises an actual race condition can potentially
-give nondeterministic output so it is commented for CI stability.
 
 testcase!(
-    bug = "Forcing `z` first gives us `Any` for `x`",
     try_leaky_loop_and_import_z,
     env_leaky_loop(),
     r#"
@@ -82,32 +57,25 @@ from typing import assert_type, Any
 from leaky_loop import z
 assert_type(z, int)
 from leaky_loop import x
-assert_type(x, Any | None)
+assert_type(x, int | None)
 "#,
 );
-*/
 
-/*
-Import cycle tests: We can create a cycle of imports pretty easily. If we never
-do anything with imported names except forward them, we won't be able to exhibit
-nondeterminism because the answer to everything is just `Any` regardless of orders.
+// Regression test against lambda parameters not being inferred in a way that reflects
+// fixpoint semantics.
+testcase!(
+    class_field_lambda_param_scc_consistent_errors,
+    r#"
+from typing import Callable
 
-But if anything in the cycle is able to actually compute a result (for example,
-because it makes a function call that takes a cyclic argument, but the function
-itself has a well-defined return type), we will see nondeterminism, because
-- If we break the cycle on exactly that element, it will spit out a recursive
-  `Var` from the point of view of its dependents, which when forced is typically
-  `Any`.
-- If we break the cycle anywhere else, the function call will be evaluated and
-  we'll spit out a concrete answer (the same concrete answer we'll eventually
-  get in the other case when we unwind the cycle back to ourselves), and our
-  dependents will see that.
-- Note that the nondeterminism *originates* from the place where we break
-  recursion, but the *visible effects* occur in the dependents of that element,
-  not the element itself.
-
-Unlike the leaky loop tests, these have no variations that aren't potentially
-subject to race conditions, so they are all commented out for CI stability.
+class A:
+    def __init__(self):
+        self.a: Callable[[Callable[[int], int]], int] = lambda f: self.b
+        self.b = self.a(lambda x: x + "foo")  # E: `+` is not supported between `int` and `Literal['foo']`
+        self.c = self.z(lambda x: x + "foo")  # E: `+` is not supported between `int` and `Literal['foo']`
+        self.z: Callable[[Callable[[int], int]], int] = lambda f: self.c
+"#,
+);
 
 fn env_import_cycle() -> TestEnv {
     let mut env = TestEnv::new();
@@ -145,7 +113,7 @@ assert_type(x0, int)
 from yy import y
 assert_type(y, int)
 from xx import x1
-assert_type(y, int)
+assert_type(x1, int)
 "#,
 );
 
@@ -155,11 +123,11 @@ testcase!(
     r#"
 from typing import assert_type, Any
 from xx import x1
-assert_type(y, Any)
+assert_type(x1, int)
 from yy import y
-assert_type(y, Any)
+assert_type(y, int)
 from xx import x0
-assert_type(x0, Any)
+assert_type(x0, int)
 "#,
 );
 
@@ -171,9 +139,9 @@ from typing import assert_type, Any
 from yy import y
 assert_type(y, int)
 from xx import x1
-assert_type(y, int)
+assert_type(x1, int)
 from xx import x0
-assert_type(x0, Any)
+assert_type(x0, int)
 "#,
 );
 
@@ -185,12 +153,11 @@ from typing import assert_type, Any
 from yy import y
 assert_type(y, int)
 from xx import x0
-assert_type(x0, object)
+assert_type(x0, int)
 from xx import x1
-assert_type(y, Any)
+assert_type(x1, int)
 "#,
 );
-*/
 
 // This pair of tests shows that fully annotating modules eliminates
 // nondeterminism from import cycles of globals defined with assignment.
@@ -243,22 +210,10 @@ assert_type(yyy, bytes)
 "#,
 );
 
-// The following tests demonstrate that decorator cycles exhibit nondeterminism.
-//
-// The unit tests themselves are deterministic, because the `main` module (which
-// I need outside the cycle for my own sanity) isn't participating directly in
-// the cycle, and everything here has a concrete type once it's fully resolved.
-//
-// But if you run with `--nocapture`, you'll see that the type errors for
-// the `xx` and `yy` modules are not consistent between the two tests:
-// - In version (a) we get no type errors in xx and a type error in yy
-// - In version (b) we get no type errors in yy and a type error in xx
-//
-// The root cause of the error is that whichever of `fx` / `fy` *doesn't* break
-// the cycle winds up with type `int` prior to `@dec` being applied, but
-// whichever one *does* break it has type `Any` (until the cycle completes).
+// Decorator cycle tests: `fx` and `fy` each import and use the other as a
+// decorator, creating a cross-module cycle through decorator application.
+// With iterative fixpoint solving, these should converge deterministically.
 
-/*
 fn env_import_cycle_decorators() -> TestEnv {
     let mut env = TestEnv::new();
     env.add(
@@ -269,7 +224,7 @@ from yy import fy
 def dec(
     arg: Callable[[Callable[..., int]], Callable[..., int]]
 ) -> Callable[..., int]: ...
-@dec  # Sometimes an error, depends on the cycle resolution order
+@dec  # E: Argument `int` is not assignable to parameter `arg` with type `((...) -> int) -> (...) -> int` in function `dec`
 @fy
 def fx(arg: Callable[..., Any]) -> Callable[..., Any]: ...
 "#,
@@ -282,7 +237,7 @@ from xx import fx
 def dec(
     arg: Callable[[Callable[..., int]], Callable[..., int]]
 ) -> Callable[..., int]: ...
-@dec  # Sometimes an error, depends on the cycle resolution order
+@dec  # E: Argument `int` is not assignable to parameter `arg` with type `((...) -> int) -> (...) -> int` in function `dec`
 @fx
 def fy(arg: Callable[..., Any]) -> Callable[..., Any]: ...
 "#,
@@ -291,7 +246,6 @@ def fy(arg: Callable[..., Any]) -> Callable[..., Any]: ...
 }
 
 testcase!(
-    bug = "Type errors reported in xx / yy differ between versions (a) and (b) (run with --nocapture)",
     import_cycle_decorators_a,
     env_import_cycle_decorators(),
     r#"
@@ -304,7 +258,6 @@ assert_type(fx, Callable[..., int])
 );
 
 testcase!(
-    bug = "Type errors reported in xx / yy differ between versions (a) and (b) (run with --nocapture)",
     import_cycle_decorators_b,
     env_import_cycle_decorators(),
     r#"
@@ -315,7 +268,6 @@ from yy import fy
 assert_type(fy, Callable[..., int])
 "#,
 );
-*/
 
 // This pair of tests failed until we separated Mro out from ClassMetadata - parsing base
 // types depends on the metadata but not the Mro, which was leading to patterns where a base
@@ -388,7 +340,7 @@ testcase!(
     force_for_narrowing_cycle_detection,
     r#"
 def f(  # E: Expected `)`, found newline
-    if n:  # E: Type narrowing encountered a cycle in Type::Var # E: Expected an indented block after `if` statement
+    if n:  # E: Expected an indented block after `if` statement
 )n = min(n, size)  # E: Expected a statement # E: `n` is uninitialized # E: Could not find name `size`
 "#,
 );
@@ -614,10 +566,10 @@ fn env_deep_phi_chain_term_expr() -> TestEnv {
     code.push_str("    L: list[str] = []\n");
     for i in 0..NUM_FIELDS {
         writeln!(code, "    if self.f{i} is not None:").unwrap();
-        writeln!(code, "      value = repr(self.f{i})").unwrap();
-        writeln!(code, "      L.append('    f{i}=%s' % (value,))").unwrap();
+        writeln!(code, "          value = repr(self.f{i})").unwrap();
+        writeln!(code, "          L.append('    f{i}=%s' % (value,))").unwrap();
     }
-    code.push_str("    return value\n");
+    code.push_str("    return value  # E: may be uninitialized\n");
 
     TestEnv::one("gen", &code)
 }
@@ -628,5 +580,210 @@ testcase!(
     r#"
 from gen import Struct
 x = Struct().serialize()
+"#,
+);
+
+// Verify that a simple loop variable whose type is stable across iterations
+// is correctly inferred. The LoopPhi cold-start bypass resolves the prior
+// value (x = 0, type int) during iteration 1, and the warm-start iteration
+// confirms convergence.
+testcase!(
+    iterative_loop_phi_simple,
+    r#"
+from typing import assert_type
+
+def f(cond: bool):
+    x = 0
+    while cond:
+        x = x + 1
+    assert_type(x, int)
+"#,
+);
+
+// Verify that multiple loop variables modified in the same loop are all
+// correctly inferred. Each variable produces its own LoopPhi node in the
+// SCC; the cold-start bypass must handle all of them independently, and
+// the warm-start iteration must confirm convergence for every variable.
+testcase!(
+    iterative_loop_phi_multi_var,
+    r#"
+from typing import assert_type
+
+def f(cond: bool):
+    x = 0
+    y = 1.5
+    z: list[int] = []
+    while cond:
+        x = x + 1
+        y = y * 2.0
+        z = z + [x]
+    assert_type(x, int)
+    assert_type(y, float)
+    assert_type(z, list[int])
+"#,
+);
+
+// Verify that a loop variable whose type widens across iterations converges
+// correctly under iterative fixpoint solving. The variable `x` starts as
+// `int` but may be reassigned to `None` inside the loop, so the LoopPhi
+// must converge to `int | None`.
+testcase!(
+    iterative_loop_phi_increment,
+    r#"
+from typing import assert_type
+
+def f(cond: bool):
+    x: int | None = 0
+    while cond:
+        assert_type(x, int | None)
+        if cond:
+            x = None
+        else:
+            x = 1
+    assert_type(x, int | None)
+"#,
+);
+
+// Verify that mutually recursive functions (a true SCC, not just a LoopPhi)
+// converge correctly under iterative fixpoint solving. Functions `f` and `g`
+// each call the other, creating a cycle in the binding graph. The cold-start
+// iteration uses placeholders for the unknown return types; the warm-start
+// iteration substitutes the previous answers and should converge to the
+// annotated return types.
+testcase!(
+    iterative_warm_start_mutual_recursion,
+    r#"
+from typing import assert_type
+
+def f(x: int) -> str:
+    if x <= 0:
+        return "done"
+    return g(x - 1)
+
+def g(x: int) -> str:
+    return f(x)
+
+assert_type(f(1), str)
+assert_type(g(1), str)
+"#,
+);
+
+// Verify that spurious errors from cold-start iteration 1 (which uses
+// placeholders via `error_swallower()`) do not leak into the final output.
+// A clean mutual recursion cycle with fully annotated signatures should
+// produce NO errors: the cold-start may temporarily see placeholder types
+// that look like mismatches, but those errors are swallowed. The warm-start
+// iterations use `error_collector()` and should see converged, correct types
+// that produce no errors.
+testcase!(
+    iterative_error_suppression_no_spurious_errors,
+    r#"
+from typing import assert_type
+
+def f(x: int) -> int:
+    return g(x)
+
+def g(x: int) -> int:
+    return f(x)
+
+assert_type(f(1), int)
+assert_type(g(1), int)
+"#,
+);
+
+// Verify that real type errors ARE reported after convergence in iterative
+// mode. While cold-start (iteration 1) errors are suppressed, errors from
+// iteration >= 2 are collected and committed. Here `g` has a return type
+// annotation of `str` but returns `x` (an `int`), which is a genuine
+// incompatible-return-type error that must survive across iterations.
+testcase!(
+    iterative_error_suppression_real_errors_reported,
+    r#"
+from typing import assert_type
+
+def f(x: int) -> str:
+    if x <= 0:
+        return "done"
+    return g(x - 1)
+
+def g(x: int) -> str:
+    return x  # E: Returned type `int` is not assignable to declared return type `str`
+
+assert_type(f(1), str)
+assert_type(g(1), str)
+"#,
+);
+
+// Verify that the iterative solver handles SCCs spanning multiple modules.
+// Module `a` defines `f` which calls `g` from module `b`, and module `b`
+// defines `g` which calls `f` from module `a`. This creates a cross-module
+// cycle that exercises `solve_idx_erased` plumbing: the iterative solver
+// must detect the cross-module SCC and converge to the annotated return
+// types via cold-start placeholders followed by warm-start iterations.
+
+fn env_iterative_cross_module_cycle() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add(
+        "a",
+        r#"
+from b import g
+
+def f(x: int) -> int:
+    return g(x)
+"#,
+    );
+    env.add(
+        "b",
+        r#"
+from a import f
+
+def g(x: int) -> int:
+    return f(x)
+"#,
+    );
+    env
+}
+
+testcase!(
+    iterative_cross_module_scc_cycle,
+    env_iterative_cross_module_cycle(),
+    r#"
+from typing import assert_type
+from a import f
+from b import g
+assert_type(f(1), int)
+assert_type(g(1), int)
+"#,
+);
+
+// Verify that two disjoint SCCs (no edges between them) solve independently
+// and correctly. When the iterative solver discovers a disjoint SCC during
+// iteration, it should solve that SCC to completion, commit its results,
+// and return without disturbing the iteration state of the other SCC.
+// Here SCC1 = {f, g} (int -> int) and SCC2 = {h, k} (str -> str) are
+// completely independent mutual-recursion pairs.
+testcase!(
+    iterative_disjoint_scc_independence,
+    r#"
+from typing import assert_type
+
+# SCC 1: f and g call each other
+def f(x: int) -> int:
+    return g(x)
+
+def g(x: int) -> int:
+    return f(x)
+
+# SCC 2: h and k call each other (completely independent of f/g)
+def h(x: str) -> str:
+    return k(x)
+
+def k(x: str) -> str:
+    return h(x)
+
+assert_type(f(1), int)
+assert_type(g(1), int)
+assert_type(h("a"), str)
+assert_type(k("a"), str)
 "#,
 );

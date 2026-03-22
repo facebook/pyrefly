@@ -252,6 +252,106 @@ class C:
 "#,
 );
 
+// State 1: check-unannotated-defs=false, infer-return-types=never.
+// Unannotated functions are skipped entirely; annotated functions are checked
+// but return types are never inferred.
+testcase!(
+    test_skip_check_no_infer,
+    TestEnv::new_skip_check_no_infer(),
+    r#"
+from typing import assert_type, Any, Callable
+
+# Unannotated: body is not checked, return type is Any
+def unchecked(x, y):
+    z: str = 0  # no error
+    return x + y
+assert_type(unchecked(0, 0), Any)
+
+# Annotated: body is checked, but return type is NOT inferred (still Any)
+def annotated_params(x: int, y: int):
+    return x + y
+assert_type(annotated_params(0, 0), Any)
+
+# Explicitly annotated return: body is checked, annotation is used
+def annotated_return(x: int) -> int:
+    return x + 1
+assert_type(annotated_return(0), int)
+
+# Annotated function with missing return path: error is reported
+def missing_return(x: int) -> int:  # E: missing an explicit `return`
+    if x > 0:
+        return x
+"#,
+);
+
+// State 2: check-unannotated-defs=false, infer-return-types=annotated.
+// Unannotated functions are skipped; annotated functions get return inference.
+testcase!(
+    test_skip_check_and_infer_return_type,
+    TestEnv::new_skip_check_infer_return_types(),
+    r#"
+from typing import assert_type, Any
+
+# check-unannotated-defs=false -> totally unchecked
+def unchecked(x, y):
+    z: str = 0 # no error
+    return x + y
+# infer-return-types=annotated -> inferred for annotated functions
+def inferred_return(x: int, y: int):
+    return x + y
+assert_type(unchecked(0, 0), Any)
+assert_type(inferred_return(0, 0), int)
+"#,
+);
+
+// State 5: check-unannotated-defs=true, infer-return-types=never.
+// All bodies are checked, but return types are never inferred.
+testcase!(
+    test_check_all_no_infer,
+    TestEnv::new_check_all_no_infer(),
+    r#"
+from typing import assert_type, Any, Callable
+
+# Unannotated: body IS checked, but return type is Any
+def unannotated():
+    oops: int = "oops"  # E:
+    return 42
+assert_type(unannotated, Callable[[], Any])
+
+# Annotated params: body is checked, return type is NOT inferred
+def annotated_params(x: int, y: int):
+    return x + y
+assert_type(annotated_params(0, 0), Any)
+
+# Explicit return annotation: respected as always
+def annotated_return(x: int) -> int:
+    return x + 1
+assert_type(annotated_return(0), int)
+"#,
+);
+
+// State 6: check-unannotated-defs=true, infer-return-types=annotated.
+// All bodies are checked, but return types are only inferred for functions
+// with at least one annotation.
+testcase!(
+    test_check_all_infer_annotated_only,
+    TestEnv::new_check_infer_annotated_only(),
+    r#"
+from typing import assert_type, Any, Callable
+
+# Unannotated: body is checked but return type is Any
+def unannotated():
+    oops: int = "oops"  # E:
+    return 42
+assert_type(unannotated, Callable[[], Any])
+
+# Annotated parameters: body is checked and return type is inferred
+def annotated_params(x: int, y: int):
+    return x + y
+assert_type(annotated_params(0, 0), int)
+"#,
+);
+
 testcase!(
     bug = "We do not yet implement @no_type_check",
     test_no_type_check_decorator,

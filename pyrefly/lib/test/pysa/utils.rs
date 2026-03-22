@@ -7,6 +7,7 @@
 
 use std::num::NonZeroU32;
 
+use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_types::class::Class;
 use pyrefly_util::lined_buffer::DisplayPos;
@@ -17,13 +18,13 @@ use ruff_python_ast::name::Name;
 use crate::binding::binding::KeyClass;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
+use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionNode;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::get_all_functions;
 use crate::report::pysa::global_variable::GlobalVariableRef;
 use crate::report::pysa::location::PysaLocation;
-use crate::report::pysa::module::ModuleKey;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
@@ -48,11 +49,12 @@ pub fn get_handle_for_module_name(module_name: &str, transaction: &Transaction) 
 }
 
 pub fn get_class(module_name: &str, class_name: &str, context: &ModuleContext) -> Class {
-    let handle = get_handle_for_module_name(module_name, context.transaction);
+    let transaction = context.resolver.transaction_for_tests();
+    let handle = get_handle_for_module_name(module_name, transaction);
 
     // This is slow, but we don't care in tests.
-    let bindings = context.transaction.get_bindings(&handle).unwrap();
-    let answers = context.transaction.get_answers(&handle).unwrap();
+    let bindings = transaction.get_bindings(&handle).unwrap();
+    let answers = transaction.get_answers(&handle).unwrap();
     bindings
         .keys::<KeyClass>()
         .map(|idx| answers.get_idx(idx).unwrap().0.clone().unwrap())
@@ -62,10 +64,7 @@ pub fn get_class(module_name: &str, class_name: &str, context: &ModuleContext) -
 
 pub fn get_class_ref(module_name: &str, class_name: &str, context: &ModuleContext) -> ClassRef {
     let class = get_class(module_name, class_name, context);
-    let module_id = context
-        .module_ids
-        .get(ModuleKey::from_module(class.module()))
-        .expect("indexed module");
+    let module_id = context.module_ids().get_from_module(class.module());
 
     ClassRef {
         class_id: ClassId::from_class(&class),
@@ -79,17 +78,19 @@ pub fn get_function_ref(
     function_name: &str,
     context: &ModuleContext,
 ) -> FunctionRef {
-    let handle = get_handle_for_module_name(module_name, context.transaction);
-    let context = ModuleContext::create(handle, context.transaction, context.module_ids).unwrap();
+    let transaction = context.resolver.transaction_for_tests();
+    let handle = get_handle_for_module_name(module_name, transaction);
+    let module_context =
+        ModuleAnswersContext::create(handle.dupe(), transaction, context.module_ids());
 
     // This is slow, but we don't care in tests.
-    get_all_functions(&context)
-        .filter(|function| function.should_export(&context))
+    get_all_functions(&module_context)
+        .filter(|function| function.should_export(&module_context))
         .find(|function| function.name().as_str() == function_name)
         .unwrap_or_else(|| {
             panic!("expected valid function name, got `{module_name}.{function_name}`")
         })
-        .as_function_ref(&context)
+        .as_function_ref(&module_context)
 }
 
 fn get_method_ref_with_predicate(
@@ -99,12 +100,14 @@ fn get_method_ref_with_predicate(
     context: &ModuleContext,
     predicate: impl Fn(&FunctionNode) -> bool,
 ) -> FunctionRef {
-    let handle = get_handle_for_module_name(module_name, context.transaction);
-    let context = ModuleContext::create(handle, context.transaction, context.module_ids).unwrap();
+    let transaction = context.resolver.transaction_for_tests();
+    let handle = get_handle_for_module_name(module_name, transaction);
+    let module_context =
+        ModuleAnswersContext::create(handle.dupe(), transaction, context.module_ids());
 
     // This is slow, but we don't care in tests.
-    get_all_functions(&context)
-        .filter(|function| function.should_export(&context))
+    get_all_functions(&module_context)
+        .filter(|function| function.should_export(&module_context))
         .filter(|function| predicate(function))
         .find(|function| match function {
             FunctionNode::DecoratedFunction(decorated_function) => {
@@ -120,7 +123,7 @@ fn get_method_ref_with_predicate(
         .unwrap_or_else(|| {
             panic!("expected valid method name, got `{module_name}.{class_name}.{function_name}`")
         })
-        .as_function_ref(&context)
+        .as_function_ref(&module_context)
 }
 
 pub fn get_method_ref(
@@ -152,11 +155,12 @@ pub fn get_global_ref(
     global_name: &str,
     context: &ModuleContext,
 ) -> GlobalVariableRef {
-    let handle = get_handle_for_module_name(module_name, context.transaction);
-    let context = ModuleContext::create(handle, context.transaction, context.module_ids).unwrap();
+    let transaction = context.resolver.transaction_for_tests();
+    let handle = get_handle_for_module_name(module_name, transaction);
+    let module_id = context.module_ids().get_from_handle(&handle);
     GlobalVariableRef {
-        module_id: context.module_id,
-        module_name: context.handle.module(),
+        module_id,
+        module_name: handle.module(),
         name: Name::new(global_name),
     }
 }

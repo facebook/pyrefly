@@ -127,7 +127,7 @@ fn get_globs_and_config_for_project(
         ConfigSource::File(path) => {
             info!("Checking project configured at `{}`", path.display());
         }
-        ConfigSource::Marker(path) => {
+        ConfigSource::PythonToolMarker(path) | ConfigSource::Marker(path) => {
             info!(
                 "Found `{}` marking project root, checking root directory with default configuration",
                 path.display(),

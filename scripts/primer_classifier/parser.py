@@ -35,6 +35,9 @@ class ErrorEntry:
     message: str  # the error message text
     error_kind: str  # e.g. "bad-return", "missing-import"
     raw_line: str  # the original line from the diff
+    cross_checked: bool = False  # True if cross-check ran successfully for this error
+    also_in_mypy: bool = False  # cross-check: mypy also flags this (only meaningful if cross_checked)
+    also_in_pyright: bool = False  # cross-check: pyright also flags this (only meaningful if cross_checked)
 
     @property
     def line_number(self) -> int:
@@ -50,6 +53,9 @@ class ProjectDiff:
     url: Optional[str] = None  # GitHub URL if present
     added: list[ErrorEntry] = field(default_factory=list)
     removed: list[ErrorEntry] = field(default_factory=list)
+    # Raw checker errors from cross-check (populated by cross_checker)
+    mypy_errors: list[dict[str, object]] = field(default_factory=list)
+    pyright_errors: list[dict[str, object]] = field(default_factory=list)
 
 
 # Matches the concise error format:

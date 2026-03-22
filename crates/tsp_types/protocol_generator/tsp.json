@@ -2,6 +2,68 @@
     "metaData": {
         "version": "0.2.0"
     },
+    "enumerations": [
+        {
+            "name": "TypeFlags",
+            "type": {"kind": "base", "name": "integer"},
+            "isFlags": true,
+            "documentation": "Flags that describe the characteristics of a type. These flags can be combined using bitwise operations.",
+            "values": [
+                {"name": "None", "value": 0, "documentation": "No flags set."},
+                {"name": "Instantiable", "value": 1, "documentation": "Indicates if the type can be instantiated."},
+                {"name": "Instance", "value": 2, "documentation": "Indicates if the type represents an instance (as opposed to a class or type itself)."},
+                {"name": "Callable", "value": 4, "documentation": "Indicates if an instance of the type can be called like a function. (It has a `__call__` method)."},
+                {"name": "Literal", "value": 8, "documentation": "Indicates if the instance is a literal (like `42`, `\"hello\"`, etc.)."},
+                {"name": "Interface", "value": 16, "documentation": "Indicates if the type is an interface (a type that defines a set of methods and properties). In Python this would be a Protocol."},
+                {"name": "Generic", "value": 32, "documentation": "Indicates if the type is a generic type (a type that can be parameterized with other types)."},
+                {"name": "FromAlias", "value": 64, "documentation": "Indicates if the type came from an alias (a type that refers to another type)."},
+                {"name": "Unpacked", "value": 128, "documentation": "Indicates if the type is unpacked (used with TypeVarTuple)."},
+                {"name": "Optional", "value": 256, "documentation": "Indicates if the type is optional (used with Tuple type arguments)."},
+                {"name": "Unbound", "value": 512, "documentation": "Indicates if the type is unbound (used with *args in tuple type arguments)."}
+            ]
+        },
+        {
+            "name": "DeclarationCategory",
+            "type": {"kind": "base", "name": "integer"},
+            "documentation": "Represents the category of a declaration in the type system. This is used to classify declarations such as variables, functions, classes, etc.",
+            "values": [
+                {"name": "Intrinsic", "value": 0, "documentation": "An intrinsic refers to a symbol that has no actual declaration in the source code, such as built-in types or functions. One such example is a '__class__' declaration."},
+                {"name": "Variable", "value": 1, "documentation": "A variable is a named storage location that can hold a value."},
+                {"name": "Param", "value": 2, "documentation": "A parameter is a variable that is passed to a function or method."},
+                {"name": "TypeParam", "value": 3, "documentation": "This is for PEP 695 type parameters."},
+                {"name": "TypeAlias", "value": 4, "documentation": "This is for PEP 695 type aliases."},
+                {"name": "Function", "value": 5, "documentation": "A function is any construct that begins with the `def` keyword and has a body, which can be called with arguments."},
+                {"name": "Class", "value": 6, "documentation": "A class is any construct that begins with the `class` keyword and has a body, which can be instantiated."},
+                {"name": "Import", "value": 7, "documentation": "An import declaration, which is a reference to another module."}
+            ]
+        },
+        {
+            "name": "TypeKind",
+            "type": {"kind": "base", "name": "integer"},
+            "documentation": "Discriminator for the Type union, identifying which variant a type is.",
+            "values": [
+                {"name": "BuiltIn", "value": 0, "documentation": "unknown, any, never, etc."},
+                {"name": "Declared", "value": 1, "documentation": "Base for source-declared types (rarely used directly)"},
+                {"name": "Function", "value": 2, "documentation": "Functions and methods from def statements"},
+                {"name": "Class", "value": 3, "documentation": "Classes from class statements"},
+                {"name": "Union", "value": 4, "documentation": "int | str | None"},
+                {"name": "Module", "value": 5, "documentation": "import os -> os is ModuleType"},
+                {"name": "TypeVar", "value": 6, "documentation": "T, P, Ts in generics"},
+                {"name": "Overloaded", "value": 7, "documentation": "Functions with multiple @overload signatures"},
+                {"name": "Synthesized", "value": 8, "documentation": "Types that are synthesized by the type checker"},
+                {"name": "TypeReference", "value": 9, "documentation": "Reference by ID for deduplication"}
+            ]
+        },
+        {
+            "name": "DeclarationKind",
+            "type": {"kind": "base", "name": "integer"},
+            "documentation": "Discriminator for Declaration variants.",
+            "values": [
+                {"name": "Regular", "value": 0, "documentation": "Declaration exists in source code with AST node"},
+                {"name": "Synthesized", "value": 1, "documentation": "Declaration created by type checker (no source node)"}
+            ]
+        }
+    ],
     "requests": [
         {
             "method": "typeServer/getComputedType",
@@ -246,85 +308,6 @@
                 "v0_2_0": "Added new request types and fields",
                 "v0_3_0": "Switch to more complex types",
                 "current": "Switch to Type union and using stubs"
-            }
-        },
-        "TypeFlags": {
-            "kind": "stringLiteral",
-            "value": [
-                "None",
-                "Instantiable",
-                "Instance",
-                "Callable",
-                "Literal",
-                "Interface",
-                "Generic",
-                "FromAlias",
-                "Unpacked",
-                "Optional",
-                "Unbound"
-            ],
-            "documentation": "Flags that describe the characteristics of a type. These flags can be combined using bitwise operations.",
-            "valueDocumentation": {
-                "Instantiable": "Indicates if the type can be instantiated.",
-                "Instance": "Indicates if the type represents an instance (as opposed to a class or type itself).",
-                "Callable": "Indicates if an instance of the type can be called like a function. (It has a `__call__` method).",
-                "Literal": "Indicates if the instance is a literal (like `42`, `\"hello\"`, etc.).",
-                "Interface": "Indicates if the type is an interface (a type that defines a set of methods and properties). In Python this would be a Protocol.",
-                "Generic": "Indicates if the type is a generic type (a type that can be parameterized with other types).",
-                "FromAlias": "Indicates if the type came from an alias (a type that refers to another type).",
-                "Unpacked": "Indicates if the type is unpacked (used with TypeVarTuple).",
-                "Optional": "Indicates if the type is optional (used with Tuple type arguments).",
-                "Unbound": "Indicates if the type is unbound (used with *args in tuple type arguments)."
-            }
-        },
-        "DeclarationCategory": {
-            "kind": "stringLiteral",
-            "value": ["Intrinsic", "Variable", "Param", "TypeParam", "TypeAlias", "Function", "Class", "Import"],
-            "documentation": "Represents the category of a declaration in the type system. This is used to classify declarations such as variables, functions, classes, etc.",
-            "valueDocumentation": {
-                "Intrinsic": "An intrinsic refers to a symbol that has no actual declaration in the source code, such as built-in types or functions. One such example is a '__class__' declaration.",
-                "Variable": "A variable is a named storage location that can hold a value.",
-                "Param": "A parameter is a variable that is passed to a function or method.",
-                "TypeParam": "This is for PEP 695 type parameters.",
-                "TypeAlias": "This is for PEP 695 type aliases.",
-                "Function": "A function is any construct that begins with the `def` keyword and has a body, which can be called with arguments.",
-                "Class": "A class is any construct that begins with the `class` keyword and has a body, which can be instantiated.",
-                "Import": "An import declaration, which is a reference to another module."
-            }
-        },
-        "TypeKind": {
-            "kind": "stringLiteral",
-            "value": [
-                "BuiltIn",
-                "Declared",
-                "Function",
-                "Class",
-                "Union",
-                "Module",
-                "TypeVar",
-                "Overloaded",
-                "Synthesized",
-                "TypeReference"
-            ],
-            "valueDocumentation": {
-                "BuiltIn": "unknown, any, never, etc.",
-                "Declared": "Base for source-declared types (rarely used directly)",
-                "Function": "Functions and methods from def statements",
-                "Class": "Classes from class statements",
-                "Union": "int | str | None",
-                "Module": "import os -> os is ModuleType",
-                "TypeVar": "T, P, Ts in generics",
-                "Overloaded": "Functions with multiple @overload signatures",
-                "Synthesized": "Types that are synthesized by the type checker",
-                "TypeReference": "Reference by ID for deduplication"
-            }
-        },
-        "DeclarationKind": {
-            "kind": "stringLiteral",
-            "value": ["Regular", "Synthesized"],
-            "valueDocumentation": {
-                "Regular": "Declaration exists in source code with AST node",
-                "Synthesized": "Declaration created by type checker (no source node)"
             }
         },
         "Variance": {
@@ -600,13 +583,13 @@
                     "name": "kind",
                     "type": {
                         "kind": "reference",
-                        "name": "T"
+                        "name": "DeclarationKind"
                     },
                     "optional": false,
                     "documentation": "Discriminator field that determines which declaration variant this is. Regular: Has source code and AST node Synthesized: Created by type checker, no source node"
                 }
             ],
-            "documentation": "Base interface for all declaration types. Provides the discriminator field for the Declaration union. This is a generic interface that is extended by: - RegularDeclaration (kind = Regular) - SynthesizedDeclaration (kind = Synthesized) The type parameter T ensures that the kind field matches the implementing interface. Used for type-safe discrimination: ```typescript if (declaration.kind === DeclarationKind.Regular) { // TypeScript knows this is RegularDeclaration const node = declaration.node; } ```"
+            "documentation": "Base interface for all declaration types. Provides the discriminator field for the Declaration union."
         },
         "RegularDeclaration": {
             "kind": "interface",
@@ -780,7 +763,7 @@
                     "name": "kind",
                     "type": {
                         "kind": "reference",
-                        "name": "T"
+                        "name": "TypeKind"
                     },
                     "optional": false,
                     "documentation": "Discriminator field that determines which Type variant this is. Used for type narrowing when processing Type unions. Example: `if (type.kind === TypeKind.BuiltIn) { ... }`"

@@ -48,11 +48,11 @@ struct Args {
 async fn run() -> anyhow::Result<ExitCode> {
     let args = Args::parse_from(get_args_expanded(args_os())?);
     args.common.init(false);
-    Ok(args
+    let (status, _) = args
         .command
         .run(crate_version!(), &NoTelemetry, None)
-        .await?
-        .to_exit_code())
+        .await?;
+    Ok(status.to_exit_code())
 }
 
 #[tokio::main(flavor = "current_thread")]

@@ -81,6 +81,7 @@ use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
+use crate::types::class::ClassFields;
 use crate::types::types::AnyStyle;
 
 enum IllegalIdentifierHandling {
@@ -99,9 +100,7 @@ enum SynthesizedClassKind {
 
 impl<'a> BindingsBuilder<'a> {
     fn def_index(&mut self) -> ClassDefIndex {
-        let res = ClassDefIndex(self.class_count);
-        self.class_count += 1;
-        res
+        self.metadata.push_class()
     }
 
     /// Shared helper that allocates class indices and declares the class object with the given key.
@@ -111,9 +110,11 @@ impl<'a> BindingsBuilder<'a> {
         key: Key,
     ) -> (CurrentIdx, ClassIndices) {
         let def_index = self.def_index();
+        let class_object = self.declare_current_idx(key);
         let class_indices = ClassIndices {
             def_index,
             class_idx: self.idx_for_promise(KeyClass(ShortIdentifier::new(class_name))),
+            class_object_idx: class_object.idx(),
             base_type_idx: self.idx_for_promise(KeyClassBaseType(def_index)),
             metadata_idx: self.idx_for_promise(KeyClassMetadata(def_index)),
             mro_idx: self.idx_for_promise(KeyClassMro(def_index)),
@@ -124,7 +125,6 @@ impl<'a> BindingsBuilder<'a> {
                 .idx_for_promise(KeyConsistentOverrideCheck(def_index)),
             abstract_class_check_idx: self.idx_for_promise(KeyAbstractClassCheck(def_index)),
         };
-        let class_object = self.declare_current_idx(key);
         (class_object, class_indices)
     }
 
@@ -462,13 +462,13 @@ impl<'a> BindingsBuilder<'a> {
         }
 
         fields.reserve(0); // Attempt to shrink to capacity
+        self.metadata.get_class_mut(class_indices.def_index).fields = ClassFields::new(fields);
         self.insert_binding_idx(
             class_indices.class_idx,
             BindingClass::ClassDef(ClassBinding {
                 def_index: class_indices.def_index,
                 def: ClassDefData::new(x),
                 parent: parent.dupe(),
-                fields,
                 tparams_require_binding,
                 docstring_range,
             }),
@@ -613,6 +613,22 @@ impl<'a> BindingsBuilder<'a> {
                 if elts.is_empty() =>
             {
                 Vec::new()
+            }
+            // namedtuple('Point', [*Base._fields, 'z'])
+            // Starred expressions can't be resolved statically, so mark
+            // the namedtuple as having dynamic fields. We still extract
+            // any string literals we can see as known fields for
+            // autocomplete and type checking.
+            [Expr::List(ExprList { elts, .. }) | Expr::Tuple(ExprTuple { elts, .. })]
+                if elts.iter().any(|elt| matches!(elt, Expr::Starred(_))) =>
+            {
+                has_dynamic_fields = true;
+                elts.iter()
+                    .filter_map(|elt| match elt {
+                        Expr::StringLiteral(s) => Some((s.value.to_string(), s.range(), None)),
+                        _ => None,
+                    })
+                    .collect()
             }
             // namedtuple('Point', ['x', 'y'])
             [Expr::List(ExprList { elts, .. })]
@@ -835,7 +851,10 @@ impl<'a> BindingsBuilder<'a> {
                     alias_of: None,
                 },
                 (None, false) => match annotation {
-                    Some(annotation) => ClassFieldDefinition::DeclaredByAnnotation { annotation },
+                    Some(annotation) => ClassFieldDefinition::DeclaredByAnnotation {
+                        annotation,
+                        initialized_in_recognized_method: false,
+                    },
                     None => ClassFieldDefinition::DeclaredWithoutAnnotation,
                 },
             };
@@ -913,6 +932,7 @@ impl<'a> BindingsBuilder<'a> {
             force_class_initialization,
             class_kind,
         );
+        self.metadata.get_class_mut(class_indices.def_index).fields = ClassFields::new(fields);
         if bind_to_name {
             self.bind_current_as(
                 &class_name,
@@ -928,12 +948,7 @@ impl<'a> BindingsBuilder<'a> {
         }
         self.insert_binding_idx(
             class_indices.class_idx,
-            BindingClass::FunctionalClassDef(
-                class_indices.def_index,
-                class_name,
-                parent.dupe(),
-                fields,
-            ),
+            BindingClass::FunctionalClassDef(class_indices.def_index, class_name, parent.dupe()),
         );
 
         self.insert_binding_idx(
@@ -1217,11 +1232,13 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         name: &ExprName,
         parent: &NestingContext,
+        func: &mut Expr,
         new_type_name: &mut Expr,
         base: &mut Expr,
     ) {
         let class_name = Ast::expr_name_identifier(name.clone());
         let (mut class_object, class_indices) = self.class_object_and_indices(&class_name);
+        self.ensure_expr(func, class_object.usage());
         self.ensure_expr(new_type_name, class_object.usage());
         self.check_functional_definition_name(&name.id, new_type_name);
         self.ensure_type(base, &mut None);

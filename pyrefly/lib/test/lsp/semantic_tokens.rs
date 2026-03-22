@@ -733,7 +733,6 @@ token-type: variable
     );
 }
 
-// todo(kylei): should be 3 semantic tokens (including after reassignment) #1033
 #[test]
 fn reassignment() {
     let code = r#"
@@ -748,6 +747,9 @@ line: 1, column: 0, length: 3, text: foo
 token-type: variable
 
 line: 2, column: 0, length: 3, text: foo
+token-type: variable
+
+line: 3, column: 0, length: 3, text: foo
 token-type: variable"#,
     );
 }
@@ -1152,6 +1154,34 @@ token-type: class, token-modifiers: [defaultLibrary]
 
 line: 4, column: 8, length: 9, text: with_func
 token-type: function
+"#,
+    );
+}
+
+#[test]
+fn list_comprehension_variable_test() {
+    let code = r#"
+items = [1, 2, 3]
+result = [x for x in items]
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 0, length: 5, text: items
+token-type: variable
+
+line: 2, column: 0, length: 6, text: result
+token-type: variable
+
+line: 2, column: 10, length: 1, text: x
+token-type: variable
+
+line: 2, column: 16, length: 1, text: x
+token-type: variable
+
+line: 2, column: 21, length: 5, text: items
+token-type: variable
 "#,
     );
 }

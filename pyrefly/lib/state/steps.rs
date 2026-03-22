@@ -14,6 +14,7 @@ use dupe::Dupe;
 use enum_iterator::Sequence;
 use parse_display::Display;
 use paste::paste;
+use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
@@ -24,8 +25,8 @@ use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
 use crate::binding::bindings::Bindings;
+use crate::config::base::InferReturnTypes;
 use crate::config::base::RecursionLimitConfig;
-use crate::config::base::UntypedDefBehavior;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
@@ -36,6 +37,13 @@ use crate::state::memory::MemoryFilesLookup;
 use crate::state::require::Require;
 use crate::types::stdlib::Stdlib;
 
+/// Context for pysa data extraction during the Solutions step.
+pub struct PysaContext<'a> {
+    pub handle: &'a Handle,
+    pub module_ids: &'a crate::report::pysa::module::ModuleIds,
+    pub stdlib: Arc<Stdlib>,
+}
+
 pub struct Context<'a, Lookup> {
     pub require: Require,
     pub module: ModuleName,
@@ -45,11 +53,14 @@ pub struct Context<'a, Lookup> {
     pub uniques: &'a UniqueFactory,
     pub stdlib: &'a Stdlib,
     pub lookup: &'a Lookup,
-    pub untyped_def_behavior: UntypedDefBehavior,
+    pub check_unannotated_defs: bool,
+    pub infer_return_types: InferReturnTypes,
     pub infer_with_first_use: bool,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
     pub recursion_limit_config: Option<RecursionLimitConfig>,
+    /// Pysa context for building PysaSolutions during the Solutions step.
+    pub pysa_context: Option<PysaContext<'a>>,
 }
 
 #[derive(Debug, Default, Dupe, Clone)]
@@ -159,13 +170,28 @@ impl AtomicStep {
 
 /// For each step:
 ///   1. Gets inputs from `StepsMut` fields via `load_full().unwrap()`
+///      (or `load_full()` for inputs suffixed with `?`, yielding `Option`)
 ///   2. Calls `Step::step_$output(ctx, inputs...)`
 ///   3. Stores the result via ArcSwap
 macro_rules! compute_step {
-    ($steps:ident, $ctx:ident, $output:ident = $($input:ident),* $(,)?) => {{
-        $(let $input = $steps.$input.load_full().unwrap();)*
+    // Entry point: parse comma-separated inputs, then delegate to @exec.
+    ($steps:ident, $ctx:ident, $output:ident = $($rest:tt)*) => {{
+        compute_step!(@exec $steps, $ctx, $output, [] $($rest)*);
+    }};
+    // Base case: all inputs consumed, emit the step call.
+    (@exec $steps:ident, $ctx:ident, $output:ident, [$($input:ident)*]) => {{
         let res = paste! { Step::[<step_ $output>] }($ctx, $($input,)*);
         $steps.$output.store(Some(res));
+    }};
+    // Optional input (name?): load as Option (no unwrap).
+    (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] $input:ident ? $(, $($rest:tt)*)?) => {{
+        let $input = $steps.$input.load_full();
+        compute_step!(@exec $steps, $ctx, $output, [$($acc)* $input] $($($rest)*)?);
+    }};
+    // Required input (name): load and unwrap.
+    (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] $input:ident $(, $($rest:tt)*)?) => {{
+        let $input = $steps.$input.load_full().unwrap();
+        compute_step!(@exec $steps, $ctx, $output, [$($acc)* $input] $($($rest)*)?);
     }};
 }
 
@@ -274,7 +300,7 @@ impl StepsMut {
             Step::Ast => compute_step!(self, ctx, ast = load),
             Step::Exports => compute_step!(self, ctx, exports = load, ast),
             Step::Answers => compute_step!(self, ctx, answers = load, ast, exports),
-            Step::Solutions => compute_step!(self, ctx, solutions = load, answers),
+            Step::Solutions => compute_step!(self, ctx, solutions = load, ast?, answers),
         }
         // Release-store current_step: readers seeing this value are guaranteed
         // to see the step data stored above.
@@ -390,7 +416,7 @@ impl Step {
         load: Arc<Load>,
         ast: Arc<ModModule>,
     ) -> Arc<Exports> {
-        Arc::new(Exports::new(&ast.body, &load.module_info, ctx.sys_info))
+        Arc::new(Exports::new(&ast.body, &load.module_info, *ctx.sys_info))
     }
 
     #[inline(never)]
@@ -406,18 +432,19 @@ impl Step {
             ctx.strict_callable_subtyping,
         );
         let enable_index = ctx.require.keep_index();
-        let enable_trace = ctx.require.keep_answers_trace();
+        let enable_trace = ctx.require.keep_answers_trace() || ctx.pysa_context.is_some();
         let bindings = Bindings::new(
             Arc::unwrap_or_clone(ast),
             load.module_info.dupe(),
             &exports,
             &solver,
             ctx.lookup,
-            ctx.sys_info,
+            *ctx.sys_info,
             &load.errors,
             ctx.uniques,
             enable_trace,
-            ctx.untyped_def_behavior,
+            ctx.check_unannotated_defs,
+            ctx.infer_return_types,
         );
         let answers = Answers::new(&bindings, solver, enable_index, enable_trace);
         Arc::new((bindings, Arc::new(answers)))
@@ -427,8 +454,21 @@ impl Step {
     fn step_solutions<Lookup: LookupExport + LookupAnswer>(
         ctx: &Context<Lookup>,
         load: Arc<Load>,
+        ast: Option<Arc<ModModule>>,
         answers: Arc<(Bindings, Arc<Answers>)>,
     ) -> Arc<Solutions> {
+        let pysa_context = ctx.pysa_context.as_ref().map(|pysa_context| {
+            crate::report::pysa::context::ModuleAnswersContext {
+                handle: pysa_context.handle.dupe(),
+                module_id: pysa_context.module_ids.get_from_handle(pysa_context.handle),
+                module_info: load.module_info.dupe(),
+                stdlib: pysa_context.stdlib.dupe(),
+                ast: ast.expect("AST must be available when pysa is enabled"),
+                bindings: answers.0.dupe(),
+                answers: answers.1.dupe(),
+            }
+        });
+
         let solutions = answers.1.solve(
             ctx.lookup,
             ctx.lookup,
@@ -438,9 +478,12 @@ impl Step {
             ctx.uniques,
             ctx.require.compute_errors()
                 || ctx.require.keep_answers_trace()
-                || ctx.require.keep_answers(),
+                || ctx.require.keep_answers()
+                || ctx.pysa_context.is_some(),
             ctx.recursion_limit_config,
+            pysa_context.as_ref(),
         );
+
         Arc::new(solutions)
     }
 }

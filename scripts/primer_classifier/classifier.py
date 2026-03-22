@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .code_fetcher import fetch_files_by_path, fetch_source_context
+from .cross_checker import cross_check_projects
 from .llm_client import (
     assign_verdict_with_llm,
     CategoryVerdict,
@@ -50,6 +51,7 @@ class Classification:
     categories: list[CategoryVerdict] = field(default_factory=list)
     pr_attribution: str = ""
     error_kinds: list[str] = field(default_factory=list)
+    cross_check_stats: str = ""  # e.g. "3/10 mypy, 5/10 pyright, 2/10 pyrefly-only"
 
 
 @dataclass
@@ -193,7 +195,9 @@ def _extract_class_name(message: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def _categorize_errors(entries: list[ErrorEntry], prefix: str) -> str:
+def _categorize_errors(
+    entries: list[ErrorEntry], prefix: str, cross_check: bool = False
+) -> str:
     """Group errors by (error_kind, class_name) and produce a category summary.
 
     Instead of listing 131 individual errors, output something like:
@@ -250,12 +254,55 @@ def _categorize_errors(entries: list[ErrorEntry], prefix: str) -> str:
                     attr_str += f", ... ({len(attrs)} total)"
                 line += f"\n    Attributes: {attr_str}"
             line += f"\n    Files: {file_list}"
+        # Add cross-check stats for added errors
+        if cross_check and prefix == "+":
+            line += "\n" + _cross_check_stats(group_entries)
         lines.append(line)
 
     return "\n".join(lines)
 
 
-def _format_errors_for_llm(project: ProjectDiff) -> str:
+def _cross_check_counts(
+    entries: list[ErrorEntry],
+) -> tuple[int, int, int, int]:
+    """Aggregate cross-check counts for a list of entries.
+
+    Returns (total_checked, in_mypy, in_pyright, pyrefly_only).
+    Only counts entries where cross_checked is True.
+    """
+    checked = [e for e in entries if e.cross_checked]
+    total = len(checked)
+    in_mypy = sum(1 for e in checked if e.also_in_mypy)
+    in_pyright = sum(1 for e in checked if e.also_in_pyright)
+    pyrefly_only = sum(
+        1 for e in checked if not e.also_in_mypy and not e.also_in_pyright
+    )
+    return total, in_mypy, in_pyright, pyrefly_only
+
+
+def _cross_check_tag(entry: ErrorEntry) -> str:
+    """Build a cross-check annotation tag for an error entry."""
+    if not entry.cross_checked:
+        return ""  # not checked — don't annotate
+    if not entry.also_in_mypy and not entry.also_in_pyright:
+        return " [pyrefly-only]"
+    parts = []
+    parts.append("mypy: yes" if entry.also_in_mypy else "mypy: no")
+    parts.append("pyright: yes" if entry.also_in_pyright else "pyright: no")
+    return f" [{', '.join(parts)}]"
+
+
+def _cross_check_stats(entries: list[ErrorEntry]) -> str:
+    """Build aggregate cross-check stats for a group of errors."""
+    total, in_mypy, in_pyright, _ = _cross_check_counts(entries)
+    if total == 0:
+        return ""
+    return f"    Cross-check: {in_mypy}/{total} also in mypy, {in_pyright}/{total} also in pyright"
+
+
+def _format_errors_for_llm(
+    project: ProjectDiff, cross_check: bool = False
+) -> str:
     """Format errors for the LLM prompt.
 
     For projects with <= CATEGORY_THRESHOLD errors, list each individually.
@@ -268,7 +315,8 @@ def _format_errors_for_llm(project: ProjectDiff) -> str:
         # Small project: list individually
         lines = []
         for entry in project.added:
-            lines.append(f"+ {entry.raw_line}")
+            tag = _cross_check_tag(entry) if cross_check else ""
+            lines.append(f"+ {entry.raw_line}{tag}")
         for entry in project.removed:
             lines.append(f"- {entry.raw_line}")
         return "\n".join(lines)
@@ -301,7 +349,7 @@ def _format_errors_for_llm(project: ProjectDiff) -> str:
 
     if project.added:
         parts.append("NEW errors (added on PR branch):")
-        parts.append(_categorize_errors(project.added, "+"))
+        parts.append(_categorize_errors(project.added, "+", cross_check))
     if project.removed:
         if project.added:
             parts.append("")
@@ -365,7 +413,9 @@ def _determine_change_type(project: ProjectDiff) -> str:
         return "mixed (some errors added, some removed)"
 
 
-def _compute_structural_signals(project: ProjectDiff) -> str:
+def _compute_structural_signals(
+    project: ProjectDiff, cross_check: bool = False
+) -> str:
     """Compute structural signals about the project and errors for the LLM.
 
     Returns a string of signals to append to the user prompt, helping the
@@ -373,6 +423,18 @@ def _compute_structural_signals(project: ProjectDiff) -> str:
     failures.
     """
     signals: list[str] = []
+
+    # Cross-check signal: summarize how many errors are also in mypy/pyright
+    if cross_check and project.added:
+        total, in_mypy, in_pyright, pyrefly_only = _cross_check_counts(
+            project.added
+        )
+        if total > 0:
+            signals.append(
+                f"STRUCTURAL SIGNAL — CROSS-CHECK: {in_mypy}/{total} new errors also reported by mypy, "
+                f"{in_pyright}/{total} by pyright, {pyrefly_only}/{total} pyrefly-only. "
+                "Pyrefly-only errors are more likely regressions."
+            )
 
     # Stubs project flag
     if _is_stubs_project(project):
@@ -494,6 +556,7 @@ def classify_project(
     model: Optional[str] = None,
     pyrefly_diff: Optional[str] = None,
     pr_description: Optional[str] = None,
+    cross_check: bool = False,
 ) -> Classification:
     """Classify a single project's changes.
 
@@ -501,6 +564,18 @@ def classify_project(
     fetches source code and delegates to the LLM. When pyrefly_diff is provided,
     it is included in each LLM call for PR attribution.
     """
+    # Build cross-check stats string if cross-checking was enabled
+    cc_stats = ""
+    if cross_check and project.added:
+        total, in_mypy, in_pyright, pyrefly_only = _cross_check_counts(
+            project.added
+        )
+        if total > 0:
+            cc_stats = (
+                f"{in_mypy}/{total} mypy, {in_pyright}/{total} pyright, "
+                f"{pyrefly_only}/{total} pyrefly-only"
+            )
+
     base = Classification(
         project_name=project.name,
         verdict="ambiguous",
@@ -512,6 +587,7 @@ def classify_project(
             for e in (*project.added, *project.removed)
             if e.error_kind
         )),
+        cross_check_stats=cc_stats,
     )
 
     # Heuristic 1: All additions are internal-error → regression
@@ -554,7 +630,7 @@ def classify_project(
         base.method = "heuristic"
         return base
 
-    errors_text = _format_errors_for_llm(project)
+    errors_text = _format_errors_for_llm(project, cross_check)
     source_context = _get_best_source_context(project, fetch_code)
 
     # Truncate pyrefly diff if needed, then account for its size in source budget
@@ -566,7 +642,7 @@ def classify_project(
 
     source_context = _truncate_source_context(source_context, errors_text, diff_len)
     change_type = _determine_change_type(project)
-    structural_signals = _compute_structural_signals(project)
+    structural_signals = _compute_structural_signals(project, cross_check)
 
     try:
         llm_result = classify_with_llm(
@@ -654,6 +730,7 @@ def classify_all(
     pyrefly_diff: Optional[str] = None,
     generate_suggestion: bool = False,
     pr_description: Optional[str] = None,
+    cross_check: bool = False,
 ) -> ClassificationResult:
     """Classify all projects in a primer diff.
 
@@ -661,10 +738,21 @@ def classify_all(
     and summary counts. When pyrefly_diff is provided, it is passed
     to each per-project LLM call for PR attribution.
 
+    When cross_check is True, runs mypy/pyright on each project and uses
+    an LLM to match errors semantically before classification.
+
     When generate_suggestion is True and regressions or ambiguous results
     exist, runs Pass 3 to produce an aggregate source code suggestion.
     """
     result = ClassificationResult(total_projects=len(projects))
+
+    # Cross-check: run mypy/pyright and annotate errors before classifying
+    if cross_check:
+        print(
+            f"Running mypy/pyright cross-check on {len(projects)} project(s)...",
+            file=sys.stderr,
+        )
+        cross_check_projects(projects, model=model)
 
     for project in projects:
         classification = classify_project(
@@ -674,6 +762,7 @@ def classify_all(
             model=model,
             pyrefly_diff=pyrefly_diff,
             pr_description=pr_description,
+            cross_check=cross_check,
         )
         result.classifications.append(classification)
 

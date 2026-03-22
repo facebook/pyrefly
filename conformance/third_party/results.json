@@ -1,9 +1,9 @@
 {
-  "total": 138,
-  "pass": 122,
-  "fail": 16,
-  "pass_rate": 0.88,
-  "differences": 48,
+  "total": 139,
+  "pass": 124,
+  "fail": 15,
+  "pass_rate": 0.89,
+  "differences": 62,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -33,6 +33,7 @@
     "dataclasses_match_args.py",
     "dataclasses_order.py",
     "dataclasses_postinit.py",
+    "dataclasses_slots.py",
     "dataclasses_transform_class.py",
     "dataclasses_transform_converter.py",
     "dataclasses_transform_field.py",
@@ -104,6 +105,7 @@
     "protocols_self.py",
     "protocols_subtyping.py",
     "protocols_variance.py",
+    "qualifiers_annotated.py",
     "qualifiers_final_decorator.py",
     "specialtypes_any.py",
     "specialtypes_never.py",
@@ -131,20 +133,19 @@
   "failing": {
     "aliases_implicit.py": 5,
     "annotations_forward_refs.py": 2,
-    "callables_annotation.py": 2,
+    "callables_annotation.py": 1,
     "constructors_callable.py": 4,
     "dataclasses_descriptors.py": 6,
-    "dataclasses_slots.py": 2,
     "exceptions_context_managers.py": 2,
-    "generics_basic.py": 3,
+    "generics_basic.py": 1,
     "generics_paramspec_components.py": 1,
     "generics_scoping.py": 4,
     "generics_self_basic.py": 2,
     "generics_self_usage.py": 2,
     "generics_typevartuple_basic.py": 1,
     "protocols_modules.py": 1,
-    "qualifiers_annotated.py": 6,
-    "qualifiers_final_annotation.py": 5
+    "qualifiers_final_annotation.py": 3,
+    "typeforms_typeform.py": 27
   },
   "comment": "@generated"
 }

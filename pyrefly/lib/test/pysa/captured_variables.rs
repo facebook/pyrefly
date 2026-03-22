@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use dupe::Dupe;
 use pretty_assertions::assert_eq;
 use ruff_python_ast::name::Name;
 use serde::Serialize;
@@ -16,7 +17,9 @@ use crate::report::pysa::captured_variable::CaptureKind;
 use crate::report::pysa::captured_variable::ModuleCapturedVariables;
 use crate::report::pysa::captured_variable::collect_captured_variables_for_module;
 use crate::report::pysa::collect::CollectNoDuplicateKeys;
+use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::context::PysaResolver;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::module::ModuleIds;
 use crate::test::pysa::call_graph::split_module_class_and_identifier;
@@ -109,8 +112,20 @@ fn test_exported_captured_variables(
     let module_ids = ModuleIds::new(&handles);
 
     let test_module_handle = get_handle_for_module_name(module_name, &transaction);
-
-    let context = ModuleContext::create(test_module_handle, &transaction, &module_ids).unwrap();
+    let resolver = PysaResolver::new_for_test(
+        &transaction,
+        &module_ids,
+        test_module_handle.dupe(),
+        &handles,
+    );
+    let context = ModuleContext {
+        answers_context: ModuleAnswersContext::create(
+            test_module_handle.dupe(),
+            &transaction,
+            &module_ids,
+        ),
+        resolver: &resolver,
+    };
 
     let expected_captures = captured_variables_from_expected(expected_captures);
     let actual_captures = captured_variables_from_actual(

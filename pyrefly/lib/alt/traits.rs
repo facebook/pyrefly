@@ -120,6 +120,21 @@ pub trait Solve<Ans: LookupAnswer>: Keyed {
     ) -> Arc<Self::Answer> {
         answer
     }
+
+    /// Check for a shortcut answer that bypasses CalcStack push and caching.
+    /// Called in `get_idx` before pushing to the CalcStack. If this returns `Some`,
+    /// the answer is returned directly without pushing, solving, or caching.
+    ///
+    /// Used by `Key` to intercept `ForwardToFirstUse` bindings during inline
+    /// first-use pinning: returns the stored partial answer so that the raw
+    /// (unpinned) type is visible to the first-use expression without being
+    /// written to the shared answer cache.
+    fn check_shortcut(
+        _answers: &AnswersSolver<Ans>,
+        _binding: &Self::Value,
+    ) -> Option<Arc<Self::Answer>> {
+        None
+    }
 }
 
 impl<Ans: LookupAnswer> Solve<Ans> for Key {
@@ -151,6 +166,20 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
             .arc_clone()
             .map_ty(|ty| answers.record_recursive(range, ty, recursive, errors));
         Arc::new(ty_info)
+    }
+
+    fn check_shortcut(answers: &AnswersSolver<Ans>, binding: &Binding) -> Option<Arc<TypeInfo>> {
+        match binding {
+            Binding::ForwardToFirstUse(fwd) => {
+                let def_idx = answers.def_idx_for_forward_to_first_use(*fwd)?;
+                answers.check_partial_answer(def_idx)
+            }
+            Binding::LambdaParameter(id, owner) => {
+                let var = answers.resolve_lambda_param_var(*id, *owner);
+                Some(Arc::new(TypeInfo::of_ty(var.to_type(answers.heap))))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -206,11 +235,13 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<Type> {
-        Arc::new(
-            answers
-                .solve_binding(&binding.0, range, errors)
-                .arc_clone_ty(),
-        )
+        let inner = match binding {
+            BindingExport::Forward(idx) => Binding::Forward(*idx),
+            BindingExport::AnnotatedForward(ann, idx) => {
+                Binding::AnnotatedType(*ann, Box::new(Binding::Forward(*idx)))
+            }
+        };
+        Arc::new(answers.solve_binding(&inner, range, errors).arc_clone_ty())
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {

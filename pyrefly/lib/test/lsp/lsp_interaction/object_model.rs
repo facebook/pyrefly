@@ -8,15 +8,20 @@
 /// This file contains a new implementation of the lsp_interaction test suite. Soon it will replace the old one.
 use std::iter::once;
 use std::marker::PhantomData;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::thread::{self};
 use std::time::Duration;
 use std::time::Instant;
 
+use anyhow::Error;
+use crossbeam_channel::Receiver;
 use crossbeam_channel::RecvTimeoutError;
+use crossbeam_channel::Sender;
 use lsp_server::RequestId;
 use lsp_server::ResponseError;
 use lsp_types::CompletionList;
@@ -60,24 +65,27 @@ use lsp_types::request::SignatureHelpRequest;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
 use pretty_assertions::assert_eq;
+use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
+use pyrefly::commands::lsp::run_lsp;
+use pyrefly::lsp::non_wasm::external_provider::NoExternalProvider;
+use pyrefly::lsp::non_wasm::protocol::JsonRpcMessage;
+use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly::lsp::non_wasm::protocol::Notification;
+use pyrefly::lsp::non_wasm::protocol::Request;
+use pyrefly::lsp::non_wasm::protocol::Response;
+use pyrefly::lsp::non_wasm::server::Connection;
+use pyrefly::lsp::wasm::provide_type::ProvideType;
 use pyrefly_util::fs_anyhow::read_to_string;
 use pyrefly_util::lock::FinishHandle;
 use pyrefly_util::telemetry::NoTelemetry;
+use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::thread_pool::ThreadCount;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::commands::lsp::IndexingMode;
-use crate::commands::lsp::LspArgs;
-use crate::commands::lsp::run_lsp;
-use crate::lsp::non_wasm::external_references::NoExternalReferences;
-use crate::lsp::non_wasm::protocol::JsonRpcMessage;
-use crate::lsp::non_wasm::protocol::Message;
-use crate::lsp::non_wasm::protocol::Notification;
-use crate::lsp::non_wasm::protocol::Request;
-use crate::lsp::non_wasm::protocol::Response;
-use crate::lsp::non_wasm::server::Connection;
-use crate::lsp::wasm::provide_type::ProvideType;
-use crate::test::util::init_test;
+use crate::init::init_test;
 
 #[derive(Debug)]
 pub enum LspMessageError {
@@ -657,7 +665,6 @@ impl TestClient {
     }
 
     /// Send a file deletion event notification
-    #[allow(dead_code)]
     pub fn file_deleted(&self, file: &str) {
         let path = self.get_root_or_panic().join(file);
         self.send_notification::<DidChangeWatchedFiles>(json!({
@@ -907,6 +914,7 @@ impl TestClient {
     }
 
     /// Wait for a publishDiagnostics notification for the given file path, regardless of error count.
+    #[allow(dead_code)]
     pub fn expect_publish_diagnostics_for_file(
         &self,
         path: PathBuf,
@@ -1235,34 +1243,134 @@ pub struct LspInteraction {
     pub client: TestClient,
 }
 
+/// A recorded telemetry event capturing the event payload, processing duration,
+/// and stringified error (if any). Used by [`TestTelemetry`] to broadcast events
+/// to test subscribers.
+#[expect(dead_code)]
+pub struct RecordedTelemetryEvent {
+    pub event: TelemetryEvent,
+    pub process: Duration,
+    pub error: Option<String>,
+}
+
+/// A [`Telemetry`] implementation that broadcasts each recorded event to all
+/// subscribed receivers via crossbeam channels. Tests call [`subscribe`] to
+/// obtain a [`Receiver`] they can `recv_timeout` on to wait for specific events.
+///
+/// # Example: timing event durations
+///
+/// ```ignore
+/// let telemetry = TestTelemetry::new();
+/// let rx = telemetry.subscribe();
+/// let interaction = LspInteraction::new_with_args(args, telemetry);
+///
+/// // ... trigger an LSP operation ...
+///
+/// let event = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+/// assert!(event.process < Duration::from_secs(5), "operation too slow: {:?}", event.process);
+/// ```
+///
+/// # Example: waiting for a specific event before proceeding
+///
+/// ```ignore
+/// let telemetry = TestTelemetry::new();
+/// let rx = telemetry.subscribe();
+/// let interaction = LspInteraction::new_with_args(args, telemetry);
+///
+/// // .. wait for a sourcedb rebuild to complete before opening a file ...
+///
+/// while !matches!(
+///     rx.recv_timeout(Duration::from_secs(10)).unwrap().event.kind,
+///     TelemetryEventKind::SourceDbRebuild,
+/// ) {}
+///
+/// interaction.did_open(uri, contents).unwrap();
+/// ```
+pub struct TestTelemetry {
+    subscribers: Mutex<Vec<Sender<Arc<RecordedTelemetryEvent>>>>,
+}
+
+impl TestTelemetry {
+    #[expect(dead_code)]
+    pub fn new() -> Self {
+        Self {
+            subscribers: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Register a new subscriber. Returns a [`Receiver`] that will receive all
+    /// future [`RecordedTelemetryEvent`]s wrapped in [`Arc`].
+    #[expect(dead_code)]
+    pub fn subscribe(&self) -> Receiver<Arc<RecordedTelemetryEvent>> {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        self.subscribers
+            .lock()
+            .expect("TestTelemetry subscribers lock poisoned")
+            .push(sender);
+        receiver
+    }
+}
+
+impl Telemetry for TestTelemetry {
+    fn record_event(&self, event: TelemetryEvent, process: Duration, error: Option<&Error>) {
+        let recorded = Arc::new(RecordedTelemetryEvent {
+            event,
+            process,
+            error: error.map(|e| e.to_string()),
+        });
+        let mut subscribers = self
+            .subscribers
+            .lock()
+            .expect("TestTelemetry subscribers lock poisoned");
+        // Send to all subscribers, dropping any that have disconnected.
+        subscribers.retain(|sender| sender.send(recorded.clone()).is_ok());
+    }
+
+    fn surface(&self) -> Option<String> {
+        None
+    }
+}
+
 impl LspInteraction {
     pub fn new() -> Self {
         Self::new_with_indexing_mode(IndexingMode::None)
     }
 
     pub fn new_with_indexing_mode(indexing_mode: IndexingMode) -> Self {
-        init_test();
+        let args = LspArgs {
+            indexing_mode,
+            workspace_indexing_limit: 50,
+            build_system_blocking: false,
+            enable_external_references: false,
+        };
+        Self::new_with_args(args, NoTelemetry, None)
+    }
+
+    /// Create an `LspInteraction` with custom [`LspArgs`] and a custom
+    /// [`Telemetry`] implementation. The telemetry value is moved into the
+    /// spawned server thread.
+    pub fn new_with_args<T: Telemetry + 'static>(
+        args: LspArgs,
+        telemetry: T,
+        thread_count: Option<ThreadCount>,
+    ) -> Self {
+        init_test(thread_count.unwrap_or(ThreadCount::NumThreads(NonZeroUsize::new(3).unwrap())));
 
         let ((conn_client, _client_reader), (conn_server, server_reader)) = Connection::memory();
 
         let finish_handle = Arc::new(FinishHandle::new());
         let finish_server = finish_handle.clone();
 
-        // Spawn the server thread notify when finished
+        // Spawn the server thread and notify when finished.
         thread::spawn(move || {
-            let args = LspArgs {
-                indexing_mode,
-                workspace_indexing_limit: 50,
-                build_system_blocking: false,
-            };
             let _ = run_lsp(
                 conn_server,
                 server_reader,
                 args,
                 None,
                 None,
-                &NoTelemetry,
-                Arc::new(NoExternalReferences),
+                &telemetry,
+                Arc::new(NoExternalProvider),
                 None,
             );
             finish_server.notify_finished();

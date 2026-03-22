@@ -58,6 +58,7 @@ use crate::binding::bindings::NameLookupResult;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::narrow::NarrowSource;
+use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
@@ -378,7 +379,7 @@ impl<'a> BindingsBuilder<'a> {
                 if is_special_name(name.id.as_str()) {
                     self.error(
                         name.range,
-                        ErrorInfo::Kind(ErrorKind::UnknownName),
+                        ErrorInfo::Kind(ErrorKind::UnimportedDirective),
                         format!(
                             "`{}` must be imported from `typing` for runtime usage",
                             name
@@ -433,10 +434,10 @@ impl<'a> BindingsBuilder<'a> {
             // for inner and outer loops. It is safe to overwrite it because it literally the same.
             let iterable_value_idx = self.insert_binding_overwrite(
                 Key::Anon(comp.iter.range()),
-                Binding::IterableValue(
-                    None,
+                Binding::IterableValueComprehension(
                     Box::new(comp.iter.clone()),
                     IsAsync::new(comp.is_async),
+                    comp.target.range(),
                 ),
             );
             self.scopes.add_lvalue_to_current_static(&comp.target);
@@ -454,10 +455,25 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn bind_lambda(&mut self, lambda: &mut ExprLambda, usage: &mut Usage) {
+        // Process default values in the enclosing scope before pushing the lambda scope,
+        // because default values are evaluated at function definition time.
+        if let Some(parameters) = &mut lambda.parameters {
+            for x in parameters
+                .posonlyargs
+                .iter_mut()
+                .chain(parameters.args.iter_mut())
+                .chain(parameters.kwonlyargs.iter_mut())
+            {
+                if let Some(default) = x.default.as_deref_mut() {
+                    self.ensure_expr(default, usage);
+                }
+            }
+        }
         self.scopes.push(Scope::lambda(lambda.range, false));
+        let owner = usage.current_idx();
         if let Some(parameters) = &lambda.parameters {
             for x in parameters {
-                self.bind_lambda_param(x.name());
+                self.bind_lambda_param(x.name(), owner);
             }
         }
         self.ensure_expr(&mut lambda.body, usage);
@@ -784,6 +800,18 @@ impl<'a> BindingsBuilder<'a> {
                 self.bind_target_with_expr(&mut x.target, &mut x.value, &|expr, ann| {
                     Binding::Expr(ann, Box::new(expr.clone()))
                 });
+                // PEP 572: walrus operators inside comprehensions bind to
+                // the enclosing (non-comprehension) scope.
+                if self.scopes.in_comprehension()
+                    && let Expr::Name(name) = &*x.target
+                    && let Some(idx) = self.scopes.get_current_flow_idx(&name.id)
+                {
+                    self.scopes.define_in_enclosing_non_comprehension_scope(
+                        Hashed::new(&name.id),
+                        idx,
+                        FlowStyle::Other,
+                    );
+                }
             }
             Expr::Lambda(x) => {
                 self.bind_lambda(x, usage);
@@ -941,6 +969,18 @@ impl<'a> BindingsBuilder<'a> {
                 for e in tup.elts[1..].iter_mut() {
                     self.ensure_expr(e, &mut Usage::StaticTypeInformation);
                 }
+            }
+            // Jaxtyping annotations: Float[Tensor, "batch channels"].
+            // The second argument is a shape string, not a forward reference.
+            Expr::Subscript(ExprSubscript { value, slice, .. })
+                if self.tensor_shapes()
+                    && matches!(&**value, Expr::Name(n) if self.scopes.is_imported_from_module(&n.id, "jaxtyping"))
+                    && matches!(&**slice, Expr::Tuple(tup) if tup.elts.len() == 2) =>
+            {
+                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
+                let tup = slice.as_tuple_expr_mut().unwrap();
+                self.ensure_type_impl(&mut tup.elts[0], tparams_builder, in_string_literal, usage);
+                self.ensure_expr(&mut tup.elts[1], &mut Usage::StaticTypeInformation);
             }
             Expr::Subscript(ExprSubscript { value, slice, .. }) => {
                 self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);

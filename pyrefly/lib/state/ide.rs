@@ -81,10 +81,12 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             Binding::TypeAliasRef(..) => {
                 return Some(current_key);
             }
+            Binding::IterableValueComprehension(..) | Binding::IterableValueLoop(..) => {
+                return Some(current_key);
+            }
             Binding::Forward(k)
+            | Binding::ForwardToFirstUse(k)
             | Binding::Narrow(k, _, _)
-            | Binding::CompletedPartialType(k, ..)
-            | Binding::PartialTypeWithUpstreamsCompleted(k, ..)
             | Binding::LoopPhi(k, ..) => {
                 current_idx = *k;
             }
@@ -125,7 +127,9 @@ fn create_intermediate_definition_from(
 
     while !gas.stop() {
         match current_binding {
-            Binding::Forward(k) => current_binding = bindings.get(*k),
+            Binding::Forward(k) | Binding::ForwardToFirstUse(k) => {
+                current_binding = bindings.get(*k)
+            }
             Binding::PossibleLegacyTParam(k, _) => {
                 let binding = bindings.get(*k);
                 current_binding = bindings.get(binding.idx());
@@ -207,6 +211,16 @@ fn create_intermediate_definition_from(
                         special_export: None,
                     })),
                 };
+            }
+            Binding::IterableValueComprehension(_, _, target_range) => {
+                return Some(IntermediateDefinition::Local(Export {
+                    location: *target_range,
+                    symbol_kind: Some(SymbolKind::Variable),
+                    docstring_range: None,
+                    deprecation: None,
+                    is_final: false,
+                    special_export: None,
+                }));
             }
             _ => {
                 return Some(IntermediateDefinition::Local(Export {

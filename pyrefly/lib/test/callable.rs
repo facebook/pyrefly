@@ -26,6 +26,24 @@ f8: Callable[[int], int] = lambda x: x + "foo" # E: Argument `Literal['foo']` is
 );
 
 testcase!(
+    test_lambda_defaults,
+    r#"
+from typing import reveal_type
+f = lambda x, y=1: x + y
+reveal_type(f)  # E: revealed type: (x: Unknown, y: Unknown = ...) -> Unknown
+f(1)  # OK, y has default
+f(1, 2)  # OK
+f()  # E: Missing argument `x`
+
+g = lambda x, y="hello", z=None: (x, y, z)
+reveal_type(g)  # E: revealed type: (x: Unknown, y: Unknown = ..., z: Unknown = ...) -> tuple[Unknown, Unknown, Unknown]
+g(1)  # OK
+g(1, "world")  # OK
+g(1, "world", True)  # OK
+"#,
+);
+
+testcase!(
     test_callable_variable_typevar_annotation,
     r#"
 from typing import Callable, TypeVar, reveal_type
@@ -1336,7 +1354,6 @@ def g():
 );
 
 testcase!(
-    bug = "conformance: Protocol with ParamSpec[...] should be compatible with Protocol using *args: Any, **kwargs: Any",
     test_protocol_paramspec_ellipsis,
     r#"
 from typing import Any, Protocol, ParamSpec
@@ -1357,8 +1374,8 @@ class Proto7(Protocol):
     def __call__(self, a: float, /, b: int, *, k: str, m: str) -> None: ...
 
 def test(p4: Proto4[...], p7: Proto7):
-    # Both should be OK per conformance spec - pyrefly incorrectly errors
-    ok10: Proto3 = p4  # E: `Proto4[Ellipsis]` is not assignable to `Proto3`
+    # Both should be OK per conformance spec.
+    ok10: Proto3 = p4
     ok11: Proto6 = p7
 "#,
 );
@@ -1400,7 +1417,7 @@ class Class8(Generic[T]):
 
 r8 = accepts_callable(Class8)
 # pyrefly incorrectly errors on this - should be OK
-assert_type(r8([""], [""]), Class8[str])  # E: assert_type(Class8[Any], Class8[str]) failed
+assert_type(r8([""], [""]), Class8[str])  # E: assert_type(Class8[Unknown], Class8[str]) failed
 "#,
 );
 
@@ -1416,5 +1433,19 @@ class Pipeline:
 
     def run(self, data: object) -> object:
         return self.model(data)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/769
+testcase!(
+    test_callable_no_args_assignable_to_varargs,
+    r#"
+from typing import Callable
+
+def schedule(delay: int, func: Callable[..., object]) -> None: ...
+
+def after_func() -> None: ...
+
+schedule(1000, after_func)
 "#,
 );

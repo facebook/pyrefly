@@ -26,6 +26,7 @@ use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
 use crate::callable::Required;
+use crate::class::Class;
 use crate::class::ClassType;
 use crate::dimension::SizeExpr;
 use crate::keywords::KwCall;
@@ -36,17 +37,22 @@ use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
 use crate::special_form::SpecialForm;
 use crate::tensor::TensorType;
+use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
 use crate::typed_dict::TypedDict;
+use crate::types::AnyStyle;
 use crate::types::BoundMethod;
 use crate::types::Forall;
 use crate::types::Forallable;
+use crate::types::NNModuleType;
+use crate::types::NeverStyle;
 use crate::types::Overload;
 use crate::types::SuperObj;
 use crate::types::Type;
 use crate::types::Union;
+use crate::types::Var;
 
 /// Global factory for producing unique heap identifiers.
 static HEAP_UNIQUE_FACTORY: LazyLock<UniqueFactory> = LazyLock::new(UniqueFactory::new);
@@ -246,7 +252,7 @@ impl TypeHeap {
     }
 
     /// Create a `Type::ClassDef` from a Class.
-    pub fn mk_class_def(&self, class: crate::class::Class) -> Type {
+    pub fn mk_class_def(&self, class: Class) -> Type {
         Type::ClassDef(class)
     }
 
@@ -261,7 +267,7 @@ impl TypeHeap {
     }
 
     /// Create a `Type::Tuple` from a Tuple.
-    pub fn mk_tuple(&self, tuple: crate::tuple::Tuple) -> Type {
+    pub fn mk_tuple(&self, tuple: Tuple) -> Type {
         Type::Tuple(tuple)
     }
 
@@ -276,7 +282,7 @@ impl TypeHeap {
     }
 
     /// Create a `Type::Var` from a Var.
-    pub fn mk_var(&self, var: crate::types::Var) -> Type {
+    pub fn mk_var(&self, var: Var) -> Type {
         Type::Var(var)
     }
 
@@ -412,12 +418,12 @@ impl TypeHeap {
     }
 
     /// Create a `Type::Any` with the given style.
-    pub fn mk_any(&self, style: crate::types::AnyStyle) -> Type {
+    pub fn mk_any(&self, style: AnyStyle) -> Type {
         Type::Any(style)
     }
 
     /// Create a `Type::Never` with the given style.
-    pub fn mk_never_style(&self, style: crate::types::NeverStyle) -> Type {
+    pub fn mk_never_style(&self, style: NeverStyle) -> Type {
         Type::Never(style)
     }
 
@@ -434,6 +440,11 @@ impl TypeHeap {
     /// Create a `Type::Tensor` from a TensorType.
     pub fn mk_tensor(&self, tensor: TensorType) -> Type {
         Type::Tensor(Box::new(tensor))
+    }
+
+    /// Create a `Type::NNModule` from an NNModuleType.
+    pub fn mk_nn_module(&self, module: NNModuleType) -> Type {
+        Type::NNModule(Box::new(module))
     }
 }
 

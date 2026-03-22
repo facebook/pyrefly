@@ -10,6 +10,7 @@ use std::mem;
 
 use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -21,6 +22,7 @@ use crate::error::context::ErrorInfo;
 use crate::error::error::Error;
 use crate::error::style::ErrorStyle;
 use crate::module::module_info::ModuleInfo;
+use crate::state::errors::find_containing_range;
 
 #[derive(Debug, Default, Clone)]
 struct ModuleErrors {
@@ -87,8 +89,14 @@ impl ModuleErrors {
 
 #[derive(Debug, Default)]
 pub struct CollectedErrors {
-    /// Errors that will be reported to the user.
-    pub shown: Vec<Error>,
+    /// Ordinary diagnostics (errors, warnings, info) that passed severity and
+    /// suppression filters. These participate in baseline exclusion,
+    /// suppression, and min-severity filtering.
+    pub ordinary: Vec<Error>,
+    /// Directive diagnostics (e.g. `reveal_type`) that are always displayed to
+    /// the user. Directives are never subject to baseline exclusion,
+    /// suppression, or min-severity filtering.
+    pub directives: Vec<Error>,
     /// Errors that are suppressed with inline ignore comments.
     pub suppressed: Vec<Error>,
     /// Errors that are disabled with configuration options.
@@ -171,17 +179,60 @@ impl ErrorCollector {
         self.errors.lock().len()
     }
 
-    pub fn collect_into(&self, error_config: &ErrorConfig, result: &mut CollectedErrors) {
+    /// Checks whether an error is suppressed, considering both the error's own
+    /// line and, if it falls inside a multi-line f/t-string, the f-string's
+    /// start and end lines.
+    fn is_error_suppressed(
+        err: &Error,
+        fstring_ranges: &[(LineNumber, LineNumber)],
+        error_config: &ErrorConfig,
+    ) -> bool {
+        if err.is_ignored(&error_config.enabled_ignores) {
+            return true;
+        }
+        // Check if the error is inside a multi-line f/t-string. If so, a
+        // suppression that covers the f-string's start or end line should also apply.
+        let line = err.display_range().start.line_within_file();
+        if let Some((fs_start, fs_end)) = find_containing_range(fstring_ranges, line) {
+            let ignore = err.module().ignore();
+            let kind = err.error_kind().to_name();
+            let enabled = &error_config.enabled_ignores;
+            if fs_start != line && ignore.is_ignored(fs_start, kind, enabled) {
+                return true;
+            }
+            if fs_end != line && ignore.is_ignored(fs_end, kind, enabled) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn collect_into(
+        &self,
+        error_config: &ErrorConfig,
+        fstring_ranges: &[(LineNumber, LineNumber)],
+        result: &mut CollectedErrors,
+    ) {
         let mut errors = self.errors.lock();
         if !(self.module_info.is_generated() && error_config.ignore_errors_in_generated_code) {
             for err in errors.iter() {
-                if err.is_ignored(&error_config.enabled_ignores) {
+                if err.error_kind().is_directive() {
+                    // Directives bypass suppression, baseline, and
+                    // min-severity, but still respect explicit severity
+                    // overrides (e.g. --ignore reveal-type).
+                    let severity = error_config.display_config.severity(err.error_kind());
+                    if severity == Severity::Ignore {
+                        result.disabled.push(err.clone());
+                    } else {
+                        result.directives.push(err.with_severity(severity));
+                    }
+                } else if Self::is_error_suppressed(err, fstring_ranges, error_config) {
                     result.suppressed.push(err.clone());
                 } else {
                     match error_config.display_config.severity(err.error_kind()) {
-                        Severity::Error => result.shown.push(err.with_severity(Severity::Error)),
-                        Severity::Warn => result.shown.push(err.with_severity(Severity::Warn)),
-                        Severity::Info => result.shown.push(err.with_severity(Severity::Info)),
+                        Severity::Error => result.ordinary.push(err.with_severity(Severity::Error)),
+                        Severity::Warn => result.ordinary.push(err.with_severity(Severity::Warn)),
+                        Severity::Info => result.ordinary.push(err.with_severity(Severity::Info)),
                         Severity::Ignore => result.disabled.push(err.clone()),
                     }
                 }
@@ -191,7 +242,7 @@ impl ErrorCollector {
 
     pub fn collect(&self, error_config: &ErrorConfig) -> CollectedErrors {
         let mut result = CollectedErrors::default();
-        self.collect_into(error_config, &mut result);
+        self.collect_into(error_config, &[], &mut result);
         result
     }
 }
@@ -265,7 +316,7 @@ mod tests {
                     false,
                     Tool::default_enabled(),
                 ))
-                .shown
+                .ordinary
                 .map(|x| x.msg()),
             vec!["b", "a", "a"]
         );
@@ -318,7 +369,7 @@ mod tests {
         let config = ErrorConfig::new(&display_config, false, Tool::default_enabled());
 
         assert_eq!(
-            errors.collect(&config).shown.map(|x| x.msg()),
+            errors.collect(&config).ordinary.map(|x| x.msg()),
             vec!["a", "b", "d"]
         );
     }
@@ -340,10 +391,19 @@ mod tests {
 
         let display_config = ErrorDisplayConfig::default();
         let config0 = ErrorConfig::new(&display_config, false, Tool::default_enabled());
-        assert_eq!(errors.collect(&config0).shown.map(|x| x.msg()), vec!["a"]);
+        assert_eq!(
+            errors.collect(&config0).ordinary.map(|x| x.msg()),
+            vec!["a"]
+        );
 
         let config1 = ErrorConfig::new(&display_config, true, Tool::default_enabled());
-        assert!(errors.collect(&config1).shown.map(|x| x.msg()).is_empty());
+        assert!(
+            errors
+                .collect(&config1)
+                .ordinary
+                .map(|x| x.msg())
+                .is_empty()
+        );
     }
 
     #[test]
@@ -373,7 +433,7 @@ mod tests {
                     false,
                     Tool::default_enabled(),
                 ))
-                .shown
+                .ordinary
                 .map(|x| x.msg()),
             vec!["Overload", "A specific error"]
         );

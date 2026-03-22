@@ -416,6 +416,14 @@ impl Metaclass {
             Self::None => None,
         }
     }
+
+    pub fn get_mut(&mut self) -> Option<&mut ClassType> {
+        match self {
+            Self::Direct(metaclass) => Some(metaclass),
+            Self::Inherited(metaclass) => Some(metaclass),
+            Self::None => None,
+        }
+    }
 }
 
 /// A struct representing the keywords in a class header, e.g. for

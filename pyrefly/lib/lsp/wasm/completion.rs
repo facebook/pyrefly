@@ -24,6 +24,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
+use pyrefly_util::thread_pool::ThreadPool;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::Identifier;
@@ -641,6 +642,7 @@ impl Transaction<'_> {
         completions: &mut Vec<RankedCompletion>,
         import_format: ImportFormat,
         supports_completion_item_details: bool,
+        custom_thread_pool: Option<&ThreadPool>,
     ) {
         // Auto-import can be slow. Let's only return results if there are no local
         // results for now. TODO: re-enable it once we no longer have perf issues.
@@ -665,7 +667,9 @@ impl Transaction<'_> {
             if identifier_text.len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
                 return;
             }
-            for (handle_to_import_from, name, export) in self.search_exports_fuzzy(identifier_text)
+            for (handle_to_import_from, name, export) in self
+                .search_exports_fuzzy(identifier_text, custom_thread_pool)
+                .unwrap_or_default()
             {
                 // Using handle itself doesn't always work because handles can be made separately and have different hashes
                 if handle_to_import_from.module() == handle.module()
@@ -728,6 +732,33 @@ impl Transaction<'_> {
                 }
                 let module_name_str = module_name.as_str().to_owned();
                 let source = autoimport_source(&module_name_str);
+                if let Some((submodule_name, position, insert_text, imported_module)) =
+                    self.submodule_autoimport_edit(handle, &ast, module_name, import_format)
+                {
+                    let import_text_edit = TextEdit {
+                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
+                        new_text: insert_text.clone(),
+                    };
+                    let additional_text_edits = Some(vec![import_text_edit]);
+                    let auto_import_label_detail = format!(" (import {imported_module})");
+                    completions.push(RankedCompletion {
+                        item: CompletionItem {
+                            label: submodule_name,
+                            detail: Some(insert_text),
+                            kind: Some(CompletionItemKind::MODULE),
+                            additional_text_edits,
+                            label_details: supports_completion_item_details.then_some(
+                                CompletionItemLabelDetails {
+                                    detail: Some(auto_import_label_detail),
+                                    description: Some(module_name_str.clone()),
+                                },
+                            ),
+                            ..Default::default()
+                        },
+                        source,
+                        is_incompatible: false,
+                    });
+                }
                 if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
                 {
                     let (import_text, additional_text_edits) = {
@@ -813,6 +844,7 @@ impl Transaction<'_> {
         import_format: ImportFormat,
         options: CompletionOptions,
         mut mru_index: Option<F>,
+        custom_thread_pool: Option<&ThreadPool>,
     ) -> (Vec<CompletionItem>, bool)
     where
         F: FnMut(&CompletionItem) -> Option<usize>,
@@ -830,9 +862,27 @@ impl Transaction<'_> {
         match self.identifier_at(handle, position) {
             Some(IdentifierWithContext {
                 identifier,
-                context: IdentifierContext::ImportedName { module_name, .. },
+                context:
+                    IdentifierContext::ImportedName {
+                        module_name, dots, ..
+                    },
             }) => {
-                if let Some(handle) = self.import_handle(handle, module_name, None).finding() {
+                // For relative imports (dots > 0), resolve to an absolute module name.
+                let resolved = if dots > 0 {
+                    let is_init = handle.path().is_init();
+                    let suffix = if module_name.as_str().is_empty() {
+                        None
+                    } else {
+                        Some(&Name::new(module_name.as_str()))
+                    };
+                    handle
+                        .module()
+                        .new_maybe_relative(is_init, dots, suffix)
+                        .unwrap_or(module_name)
+                } else {
+                    module_name
+                };
+                if let Some(handle) = self.import_handle(handle, resolved, None).finding() {
                     if "import".starts_with(identifier.as_str()) {
                         result.push(RankedCompletion::new(CompletionItem {
                             label: "import".to_owned(),
@@ -846,10 +896,17 @@ impl Transaction<'_> {
                             ExportLocation::ThisModule(export) => export.deprecation.is_some(),
                             ExportLocation::OtherModule(_, _) => false,
                         };
+                        let kind = match export {
+                            ExportLocation::ThisModule(export) => export
+                                .symbol_kind
+                                .map_or(CompletionItemKind::VARIABLE, |k| {
+                                    k.to_lsp_completion_item_kind()
+                                }),
+                            ExportLocation::OtherModule(_, _) => CompletionItemKind::VARIABLE,
+                        };
                         result.push(RankedCompletion::new(CompletionItem {
                             label: name.to_string(),
-                            // todo(kylei): completion kind for exports
-                            kind: Some(CompletionItemKind::VARIABLE),
+                            kind: Some(kind),
                             tags: if is_deprecated {
                                 Some(vec![CompletionItemTag::DEPRECATED])
                             } else {
@@ -860,25 +917,56 @@ impl Transaction<'_> {
                     }
                 }
             }
-            // TODO: Handle relative import (via ModuleName::new_maybe_relative)
             Some(IdentifierWithContext {
                 identifier,
-                context: IdentifierContext::ImportedModule { .. },
-            }) => self
-                .import_prefixes(handle, ModuleName::from_name(identifier.id()))
-                .iter()
-                .for_each(|module_name| {
-                    result.push(RankedCompletion::new(CompletionItem {
-                        label: module_name
-                            .components()
-                            .last()
-                            .unwrap_or(&Name::empty())
-                            .to_string(),
-                        detail: Some(module_name.to_string()),
-                        kind: Some(CompletionItemKind::MODULE),
-                        ..Default::default()
-                    }))
-                }),
+                context: IdentifierContext::ImportedModule { name, dots },
+            }) => {
+                if dots > 0 {
+                    // For relative imports, resolve the base package and form an absolute prefix.
+                    let is_init = handle.path().is_init();
+                    if let Some(base) = handle.module().new_maybe_relative(is_init, dots, None) {
+                        let prefix = if name.as_str().is_empty() {
+                            base
+                        } else {
+                            ModuleName::from_str(&format!("{}.{}", base.as_str(), name.as_str()))
+                        };
+                        let base_prefix = format!("{}.", base.as_str());
+                        self.import_prefixes(handle, prefix)
+                            .iter()
+                            .for_each(|module_name| {
+                                let relative_name = module_name
+                                    .as_str()
+                                    .strip_prefix(&base_prefix)
+                                    .unwrap_or(module_name.as_str());
+                                result.push(RankedCompletion::new(CompletionItem {
+                                    label: module_name
+                                        .components()
+                                        .last()
+                                        .unwrap_or(&Name::empty())
+                                        .to_string(),
+                                    detail: Some(relative_name.to_owned()),
+                                    kind: Some(CompletionItemKind::MODULE),
+                                    ..Default::default()
+                                }));
+                            });
+                    }
+                } else {
+                    self.import_prefixes(handle, ModuleName::from_name(identifier.id()))
+                        .iter()
+                        .for_each(|module_name| {
+                            result.push(RankedCompletion::new(CompletionItem {
+                                label: module_name
+                                    .components()
+                                    .last()
+                                    .unwrap_or(&Name::empty())
+                                    .to_string(),
+                                detail: Some(module_name.to_string()),
+                                kind: Some(CompletionItemKind::MODULE),
+                                ..Default::default()
+                            }))
+                        });
+                }
+            }
             Some(IdentifierWithContext {
                 identifier: _,
                 context: IdentifierContext::Attribute { base_range, .. },
@@ -973,6 +1061,7 @@ impl Transaction<'_> {
                         &mut result,
                         import_format,
                         supports_completion_item_details,
+                        custom_thread_pool,
                     );
                 }
                 // Mark results as incomplete in the following cases so clients keep asking

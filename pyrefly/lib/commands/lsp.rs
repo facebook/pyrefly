@@ -15,7 +15,7 @@ use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::util::CommandExitStatus;
-use crate::lsp::non_wasm::external_references::ExternalReferences;
+use crate::lsp::non_wasm::external_provider::ExternalProvider;
 use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::server::Connection;
 use crate::lsp::non_wasm::server::InitializeInfo;
@@ -29,7 +29,7 @@ use crate::lsp::non_wasm::server::lsp_loop;
 /// requests.
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
-pub(crate) enum IndexingMode {
+pub enum IndexingMode {
     /// Do not index anything. Features that depend on indexing (e.g. find-refs) will be disabled.
     None,
     /// Start indexing when opening a file that belongs to a config in the background.
@@ -48,17 +48,21 @@ pub(crate) enum IndexingMode {
 pub struct LspArgs {
     /// Find the struct that contains this field and add the indexing mode used by the language server
     #[arg(long, value_enum, default_value_t)]
-    pub(crate) indexing_mode: IndexingMode,
+    pub indexing_mode: IndexingMode,
 
     /// Sets the maximum number of user files for Pyrefly to index in the workspace.
     /// Note that indexing files is a performance-intensive task.
     #[arg(long, default_value_t = if cfg!(fbcode_build) {0} else {2000})]
-    pub(crate) workspace_indexing_limit: usize,
+    pub workspace_indexing_limit: usize,
 
     /// Block for build system operations, only using fallback heuristics after checking
     /// an up-to-date source DB. Only useful for benchmarking.
     #[arg(long)]
-    pub(crate) build_system_blocking: bool,
+    pub build_system_blocking: bool,
+
+    /// Enable external references integration for cross-repo go-to-definition.
+    #[arg(long, hide = true)]
+    pub enable_external_references: bool,
 }
 
 /// Run LSP server with optional path remapping.
@@ -72,7 +76,7 @@ pub fn run_lsp(
     server_info: Option<ServerInfo>,
     path_remapper: Option<PathRemapper>,
     telemetry: &impl Telemetry,
-    external_references: Arc<dyn ExternalReferences>,
+    external_references: Arc<dyn ExternalProvider>,
     wrapper: Option<ConfigConfigurerWrapper>,
 ) -> anyhow::Result<()> {
     if let Some(initialize_info) =
@@ -119,7 +123,7 @@ impl LspArgs {
         version: &str,
         path_remapper: Option<PathRemapper>,
         telemetry: &impl Telemetry,
-        external_references: Arc<dyn ExternalReferences>,
+        external_references: Arc<dyn ExternalProvider>,
         wrapper: Option<ConfigConfigurerWrapper>,
     ) -> anyhow::Result<CommandExitStatus> {
         // Note that we must have our logging only write out to stderr.

@@ -56,3 +56,36 @@ struct FindReferencesResultTuple {
   2: ByteSpan tuplefield1;
   3: Digest tuplefield2;
 }
+
+// Minimal stubs of python.* declaration types from Glean schema.
+// Field IDs match glean/schema/thrift/python.thrift.
+struct ClassDeclaration {
+  1: i64 id;
+}
+
+struct FunctionDeclaration {
+  1: i64 id;
+}
+
+// python.Declaration union. Field IDs match glean/schema/thrift/python.thrift.
+union Declaration {
+  1: ClassDeclaration cls;
+  2: FunctionDeclaration func;
+}
+
+/// Result container for the workspace symbol Angle query:
+///   {Name, File, Span, Decl} where
+///     python.SearchClassByName / python.SearchFunctionByName ...;
+///     python.DeclarationLocation { declaration = Decl, file = File, span = Span };
+struct WorkspaceSymbolResult {
+  1: i64 id;
+  2: optional WorkspaceSymbolResultTuple key;
+}
+
+/// The tuple fields in the same order as the workspace symbol query result columns.
+struct WorkspaceSymbolResultTuple {
+  1: string name;
+  2: File file;
+  3: ByteSpan span;
+  4: Declaration declaration;
+}

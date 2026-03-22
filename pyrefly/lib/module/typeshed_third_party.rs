@@ -22,7 +22,6 @@ use starlark_map::small_map::SmallMap;
 use crate::module::bundled::BundledStub;
 use crate::module::bundled::create_bundled_stub_config;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct BundledTypeshedThirdParty {
     pub find: SmallMap<ModuleName, PathBuf>,
@@ -44,7 +43,6 @@ impl BundledStub for BundledTypeshedThirdParty {
         Ok(res)
     }
 
-    #[allow(dead_code)]
     fn find(&self, module: ModuleName) -> Option<ModulePath> {
         self.find
             .get(&module)

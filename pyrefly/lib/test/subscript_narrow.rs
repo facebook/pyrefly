@@ -416,6 +416,20 @@ def use2(mapping: NotDict) -> None:
 "#,
 );
 
+testcase!(
+    test_negative_index_narrow,
+    r#"
+from typing import assert_type
+class C:
+    x: str | None
+def test(xs: list[C]) -> bool:
+    if xs[-1].x and "[ERROR]" in xs[-1].x:
+        assert_type(xs[-1].x, str)
+        return True
+    return False
+"#,
+);
+
 // This test verifies behavior related to MAX_FLOW_NARROW_DEPTH in scope.rs.
 // By assigning to the same key repeatedly, we increment the narrow depth.
 // After exceeding the depth limit (100), the narrow chain is broken and we

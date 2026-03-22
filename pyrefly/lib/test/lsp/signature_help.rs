@@ -1046,7 +1046,7 @@ Signature Help Result: active=1
 
 11 | foo(1, )
             ^
-Signature Help Result: active=0
+Signature Help Result: active=1
 - (x: int, y: str) -> int, parameters=[x: int, y: str], active parameter = 1
 - (x: str) -> str, parameters=[x: str]
 "#

@@ -228,10 +228,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         is_total: bool,
     ) -> Option<TypedDictField> {
-        let member = self.get_class_member(typed_dict.class_object(), name)?;
-        let field = Arc::unwrap_or_clone(member);
-        let instantiated_ty = self.get_instantiated_typed_dict_field_type(typed_dict, name)?;
-        let mut typed_dict_field = field.as_typed_dict_field_info(is_total)?;
+        let member = self.get_non_synthesized_class_member(typed_dict.class_object(), name)?;
+        let instantiated_ty = self.instantiate_typed_dict_field_type(typed_dict, name, &member)?;
+        let mut typed_dict_field =
+            Arc::unwrap_or_clone(member).as_typed_dict_field_info(is_total)?;
         typed_dict_field.ty = instantiated_ty;
         Some(typed_dict_field)
     }
@@ -473,7 +473,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> OverloadType {
         let q = Quantified::type_var(
             Name::new("_T"),
-            self.uniques,
+            self.uniques.fresh(),
             None,
             Restriction::Unrestricted,
             PreInferenceVariance::Invariant,
@@ -731,7 +731,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(typed_dict)
             && !extra.read_only
             && self.typed_dict_fields(typed_dict).values().all(|field| {
-                !field.is_read_only() && !field.required && self.is_equal(&field.ty, &extra.ty)
+                !field.is_read_only() && !field.required && self.is_consistent(&field.ty, &extra.ty)
             })
         {
             Some(extra.ty)
@@ -914,7 +914,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> ClassField {
         let (annotation, is_legal_field_declaration) = match field_definition {
-            ClassFieldDefinition::DeclaredByAnnotation { annotation } => (Some(annotation), true),
+            ClassFieldDefinition::DeclaredByAnnotation { annotation, .. } => {
+                (Some(annotation), true)
+            }
             ClassFieldDefinition::AssignedInBody {
                 value: _,
                 annotation,
@@ -993,7 +995,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                                 format!("Cannot add required field `{}` to TypedDict `{}` with non-read-only `extra_items`", name, base.name()),
                             );
-                        } else if !self.is_equal(field_ty, &ty) {
+                        } else if !self.is_consistent(field_ty, &ty) {
                             self.error(
                                 errors,
                                 range,

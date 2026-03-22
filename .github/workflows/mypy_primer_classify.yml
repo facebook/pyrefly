@@ -20,7 +20,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          sparse-checkout: scripts/primer_classifier
+          sparse-checkout: |
+            scripts/primer_classifier
+            scripts/projects.py
+            scripts/compare_typecheckers.py
+            scripts/setup_primer_deps.py
+            scripts/llm_transport.py
           persist-credentials: false
 
       - uses: actions/setup-python@v6
@@ -82,6 +87,7 @@ jobs:
             --pyrefly-diff pr_code.diff \
             --pr-description pr_description.txt \
             --suggest \
+            --cross-check \
             --output-format markdown \
             | tee classification.md
         env:

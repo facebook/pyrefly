@@ -7,10 +7,10 @@
 
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::check_inlay_hint_label_values;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::check_inlay_hint_label_values;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_inlay_hint_default_config() {

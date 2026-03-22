@@ -56,7 +56,7 @@ impl FindError {
     ) -> FindError {
         let config_suffix = match config_source {
             ConfigSource::File(p) => format!(" (from config in `{}`)", p.display()),
-            ConfigSource::Marker(p) => {
+            ConfigSource::PythonToolMarker(p) | ConfigSource::Marker(p) => {
                 format!(
                     " (from default config for project root marked by `{}`)",
                     p.display()

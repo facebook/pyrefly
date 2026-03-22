@@ -72,9 +72,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 all_fields.extend(dataclass.fields.clone());
             }
         }
-        for name in cls.fields() {
-            if cls.is_field_annotated(name) {
-                all_fields.insert(name.clone());
+        if let Some(class_fields) = self.get_class_fields(cls) {
+            for name in class_fields.names() {
+                if class_fields.is_field_annotated(name) {
+                    all_fields.insert(name.clone());
+                }
             }
         }
         all_fields
@@ -169,7 +171,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if dataclass.kws.slots {
             // It's a runtime error to set slots=True on a class that already defines __slots__.
             // Note that inheriting __slots__ from a base class is fine.
-            if cls.contains(&dunder::SLOTS) {
+            if self
+                .get_class_fields(cls)
+                .is_some_and(|f| f.contains(&dunder::SLOTS))
+            {
                 self.error(
                     errors,
                     cls.range(),
@@ -747,8 +752,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let compute_for_class = |target_cls: &Class| -> SmallSet<Name> {
             let mut kw_only_fields = SmallSet::new();
             let mut seen_kw_only_marker = false;
-            for name in target_cls.fields() {
-                if !target_cls.is_field_annotated(name) {
+            let Some(class_fields) = self.get_class_fields(target_cls) else {
+                return kw_only_fields;
+            };
+            for name in class_fields.names() {
+                if !class_fields.is_field_annotated(name) {
                     continue;
                 }
                 let Some(field) =
@@ -850,7 +858,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if !is_kw_only {
                     if !has_default
                         && has_seen_default
-                        && let Some(range) = cls.field_decl_range(&name)
+                        && let Some(range) = self
+                            .get_class_fields(cls)
+                            .and_then(|f| f.field_decl_range(&name))
                     {
                         self.error(
                             errors,

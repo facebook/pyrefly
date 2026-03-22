@@ -21,6 +21,14 @@ impl Epoch {
     pub fn next(&mut self) {
         self.0 += 1;
     }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    pub fn from_u32(v: u32) -> Self {
+        Self(v)
+    }
 }
 
 /// Invariant: checked >= computed >= changed
@@ -52,12 +60,5 @@ impl AtomicEpoch {
 
     pub fn store(&self, epoch: Epoch) {
         self.0.store(epoch.0, Ordering::Release);
-    }
-
-    /// Used when the write is followed by a Release store on a
-    /// different variable that readers check first (e.g., `checked`
-    /// synchronizes reads of `current_step` and `computed`).
-    pub fn store_relaxed(&self, epoch: Epoch) {
-        self.0.store(epoch.0, Ordering::Relaxed);
     }
 }

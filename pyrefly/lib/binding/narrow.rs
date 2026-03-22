@@ -542,6 +542,98 @@ impl NarrowOp {
             Self::Or(ops) => Self::Or(ops.map(|op| op.for_subject(subject))),
         }
     }
+
+    /// Rebase a narrowing operation onto an expression that is already the subject.
+    ///
+    /// For example, if we are matching on `self.a` and have a carry-over narrow for
+    /// `self.a != "A"`, the projected subject binding should apply `NotEq("A")`
+    /// directly, not try to look up `.a` again on the type of `self.a`.
+    ///
+    /// One reason we need this is to allow negation to work properly against a facet
+    /// chain, which is important when a pattern match subject is a facet chain
+    /// because we might need to actually bind the projection if one of the match
+    /// cases binds the name, as in
+    /// ```python
+    /// match self.a
+    ///    case "foo": pass
+    ///    case self_a:  # here, we need to get the projected negated narrow, just narrowing
+    ///        pass      # `self` with a facet is not sufficient to bind `self_a`
+    /// ```
+    ///
+    /// This projection is intentionally conservative: if part of the operation does not
+    /// directly constrain the subject expression, we drop it rather than risk producing
+    /// an unsound narrow.
+    /// - We keep all narrows of an `And` that *can* be projected onto the narrowing
+    ///   subject, while dropping any that cannot be.
+    /// - We produce no answer from an `Or` unless *all* of the components can be
+    ///   rebased (because if any part of an `Or` is not about a subject, then this
+    ///   means that at negation time we don't know anything about that subject).
+    pub fn rebase_onto_subject(&self, subject: &NarrowingSubject) -> Option<Self> {
+        fn rebase_facet_subject(
+            base: &FacetSubject,
+            extra: &FacetSubject,
+        ) -> Option<Option<FacetSubject>> {
+            let base_chain = base.chain.facets().as_slice();
+            let extra_chain = extra.chain.facets().as_slice();
+            if extra_chain.len() < base_chain.len()
+                || !extra_chain
+                    .iter()
+                    .zip(base_chain.iter())
+                    .all(|(extra, base)| extra == base)
+            {
+                return None;
+            }
+            let remainder = extra_chain
+                .iter()
+                .skip(base_chain.len())
+                .cloned()
+                .collect::<Vec<_>>();
+            if let Ok(chain) = Vec1::try_from_vec(remainder) {
+                Some(Some(FacetSubject {
+                    chain: UnresolvedFacetChain::new(chain),
+                    origin: extra.origin,
+                }))
+            } else {
+                Some(None)
+            }
+        }
+        match self {
+            Self::Atomic(prop, op) => match subject {
+                NarrowingSubject::Name(_) => Some(Self::Atomic(prop.clone(), op.clone())),
+                NarrowingSubject::Facets(_, base_facet) => match prop {
+                    None => None,
+                    Some(prop) => rebase_facet_subject(base_facet, prop)
+                        .map(|prop| Self::Atomic(prop, op.clone())),
+                },
+            },
+            Self::And(ops) => {
+                // Note that for `And`, we drop any operations not relevant to the subject
+                // but keep the remainder.
+                let projected = ops
+                    .iter()
+                    .filter_map(|op| op.rebase_onto_subject(subject))
+                    .collect::<Vec<_>>();
+                match projected.as_slice() {
+                    [] => None,
+                    [op] => Some(op.clone()),
+                    _ => Some(Self::And(projected)),
+                }
+            }
+            Self::Or(ops) => {
+                // Note that `projected` produces no result unless *all* of the ops can be
+                // rebased onto the subject.
+                let projected = ops
+                    .iter()
+                    .map(|op| op.rebase_onto_subject(subject))
+                    .collect::<Option<Vec<_>>>()?;
+                match projected.as_slice() {
+                    [] => None,
+                    [op] => Some(op.clone()),
+                    _ => Some(Self::Or(projected)),
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1076,6 +1168,34 @@ impl NarrowOps {
     }
 }
 
+/// Extract an integer index from a subscript slice expression.
+/// Handles both positive literals like `0` and negative literals like `-1`
+/// (which the AST represents as `UnaryOp(USub, NumberLiteral)`).
+pub(crate) fn int_from_slice(slice: &Expr) -> Option<i64> {
+    match slice {
+        Expr::NumberLiteral(ExprNumberLiteral {
+            value: Number::Int(idx),
+            ..
+        }) => idx.as_i64(),
+        Expr::UnaryOp(ExprUnaryOp {
+            op: UnaryOp::USub,
+            operand,
+            ..
+        }) => {
+            if let Expr::NumberLiteral(ExprNumberLiteral {
+                value: Number::Int(idx),
+                ..
+            }) = &**operand
+            {
+                idx.as_i64().and_then(|i| i.checked_neg())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Given an expression, determine whether it is a chain of properties (attribute/concrete index) rooted at a name,
 /// and if so, return the name and the chain of properties.
 /// For example: x.y.[0].z
@@ -1104,11 +1224,7 @@ pub fn identifier_and_chain_for_expr(expr: &Expr) -> Option<(Identifier, Unresol
                 _ => None,
             }
         } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::NumberLiteral(ExprNumberLiteral {
-                value: Number::Int(idx),
-                ..
-            }) = &**slice
-            && let Some(idx) = idx.as_usize()
+            && let Some(idx) = int_from_slice(slice)
         {
             match &*subscript.value {
                 Expr::Name(name) => {
@@ -1199,11 +1315,7 @@ pub fn identifier_and_chain_prefix_for_expr(
                 _ => None,
             }
         } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::NumberLiteral(ExprNumberLiteral {
-                value: Number::Int(idx),
-                ..
-            }) = &**slice
-            && let Some(idx) = idx.as_usize()
+            && let Some(idx) = int_from_slice(slice)
         {
             match &*subscript.value {
                 Expr::Name(name) => {

@@ -6,17 +6,16 @@
  */
 
 use std::cmp::Ordering;
+use std::collections::hash_map::DefaultHasher;
 use std::convert::Infallible;
 use std::fmt;
 use std::fmt::Display;
 use std::str::FromStr;
-use std::sync::Arc;
 
 use dupe::Dupe;
 use itertools::Itertools;
 use parse_display::Display;
 use pyrefly_util::prelude::SliceExt;
-use pyrefly_util::with_hash::WithHash;
 use regex::Match;
 use regex::Regex;
 use ruff_python_ast::BoolOp;
@@ -38,6 +37,8 @@ use serde::Serialize;
 use serde::de;
 use serde::de::MapAccess;
 use serde::de::Visitor;
+use static_interner::Intern;
+use static_interner::Interner;
 
 use crate::ast::Ast;
 
@@ -217,10 +218,15 @@ impl PythonPlatform {
     }
 }
 
+static SYS_INFO_INTERNER: Interner<SysInfoInner, DefaultHasher> = Interner::new();
+
 /// Information available from the Python library `sys`, namely
 /// `version` and `platform`.
-#[derive(Clone, Dupe, Debug, PartialEq, Eq, Hash, Default)]
-pub struct SysInfo(Arc<WithHash<SysInfoInner>>);
+/// Interned so that cloning is a trivial pointer copy (no atomic refcount).
+/// There are very few distinct SysInfo values (typically 1 per run), so the
+/// leaked memory from interning is negligible.
+#[derive(Clone, Dupe, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SysInfo(Intern<SysInfoInner>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct SysInfoInner {
@@ -239,33 +245,39 @@ impl Default for SysInfoInner {
     }
 }
 
+impl Default for SysInfo {
+    fn default() -> Self {
+        Self(SYS_INFO_INTERNER.intern(SysInfoInner::default()))
+    }
+}
+
 impl SysInfo {
     pub fn new(version: PythonVersion, platform: PythonPlatform) -> Self {
-        Self(Arc::new(WithHash::new(SysInfoInner {
+        Self(SYS_INFO_INTERNER.intern(SysInfoInner {
             version,
             platform,
             type_checking: true,
-        })))
+        }))
     }
 
     pub fn new_without_type_checking(version: PythonVersion, platform: PythonPlatform) -> Self {
-        Self(Arc::new(WithHash::new(SysInfoInner {
+        Self(SYS_INFO_INTERNER.intern(SysInfoInner {
             version,
             platform,
             type_checking: false,
-        })))
+        }))
     }
 
     pub fn version(&self) -> PythonVersion {
-        self.0.key().version
+        self.0.version
     }
 
     pub fn platform(&self) -> &PythonPlatform {
-        &self.0.key().platform
+        &self.0.platform
     }
 
     pub fn type_checking(&self) -> bool {
-        self.0.key().type_checking
+        self.0.type_checking
     }
 }
 
@@ -498,7 +510,7 @@ impl SysInfo {
         x == "TYPE_CHECKING" || x == "TYPE_CHECKING_WITH_PYREFLY"
     }
 
-    fn evaluate(&self, x: &Expr) -> Option<Value> {
+    fn evaluate(self, x: &Expr) -> Option<Value> {
         match x {
             Expr::Compare(x) if x.ops.len() == 1 && x.comparators.len() == 1 => Some(Value::Bool(
                 self.evaluate(&x.left)?
@@ -605,7 +617,7 @@ impl SysInfo {
         }
     }
 
-    fn subscript_value(&self, base: &Value, slice: &Expr) -> Option<Value> {
+    fn subscript_value(self, base: &Value, slice: &Expr) -> Option<Value> {
         match base {
             Value::Tuple(values) => self.subscript_tuple(values, slice),
             Value::VersionInfo(version) => {
@@ -620,7 +632,7 @@ impl SysInfo {
         }
     }
 
-    fn subscript_tuple(&self, values: &[Value], slice: &Expr) -> Option<Value> {
+    fn subscript_tuple(self, values: &[Value], slice: &Expr) -> Option<Value> {
         match slice {
             Expr::Slice(ExprSlice {
                 lower, upper, step, ..
@@ -670,7 +682,7 @@ impl SysInfo {
         }
     }
 
-    fn eval_index(&self, expr: &Expr) -> Option<i64> {
+    fn eval_index(self, expr: &Expr) -> Option<i64> {
         match self.evaluate(expr)? {
             Value::Int(value) => Some(value),
             _ => None,

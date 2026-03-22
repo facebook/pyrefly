@@ -177,7 +177,6 @@ struct PyreflyClientConfig {
     display_type_errors: Option<DisplayTypeErrors>,
     disable_language_services: Option<bool>,
     extra_paths: Option<Vec<PathBuf>>,
-    #[allow(dead_code)] // Will be read once diagnostic mode semantics are implemented.
     diagnostic_mode: Option<DiagnosticMode>,
     #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
@@ -189,9 +188,9 @@ struct PyreflyClientConfig {
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum DiagnosticMode {
-    // TODO: Implement workspace-wide diagnostics.
-    // #[serde(rename = "workspace")]
-    // Workspace,
+    /// Compute and publish diagnostics for all files in the workspace, not just open files.
+    #[serde(rename = "workspace")]
+    Workspace,
     #[default]
     #[serde(rename = "openFilesOnly")]
     OpenFilesOnly,
@@ -620,9 +619,18 @@ impl Workspaces {
     /// Get the diagnostic mode for a file at the given path.
     /// Checks `pyrefly.diagnosticMode` first, then falls back to
     /// `analysis.diagnosticMode`, and defaults to `OpenFilesOnly`.
-    #[allow(dead_code)] // Will be used once diagnostic mode semantics are implemented.
+    ///
+    /// Workspace diagnostic mode is only honored for explicit workspace folders,
+    /// never for the catch-all default workspace. If the file resolves to the
+    /// default workspace, `OpenFilesOnly` is returned regardless of the default
+    /// workspace's settings, preventing the server from scanning the entire filesystem.
     pub fn diagnostic_mode(&self, path: &Path) -> DiagnosticMode {
-        self.get_with(path.to_path_buf(), |(_, workspace)| {
+        self.get_with(path.to_path_buf(), |(workspace_root, workspace)| {
+            // Only honor Workspace mode for explicit workspace folders, not
+            // the catch-all default (workspace_root == None).
+            if workspace_root.is_none() {
+                return DiagnosticMode::OpenFilesOnly;
+            }
             workspace
                 .diagnostic_mode
                 .or_else(|| {
@@ -632,6 +640,26 @@ impl Workspaces {
                 })
                 .unwrap_or_default()
         })
+    }
+
+    /// Returns the workspace roots that have `DiagnosticMode::Workspace` enabled.
+    pub fn workspace_diagnostic_roots(&self) -> Vec<PathBuf> {
+        self.workspaces
+            .read()
+            .iter()
+            .filter(|(_, workspace)| {
+                let mode = workspace
+                    .diagnostic_mode
+                    .or_else(|| {
+                        workspace
+                            .lsp_analysis_config
+                            .and_then(|c| c.diagnostic_mode)
+                    })
+                    .unwrap_or_default();
+                mode == DiagnosticMode::Workspace
+            })
+            .map(|(path, _)| path.clone())
+            .collect()
     }
 }
 

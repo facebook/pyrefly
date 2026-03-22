@@ -14,11 +14,12 @@ use pyrefly_util::telemetry::Telemetry;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::commands::util::CommandExitStatus;
-use crate::lsp::non_wasm::external_references::NoExternalReferences;
+use crate::lsp::non_wasm::external_provider::NoExternalProvider;
 use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::server::Connection;
 use crate::lsp::non_wasm::server::InitializeInfo;
 use crate::lsp::non_wasm::server::MessageReader;
+use crate::lsp::non_wasm::server::Server;
 use crate::lsp::non_wasm::server::initialize_finish;
 use crate::lsp::non_wasm::server::initialize_start;
 use crate::tsp::server::tsp_capabilities;
@@ -50,7 +51,7 @@ pub fn run_tsp(
         // Create an LSP server instance for the TSP server to use.
         let lsp_queue = LspQueue::new();
         let surface = telemetry.surface();
-        let lsp_server = crate::lsp::non_wasm::server::Server::new(
+        let lsp_server = Server::new(
             connection,
             lsp_queue,
             initialize_info.params.clone(),
@@ -60,7 +61,7 @@ pub fn run_tsp(
             false,
             surface,
             None, // No path remapping for TSP
-            Arc::new(NoExternalReferences),
+            Arc::new(NoExternalProvider),
             wrapper,
         );
 
