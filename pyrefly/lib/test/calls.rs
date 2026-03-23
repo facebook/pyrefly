@@ -234,6 +234,21 @@ reduce(max, [1,2])
 );
 
 testcase!(
+    test_reduce_gcd_returns_int,
+    r#"
+from functools import reduce
+from math import gcd
+
+def detect_indentation(values: list[int]) -> int:
+    try:
+        indentation = reduce(gcd, [v for v in values if not v % 2]) or 1
+    except TypeError:
+        indentation = 1
+    return indentation
+    "#,
+);
+
+testcase!(
     test_union_with_type,
     r#"
 from typing import assert_type
