@@ -352,6 +352,26 @@ Docstring Result: `Test docstring`
 }
 
 #[test]
+fn variable_docstring_definition_site_test() {
+    let code = r#"
+VAR = "abc"
+#^
+"""Some documentation."""
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
+    assert_eq!(
+        r#"
+# main.py
+2 | VAR = "abc"
+     ^
+Docstring Result: `Some documentation.`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn module_binding_test() {
     let lib = r#"
 """Test docstring"""
@@ -371,6 +391,78 @@ print(lib)
 3 | print(lib)
           ^
 Docstring Result: `Test docstring`
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn variable_docstring_test() {
+    let code = r#"
+VAR = "abc"
+"""Some documentation."""
+print(VAR)
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
+    assert_eq!(
+        r#"
+# main.py
+4 | print(VAR)
+          ^
+Docstring Result: `Some documentation.`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn annotated_variable_docstring_test() {
+    let code = r#"
+VAR: str = "abc"
+"""Some documentation."""
+print(VAR)
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
+    assert_eq!(
+        r#"
+# main.py
+4 | print(VAR)
+          ^
+Docstring Result: `Some documentation.`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn cross_module_variable_docstring_test() {
+    let lib = r#"
+VAR = "abc"
+"""Some documentation."""
+"#;
+    let code = r#"
+from lib import VAR
+print(VAR)
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("lib", lib)],
+        test_report_factory(lib),
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | print(VAR)
+          ^
+Docstring Result: `Some documentation.`
 
 
 # lib.py

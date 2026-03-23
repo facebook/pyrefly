@@ -962,8 +962,20 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn stmts(&mut self, xs: Vec<Stmt>, parent: &NestingContext) {
-        for x in xs {
-            self.stmt(x, parent);
+        let mut iter = xs.into_iter().peekable();
+        while let Some(x) = iter.next() {
+            // PEP 257-style variable docstrings: a standalone string literal immediately
+            // following an assignment is the variable's docstring.
+            let var_docstring = if matches!(x, Stmt::Assign(_) | Stmt::AnnAssign(_))
+                && let Some(Stmt::Expr(e)) = iter.peek()
+                && let Expr::StringLiteral(_) = e.value.as_ref()
+            {
+                Some(e.range())
+            } else {
+                None
+            };
+
+            self.stmt(x, parent, var_docstring);
         }
     }
 
