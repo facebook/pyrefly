@@ -783,15 +783,19 @@ fn function_last_expressions<'a>(
                 f(sys_info, &x.body, res)?;
             }
             Stmt::While(x) => {
-                // Infinite loops with no breaks cannot fall through
-                if sys_info.evaluate_bool(&x.test) != Some(true) {
-                    return None;
-                }
                 let mut has_break = false;
                 x.body
                     .visit(&mut |stmt| loop_body_has_break_statement(stmt, &mut has_break));
-                if has_break {
-                    return None;
+                if sys_info.evaluate_bool(&x.test) == Some(true) {
+                    // Infinite loops with no breaks cannot fall through.
+                    if has_break {
+                        return None;
+                    }
+                } else {
+                    if has_break || x.orelse.is_empty() {
+                        return None;
+                    }
+                    f(sys_info, &x.orelse, res)?;
                 }
             }
             Stmt::For(x) => {

@@ -237,6 +237,21 @@ def f(b: bool) -> None:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2868
+testcase!(
+    test_return_while_else,
+    r#"
+def find_match(items: list[int], target: int) -> int:
+    i = 0
+    while i < len(items):
+        if items[i] == target:
+            return i
+        i += 1
+    else:
+        return -1
+"#,
+);
+
 testcase!(
     test_return_then_dead_code,
     r#"
