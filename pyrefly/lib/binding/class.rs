@@ -982,7 +982,6 @@ impl<'a> BindingsBuilder<'a> {
     ) {
         let class_name = Ast::expr_name_identifier(name.clone());
         let (mut class_object, class_indices) = self.class_object_and_indices(&class_name);
-        self.check_functional_definition_name(&name.id, arg_name);
         self.ensure_expr(func, class_object.usage());
         self.ensure_expr(arg_name, class_object.usage());
         for arg in &mut *members {

@@ -61,6 +61,27 @@ assert_type(Point6(1, 2).x, int)
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2874
+testcase!(
+    test_named_tuple_functional_name_mismatch,
+    r#"
+from collections import namedtuple
+from typing import Any, NamedTuple, assert_type
+
+repo_details = namedtuple(
+    "RepoDetails",
+    ("source_dir", "local_dest", "file", "age"),
+)
+typing_repo_details = NamedTuple(
+    "TypingRepoDetails",
+    [("source_dir", str), ("local_dest", str), ("file", str), ("age", int)],
+)
+
+assert_type(repo_details("", "", "", 1).source_dir, Any)
+assert_type(typing_repo_details("", "", "", 1).age, int)
+    "#,
+);
+
 testcase!(
     test_named_tuple_functional_defaults_and_constructor,
     r#"
