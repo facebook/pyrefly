@@ -34,17 +34,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         None
     }
-
-    /// Check if a class that inherits from tuple defines its own `__getitem__`,
-    /// which should take priority over tuple's special subscript handling.
-    pub fn class_overrides_tuple_getitem(&self, cls: &ClassType) -> bool {
-        if cls.class_object().is_builtin("tuple") {
-            return false;
-        }
+    /// Check whether tuple indexing should use tuple's special subscript handling
+    /// rather than a user-defined `__getitem__` override.
+    pub fn tuple_uses_builtin_getitem(&self, cls: &ClassType) -> bool {
         self.get_non_synthesized_class_member_and_defining_class(
             cls.class_object(),
             &dunder::GETITEM,
         )
-        .is_some_and(|member| !member.defining_class.is_builtin("tuple"))
+        .is_none_or(|member| member.defining_class.is_builtin("tuple"))
     }
 }

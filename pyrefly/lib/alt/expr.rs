@@ -2217,7 +2217,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::ClassType(ref cls) | Type::SelfType(ref cls)
                     if let Some(tuple) = self.as_tuple(cls)
-                        && !self.class_overrides_tuple_getitem(cls) =>
+                        && self.tuple_uses_builtin_getitem(cls) =>
                 {
                     self.infer_tuple_subscript(
                         tuple,
