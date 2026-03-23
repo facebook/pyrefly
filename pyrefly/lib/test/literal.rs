@@ -435,3 +435,24 @@ OneOrTwo: TypeAlias = One | Two
 Spam: TypeAlias = Literal[OneOrTwo]
 "#,
 );
+
+testcase!(
+    bug = "enumerate promotes Literal types to their base type",
+    test_enumerate_preserves_literal_type,
+    r#"
+from typing import Literal
+
+def test(x: Literal["a", "b"]) -> None:
+    pass
+
+c = ("a", "b")
+
+# Direct iteration preserves Literal types
+for i in c:
+    test(i)
+
+# enumerate loses Literal types due to TypeVar promotion
+for i, j in enumerate(c):
+    test(j) # E: Argument `str` is not assignable to parameter `x` with type `Literal['a', 'b']` in function `test`
+    "#,
+);
