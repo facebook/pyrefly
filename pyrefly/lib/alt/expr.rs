@@ -77,6 +77,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LambdaParamId;
+use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::int_from_slice;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -89,7 +90,6 @@ use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::facet::FacetKind;
-use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::param_spec::ParamSpec;
 use crate::types::quantified::Quantified;
@@ -1231,6 +1231,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             BoolOp::And => false,
             BoolOp::Or => true,
         };
+        let result_narrow = match op {
+            BoolOp::And => AtomicNarrowOp::IsFalsy,
+            BoolOp::Or => AtomicNarrowOp::IsTruthy,
+        };
         let should_shortcircuit =
             |t: &Type, r: TextRange| self.as_bool(t, r, errors) == Some(target);
         let should_discard = |t: &Type, r: TextRange| self.as_bool(t, r, errors) == Some(!target);
@@ -1264,21 +1268,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None => t.clone(),
                         Some(acc) => self.union(acc, t.clone()),
                     });
-                    // Narrow the type for the result of the boolop
-                    let t = if i != last_index
-                        && t == self.heap.mk_class_type(self.stdlib.bool().clone())
-                    {
-                        Lit::Bool(target).to_implicit_type()
-                    } else if i != last_index
-                        && t == self.heap.mk_class_type(self.stdlib.int().clone())
-                        && !target
-                    {
-                        LitInt::new(0).to_implicit_type()
-                    } else if i != last_index
-                        && t == self.heap.mk_class_type(self.stdlib.str().clone())
-                        && !target
-                    {
-                        Lit::Str(Default::default()).to_implicit_type()
+                    let t = if i != last_index {
+                        self.atomic_narrow(&t, &result_narrow, value.range(), errors)
                     } else {
                         t
                     };

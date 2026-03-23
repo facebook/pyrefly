@@ -379,6 +379,18 @@ def f(x1: list[str], x2: list[LiteralString]):
 );
 
 testcase!(
+    test_str_join_boolop_narrowing,
+    r#"
+from typing import assert_type
+
+def format_types(types: set[type | None]) -> str:
+    values = sorted((e and e.__name__) or "None" for e in types)
+    assert_type(values, list[str])
+    return ", ".join(values)
+    "#,
+);
+
+testcase!(
     test_giant_literal_string,
     r#"
 from typing import assert_type, LiteralString
