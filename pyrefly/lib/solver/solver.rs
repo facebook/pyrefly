@@ -1956,9 +1956,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                     | Variable::PartialQuantified(q) => {
                         let is_partial = matches!(&*v2_ref, Variable::PartialQuantified(_));
-                        let t1_p = t1
-                            .clone()
-                            .promote_implicit_literals(self.type_order.stdlib());
+                        // Don't promote unions of implicit literals (e.g., Literal["a"] | Literal["b"]
+                        // from tuple element types) — they represent structured type information
+                        // that should be preserved through TypeVar solving.
+                        let t1_p = if matches!(t1, Type::Union(u) if u.members.iter().all(|t| t.is_implicit_literal()))
+                        {
+                            t1.clone()
+                        } else {
+                            t1.clone()
+                                .promote_implicit_literals(self.type_order.stdlib())
+                        };
                         let name = q.name.clone();
                         let kind = q.kind();
                         let restriction = q.restriction().clone();
