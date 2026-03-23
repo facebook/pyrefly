@@ -442,6 +442,23 @@ bar: Callable[[int, bytes | str], int] = foo
 );
 
 testcase!(
+    test_bound_method_overload_assignable_to_callable,
+    r#"
+from typing import Callable, assert_type
+import itertools
+
+_FORMAT_PATH = "{}/{}".format
+_DIRECT: Callable[[str, str], str] = _FORMAT_PATH
+
+def get_paths(path: str) -> list[str]:
+    parts = path.split("/")
+    result = list(itertools.accumulate(parts, _FORMAT_PATH))
+    assert_type(result, list[str])
+    return result
+    "#,
+);
+
+testcase!(
     test_overload_assignable_to_callable_return_supertype,
     r#"
 from typing import Callable, overload

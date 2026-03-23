@@ -1135,11 +1135,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     fn is_subset_overload(&mut self, overload: &Overload, want: &Type) -> Result<(), SubsetError> {
-        if any(overload.signatures.iter(), |l| {
-            self.is_subset_eq(&l.as_type(), want)
-        })
-        .is_ok()
-        {
+        if any(overload.signatures.iter(), |l| self.is_subset_eq(&l.as_type(), want)).is_ok() {
             return Ok(());
         }
         if let Type::Callable(box Callable {
@@ -1187,9 +1183,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         ParamList::new_types(ts),
                         ret.clone(),
                     )));
-                    any(overload.signatures.iter(), |l| {
-                        self.is_subset_eq(&l.as_type(), &callable)
-                    })
+                    any(overload.signatures.iter(), |l| self.is_subset_eq(&l.as_type(), &callable))
                 })
                 .is_ok()
                 {
@@ -1640,8 +1634,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     metadata: _,
                 }),
             ) => {
-                self.is_subset_params(&l.params, &u.params)?;
-                self.is_subset_eq(&l.ret, &u.ret)
+                let want_has_vars =
+                    Type::Callable(Box::new(u.clone())).may_contain_quantified_var();
+                if want_has_vars {
+                    self.is_subset_eq(&l.ret, &u.ret)?;
+                    self.is_subset_params(&l.params, &u.params)
+                } else {
+                    self.is_subset_params(&l.params, &u.params)?;
+                    self.is_subset_eq(&l.ret, &u.ret)
+                }
             }
             (Type::TypedDict(TypedDict::Anonymous(got)), Type::TypedDict(want)) => {
                 self.is_subset_anonymous_typed_dict(got, want)

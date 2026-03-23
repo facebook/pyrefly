@@ -221,6 +221,20 @@ impl Display for VariableNode {
 }
 
 impl Variables {
+    fn snapshot(&self) -> SmallMap<Var, VariableNode> {
+        self.0
+            .iter()
+            .map(|(var, node)| (*var, node.borrow().clone()))
+            .collect()
+    }
+
+    fn restore(&mut self, snapshot: SmallMap<Var, VariableNode>) {
+        self.0 = snapshot
+            .into_iter()
+            .map(|(var, node)| (var, RefCell::new(node)))
+            .collect();
+    }
+
     fn get<'a>(&'a self, x: Var) -> Ref<'a, Variable> {
         let root = self.get_root(x);
         let variable = self.get_node(root).borrow();
