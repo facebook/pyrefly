@@ -285,7 +285,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let named_tuple_metadata =
             self.named_tuple_metadata(cls, bases, &bases_with_metadata, errors);
-        if named_tuple_metadata.is_some() && bases_with_metadata.len() > 1 {
+        if named_tuple_metadata.is_some()
+            && bases_with_metadata.len() > 1
+            && !cls.module().path().is_interface()
+        {
+            // Typeshed models some stdlib namedtuple result objects, such as urllib.parse.ParseResult,
+            // by mixing methods into a NamedTuple subclass inside a `.pyi`. Keep rejecting this in
+            // user code, but allow it in stubs so we can type-check those result objects precisely.
             self.error(
                 errors,
                 cls.range(),

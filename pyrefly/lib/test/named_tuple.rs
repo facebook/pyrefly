@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -270,7 +271,6 @@ def test(p: Pair, p2: Pair2[bytes]):
 );
 
 testcase!(
-    bug = "NamedTuple extends tuple[Any, ...], making it a subtype of too many things",
     test_named_tuple_subclass,
     r#"
 from typing import NamedTuple, Sequence, Never
@@ -278,8 +278,46 @@ class Pair(NamedTuple):
     x: int
     y: str
 p: Pair = Pair(1, "")
-x1: Sequence[int|str] = p # should succeed
-x2: Sequence[Never] = p # should fail
+x1: Sequence[int|str] = p
+def f(x: Sequence[Never]) -> None: ...
+f(p)  # E: Argument `Pair` is not assignable to parameter `x` with type `Sequence[Never]` in function `f`
+    "#,
+);
+
+fn env_named_tuple_stub_mixins() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+from typing import Generic, NamedTuple, TypeVar
+
+T = TypeVar("T")
+
+class Base(NamedTuple, Generic[T]):
+    x: T
+
+class Mixin: ...
+
+class Derived(Base[str], Mixin): ...
+        "#,
+    );
+    t
+}
+
+testcase!(
+    test_named_tuple_stub_mixins_preserve_tuple_subtyping,
+    env_named_tuple_stub_mixins(),
+    r#"
+from typing import Iterable
+from foo import Derived
+
+def takes_none(xs: Iterable[None]) -> None: ...
+def takes_str(xs: Iterable[str]) -> None: ...
+
+def f(d: Derived) -> None:
+    takes_str(d)
+    takes_none(d)  # E: Argument `Derived` is not assignable to parameter `xs` with type `Iterable[None]` in function `takes_none`
     "#,
 );
 
