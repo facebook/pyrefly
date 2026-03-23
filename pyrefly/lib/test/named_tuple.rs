@@ -670,3 +670,142 @@ o = arbitrary_method("a", 2, ImplementedModel)
 assert_type(o, ImplementedModel)
 "#,
 );
+
+testcase!(
+    test_namedtuple_adjacent_defaults_basic,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+Point.__new__.__defaults__ = (0,)
+p = Point(1, 2)  # should succeed — z defaults to 0
+"#,
+);
+
+testcase!(
+    test_typing_namedtuple_adjacent_defaults,
+    r#"
+from typing import NamedTuple
+Point = NamedTuple("Point", [("x", int), ("y", int), ("z", int)])
+Point.__new__.__defaults__ = (0,)
+p = Point(1, 2)  # should succeed — z defaults to 0
+"#,
+);
+
+testcase!(
+    test_namedtuple_adjacent_defaults_multiple,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+Point.__new__.__defaults__ = (0, 0)
+p = Point(1)  # should succeed — y and z default
+"#,
+);
+
+testcase!(
+    test_namedtuple_adjacent_defaults_none,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+Point.__new__.__defaults__ = None
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+testcase!(
+    test_namedtuple_adjacent_defaults_overflow,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y"])
+Point.__new__.__defaults__ = (0, 0, 0)
+p = Point()  # should succeed — all fields optional when defaults >= fields
+"#,
+);
+
+testcase!(
+    test_namedtuple_defaults_non_adjacent,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+x = 1
+Point.__new__.__defaults__ = (0,)
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+testcase!(
+    test_class_namedtuple_unaffected,
+    r#"
+from typing import NamedTuple
+class Point(NamedTuple):
+    x: int
+    y: int
+    z: int
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+testcase!(
+    test_namedtuple_defaults_non_literal_rhs,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+defs = (0,)
+Point.__new__.__defaults__ = defs
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+testcase!(
+    test_namedtuple_defaults_replaces_kwarg,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"], defaults=(1,))
+Point.__new__.__defaults__ = (2, 3)
+p = Point(1)  # should succeed — y and z now have defaults from __new__.__defaults__
+"#,
+);
+
+testcase!(
+    test_namedtuple_adjacent_defaults_empty_tuple,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+Point.__new__.__defaults__ = ()
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+testcase!(
+    test_namedtuple_none_overrides_kwarg,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"], defaults=(1,))
+Point.__new__.__defaults__ = None
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+testcase!(
+    test_collections_namedtuple_defaults_do_not_constrain_type,
+    r#"
+from collections import namedtuple
+Query = namedtuple("Query", ["where", "sort", "group"])
+Query.__new__.__defaults__ = ({}, [("_id", 1)], "status")
+# collections.namedtuple fields are untyped — passing None for a field
+# with a string default is valid.
+q1 = Query(where={}, sort=[], group=None)
+q2 = Query(where={}, sort=[], group="custom")
+q3 = Query()
+"#,
+);
+
+testcase!(
+    test_collections_namedtuple_kwarg_defaults_do_not_constrain_type,
+    r#"
+from collections import namedtuple
+Query = namedtuple("Query", ["where", "sort", "group"], defaults=({}, [("_id", 1)], "status"))
+q1 = Query(where={}, sort=[], group=None)
+q2 = Query(where={}, sort=[], group="custom")
+q3 = Query()
+"#,
+);

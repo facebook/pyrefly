@@ -16,6 +16,7 @@ use pyrefly_graph::index::Idx;
 use pyrefly_graph::index::Index;
 use pyrefly_graph::index_map::IndexMap;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -263,6 +264,9 @@ pub struct BindingsBuilder<'a> {
     next_lambda_param_id: u32,
     /// See `BindingsInner::subsequently_initialized`.
     subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
+    /// Defaults extracted from an adjacent `__new__.__defaults__` assignment,
+    /// set by `stmts()` and consumed by namedtuple synthesis in `stmt()`.
+    pub adjacent_namedtuple_defaults: Option<Vec<Expr>>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -533,6 +537,7 @@ impl Bindings {
             lambda_yield_keys: Vec::new(),
             next_lambda_param_id: 0,
             subsequently_initialized: SmallSet::new(),
+            adjacent_namedtuple_defaults: None,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -760,6 +765,25 @@ impl CurrentIdx {
     }
 }
 
+fn extract_new_defaults(stmt: &Stmt, name: &str) -> Option<Vec<Expr>> {
+    if let Stmt::Assign(assign) = stmt
+        && let [Expr::Attribute(outer)] = assign.targets.as_slice()
+        && outer.attr.id == dunder::DEFAULTS
+        && let Expr::Attribute(inner) = outer.value.as_ref()
+        && inner.attr.id == dunder::NEW
+        && let Expr::Name(target_name) = inner.value.as_ref()
+        && target_name.id == name
+    {
+        match assign.value.as_ref() {
+            Expr::Tuple(tuple) => Some(tuple.elts.clone()),
+            Expr::NoneLiteral(_) => Some(vec![]),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
 impl<'a> BindingsBuilder<'a> {
     /// Whether to infer empty container types and unsolved type variables based on first use.
     pub fn infer_with_first_use(&self) -> bool {
@@ -962,8 +986,25 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn stmts(&mut self, xs: Vec<Stmt>, parent: &NestingContext) {
-        for x in xs {
+        let mut iter = xs.into_iter().peekable();
+        while let Some(x) = iter.next() {
+            if let Stmt::Assign(assign) = &x
+                && let [Expr::Name(name)] = assign.targets.as_slice()
+                && let Expr::Call(call) = assign.value.as_ref()
+                && let Some(defaults) = iter
+                    .peek()
+                    .and_then(|next| extract_new_defaults(next, &name.id))
+                && let Some(special) = self.as_special_export(&call.func)
+                && matches!(
+                    special,
+                    SpecialExport::TypingNamedTuple | SpecialExport::CollectionsNamedTuple
+                )
+            {
+                iter.next();
+                self.adjacent_namedtuple_defaults = Some(defaults);
+            }
             self.stmt(x, parent);
+            self.adjacent_namedtuple_defaults = None;
         }
     }
 

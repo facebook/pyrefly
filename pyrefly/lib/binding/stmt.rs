@@ -607,12 +607,15 @@ impl<'a> BindingsBuilder<'a> {
                                     call.arguments.args.split_first_mut()
                                 {
                                     self.check_functional_definition_name(&name.id, arg_name);
+                                    let adjacent_defaults =
+                                        self.adjacent_namedtuple_defaults.take();
                                     self.synthesize_typing_named_tuple_def(
                                         Ast::expr_name_identifier(name.clone()),
                                         parent,
                                         &mut call.func,
                                         members,
                                         true,
+                                        adjacent_defaults,
                                     );
                                     return;
                                 }
@@ -622,6 +625,8 @@ impl<'a> BindingsBuilder<'a> {
                                     call.arguments.args.split_first_mut()
                                 {
                                     self.check_functional_definition_name(&name.id, arg_name);
+                                    let adjacent_defaults =
+                                        self.adjacent_namedtuple_defaults.take();
                                     self.synthesize_collections_named_tuple_def(
                                         Ast::expr_name_identifier(name.clone()),
                                         parent,
@@ -629,6 +634,7 @@ impl<'a> BindingsBuilder<'a> {
                                         members,
                                         &mut call.arguments.keywords,
                                         true,
+                                        adjacent_defaults,
                                     );
                                     return;
                                 }

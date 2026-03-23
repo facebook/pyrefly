@@ -98,6 +98,18 @@ enum SynthesizedClassKind {
     NewType,
 }
 
+/// Right-align `default_elts` into `defaults`: a slice of N elements makes the last N fields
+/// optional. An empty slice clears all defaults.
+fn apply_adjacent_defaults(default_elts: &[Expr], n_members: usize, defaults: &mut [Option<Expr>]) {
+    defaults.iter_mut().for_each(|d| *d = None);
+    let n_defaults = default_elts.len().min(n_members);
+    // Right-align: skip leading elements if more defaults than fields
+    let start = default_elts.len() - n_defaults;
+    for (i, elt) in default_elts[start..].iter().enumerate() {
+        defaults[n_members - n_defaults + i] = Some(elt.clone());
+    }
+}
+
 impl<'a> BindingsBuilder<'a> {
     fn def_index(&mut self) -> ClassDefIndex {
         self.metadata.push_class()
@@ -179,6 +191,7 @@ impl<'a> BindingsBuilder<'a> {
                                     members,
                                     &mut call.arguments.keywords,
                                     false,
+                                    None,
                                 ))
                             } else {
                                 None
@@ -194,6 +207,7 @@ impl<'a> BindingsBuilder<'a> {
                                     &mut call.func,
                                     members,
                                     false,
+                                    None,
                                 ))
                             } else {
                                 None
@@ -764,7 +778,7 @@ impl<'a> BindingsBuilder<'a> {
     /// and field definition bindings.
     fn insert_synthesized_fields(
         &mut self,
-        member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)>,
+        member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)>,
         fields: &mut SmallMap<Name, ClassFieldProperties>,
         class_indices: &ClassIndices,
         illegal_identifier_handling: IllegalIdentifierHandling,
@@ -841,7 +855,7 @@ impl<'a> BindingsBuilder<'a> {
             });
             let definition = match (member_value, force_class_initialization) {
                 (Some(value), _) => ClassFieldDefinition::AssignedInBody {
-                    value: Box::new(ExprOrBinding::Expr(value)),
+                    value: Box::new(value),
                     annotation,
                     alias_of: None,
                 },
@@ -879,7 +893,7 @@ impl<'a> BindingsBuilder<'a> {
         base: Option<Expr>,
         keywords: Box<[(Name, Expr)]>,
         // name, position, annotation, value
-        member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)>,
+        member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)>,
         illegal_identifier_handling: IllegalIdentifierHandling,
         force_class_initialization: bool,
         class_kind: SynthesizedClassKind,
@@ -993,7 +1007,7 @@ impl<'a> BindingsBuilder<'a> {
         for arg in &mut *members {
             self.ensure_expr(arg, class_object.usage());
         }
-        let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> =
+        let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)> =
             match members {
                 // Enum('Color', 'RED, GREEN, BLUE')
                 // Enum('Color', 'RED GREEN BLUE')
@@ -1077,7 +1091,7 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             .into_iter()
-            .map(|(name, range, value)| (name, range, None, value))
+            .map(|(name, range, value)| (name, range, None, value.map(ExprOrBinding::Expr)))
             .collect();
         self.synthesize_class_def(
             class_name,
@@ -1105,6 +1119,7 @@ impl<'a> BindingsBuilder<'a> {
         members: &mut [Expr],
         keywords: &mut [Keyword],
         bind_to_name: bool,
+        adjacent_defaults: Option<Vec<Expr>>,
     ) -> Idx<KeyClass> {
         let (mut class_object, class_indices) = if bind_to_name {
             self.class_object_and_indices(&class_name)
@@ -1158,12 +1173,25 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
         }
-        let member_definitions_with_defaults: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> =
-            member_definitions
-                .into_iter()
-                .zip(defaults)
-                .map(|((name, range, annotation), default)| (name, range, annotation, default))
-                .collect();
+        if let Some(ref default_elts) = adjacent_defaults {
+            apply_adjacent_defaults(default_elts, n_members, &mut defaults);
+        }
+        let member_definitions_with_defaults: Vec<(
+            String,
+            TextRange,
+            Option<Expr>,
+            Option<ExprOrBinding>,
+        )> = member_definitions
+            .into_iter()
+            .zip(defaults)
+            .map(|((name, range, annotation), default)| {
+                // collections.namedtuple fields are untyped: defaults only
+                // mark optionality, not the field type.
+                let value =
+                    default.map(|_| ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)));
+                (name, range, annotation, value)
+            })
+            .collect();
         let range = class_name.range();
         self.synthesize_class_def(
             class_name,
@@ -1190,6 +1218,7 @@ impl<'a> BindingsBuilder<'a> {
         func: &mut Expr,
         members: &[Expr],
         bind_to_name: bool,
+        adjacent_defaults: Option<Vec<Expr>>,
     ) -> Idx<KeyClass> {
         let (mut class_object, class_indices) = if bind_to_name {
             self.class_object_and_indices(&class_name)
@@ -1197,19 +1226,26 @@ impl<'a> BindingsBuilder<'a> {
             self.anon_class_object_and_indices(&class_name)
         };
         self.ensure_expr(func, class_object.usage());
-        let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> = self
-            .parse_typing_namedtuple_fields(members, class_name.range)
-            .0
-            .into_iter()
-            .map(|(name, range, annotation)| {
-                if let Some(mut ann) = annotation {
-                    self.ensure_type(&mut ann, &mut None);
-                    (name, range, Some(ann), None)
-                } else {
-                    (name, range, None, None)
-                }
-            })
-            .collect();
+        let (parsed_fields, _has_dynamic) =
+            self.parse_typing_namedtuple_fields(members, class_name.range);
+        let n_members = parsed_fields.len();
+        let mut defaults: Vec<Option<Expr>> = vec![None; n_members];
+        if let Some(ref default_elts) = adjacent_defaults {
+            apply_adjacent_defaults(default_elts, n_members, &mut defaults);
+        }
+        let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)> =
+            parsed_fields
+                .into_iter()
+                .zip(defaults)
+                .map(|((name, range, annotation), default)| {
+                    if let Some(mut ann) = annotation {
+                        self.ensure_type(&mut ann, &mut None);
+                        (name, range, Some(ann), default.map(ExprOrBinding::Expr))
+                    } else {
+                        (name, range, None, default.map(ExprOrBinding::Expr))
+                    }
+                })
+                .collect();
         self.synthesize_class_def(
             class_name,
             class_object,
@@ -1296,19 +1332,20 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
         }
-        let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> = match args {
-            // Movie = TypedDict('Movie', {'name': str, 'year': int})
-            [Expr::Dict(ExprDict { items, .. })] => items
-                .iter_mut()
-                .filter_map(|item| {
-                    if let Some(key) = &mut item.key {
-                        self.ensure_expr(key, class_object.usage());
-                    }
-                    self.ensure_type(&mut item.value, &mut None);
-                    match (&item.key, &item.value) {
-                        (Some(Expr::StringLiteral(k)), v) => {
-                            Some((k.value.to_string(), k.range(), Some(v.clone()), None))
+        let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)> =
+            match args {
+                // Movie = TypedDict('Movie', {'name': str, 'year': int})
+                [Expr::Dict(ExprDict { items, .. })] => items
+                    .iter_mut()
+                    .filter_map(|item| {
+                        if let Some(key) = &mut item.key {
+                            self.ensure_expr(key, class_object.usage());
                         }
+                        self.ensure_type(&mut item.value, &mut None);
+                        match (&item.key, &item.value) {
+                            (Some(Expr::StringLiteral(k)), v) => {
+                                Some((k.value.to_string(), k.range(), Some(v.clone()), None))
+                            }
                         (Some(k), _) => {
                             self.error(
                                 k.range(),
