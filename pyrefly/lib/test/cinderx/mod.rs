@@ -87,13 +87,16 @@ fn check_fixture(name: &str) {
         return;
     }
 
-    let expected = std::fs::read_to_string(&expected_path).unwrap_or_else(|_| {
-        panic!(
-            "expected file {expected_path:?} not found.\n\
-             To create it, run: UPDATE_EXPECT=1 cargo test {name}\n\
-             Actual output:\n{actual}"
-        )
-    });
+    let expected = std::fs::read_to_string(&expected_path)
+        .unwrap_or_else(|_| {
+            panic!(
+                "expected file {expected_path:?} not found.\n\
+                 To create it, run: UPDATE_EXPECT=1 cargo test {name}\n\
+                 Actual output:\n{actual}"
+            )
+        })
+        // Normalize Windows line endings so tests pass on all platforms.
+        .replace("\r\n", "\n");
 
     assert_eq!(
         expected, actual,
