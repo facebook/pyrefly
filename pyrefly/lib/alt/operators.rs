@@ -35,6 +35,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
+use crate::alt::expr::MAX_TUPLE_LENGTH;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::KeyAnnotation;
 use crate::config::error_kind::ErrorKind;
@@ -315,6 +316,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn try_tuple_repeat(&self, lhs: &Type, rhs: &Type) -> Option<Type> {
+        let repeat_count = |ty: &Type| match ty {
+            Type::Literal(box Literal {
+                value: Lit::Int(n), ..
+            }) => n.as_i64(),
+            _ => None,
+        };
+        let (tuple, repeats) = match (lhs, rhs) {
+            (Type::Tuple(tuple), rhs) => (tuple, repeat_count(rhs)?),
+            (lhs, Type::Tuple(tuple)) => (tuple, repeat_count(lhs)?),
+            _ => return None,
+        };
+        if repeats <= 0 {
+            return Some(self.heap.mk_concrete_tuple(Vec::new()));
+        }
+        if repeats == 1 {
+            return Some(self.heap.mk_tuple(tuple.clone()));
+        }
+        let repeats = usize::try_from(repeats).ok()?;
+        match tuple {
+            Tuple::Concrete(elements) => {
+                let total_len = elements.len().checked_mul(repeats)?;
+                if total_len > MAX_TUPLE_LENGTH {
+                    return None;
+                }
+                let mut repeated = Vec::with_capacity(total_len);
+                for _ in 0..repeats {
+                    repeated.extend(elements.iter().cloned());
+                }
+                Some(self.heap.mk_concrete_tuple(repeated))
+            }
+            Tuple::Unbounded(element) => Some(self.heap.mk_unbounded_tuple((**element).clone())),
+            Tuple::Unpacked(_) => None,
+        }
+    }
+
     pub fn binop_infer(
         &self,
         x: &ExprBinOp,
@@ -405,6 +442,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Type::Tuple(r) = rhs
                 {
                     self.tuple_concat(l, r)
+                } else if x.op == Operator::Mult
+                    && let Some(result) = self.try_tuple_repeat(lhs, rhs)
+                {
+                    result
                 } else if matches!(
                     x.op,
                     Operator::Add

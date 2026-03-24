@@ -486,6 +486,20 @@ def test(x: tuple[int] | tuple[str]) -> None:
 );
 
 testcase!(
+    test_tuple_repeat,
+    r#"
+from typing import assert_type, Literal
+
+assert_type((42,) * 2, tuple[Literal[42], Literal[42]])
+assert_type(2 * (42,), tuple[Literal[42], Literal[42]])
+assert_type((1, "x") * 2, tuple[Literal[1], Literal["x"], Literal[1], Literal["x"]])
+assert_type((1,) * 0, tuple[()])
+assert_type((1,) * -1, tuple[()])
+assert_type((1,) * 257, tuple[Literal[1], ...])
+"#,
+);
+
+testcase!(
     test_unpack_tuple_with_double_def,
     r#"
 from typing import Unpack, Any
