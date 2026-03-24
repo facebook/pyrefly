@@ -1401,7 +1401,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_class_def(classtype.class_object().dupe()),
                 self.heap.mk_class_type(classtype),
             ),
-            DescriptorBase::ClassDef(class) => (self.heap.mk_class_def(class), self.heap.mk_none()),
+            DescriptorBase::ClassDef(class_base) => {
+                (class_base.to_type(self.heap), self.heap.mk_none())
+            }
         };
         let args = [CallArg::ty(&obj, range), CallArg::ty(&objtype, range)];
         let call_target = self.as_call_target_or_error(

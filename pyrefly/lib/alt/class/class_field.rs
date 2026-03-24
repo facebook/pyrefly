@@ -207,7 +207,7 @@ pub struct Descriptor {
 #[derive(Clone, Debug)]
 pub enum DescriptorBase {
     Instance(ClassType),
-    ClassDef(Class),
+    ClassDef(ClassBase),
 }
 
 /// Correctly analyzing which attributes are visible on class objects, as well
@@ -2740,10 +2740,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // When accessing a property on a class (not instance), you get the property object itself
                 bind_class_attribute(self.heap, cls, ty, None)
             }
-            ClassFieldInner::Descriptor { descriptor, .. } => ClassAttribute::descriptor(
-                descriptor,
-                DescriptorBase::ClassDef(cls.class_object().dupe()),
-            ),
+            ClassFieldInner::Descriptor { descriptor, .. } => {
+                ClassAttribute::descriptor(descriptor, DescriptorBase::ClassDef(cls.clone()))
+            }
             ClassFieldInner::Method { mut ty, .. } => {
                 // When accessing a method on a class (not instance), you get the unbound function
                 if let Some(quantified) = self_quantified {

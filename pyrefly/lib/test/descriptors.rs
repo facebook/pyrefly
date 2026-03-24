@@ -648,7 +648,6 @@ class User(Base):
 );
 
 testcase!(
-    bug = "Overloaded __get__ on descriptor fails with type[T] where T is bounded; https://github.com/facebook/pyrefly/issues/1083",
     test_overloaded_descriptor_get_with_bounded_typevar,
     r#"
 from typing import Callable, overload
@@ -675,7 +674,7 @@ class B[T: A]:
         self.a = a
 
     def f(self):
-        for k in self.a.x:  # E: No matching overload found for function `MyDescriptor.__get__`
+        for k in self.a.x:
             print(k)
     "#,
 );
