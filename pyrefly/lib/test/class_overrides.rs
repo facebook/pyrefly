@@ -1298,11 +1298,52 @@ class B(A):
 );
 
 testcase!(
-    bug = "False positive bad-override when subclassing str with LiteralString overloads",
     test_override_str_subclass_with_optional_param,
     r#"
 class MyString(str):
-    def upper(self, locale: str = "en") -> str: # E: Class member `MyString.upper` overrides parent class `str` in an inconsistent manner
+    def upper(self, locale: str = "en") -> str:
         return super().upper()
+    "#,
+);
+
+testcase!(
+    bug = "We raise 4 inconsistent-overload errors where pyright raises 1. We should investigate this.",
+    test_override_all_parent_overloads_inapplicable,
+    r#"
+from typing import overload, LiteralString
+
+class Base(str):
+    @overload
+    def method(self: LiteralString) -> LiteralString: ...  # E: Implementation signature `(self: Self@Base, x: Unknown | None = None) -> Self@Base` does not accept all arguments that overload signature `(self: LiteralString) -> LiteralString` accepts  # E: Overload return type `LiteralString` is not assignable to implementation return type `Self@Base`
+    @overload
+    def method(self: LiteralString, x: int) -> LiteralString: ...  # E: Implementation signature `(self: Self@Base, x: Unknown | None = None) -> Self@Base` does not accept all arguments that overload signature `(self: LiteralString, x: int) -> LiteralString` accepts  # E: Overload return type `LiteralString` is not assignable to implementation return type `Self@Base`
+    def method(self, x=None):
+        return self
+
+class Child(Base):
+    def method(self, x: int = 0) -> str:
+        return str(self)
+    "#,
+);
+
+testcase!(
+    test_override_generic_overload_with_inapplicable_self,
+    r#"
+from typing import overload
+
+class Parent:
+    @overload
+    def method[T](self: "Narrow", x: T) -> T: ...
+    @overload
+    def method(self, x: int) -> int: ...
+    def method(self, x):
+        return x
+
+class Narrow(Parent):
+    pass
+
+class Child(Parent):
+    def method(self, x: int) -> int:
+        return x
     "#,
 );

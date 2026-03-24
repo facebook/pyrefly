@@ -3165,6 +3165,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 attr
             };
+            let Some(want_attribute) = self.filter_overloads_for_override(want_attribute, cls)
+            else {
+                // All parent overloads have a `self` type incompatible with the child class;
+                // skip the override check.
+                continue;
+            };
             if got_attribute.is_none() {
                 // Optimisation: Only compute the `got_attr` once, and only if we actually need it.
                 got_attribute = Some(self.as_instance_attribute(
@@ -4246,6 +4252,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | ClassAttribute::Descriptor(..) => {
                 // Allow deleting most attributes for now, for compatibility with mypy.
             }
+        }
+    }
+
+    /// Filter out overloads from a parent's attribute whose `self` parameter type is
+    /// incompatible with the child class. This prevents false positive `bad-override` errors.
+    fn filter_overloads_for_override(
+        &self,
+        attr: ClassAttribute,
+        child_cls: &Class,
+    ) -> Option<ClassAttribute> {
+        let child_type = self
+            .heap
+            .mk_class_type(self.as_class_type_unchecked(child_cls));
+        let filter_type = |ty: Type| -> Option<Type> {
+            match ty {
+                Type::BoundMethod(box BoundMethod {
+                    obj,
+                    func: BoundMethodType::Overload(overload),
+                }) => {
+                    let self_param = |sig: &OverloadType| match sig {
+                        OverloadType::Function(f) => f.signature.get_first_param(),
+                        OverloadType::Forall(forall) => forall.body.signature.get_first_param(),
+                    };
+                    let applicable: Vec<_> = overload
+                        .signatures
+                        .into_iter()
+                        .filter(|sig| {
+                            self_param(sig)
+                                .is_none_or(|param| self.is_subset_eq(&child_type, &param))
+                        })
+                        .collect();
+                    let signatures = vec1::Vec1::try_from_vec(applicable).ok()?;
+                    Some(
+                        BoundMethod {
+                            obj,
+                            func: BoundMethodType::Overload(Overload {
+                                signatures,
+                                metadata: overload.metadata,
+                            }),
+                        }
+                        .as_type(),
+                    )
+                }
+                other => Some(other),
+            }
+        };
+        match attr {
+            ClassAttribute::ReadWrite(ty) => Some(ClassAttribute::ReadWrite(filter_type(ty)?)),
+            ClassAttribute::ReadOnly(ty, reason) => {
+                Some(ClassAttribute::ReadOnly(filter_type(ty)?, reason))
+            }
+            other => Some(other),
         }
     }
 
