@@ -14,6 +14,7 @@ use std::path::Path;
 use itertools::Itertools;
 use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
+use lsp_types::DiagnosticTag;
 use lsp_types::Url;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::Module;
@@ -199,7 +200,11 @@ impl Error {
             message: self.msg().to_owned(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
-            tags: None,
+            tags: if self.error_kind() == ErrorKind::Deprecated {
+                Some(vec![DiagnosticTag::DEPRECATED])
+            } else {
+                None
+            },
             ..Default::default()
         }
     }
