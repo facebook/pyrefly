@@ -1296,3 +1296,13 @@ class B(A):
         return 100
     "#,
 );
+
+testcase!(
+    bug = "False positive bad-override when subclassing str with LiteralString overloads",
+    test_override_str_subclass_with_optional_param,
+    r#"
+class MyString(str):
+    def upper(self, locale: str = "en") -> str: # E: Class member `MyString.upper` overrides parent class `str` in an inconsistent manner
+        return super().upper()
+    "#,
+);
