@@ -14,7 +14,7 @@ const CONFIG_FILE: &str = "pyvenv.cfg";
 /// How deep within a project root should we attempt to search for a valid Python executable?
 /// 3 seems like a reasonable default to be able to find something in `.venv/bin/python3`.
 const SEARCH_DEPTH: usize = 3;
-const CANDIDATE_DIRS: &[&str] = &[".venv", "venv"];
+const CANDIDATE_DIRS: &[&str] = &["env", ".env", ".venv", "venv"];
 pub const ENV_VAR: &str = "VIRTUAL_ENV";
 
 fn has_standard_relative_config(interp: &Path) -> bool {
@@ -68,7 +68,8 @@ fn search_roots(project_path: &Path) -> impl Iterator<Item = &Path> {
 }
 
 pub fn find(project_path: &Path) -> Option<PathBuf> {
-    search_roots(project_path).find_map(find_in_root)
+    find_in_env_dir(project_path)
+        .or_else(|| search_roots(project_path).skip(1).find_map(find_in_root))
 }
 
 #[cfg(test)]
@@ -244,6 +245,54 @@ mod tests {
             find(&project_root),
             Some(project_root.join(".venv/bin").join(interp_name)),
         );
+    }
+
+    #[test]
+    fn test_find_allows_nonstandard_venv_name_at_start_path() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let interp_name = interp_name("");
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file("pyrefly.toml"),
+                TestPath::dir(
+                    "custom-venv",
+                    vec![
+                        TestPath::file(CONFIG_FILE),
+                        TestPath::dir("bin", vec![TestPath::file(&interp_name)]),
+                    ],
+                ),
+            ],
+        );
+
+        assert_eq!(
+            find(root),
+            Some(root.join("custom-venv/bin").join(interp_name)),
+        );
+    }
+
+    #[test]
+    fn test_find_does_not_search_nonstandard_venv_names_in_ancestors() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let interp_name = interp_name("");
+        let project_root = root.join("project");
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "custom-venv",
+                    vec![
+                        TestPath::file(CONFIG_FILE),
+                        TestPath::dir("bin", vec![TestPath::file(&interp_name)]),
+                    ],
+                ),
+                TestPath::dir("project", vec![TestPath::file("pyrefly.toml")]),
+            ],
+        );
+
+        assert_eq!(find(&project_root), None);
     }
 
     #[test]
