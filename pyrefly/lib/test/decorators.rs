@@ -246,20 +246,65 @@ testcase!(
     test_invalid_top_level_function_decorators,
     r#"
 from typing import *
-from abc import abstractstaticmethod, abstractmethod # E: `abstractstaticmethod` is deprecated
+from abc import abstractmethod
 from enum import member, nonmember
 
 @member  # E: can only be used on methods
 @nonmember  # E: can only be used on methods
 @abstractmethod  # E: can only be used on methods
-@staticmethod  # E: can only be used on methods
-@classmethod  # E: can only be used on methods
-@abstractstaticmethod  # E: can only be used on methods
-@property  # E: can only be used on methods
 @final  # E: can only be used on methods
 @override  # E: can only be used on methods
 def f(x: int) -> int:
     return x
+    "#,
+);
+
+testcase!(
+    test_top_level_descriptor_decorators,
+    r#"
+from typing import assert_type
+
+def make_property():
+    @property
+    def x(self: "Point") -> int:
+        return self._x
+
+    return x
+
+
+class Point:
+    def __init__(self, x: int):
+        self._x = x
+
+    x = make_property()
+
+
+assert_type(Point(1).x, int)
+
+@staticmethod
+def utility(x: int) -> int:
+    return x * 2
+
+
+class Helper:
+    compute = utility
+
+
+assert_type(Helper.compute(5), int)
+
+@classmethod
+def from_value(cls, val: int) -> "Container":
+    obj = cls()
+    obj.value = val
+    return obj
+
+
+class Container:
+    value: int = 0
+    from_value = from_value
+
+
+assert_type(Container.from_value(42), Container)
     "#,
 );
 

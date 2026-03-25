@@ -1203,10 +1203,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         let name = match decorator {
-            SpecialDecorator::StaticMethod(name) => name.as_str(),
-            SpecialDecorator::ClassMethod(name) => name.as_str(),
-            SpecialDecorator::Property(name) => name.as_str(),
-            SpecialDecorator::CachedProperty(name) => name.as_str(),
             SpecialDecorator::EnumMember => "member",
             SpecialDecorator::Override => "override",
             SpecialDecorator::Final => "final",
