@@ -312,6 +312,11 @@ impl schemars::JsonSchema for ConfigBase {
             generator.subschema_for::<Option<RecursionOverflowHandler>>(),
             "How should Pyrefly handle recursion overflow during type evaluation?"
         );
+        add_prop!(
+            "strict-callable-subtyping",
+            generator.subschema_for::<Option<bool>>(),
+            "Whether to strictly check callable subtyping for signatures with `*args: Any, **kwargs: Any`."
+        );
 
         let _ = required; // no required fields in ConfigBase
 

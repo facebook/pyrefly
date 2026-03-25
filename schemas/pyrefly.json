@@ -146,6 +146,10 @@
       "default": false,
       "type": "boolean"
     },
+    "strict-callable-subtyping": {
+      "description": "Whether to strictly check callable subtyping for signatures with `*args: Any, **kwargs: Any`.",
+      "type": "boolean"
+    },
     "sub-config": {
       "description": "Sub-configs that can override specific settings based on path matching.",
       "default": [],
@@ -381,6 +385,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "strict-callable-subtyping": {
+          "description": "Whether to strictly check callable subtyping for signatures with `*args: Any, **kwargs: Any`.",
+          "type": "boolean"
         },
         "tensor-shapes": {
           "description": "Whether to enable tensor shape checking.",

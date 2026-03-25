@@ -17,27 +17,6 @@ use vec1::Vec1;
 
 use crate::query::SourceDbQuerier;
 
-/// Generates a JSON schema for Vec1<String>: an array of strings with minItems: 1.
-#[cfg(feature = "jsonschema")]
-fn vec1_string_schema(
-    generator: &mut schemars::r#gen::SchemaGenerator,
-) -> schemars::schema::Schema {
-    use schemars::schema::*;
-
-    SchemaObject {
-        instance_type: Some(InstanceType::Array.into()),
-        array: Some(Box::new(ArrayValidation {
-            items: Some(SingleOrVec::Single(Box::new(
-                generator.subschema_for::<String>(),
-            ))),
-            min_items: Some(1),
-            ..Default::default()
-        })),
-        ..Default::default()
-    }
-    .into()
-}
-
 /// Args and settings for querying a custom source DB.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default, Hash)]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
@@ -55,7 +34,10 @@ pub struct CustomQueryArgs {
     ///
     /// `<arg-flag>` is either `--file` or `--target`, depending on the type
     /// of `<arg>`, and `<arg>` is an absolute path to a file or a build system's target.
-    #[cfg_attr(feature = "jsonschema", schemars(schema_with = "vec1_string_schema"))]
+    #[cfg_attr(
+        feature = "jsonschema",
+        schemars(schema_with = "pyrefly_util::schema_helpers::vec1_string_schema")
+    )]
     pub command: Vec1<String>,
 
     /// The root of the repository. Repo roots here will be shared between configs.
