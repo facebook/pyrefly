@@ -1672,3 +1672,54 @@ fn test_no_diagnostics_for_non_open_files_in_open_files_only_mode() {
         non_open_file.display()
     );
 }
+
+#[test]
+fn test_deprecated_diagnostic_tag() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]));
+
+    interaction.client.did_open("deprecated_function.py");
+
+    interaction
+        .client
+        .diagnostic("deprecated_function.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "deprecated",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#deprecated"
+                    },
+                    "message": "`old_function` is deprecated\n  use new_function instead",
+                    "range": {
+                        "start": {"line": 10, "character": 0},
+                        "end": {"line": 10, "character": 12}
+                    },
+                    "severity": 2,
+                    "source": "Pyrefly",
+                    "tags": [2]
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
