@@ -37,6 +37,8 @@ impl Transaction<'_> {
                 result.push((name, kind, location));
             }
         }
+        // Keep shared fuzzy ordering intact while preferring non-`__init__.py` matches here.
+        result.sort_by_key(|(_, _, location)| location.module.path().is_init());
         Some(result)
     }
 }
