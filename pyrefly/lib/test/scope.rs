@@ -809,6 +809,14 @@ __all__ += []  # E: `__all__` is uninitialized
 );
 
 testcase!(
+    test_dunder_all_duplicate_invalid_name,
+    r#"
+__all__ += ["A"]  # E: `__all__` is uninitialized  # E: Name `A` is listed in `__all__` but is not defined in the module
+__all__ += ["A"]  # E: Name `A` is listed in `__all__` but is not defined in the module
+"#,
+);
+
+testcase!(
     test_aug_assign_lookup_inconsistencies,
     r#"
 from typing import assert_type, Any
