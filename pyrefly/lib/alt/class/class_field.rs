@@ -2970,11 +2970,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         field_name: &Name,
         class_metadata: &Arc<ClassMetadata>,
+        is_override: bool,
     ) -> bool {
-        // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate in override checks
-        if field_name == &dunder::NEW
-            || field_name == &dunder::INIT
-            || field_name == &dunder::INIT_SUBCLASS
+        // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate
+        // in override checks unless the user explicitly opts in with `@override`.
+        if !is_override
+            && (field_name == &dunder::NEW
+                || field_name == &dunder::INIT
+                || field_name == &dunder::INIT_SUBCLASS)
         {
             return false;
         }
@@ -3041,7 +3044,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         }
         let metadata = self.get_metadata_for_class(cls);
-        if !self.should_check_field_for_override_consistency(field_name, &metadata) {
+        if !self.should_check_field_for_override_consistency(field_name, &metadata, is_override) {
             return;
         }
 
@@ -3371,6 +3374,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if !self.should_check_field_for_override_consistency(
                     parent_field_name,
                     &current_class_metadata,
+                    false,
                 ) {
                     continue;
                 }

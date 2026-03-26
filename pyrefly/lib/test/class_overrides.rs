@@ -1347,3 +1347,48 @@ class Child(Parent):
         return x
     "#,
 );
+
+testcase!(
+    test_override_init_with_decorator,
+    r#"
+from typing import override
+
+class Parent:
+    def __init__(self, x: int) -> None:
+        pass
+
+class Child(Parent):
+    @override
+    def __init__(self, x: str) -> None: # E: Class member `Child.__init__` overrides parent class `Parent` in an inconsistent manner
+        pass
+    "#,
+);
+
+testcase!(
+    test_override_init_without_decorator,
+    r#"
+class Parent:
+    def __init__(self, x: int) -> None:
+        pass
+
+class Child(Parent):
+    def __init__(self, x: str) -> None:
+        pass
+    "#,
+);
+
+testcase!(
+    test_override_init_compatible,
+    r#"
+from typing import override
+
+class Parent:
+    def __init__(self, x: int) -> None:
+        pass
+
+class Child(Parent):
+    @override
+    def __init__(self, x: int) -> None:
+        pass
+    "#,
+);
