@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use dupe::Dupe;
 use lsp_types::Hover;
 use lsp_types::HoverContents;
 use lsp_types::MarkupContent;
@@ -313,6 +314,39 @@ fn identifier_text_at(
     transaction
         .identifier_at(handle, position)
         .map(|id| id.identifier.id.to_string())
+}
+
+fn docstring_for_class_object_type(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    type_: &Type,
+) -> Option<Docstring> {
+    let qname = match type_ {
+        Type::ClassDef(cls) => cls.qname(),
+        Type::Type(inner) => match inner.as_ref() {
+            Type::ClassType(cls) => cls.qname(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let definition_handle = Handle::new(
+        qname.module_name(),
+        qname.module_path().dupe(),
+        handle.sys_info().dupe(),
+    );
+    let definition = transaction
+        .find_definition(
+            &definition_handle,
+            qname.range().start(),
+            FindPreference {
+                resolve_call_dunders: false,
+                ..Default::default()
+            },
+        )
+        .ok()?
+        .into_iter()
+        .find(|item| item.definition_range == qname.range())?;
+    Some(Docstring(definition.docstring_range?, definition.module))
 }
 
 fn collect_typed_dict_fields_for_hover<'a>(
@@ -636,7 +670,7 @@ pub fn get_hover(
     let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {
         Some(Docstring(docstring, module))
     } else {
-        None
+        docstring_for_class_object_type(transaction, handle, &type_)
     };
 
     let mut parameter_doc = keyword_argument_documentation(transaction, handle, position)
