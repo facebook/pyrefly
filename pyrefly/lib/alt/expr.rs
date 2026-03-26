@@ -219,7 +219,7 @@ impl Display for ConditionRedundantReason {
     }
 }
 
-pub(crate) static MAX_TUPLE_LENGTH: usize = 256;
+pub(crate) const MAX_TUPLE_LENGTH: usize = 256;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn synthesized_functional_class_type(&self, call: &ExprCall) -> Option<Type> {
