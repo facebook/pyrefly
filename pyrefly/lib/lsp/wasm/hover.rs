@@ -542,6 +542,7 @@ pub fn get_hover(
         .get_callables_from_call(handle, position)
         .map(|info| info.callee_range)
         .or_else(find_callee_range_at_position);
+    let hovering_over_callee = callee_range_opt.is_some_and(|range| range.contains(position));
 
     if let Some(callee_range) = callee_range_opt {
         let is_constructor = transaction
@@ -550,6 +551,8 @@ pub fn get_hover(
             .is_some_and(is_constructor_call);
         if is_constructor && let Some(new_type) = override_constructor_return_type(type_.clone()) {
             type_ = new_type;
+        } else if hovering_over_callee {
+            type_ = transaction.coerce_type_to_callable(handle, type_);
         }
     }
 
