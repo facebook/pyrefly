@@ -7,6 +7,7 @@
  * @format
  */
 
+import {execFile} from 'child_process';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {ExtensionContext} from 'vscode';
@@ -32,6 +33,8 @@ type RunTestArgs = {
 };
 
 const TASK_SOURCE = 'pyrefly';
+const OPEN_RUNNABLE_CODE_LENS_SETTING = 'Open Runnable CodeLens Setting';
+const DISABLE_RUNNABLE_CODE_LENS = 'Disable Runnable CodeLens';
 
 async function interpreterForUri(
   uri: vscode.Uri,
@@ -41,6 +44,56 @@ async function interpreterForUri(
     uri,
   );
   return envPath.path.length > 0 ? envPath.path : undefined;
+}
+
+function configurationTargetForUri(uri: vscode.Uri): vscode.ConfigurationTarget {
+  return vscode.workspace.getWorkspaceFolder(uri) != null
+    ? vscode.ConfigurationTarget.WorkspaceFolder
+    : vscode.ConfigurationTarget.Workspace;
+}
+
+async function disableRunnableCodeLens(uri: vscode.Uri): Promise<void> {
+  await vscode.workspace
+    .getConfiguration('python.pyrefly', uri)
+    .update(
+      'runnableCodeLens',
+      false,
+      configurationTargetForUri(uri),
+    );
+}
+
+async function showRunnableCodeLensError(
+  uri: vscode.Uri,
+  message: string,
+): Promise<void> {
+  const action = await vscode.window.showErrorMessage(
+    message,
+    OPEN_RUNNABLE_CODE_LENS_SETTING,
+    DISABLE_RUNNABLE_CODE_LENS,
+  );
+  if (action === OPEN_RUNNABLE_CODE_LENS_SETTING) {
+    await vscode.commands.executeCommand(
+      'workbench.action.openSettings',
+      'python.pyrefly.runnableCodeLens',
+    );
+  } else if (action === DISABLE_RUNNABLE_CODE_LENS) {
+    await disableRunnableCodeLens(uri);
+  }
+}
+
+async function canImportModule(
+  interpreter: string,
+  moduleName: string,
+  cwd: string | undefined,
+): Promise<boolean> {
+  return await new Promise(resolve => {
+    execFile(
+      interpreter,
+      ['-c', `import ${moduleName}`],
+      {cwd},
+      error => resolve(error == null),
+    );
+  });
 }
 
 function scopeForUri(uri: vscode.Uri): vscode.WorkspaceFolder | vscode.TaskScope {
@@ -120,8 +173,9 @@ async function runMainFile(
   const uri = vscode.Uri.parse(args.uri);
   const interpreter = await interpreterForUri(uri, pythonExtension);
   if (!interpreter) {
-    void vscode.window.showErrorMessage(
-      'Pyrefly could not determine a Python interpreter for this file.',
+    void showRunnableCodeLensError(
+      uri,
+      'Pyrefly could not determine a Python interpreter for this file. Ensure the correct interpreter is selected in your IDE before using runnable CodeLens.',
     );
     return;
   }
@@ -154,8 +208,9 @@ async function runTestAtLocation(
 
   const interpreter = await interpreterForUri(uri, pythonExtension);
   if (!interpreter) {
-    void vscode.window.showErrorMessage(
-      'Pyrefly could not determine a Python interpreter for this file.',
+    void showRunnableCodeLensError(
+      uri,
+      'Pyrefly could not determine a Python interpreter for this file. Ensure the correct interpreter is selected in your IDE before using runnable CodeLens.',
     );
     return;
   }
@@ -191,6 +246,13 @@ async function runTestAtLocation(
   }
   if (testName) {
     nodeId = `${nodeId}::${testName}`;
+  }
+  if (!(await canImportModule(interpreter, 'pytest', cwd))) {
+    void showRunnableCodeLensError(
+      uri,
+      'Pyrefly could not import pytest from the selected interpreter. Select the correct interpreter or install pytest in that environment before using runnable CodeLens.',
+    );
+    return;
   }
   await executeProcessTask(
     uri,
