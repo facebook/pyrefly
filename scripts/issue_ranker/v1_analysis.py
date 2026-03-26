@@ -261,9 +261,7 @@ def apply_labels(repo: str, analysis: dict, github_token: str) -> dict:
 
         # Remove labels that should no longer be present
         for label in current_labels - desired_labels:
-            delete_url = (
-                f"{api}/{num}/labels/{urllib.parse.quote(label)}"
-            )
+            delete_url = f"{api}/{num}/labels/{urllib.parse.quote(label)}"
             _github_api("DELETE", delete_url, github_token)
             removed += 1
             logging.debug(f"Removed '{label}' from #{num}")
@@ -280,12 +278,9 @@ def apply_labels(repo: str, analysis: dict, github_token: str) -> dict:
             logging.debug(f"Added '{label}' to #{num}")
 
     skipped = sum(
-        len(current.get(num, set()) & desired.get(num, set()))
-        for num in all_issues
+        len(current.get(num, set()) & desired.get(num, set())) for num in all_issues
     )
-    logging.info(
-        f"Label sync: {added} added, {removed} removed, {skipped} unchanged"
-    )
+    logging.info(f"Label sync: {added} added, {removed} removed, {skipped} unchanged")
     return {"added": added, "removed": removed, "unchanged": skipped}
 
 
