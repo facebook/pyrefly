@@ -14,6 +14,7 @@ use std::path::Path;
 use itertools::Itertools;
 use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
+use lsp_types::DiagnosticTag;
 use lsp_types::Url;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::Module;
@@ -199,7 +200,11 @@ impl Error {
             message: self.msg().to_owned(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
-            tags: None,
+            tags: if self.error_kind() == ErrorKind::Deprecated {
+                Some(vec![DiagnosticTag::DEPRECATED])
+            } else {
+                None
+            },
             ..Default::default()
         }
     }
@@ -396,6 +401,47 @@ mod tests {
   | |__^
   |
 "#,
+        );
+    }
+
+    #[test]
+    fn test_deprecated_diagnostic_has_deprecated_tag() {
+        let module_info = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("test.py")),
+            Arc::new("my_func()".to_owned()),
+        );
+        let error = Error::new(
+            module_info,
+            TextRange::new(TextSize::new(0), TextSize::new(7)),
+            vec1!["`my_func` is deprecated".to_owned()],
+            ErrorKind::Deprecated,
+        );
+        let diagnostic = error.to_diagnostic();
+        assert_eq!(
+            diagnostic.tags,
+            Some(vec![lsp_types::DiagnosticTag::DEPRECATED]),
+            "Deprecated errors should emit DiagnosticTag::DEPRECATED so editors render a strikethrough"
+        );
+    }
+
+    #[test]
+    fn test_non_deprecated_diagnostic_has_no_tag() {
+        let module_info = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("test.py")),
+            Arc::new("def f(x: int) -> str:\n    return x".to_owned()),
+        );
+        let error = Error::new(
+            module_info,
+            TextRange::new(TextSize::new(26), TextSize::new(34)),
+            vec1!["bad return".to_owned()],
+            ErrorKind::BadReturn,
+        );
+        let diagnostic = error.to_diagnostic();
+        assert_eq!(
+            diagnostic.tags, None,
+            "Non-deprecated errors should not emit any diagnostic tags"
         );
     }
 }
