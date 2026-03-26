@@ -621,51 +621,76 @@ x.append("2")  # ok
 - Default: `true`
 - Flag equivalent: `--infer-with-first-use`
 
-### `untyped-def-behavior`
+### `check-unannotated-defs`
 
-How should Pyrefly treat function definitions with no parameter or return type annotations?
+Whether Pyrefly should type check the bodies of function definitions that have
+no parameter or return type annotations.
 
-By default, Pyrefly uses the `"check-and-infer-return-type"` behavior and will
-check all function bodies, inferring the return type.
+When set to `true` (the default), Pyrefly checks all function bodies regardless
+of whether they have type annotations.
 
-:::info
-To provide inferred return types with `check-and-infer-return-type`, especially for
-site-package paths (third-party packages), Pyrefly may need to load and analyze
-more modules than you might otherwise see from mypy.
-
-This may result in increased type check durations or an output showing more modules
-analyzed than you expect. If this behavior is not preferred, you should set
-`untyped-def-behavior` to `skip-and-infer-return-any` in your config or pass it in
-as a flag.
-:::
-
-If this option is set to `"check-and-infer-return-any"`, then Pyrefly will still
-check the function body but will treat the return type as `Any`.
-
-If this option is set to `"skip-and-infer-return-any"`, Pyrefly will again treat
-the return type as `Any`, but will also skip checking the function body. In this
-case, Pyrefly will also infer `Any` as the type of any attributes inferred based
-on this function body. This behavior is what PEP 484 specifies, although we do
-not recommend it for most users today; since Pyrefly will not analyze the bodies
-of untyped functions, language server functionality like showing types on hover
-and finding definitions will not be available there.
+When set to `false`, Pyrefly skips checking the bodies of completely unannotated
+functions (functions with no parameter or return annotations). In this case,
+Pyrefly will infer `Any` as the type of any attributes inferred from these
+function bodies. This behavior is what PEP 484 specifies, although we do not
+recommend it for most users today; since Pyrefly will not analyze the bodies of
+untyped functions, language server functionality like showing types on hover and
+finding definitions will not be available there. Functions that have at least one
+annotation are still checked.
 
 :::info
-`skip-and-infer-return-any` is mypy's default inference behavior, and how we will
+`check-unannotated-defs = false` is mypy's default behavior, and how we will
 attempt to migrate your existing mypy configuration when running `pyrefly init`.
 See [Migrating from Mypy](migrating-from-mypy.mdx#mypy-config-migration) for more information on config migration.
 :::
 
-- Type: one of `"check-and-infer-return-type"`, `"check-and-infer-return-any"`,
-  `"skip-and-infer-return-any"`
-- Default: `"check-and-infer-return-type"`
-- Flag equivalent: `--untyped-def-behavior`
+- Type: `bool`
+- Default: `true`
+- Flag equivalent: `--check-unannotated-defs`
 - Equivalent configs:
-    - The `"check-and-infer-return-type"` behavior emulates Pyright's default
-      behavior.
-    - The `"skip-and-infer-return-any"` behavior emulates mypy's default behavior.
-    - The `"check-and-infer-return-any"` behavior emulates mypy's
-      `check_untyped_defs` flag.
+    - `true` emulates mypy's `check_untyped_defs` flag.
+    - `false` emulates mypy's default behavior.
+
+### `infer-return-types`
+
+Controls when Pyrefly infers return types for functions without explicit return
+type annotations. This only applies to functions whose bodies are checked;
+unannotated functions are only eligible when `check-unannotated-defs` is `true`.
+
+- `"checked"` (default): Infer return types for all checked functions, including
+  completely unannotated ones.
+- `"annotated"`: Infer return types only for functions that have at least one
+  parameter or return annotation. This is useful when combined with
+  `check-unannotated-defs = false` to still get return type inference for
+  partially annotated functions.
+- `"never"`: Never infer return types; unannotated returns are treated as `Any`.
+
+:::info
+To provide inferred return types with `"checked"` or `"annotated"`, especially
+for site-package paths (third-party packages), Pyrefly may need to load and
+analyze more modules than you might otherwise see from mypy.
+
+This may result in increased type check durations or an output showing more
+modules analyzed than you expect. If this behavior is not preferred, you should
+set `infer-return-types` to `"never"` in your config or pass it as a flag.
+:::
+
+- Type: one of `"never"`, `"annotated"`, `"checked"`
+- Default: `"checked"`
+- Flag equivalent: `--infer-return-types`
+
+### `untyped-def-behavior` (deprecated)
+
+:::warning
+This option is deprecated. Use [`check-unannotated-defs`](#check-unannotated-defs)
+and [`infer-return-types`](#infer-return-types) instead. The old option is still
+accepted for backwards compatibility and maps to the new fields, but new fields
+take precedence if both are set.
+
+- `"check-and-infer-return-type"` maps to `check-unannotated-defs = true` and `infer-return-types = "checked"`.
+- `"check-and-infer-return-any"` maps to `check-unannotated-defs = true` and `infer-return-types = "never"`.
+- `"skip-and-infer-return-any"` maps to `check-unannotated-defs = false` and `infer-return-types = "never"`.
+:::
 
 ### `use-ignore-files`
 
@@ -1007,7 +1032,8 @@ We currently allow the following config options to be overridden in a SubConfig:
 
 - `errors`
 - `replace-imports-with-any`
-- `untyped-def-behavior`
+- `check-unannotated-defs`
+- `infer-return-types`
 - `ignore-errors-in-generated-code`
 
 All SubConfig overrides _replace_ the values appearing in the 'root' or top-level of the
@@ -1176,8 +1202,10 @@ replace-imports-with-any = []
 ignore-missing-imports = []
 # should Pyrefly skip type checking if we find a generated file?
 ignore-errors-in-generated-code = false
-# what should Pyrefly do when it encounters a function that is untyped?
-untyped-def-behavior = "check-and-infer-return-type"
+# should Pyrefly check the bodies of unannotated function definitions?
+check-unannotated-defs = true
+# when should Pyrefly infer return types for functions without return annotations?
+infer-return-types = "checked"
 # can Pyrefly recognize ignore directives other than `# pyrefly: ignore` and `# type: ignore`
 permissive-ignores = false
 

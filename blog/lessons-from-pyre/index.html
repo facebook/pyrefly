@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.2ccc2416.css">
-<script src="/assets/js/runtime~main.19122bc9.js" defer="defer"></script>
-<script src="/assets/js/main.097f4eea.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.1815b9c2.js" defer="defer"></script>
+<script src="/assets/js/main.e894ba82.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -72,7 +72,7 @@
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="irreversible-ast-lowering">Irreversible AST Lowering<a href="#irreversible-ast-lowering" class="hash-link" aria-label="Direct link to Irreversible AST Lowering" title="Direct link to Irreversible AST Lowering">​</a></h2>
 <p>Early in the development of Pyre, a technique was used to accelerate iteration: leveraging the semantic similarity or equivalence between certain Python syntax patterns.</p>
 <p>For instance, the following pairs are functionally similar:</p>
-<table><thead><tr><th>Construct 1</th><th>Construct 2</th></tr></thead><tbody><tr><td>A match statement</td><td>A series of chained if/else statements</td></tr><tr><td>The legacy union type syntax  <code>Union[X, Y]</code></td><td>The new syntax `X</td></tr><tr><td>A NewType definition <code>X = NewType(&quot;X&quot;, Y)</code></td><td>A standard class definition <code>class X(Y): pass</code></td></tr><tr><td>The functional namedtuple definition <code>Point = namedtuple(&quot;Point&quot;, [&quot;x&quot;, &quot;y&quot;])</code></td><td>A class-based namedtuple definition <code>class Point(NamedTuple)</code> with <code>x</code> and <code>y</code> as members</td></tr></tbody></table>
+<table><thead><tr><th>Construct 1</th><th>Construct 2</th></tr></thead><tbody><tr><td>A match statement</td><td>A series of chained if/else statements</td></tr><tr><td>The legacy union type syntax  <code>Union[X, Y]</code></td><td>The new syntax <code>X | Y</code></td></tr><tr><td>A NewType definition <code>X = NewType(&quot;X&quot;, Y)</code></td><td>A standard class definition <code>class X(Y): pass</code></td></tr><tr><td>The functional namedtuple definition <code>Point = namedtuple(&quot;Point&quot;, [&quot;x&quot;, &quot;y&quot;])</code></td><td>A class-based namedtuple definition <code>class Point(NamedTuple)</code> with <code>x</code> and <code>y</code> as members</td></tr></tbody></table>
 <p>Once code was implemented to handle one syntax pattern, support for similar or identical patterns could be rapidly added by using AST transformation passes to &quot;lower&quot; the latter into the former.</p>
 <p>While useful, this technique introduced risks: If the original range and position information were not carefully preserved, the quality of diagnostics could suffer to the point where they could not adequately support language server features.</p>
 <p>A significant example of taking this AST lowering too far in Pyre involved how variable scopes were handled. Pyre included an AST transformation pass designed to perform alpha-conversion: renaming syntactical definitions to resolve name conflicts.</p>
