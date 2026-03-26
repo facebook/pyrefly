@@ -982,6 +982,7 @@ impl<'a> BindingsBuilder<'a> {
     ) {
         let class_name = Ast::expr_name_identifier(name.clone());
         let (mut class_object, class_indices) = self.class_object_and_indices(&class_name);
+        self.check_functional_definition_name(&name.id, arg_name, ErrorKind::UnexpectedName);
         self.ensure_expr(func, class_object.usage());
         self.ensure_expr(arg_name, class_object.usage());
         for arg in &mut *members {
@@ -1256,7 +1257,7 @@ impl<'a> BindingsBuilder<'a> {
         let (mut class_object, class_indices) = self.class_object_and_indices(&class_name);
         self.ensure_expr(func, class_object.usage());
         self.ensure_expr(new_type_name, class_object.usage());
-        self.check_functional_definition_name(&name.id, new_type_name);
+        self.check_functional_definition_name(&name.id, new_type_name, ErrorKind::InvalidArgument);
         self.ensure_type(base, &mut None);
         self.synthesize_class_def(
             class_name,
@@ -1286,7 +1287,7 @@ impl<'a> BindingsBuilder<'a> {
         let class_name = Ast::expr_name_identifier(name.clone());
         let (mut class_object, class_indices) = self.class_object_and_indices(&class_name);
         self.ensure_expr(func, class_object.usage());
-        self.check_functional_definition_name(&name.id, arg_name);
+        self.check_functional_definition_name(&name.id, arg_name, ErrorKind::InvalidArgument);
         let mut base_class_keywords = Vec::new();
         for kw in keywords {
             self.ensure_expr(&mut kw.value, class_object.usage());
@@ -1372,19 +1373,24 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     // Check that the variable name in a functional class definition matches the first argument string
-    pub fn check_functional_definition_name(&mut self, name: &Name, arg: &Expr) {
+    pub fn check_functional_definition_name(
+        &mut self,
+        name: &Name,
+        arg: &Expr,
+        error_kind: ErrorKind,
+    ) {
         if let Expr::StringLiteral(x) = arg {
             if x.value.to_str() != name.as_str() {
                 self.error(
                     arg.range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorInfo::Kind(error_kind),
                     format!("Expected string literal \"{name}\""),
                 );
             }
         } else {
             self.error(
                 arg.range(),
-                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                ErrorInfo::Kind(error_kind),
                 format!("Expected string literal \"{name}\""),
             );
         }

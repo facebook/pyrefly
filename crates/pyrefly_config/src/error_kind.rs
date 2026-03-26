@@ -261,6 +261,8 @@ pub enum ErrorKind {
     UnboundName,
     /// An error caused by a keyword argument used in the wrong place.
     UnexpectedKeyword,
+    /// The first string argument to a functional type definition does not match the bound name.
+    UnexpectedName,
     /// An error caused by passing a positional argument for a keyword-only parameter.
     UnexpectedPositionalArgument,
     /// Attempting to use a type checker directive without importing it from `typing`.
@@ -352,6 +354,7 @@ impl ErrorKind {
             ErrorKind::UnnecessaryComparison => Severity::Warn,
             ErrorKind::Unreachable => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
+            ErrorKind::UnexpectedName => Severity::Warn,
             // TODO: up severity to Warn when https://github.com/facebook/pyrefly/issues/1950 is fixed
             ErrorKind::UntypedImport => Severity::Ignore,
             ErrorKind::UnusedIgnore => Severity::Ignore,
@@ -392,6 +395,11 @@ mod tests {
     fn test_error_kind_name() {
         assert_eq!(ErrorKind::Unsupported.to_name(), "unsupported");
         assert_eq!(ErrorKind::ParseError.to_name(), "parse-error");
+    }
+
+    #[test]
+    fn test_default_warn_severity() {
+        assert_eq!(ErrorKind::UnexpectedName.default_severity(), Severity::Warn);
     }
 
     #[test]

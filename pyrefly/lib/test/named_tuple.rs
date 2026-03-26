@@ -69,11 +69,11 @@ from collections import namedtuple
 from typing import Any, NamedTuple, assert_type
 
 repo_details = namedtuple(
-    "RepoDetails",
+    "RepoDetails",  # E: Expected string literal "repo_details"
     ("source_dir", "local_dest", "file", "age"),
 )
 typing_repo_details = NamedTuple(
-    "TypingRepoDetails",
+    "TypingRepoDetails",  # E: Expected string literal "typing_repo_details"
     [("source_dir", str), ("local_dest", str), ("file", str), ("age", int)],
 )
 

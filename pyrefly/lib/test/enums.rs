@@ -122,7 +122,7 @@ testcase!(
 from typing import Literal, assert_type
 from enum import Enum
 
-_dvistate = Enum("DviState", "pre outer inpage post_post finale")
+_dvistate = Enum("DviState", "pre outer inpage post_post finale")  # E: Expected string literal "_dvistate"
 
 assert_type(_dvistate.pre, Literal[_dvistate.pre])
 assert_type(_dvistate.post_post, Literal[_dvistate.post_post])

@@ -1274,6 +1274,19 @@ def two_args(a: int, b: int) -> int:
 two_args(a=1, b=2, c=3)
 ```
 
+## unexpected-name
+
+This warning indicates that the first string argument to a functional type definition does not
+match the name it is assigned to.
+
+```python
+from collections import namedtuple
+from enum import Enum
+
+RepoDetails = namedtuple("repo_details", ["source_dir", "age"])
+DviState = Enum("_dvistate", "pre outer inpage")
+```
+
 ## unexpected-positional-argument
 
 A positional argument was passed for a keyword-only parameter.
