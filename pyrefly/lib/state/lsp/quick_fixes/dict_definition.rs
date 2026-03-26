@@ -16,23 +16,24 @@ use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::Stmt;
-use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use super::extract_shared::build_from_import_edit;
+use super::extract_shared::build_from_import_line;
 use super::extract_shared::code_at_range;
 use super::extract_shared::find_enclosing_statement_range;
+use super::extract_shared::import_insertion_point;
 use super::extract_shared::is_exact_expression;
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::selection_anchor;
 use super::extract_shared::split_selection;
+use super::extract_shared::type_to_annotation;
 use super::extract_shared::unique_name;
 use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
 use crate::types::stdlib::Stdlib;
-use crate::types::types::Type;
 
 const BODY_INDENT: &str = "    ";
 const DEFAULT_MODEL_NAME: &str = "Model";
@@ -179,15 +180,6 @@ fn infer_field_annotation(
         Some(ty) => type_to_annotation(ty, stdlib).unwrap_or_else(|| "Any".to_owned()),
         None => "Any".to_owned(),
     }
-}
-
-fn type_to_annotation(ty: Type, stdlib: &Stdlib) -> Option<String> {
-    let ty = ty.promote_implicit_literals(stdlib);
-    if ty.is_any() {
-        return None;
-    }
-    let parts = ty.get_types_with_locations(Some(stdlib));
-    Some(parts.into_iter().map(|(part, _)| part).collect())
 }
 
 fn suggest_base_name(ast: &ModModule, dict_range: TextRange) -> String {
@@ -369,10 +361,10 @@ fn build_dataclass_action(
     let mut edits = Vec::new();
     let position = import_insertion_point(ast);
     let mut import_text = String::new();
-    if requires_any && let Some(line) = build_import_line(ast, "typing", &["Any"]) {
+    if requires_any && let Some(line) = build_from_import_line(ast, "typing", &["Any"]) {
         import_text.push_str(&line);
     }
-    if let Some(line) = build_import_line(ast, "dataclasses", &["dataclass"]) {
+    if let Some(line) = build_from_import_line(ast, "dataclasses", &["dataclass"]) {
         import_text.push_str(&line);
     }
     if !import_text.is_empty() {
@@ -403,10 +395,10 @@ fn build_pydantic_action(
     let mut edits = Vec::new();
     let position = import_insertion_point(ast);
     let mut import_text = String::new();
-    if requires_any && let Some(line) = build_import_line(ast, "typing", &["Any"]) {
+    if requires_any && let Some(line) = build_from_import_line(ast, "typing", &["Any"]) {
         import_text.push_str(&line);
     }
-    if let Some(line) = build_import_line(ast, "pydantic", &["BaseModel"]) {
+    if let Some(line) = build_from_import_line(ast, "pydantic", &["BaseModel"]) {
         import_text.push_str(&line);
     }
     if !import_text.is_empty() {
@@ -470,59 +462,5 @@ fn build_import_edit(
     module_name: &str,
     names: &[&str],
 ) -> Option<(Module, TextRange, String)> {
-    let import_text = build_import_line(ast, module_name, names)?;
-    let position = import_insertion_point(ast);
-    Some((
-        module_info.dupe(),
-        TextRange::at(position, TextSize::new(0)),
-        import_text,
-    ))
-}
-
-fn build_import_line(ast: &ModModule, module_name: &str, names: &[&str]) -> Option<String> {
-    let missing = missing_imports(ast, module_name, names);
-    if missing.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "from {module_name} import {}\n",
-        missing.join(", ")
-    ))
-}
-
-fn missing_imports<'a>(ast: &ModModule, module_name: &str, names: &'a [&'a str]) -> Vec<&'a str> {
-    let mut missing: Vec<&str> = names.to_vec();
-    for stmt in &ast.body {
-        let Stmt::ImportFrom(import_from) = stmt else {
-            continue;
-        };
-        let Some(module) = &import_from.module else {
-            continue;
-        };
-        if module.id.as_str() != module_name {
-            continue;
-        }
-        for alias in &import_from.names {
-            let name = alias.name.id.as_str();
-            let is_same_binding = match &alias.asname {
-                None => true,
-                Some(asname) => asname.id.as_str() == name,
-            };
-            if !is_same_binding {
-                continue;
-            }
-            if let Some(index) = missing.iter().position(|candidate| *candidate == name) {
-                missing.remove(index);
-            }
-        }
-    }
-    missing
-}
-
-fn import_insertion_point(ast: &ModModule) -> TextSize {
-    if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
-        first_stmt.range().start()
-    } else {
-        ast.range.end()
-    }
+    build_from_import_edit(module_info, ast, module_name, names)
 }
