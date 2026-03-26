@@ -1385,10 +1385,7 @@ class TestRunV1Analysis(unittest.TestCase):
         finally:
             os.unlink(ranking_file.name)
 
-    @patch(
-        "v1_analysis.apply_labels",
-        return_value={"added": 1, "removed": 0, "unchanged": 0},
-    )
+    @patch("v1_analysis.apply_labels", return_value={"added": 1, "removed": 0, "unchanged": 0})
     @patch("v1_analysis.generate_reasons")
     def test_applies_labels_with_token(self, mock_reasons, mock_labels):
         mock_reasons.return_value = {"q2_reasons": {}, "q3_reasons": {}}
@@ -1409,10 +1406,7 @@ class TestRunV1Analysis(unittest.TestCase):
                 apply=True,
             )
             mock_labels.assert_called_once()
-            self.assertEqual(
-                result["labels_applied"],
-                {"added": 1, "removed": 0, "unchanged": 0},
-            )
+            self.assertEqual(result["labels_applied"], {"added": 1, "removed": 0, "unchanged": 0})
         finally:
             os.unlink(ranking_file.name)
 
