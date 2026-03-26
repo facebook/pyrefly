@@ -684,6 +684,29 @@ def test(kwargs: dict[str, int]):
 );
 
 testcase!(
+    test_splat_unknown_length_with_known_kwargs_keys,
+    r#"
+from typing import Any
+
+def get_content(
+    service_instance: Any,
+    obj_type: str,
+    property_list: list[str] | None = None,
+    container_ref: Any = None,
+) -> dict[str, Any]:
+    return {}
+
+def call_get_content(instance: Any, obj_type: str) -> dict[str, Any]:
+    args: list[Any] = [instance, obj_type]
+    kwargs = {
+        "property_list": ["name"],
+        "container_ref": None,
+    }
+    return get_content(*args, **kwargs)  # OK
+"#,
+);
+
+testcase!(
     test_splat_kwargs_mixed_with_keywords,
     r#"
 def f(x: str, y: int, z: int): ...

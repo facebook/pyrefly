@@ -11,6 +11,7 @@ use std::mem;
 use itertools::Itertools;
 use pyrefly_python::dunder;
 use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::literal::Lit;
 use pyrefly_types::meta_shape_dsl::MetaShapeFunction;
 use pyrefly_types::tensor_ops_registry::TensorOpsRegistry;
 use pyrefly_types::tuple::Tuple;
@@ -600,10 +601,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )
         };
 
-        let keyword_arg_names: SmallSet<&Name> = keywords
+        fn collect_finite_string_literals(ty: &Type, names: &mut SmallSet<Name>) -> bool {
+            match ty {
+                Type::Literal(lit) if let Lit::Str(s) = &lit.value => {
+                    names.insert(Name::new(s));
+                    true
+                }
+                Type::Union(union) => union
+                    .members
+                    .iter()
+                    .all(|member| collect_finite_string_literals(member, names)),
+                _ => false,
+            }
+        }
+
+        let mut keyword_arg_names: SmallSet<Name> = keywords
             .iter()
-            .filter_map(|kw| kw.arg.map(|id| &id.id))
+            .filter_map(|kw| kw.arg.map(|id| id.id.clone()))
             .collect();
+        for kw in keywords {
+            if kw.arg.is_some() {
+                continue;
+            }
+            match kw.value {
+                TypeOrExpr::Expr(Expr::Dict(dict)) => {
+                    for item in &dict.items {
+                        let Some(Expr::StringLiteral(lit)) = item.key.as_ref() else {
+                            continue;
+                        };
+                        keyword_arg_names.insert(Name::new(lit.value.to_str()));
+                    }
+                }
+                TypeOrExpr::Expr(expr) => {
+                    for (key, _) in self
+                        .expr_infer_type_info_with_hint(expr, None, arg_errors)
+                        .key_facets_at(&[])
+                    {
+                        keyword_arg_names.insert(Name::new(key.as_str()));
+                    }
+                }
+                TypeOrExpr::Type(ty, _) => match ty {
+                    Type::TypedDict(typed_dict) | Type::PartialTypedDict(typed_dict) => {
+                        for (name, field) in self.typed_dict_fields(typed_dict) {
+                            if field.required {
+                                keyword_arg_names.insert(name);
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Some((key_ty, _)) = self.unwrap_mapping(ty) {
+                            let mut known_keys = SmallSet::new();
+                            if collect_finite_string_literals(&key_ty, &mut known_keys) {
+                                keyword_arg_names.extend(known_keys);
+                            }
+                        }
+                    }
+                },
+            }
+        }
 
         // Creates a reversed copy of the parameters that we iterate through from back to front,
         // so that we can easily peek at and pop from the end.
