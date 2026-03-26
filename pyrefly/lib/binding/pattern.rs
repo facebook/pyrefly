@@ -44,10 +44,24 @@ use crate::export::special::SpecialExport;
 use crate::types::facet::UnresolvedFacetKind;
 
 impl<'a> BindingsBuilder<'a> {
+    fn expr_to_sequence_subjects(expr: &Expr) -> Option<Vec<Option<NarrowingSubject>>> {
+        let elts = match expr {
+            Expr::List(list) => &list.elts,
+            Expr::Tuple(tuple) => &tuple.elts,
+            _ => return None,
+        };
+        Some(
+            elts.iter()
+                .map(|elt| expr_to_subjects(elt).first().cloned())
+                .collect(),
+        )
+    }
+
     // Traverse a pattern and bind all the names; key is the reference for the value that's being matched on
     fn bind_pattern(
         &mut self,
         match_subject: Option<NarrowingSubject>,
+        match_subject_elements: Option<&[Option<NarrowingSubject>]>,
         pattern: Pattern,
         subject_idx: Idx<Key>,
     ) -> NarrowOps {
@@ -90,7 +104,7 @@ impl<'a> BindingsBuilder<'a> {
                     subject = Some(NarrowingSubject::Name(name.id.clone()));
                 };
                 if let Some(pattern) = p.pattern {
-                    let mut narrow_ops = self.bind_pattern(subject, *pattern, subject_idx);
+                    let mut narrow_ops = self.bind_pattern(subject, None, *pattern, subject_idx);
                     if let (Some(alias_name), Some(original_subject)) =
                         (&alias_name, &original_subject)
                         && alias_name != original_subject.name()
@@ -115,6 +129,9 @@ impl<'a> BindingsBuilder<'a> {
                     .iter()
                     .filter(|x| !matches!(x, Pattern::MatchStar(_)))
                     .count();
+                let fixed_arity_subject_elements = (num_patterns == num_non_star_patterns)
+                    .then_some(match_subject_elements)
+                    .flatten();
                 let mut subject_idx = subject_idx;
                 let synthesized_len = Expr::NumberLiteral(ExprNumberLiteral {
                     node_index: AtomicNodeIndex::default(),
@@ -182,15 +199,28 @@ impl<'a> BindingsBuilder<'a> {
                                 Key::Anon(x.range()),
                                 Binding::UnpackedValue(None, subject_idx, x.range(), position),
                             );
-                            let subject_for_subpattern = match_subject.clone().and_then(|s| {
-                                if !seen_star {
-                                    Some(s.with_facet(UnresolvedFacetKind::Index(i as i64)))
-                                } else {
-                                    None
-                                }
-                            });
+                            let subject_for_subpattern = match_subject
+                                .clone()
+                                .and_then(|s| {
+                                    if !seen_star {
+                                        Some(s.with_facet(UnresolvedFacetKind::Index(i as i64)))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .or_else(|| {
+                                    if seen_star {
+                                        None
+                                    } else {
+                                        fixed_arity_subject_elements
+                                            .and_then(|subjects| subjects.get(i))
+                                            .cloned()
+                                            .flatten()
+                                    }
+                                });
                             narrow_ops.and_all(self.bind_pattern(
                                 subject_for_subpattern,
+                                None,
                                 x,
                                 key_for_subpattern,
                             ));
@@ -253,6 +283,7 @@ impl<'a> BindingsBuilder<'a> {
                         });
                         narrow_ops.and_all(self.bind_pattern(
                             subject_at_key,
+                            None,
                             pattern,
                             match_key_idx,
                         ))
@@ -338,7 +369,7 @@ impl<'a> BindingsBuilder<'a> {
                     // bind the pattern directly to the narrowed subject (like MatchAs)
                     let pattern = x.arguments.patterns.into_iter().next().unwrap();
                     let inner_narrow_ops =
-                        self.bind_pattern(match_subject.clone(), pattern, subject_idx);
+                        self.bind_pattern(match_subject.clone(), None, pattern, subject_idx);
                     // Only combine if the inner pattern produced narrow ops.
                     // If it's empty (e.g., a simple MatchAs like `value`), we don't want
                     // and_all to add Placeholders that would invalidate our outer narrow.
@@ -364,7 +395,7 @@ impl<'a> BindingsBuilder<'a> {
                             ),
                         );
                         // TODO: narrow attributes in positional patterns
-                        narrow_ops.and_all(self.bind_pattern(None, pattern.clone(), attr_key))
+                        narrow_ops.and_all(self.bind_pattern(None, None, pattern.clone(), attr_key))
                     });
                 x.arguments.keywords.into_iter().for_each(
                     |PatternKeyword {
@@ -384,7 +415,12 @@ impl<'a> BindingsBuilder<'a> {
                                 subject_idx,
                             ))),
                         );
-                        narrow_ops.and_all(self.bind_pattern(subject_for_attr, pattern, attr_key))
+                        narrow_ops.and_all(self.bind_pattern(
+                            subject_for_attr,
+                            None,
+                            pattern,
+                            attr_key,
+                        ))
                     },
                 );
                 // When all sub-patterns are irrefutable, strip Placeholders that `and_all`
@@ -413,7 +449,7 @@ impl<'a> BindingsBuilder<'a> {
                         )
                     }
                     let new_narrow_ops =
-                        self.bind_pattern(match_subject.clone(), pattern, subject_idx);
+                        self.bind_pattern(match_subject.clone(), None, pattern, subject_idx);
                     if let Some(ref mut ops) = narrow_ops {
                         ops.or_all(new_narrow_ops)
                     } else {
@@ -494,8 +530,13 @@ impl<'a> BindingsBuilder<'a> {
             } else {
                 subject_idx
             };
-            let mut new_narrow_ops =
-                self.bind_pattern(match_narrowing_subject.clone(), pattern, case_subject_idx);
+            let match_subject_elements = Self::expr_to_sequence_subjects(subject_expr.as_ref());
+            let mut new_narrow_ops = self.bind_pattern(
+                match_narrowing_subject.clone(),
+                match_subject_elements.as_deref(),
+                pattern,
+                case_subject_idx,
+            );
             self.bind_narrow_ops(
                 &new_narrow_ops,
                 NarrowUseLocation::Span(case_range),

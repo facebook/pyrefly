@@ -813,6 +813,26 @@ def test_multi_match2(o1: object, o2: object) -> None:
 );
 
 testcase!(
+    test_match_multi_subject_sequence_narrow,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class A: ...
+
+@dataclass
+class B: ...
+
+def test(x: A | B, y: A | B) -> None:
+    match x, y:
+        case A(), B():
+            assert_type(x, A)
+            assert_type(y, B)
+"#,
+);
+
+testcase!(
     bug = "OR patterns in match cases not recognized for exhaustiveness with attribute subject",
     test_exhaustive_enum_or_pattern_no_missing_return,
     r#"
