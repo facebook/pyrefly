@@ -817,6 +817,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 (DataclassMember::NotAField, _) => {}
                 (DataclassMember::Field(field, mut keywords), _)
                 | (DataclassMember::InitVar(field, mut keywords), true) => {
+                    if keywords.init_by_alias.is_none()
+                        && let Some(generator) = dataclass.init_defaults.alias_generator.as_ref()
+                    {
+                        keywords.init_by_alias = Some(Name::new(generator.generate(name.as_str())));
+                        keywords.init_by_name = dataclass.init_defaults.init_by_name;
+                    }
                     if keywords.kw_only.is_none() {
                         // kw_only hasn't been explicitly set on the field.
                         // A field is kw_only if:
