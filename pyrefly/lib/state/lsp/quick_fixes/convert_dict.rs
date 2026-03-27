@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use dupe::Dupe;
 use lsp_types::CodeActionKind;
@@ -16,6 +16,7 @@ use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ModModule;
+use ruff_python_stdlib::identifiers::is_identifier;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -45,7 +46,7 @@ struct DictField {
 
 /// Builds code actions that generate a TypedDict, dataclass, or Pydantic model
 /// definition from a selected dict literal.
-pub(crate) fn dict_definition_code_actions(
+pub(crate) fn convert_dict_code_actions(
     transaction: &Transaction<'_>,
     handle: &Handle,
     selection: TextRange,
@@ -63,8 +64,8 @@ pub(crate) fn dict_definition_code_actions(
         };
     let insert_range = TextRange::at(insert_position, TextSize::new(0));
     let stdlib = transaction.get_stdlib(handle);
-    let mut requires_any = false;
-    let fields = collect_dict_fields(transaction, handle, &stdlib, dict_expr, &mut requires_any)?;
+    let fields = collect_dict_fields(transaction, handle, &stdlib, dict_expr)?;
+    let requires_any = fields.iter().any(|field| field.annotation == "Any");
     let base_name = suggest_base_name(ast.as_ref(), dict_range);
     let class_name = unique_name(&to_pascal_case(&base_name), |candidate| {
         name_conflicts(source, candidate)
@@ -136,23 +137,21 @@ fn collect_dict_fields(
     handle: &Handle,
     stdlib: &Stdlib,
     dict_expr: &ExprDict,
-    requires_any: &mut bool,
 ) -> Option<Vec<DictField>> {
-    let mut fields = Vec::new();
-    let mut seen_names = HashSet::new();
+    let mut fields: Vec<DictField> = Vec::new();
+    let mut field_positions: HashMap<String, usize> = HashMap::new();
     for item in &dict_expr.items {
         let key_expr = item.key.as_ref()?;
         let key = string_literal_key(key_expr)?;
-        if !is_valid_identifier(&key) {
+        if !is_identifier(&key) {
             return None;
         }
-        if !seen_names.insert(key.clone()) {
+        let annotation = infer_field_annotation(transaction, handle, stdlib, item.value.range());
+        if let Some(index) = field_positions.get(&key).copied() {
+            fields[index].annotation = annotation;
             continue;
         }
-        let annotation = infer_field_annotation(transaction, handle, stdlib, item.value.range());
-        if annotation == "Any" {
-            *requires_any = true;
-        }
+        field_positions.insert(key.clone(), fields.len());
         fields.push(DictField {
             name: key,
             annotation,
@@ -263,64 +262,6 @@ fn name_conflicts(source: &str, name: &str) -> bool {
         format!("{name}\t="),
     ];
     patterns.iter().any(|pattern| source.contains(pattern))
-}
-
-fn is_valid_identifier(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(first.is_alphabetic() || first == '_') {
-        return false;
-    }
-    if !chars.all(|c| c.is_alphanumeric() || c == '_') {
-        return false;
-    }
-    !is_keyword(name)
-}
-
-fn is_keyword(name: &str) -> bool {
-    matches!(
-        name,
-        "False"
-            | "None"
-            | "True"
-            | "and"
-            | "as"
-            | "assert"
-            | "async"
-            | "await"
-            | "break"
-            | "class"
-            | "continue"
-            | "def"
-            | "del"
-            | "elif"
-            | "else"
-            | "except"
-            | "finally"
-            | "for"
-            | "from"
-            | "global"
-            | "if"
-            | "import"
-            | "in"
-            | "is"
-            | "lambda"
-            | "match"
-            | "nonlocal"
-            | "not"
-            | "or"
-            | "pass"
-            | "raise"
-            | "return"
-            | "try"
-            | "type"
-            | "while"
-            | "with"
-            | "yield"
-            | "case"
-    )
 }
 
 fn build_typed_dict_action(

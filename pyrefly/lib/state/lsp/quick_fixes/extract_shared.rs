@@ -7,8 +7,8 @@
 
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
-use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::module::Module;
+use pyrefly_python::symbol_kind::SymbolKind;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprContext;
@@ -29,7 +29,6 @@ use crate::ModuleInfo;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
-
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
 

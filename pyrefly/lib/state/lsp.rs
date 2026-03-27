@@ -2728,12 +2728,12 @@ impl<'a> Transaction<'a> {
         quick_fixes::convert_star_import::convert_star_import_code_actions(self, handle, selection)
     }
 
-    pub fn dict_definition_code_actions(
+    pub fn convert_dict_code_actions(
         &self,
         handle: &Handle,
         selection: TextRange,
     ) -> Option<Vec<LocalRefactorCodeAction>> {
-        quick_fixes::dict_definition::dict_definition_code_actions(self, handle, selection)
+        quick_fixes::convert_dict::convert_dict_code_actions(self, handle, selection)
     }
 
     /// Determines whether a module is a third-party package.

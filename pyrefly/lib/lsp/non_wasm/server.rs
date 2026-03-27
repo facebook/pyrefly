@@ -4605,8 +4605,8 @@ impl Server {
                 transaction.convert_star_import_code_actions(&handle, range)
             );
             timed_refactor_action!(
-                "dict_definition",
-                transaction.dict_definition_code_actions(&handle, range)
+                "convert_dict",
+                transaction.convert_dict_code_actions(&handle, range)
             );
             timed_refactor_action!(
                 "pytest_fixture_type_annotation",

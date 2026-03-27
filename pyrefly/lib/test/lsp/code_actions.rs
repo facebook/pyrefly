@@ -248,7 +248,7 @@ fn compute_invert_boolean_actions_allow_errors(
     (module_info, edit_sets, titles)
 }
 
-fn compute_dict_definition_actions(
+fn compute_convert_dict_actions(
     code: &str,
     selection: TextRange,
 ) -> (
@@ -262,7 +262,7 @@ fn compute_dict_definition_actions(
     let transaction = state.transaction();
     let module_info = transaction.get_module_info(handle).unwrap();
     let actions = transaction
-        .dict_definition_code_actions(handle, selection)
+        .convert_dict_code_actions(handle, selection)
         .unwrap_or_default();
     let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
         actions.iter().map(|action| action.edits.clone()).collect();
@@ -1800,14 +1800,14 @@ def foo():
 }
 
 #[test]
-fn dict_definition_code_actions_basic() {
+fn convert_dict_code_actions_basic() {
     let code = r#"def build():
     data = {"a": 1, "b": [1, 2]}
     return data
 "#;
     let dict_start = find_nth_range(code, "{", 1).start();
     let selection = TextRange::new(dict_start, dict_start);
-    let (module_info, actions, titles) = compute_dict_definition_actions(code, selection);
+    let (module_info, actions, titles) = compute_convert_dict_actions(code, selection);
     assert_eq!(3, actions.len());
     assert_eq!(
         vec![
@@ -1854,14 +1854,14 @@ def build():
 }
 
 #[test]
-fn dict_definition_includes_any_imports() {
+fn convert_dict_includes_any_imports() {
     let code = r#"def build(value):
     data = {"a": value}
     return data
 "#;
     let dict_start = find_nth_range(code, "{", 1).start();
     let selection = TextRange::new(dict_start, dict_start);
-    let (module_info, actions, _) = compute_dict_definition_actions(code, selection);
+    let (module_info, actions, _) = compute_convert_dict_actions(code, selection);
     assert_eq!(3, actions.len());
 
     let typed_dict_result = apply_refactor_edits_for_module(&module_info, &actions[0]);
@@ -1899,14 +1899,14 @@ def build(value):
 }
 
 #[test]
-fn dict_definition_rejects_non_literal_keys() {
+fn convert_dict_rejects_non_literal_keys() {
     let code = r#"def build(extra):
     data = {"a": 1, **extra}
     return data
 "#;
     let dict_start = find_nth_range(code, "{", 1).start();
     let selection = TextRange::new(dict_start, dict_start);
-    let (_, actions, _) = compute_dict_definition_actions(code, selection);
+    let (_, actions, _) = compute_convert_dict_actions(code, selection);
     assert!(
         actions.is_empty(),
         "expected no dict definition actions, found {}",
