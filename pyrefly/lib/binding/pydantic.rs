@@ -7,6 +7,8 @@
 
 use std::slice::Iter;
 
+use pyrefly_derive::TypeEq;
+use pyrefly_derive::VisitMut;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
@@ -32,6 +34,76 @@ pub const STRICT_DEFAULT: bool = false;
 pub const FROZEN: Name = Name::new_static("frozen");
 pub const FROZEN_DEFAULT: bool = false;
 pub const EXTRA: Name = Name::new_static("extra");
+pub const ALIAS_GENERATOR: Name = Name::new_static("alias_generator");
+
+#[derive(Debug, Clone, PartialEq, Eq, TypeEq, VisitMut)]
+pub enum PydanticAliasGenerator {
+    ToCamel,
+    ToPascal,
+}
+
+impl PydanticAliasGenerator {
+    pub fn from_special_export(export: SpecialExport) -> Option<Self> {
+        match export {
+            SpecialExport::PydanticToCamel => Some(Self::ToCamel),
+            SpecialExport::PydanticToPascal => Some(Self::ToPascal),
+            _ => None,
+        }
+    }
+
+    pub fn generate(&self, field_name: &str) -> String {
+        match self {
+            Self::ToCamel => Self::to_camel(field_name),
+            Self::ToPascal => Self::to_pascal(field_name),
+        }
+    }
+
+    fn to_pascal(field_name: &str) -> String {
+        let mut title = String::with_capacity(field_name.len());
+        let mut uppercase_next = true;
+        for ch in field_name.chars() {
+            if ch == '_' {
+                uppercase_next = true;
+                title.push(ch);
+            } else if uppercase_next {
+                title.extend(ch.to_uppercase());
+                uppercase_next = false;
+            } else {
+                title.extend(ch.to_lowercase());
+            }
+        }
+        let title_chars: Vec<_> = title.chars().collect();
+        let mut pascal = String::with_capacity(title.len());
+        for (i, ch) in title_chars.iter().enumerate() {
+            if *ch == '_'
+                && i > 0
+                && title_chars[i - 1].is_ascii_alphanumeric()
+                && title_chars
+                    .get(i + 1)
+                    .is_some_and(|next| next.is_ascii_digit() || next.is_ascii_uppercase())
+            {
+                continue;
+            }
+            pascal.push(*ch);
+        }
+        pascal
+    }
+
+    fn to_camel(field_name: &str) -> String {
+        let pascal = Self::to_pascal(field_name);
+        let mut camel = String::with_capacity(pascal.len());
+        let mut lowercased = false;
+        for ch in pascal.chars() {
+            if !lowercased && ch != '_' {
+                camel.extend(ch.to_lowercase());
+                lowercased = true;
+            } else {
+                camel.push(ch);
+            }
+        }
+        camel
+    }
+}
 
 // An abstraction to iterate over configuration values, whether `ConfigDict()` or a dict display
 // is used.
@@ -84,6 +156,7 @@ pub struct PydanticConfigDict {
     pub strict: Option<bool>,
     pub validate_by_name: Option<bool>,
     pub validate_by_alias: Option<bool>,
+    pub alias_generator: Option<PydanticAliasGenerator>,
 }
 
 impl<'a> BindingsBuilder<'a> {
@@ -100,6 +173,10 @@ impl<'a> BindingsBuilder<'a> {
         }
 
         None
+    }
+
+    fn extract_alias_generator(&self, value: &Expr) -> Option<PydanticAliasGenerator> {
+        PydanticAliasGenerator::from_special_export(self.as_special_export(value)?)
     }
 
     // The goal of this function is to extract pydantic metadata (https://docs.pydantic.dev/latest/concepts/models/) from expressions.
@@ -142,6 +219,8 @@ impl<'a> BindingsBuilder<'a> {
                     && let Expr::BooleanLiteral(bl) = value
                 {
                     pydantic_config_dict.validate_by_alias = Some(bl.value);
+                } else if name == ALIAS_GENERATOR {
+                    pydantic_config_dict.alias_generator = self.extract_alias_generator(value);
                 }
             }
         }

@@ -8,6 +8,8 @@
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 
+use crate::binding::pydantic::PydanticAliasGenerator;
+
 /// Flags that control whether a Pydantic model's fields are populated by their names or their aliases.
 /// See https://docs.pydantic.dev/latest/api/config/#pydantic.config.ConfigDict.validate_by_name.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq)]
@@ -32,6 +34,7 @@ impl Default for PydanticValidationFlags {
 pub struct PydanticConfig {
     pub frozen: Option<bool>,
     pub validation_flags: PydanticValidationFlags,
+    pub validation_alias_generator: Option<PydanticAliasGenerator>,
     pub extra: Option<bool>,
     pub strict: Option<bool>,
     pub pydantic_model_kind: PydanticModelKind,
