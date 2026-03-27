@@ -633,7 +633,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If not, the call is ambiguous.
             let mut matched_overloads = matched_overloads.into_iter();
             let first_overload = matched_overloads.next().unwrap();
-            if matched_overloads.any(|o| !self.is_consistent(&first_overload.res, &o.res)) {
+            if matched_overloads.any(|o| !self.is_equivalent(&first_overload.res, &o.res)) {
                 return (
                     CalledOverload {
                         res: self.heap.mk_any_implicit(),

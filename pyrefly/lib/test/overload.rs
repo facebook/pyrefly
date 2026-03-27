@@ -1604,7 +1604,6 @@ def f(x: None):
 );
 
 testcase!(
-    bug = "op(A[Any], A[Any]) should be treated as ambiguous",
     test_ambiguous,
     r#"
 from typing import Any, overload, assert_type
@@ -1626,7 +1625,7 @@ def test(x: A[None], y: A[Any]) -> None:
     assert_type(op(x, x), A[None])
     assert_type(op(x, y), A[None])
     assert_type(op(y, x), A[None])
-    assert_type(op(y, y), Any)  # E: assert_type(A[None], Any)
+    assert_type(op(y, y), Any)
     "#,
 );
 
