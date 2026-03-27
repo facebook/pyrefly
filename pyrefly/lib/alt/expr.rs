@@ -803,7 +803,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // `key` is only `None` for a syntactically invalid dict comprehension
                     // (parser error recovery); the parser already reports the syntax error.
                     let key_ty = match &x.key {
-                        Some(key) => self.expr_infer_with_hint_promote(key, key_hint, errors, None),
+                        Some(key) => {
+                            self.dict_key_infer_with_hint(key, key_hint, errors, None)
+                        }
                         None => self.heap.mk_any_error(),
                     };
                     let value_ty =
@@ -1083,6 +1085,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         ty.promote_implicit_literals(self.stdlib)
+    }
+
+    fn dict_key_infer_with_hint(
+        &self,
+        x: &Expr,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+        tcc: Option<&dyn Fn() -> TypeCheckContext>,
+    ) -> Type {
+        self.expr_infer_with_hint_promote(x, hint, errors, tcc)
+            .transform(&mut |ty| match ty {
+                Type::LiteralString(_) => {
+                    *ty = self.heap.mk_class_type(self.stdlib.str().clone());
+                }
+                _ => {}
+            })
     }
 
     /// Check whether a type corresponds to a deprecated function or method, and if so, log a deprecation warning.
@@ -1629,7 +1647,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut value_tys = Vec::new();
             items.iter().for_each(|x| match &x.key {
                 Some(key) => {
-                    let key_t = self.expr_infer_with_hint_promote(
+                    let key_t = self.dict_key_infer_with_hint(
                         key,
                         key_hint.as_ref().and_then(|key_hint| {
                             hint.as_ref()
