@@ -149,6 +149,26 @@ impl SubsetWithSnapshotResult {
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
+    fn is_subset_overload_candidate(
+        &mut self,
+        got: &Type,
+        want: &Type,
+    ) -> Result<(), SubsetError> {
+        let vars = got
+            .collect_maybe_placeholder_vars()
+            .into_iter()
+            .chain(want.collect_maybe_placeholder_vars())
+            .collect::<Vec<_>>();
+        match self.with_snapshot(&vars, |me| me.is_subset_eq(got, want)) {
+            SubsetWithSnapshotResult::Ok => Ok(()),
+            SubsetWithSnapshotResult::InstantiationErrors(snapshot) => {
+                self.solver.restore_vars(snapshot);
+                Ok(())
+            }
+            SubsetWithSnapshotResult::Err(e) => Err(e),
+        }
+    }
+
     /// Can a function with l_args be called as a function with u_args?
     fn is_subset_param_list(
         &mut self,
@@ -1135,7 +1155,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     fn is_subset_overload(&mut self, overload: &Overload, want: &Type) -> Result<(), SubsetError> {
-        if any(overload.signatures.iter(), |l| self.is_subset_eq(&l.as_type(), want)).is_ok() {
+        if any(overload.signatures.iter(), |l| {
+            self.is_subset_overload_candidate(&l.as_type(), want)
+        })
+        .is_ok()
+        {
             return Ok(());
         }
         if let Type::Callable(box Callable {
@@ -1183,7 +1207,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         ParamList::new_types(ts),
                         ret.clone(),
                     )));
-                    any(overload.signatures.iter(), |l| self.is_subset_eq(&l.as_type(), &callable))
+                    any(overload.signatures.iter(), |l| {
+                        self.is_subset_overload_candidate(&l.as_type(), &callable)
+                    })
                 })
                 .is_ok()
                 {
@@ -1635,7 +1661,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }),
             ) => {
                 let want_has_vars =
-                    Type::Callable(Box::new(u.clone())).may_contain_quantified_var();
+                    Type::Callable(Box::new(u.clone())).may_contain_placeholder_var();
                 if want_has_vars {
                     self.is_subset_eq(&l.ret, &u.ret)?;
                     self.is_subset_params(&l.params, &u.params)
