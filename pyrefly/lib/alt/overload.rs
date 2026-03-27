@@ -629,41 +629,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let _ = matched_overloads.split_off(split_point);
                 }
             }
-            // Step 5, part 2: are all remaining return types equivalent to one another?
-            // If not, the call is ambiguous.
-            let mut matched_overloads = matched_overloads.into_iter();
-            let first_overload = matched_overloads.next().unwrap();
-            if matched_overloads.any(|o| !self.is_equivalent(&first_overload.res, &o.res)) {
-                return (
+            let selected_overload = self.disambiguate_overloads_spec_compliant(&matched_overloads);
+            if let Some(idx) = selected_overload {
+                let overload = matched_overloads
+                    .into_iter()
+                    .nth(idx)
+                    .expect("Could not find selected overload");
+                // Now that we've selected an overload, use the hint to contextually type the arguments.
+                let contextual_overload = self.call_overload(
+                    &overload.func,
+                    metadata,
+                    self_obj,
+                    args,
+                    keywords,
+                    arguments_range,
+                    &self.error_collector(),
+                    hint,
+                    ctor_targs,
+                );
+                (
+                    if contextual_overload.call_errors.is_empty() {
+                        contextual_overload
+                    } else {
+                        overload
+                    },
+                    true,
+                )
+            } else {
+                // Ambiguous call, return Any. Arbitrarily use the first overload as the matched one.
+                let first_overload = matched_overloads
+                    .into_iter()
+                    .next()
+                    .expect("Expected at least one overload");
+                (
                     CalledOverload {
                         res: self.heap.mk_any_implicit(),
                         ..first_overload
                     },
                     true,
-                );
+                )
             }
-            // Step 6: if there are still multiple matches, pick the first one.
-            // Now that we've selected an overload, use the hint to contextually type the arguments.
-            let contextual_overload = self.call_overload(
-                &first_overload.func,
-                metadata,
-                self_obj,
-                args,
-                keywords,
-                arguments_range,
-                &self.error_collector(),
-                hint,
-                ctor_targs,
-            );
-            (
-                if contextual_overload.call_errors.is_empty() {
-                    contextual_overload
-                } else {
-                    first_overload
-                },
-                true,
-            )
         }
+    }
+
+    fn disambiguate_overloads_spec_compliant(
+        &self,
+        matched_overloads: &[CalledOverload],
+    ) -> Option<usize> {
+        // Step 5, part 2: are all remaining return types equivalent to one another?
+        // If not, the call is ambiguous.
+        let mut matched_overloads = matched_overloads.iter();
+        let first_overload = matched_overloads
+            .next()
+            .expect("Expected at least one overload");
+        if matched_overloads.any(|o| !self.is_equivalent(&first_overload.res, &o.res)) {
+            return None;
+        }
+        // Step 6: if there are still multiple matches, pick the first one.
+        Some(0)
     }
 
     fn call_overload(
