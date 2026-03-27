@@ -700,10 +700,7 @@ fn thrift_go_to_def_navigates_to_thrift_source() {
     let remap_root = root_path.clone();
     let thrift_remapper = Arc::new(move |location: &Location| {
         let stub_path = location.uri.to_file_path().ok()?;
-        if !stub_path
-            .to_string_lossy()
-            .ends_with("my_thrift/ttypes.pyi")
-        {
+        if !stub_path.ends_with(PathBuf::from("my_thrift").join("ttypes.pyi")) {
             return None;
         }
         let thrift_path = remap_root.join("my_service.thrift");
