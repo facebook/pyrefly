@@ -371,7 +371,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_attrs_class =
             self.is_attrs_class(&dataclass_from_dataclass_transform, &bases_with_metadata);
         let is_from_dataclass_transform = dataclass_from_dataclass_transform.is_some();
-        let dataclass_metadata = self.dataclass_metadata(
+        let mut dataclass_metadata = self.dataclass_metadata(
             cls,
             &decorators,
             &bases_with_metadata,
@@ -379,6 +379,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             pydantic_config.as_ref(),
             is_attrs_class,
         );
+        let has_dataclass_decorator = decorators.iter().any(|(decorator, _)| {
+            matches!(
+                decorator.ty.callee_kind(),
+                Some(CalleeKind::Function(FunctionKind::Dataclass))
+            ) || matches!(&decorator.ty, Type::KwCall(call) if call.has_function_kind(FunctionKind::Dataclass))
+        });
+        if is_typed_dict && dataclass_metadata.is_some() && has_dataclass_decorator {
+            self.error(
+                errors,
+                cls.range(),
+                ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                format!("Cannot apply @dataclass to TypedDict class `{}`", cls.name()),
+            );
+            dataclass_metadata = None;
+        }
         if let Some(dm) = dataclass_metadata.as_ref()
             && pydantic_config.is_none()
         {
