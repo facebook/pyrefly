@@ -242,7 +242,11 @@ class GPT(nn.Module, Generic[VocabSize, BlockSize, NEmbedding, NHead, NLayer]):
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
-    def get_num_params(self, non_embedding=True):
+    # TODO(rechen): the type of `n_params` used to be inferred as `Unknown`.
+    # After D95667476, it is the more precise
+    # `Literal[0] | Dim[(-1 * (BlockSize * NEmbedding))] | Unknown`, which leads to follow-on
+    # errors like "`/` is not supported between `Dim[((-1 * BlockSize) * NEmbedding)]` and `float`"
+    def get_num_params(self, non_embedding=True) -> Any:
         """
         Return the number of parameters in the model.
         For non-embedding count (default), the position embeddings get subtracted.

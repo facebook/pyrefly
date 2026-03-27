@@ -629,7 +629,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let _ = matched_overloads.split_off(split_point);
                 }
             }
-            let selected_overload = self.disambiguate_overloads_spec_compliant(&matched_overloads);
+            let selected_overload = if self.solver().spec_compliant_overloads {
+                self.disambiguate_overloads_spec_compliant(&matched_overloads)
+            } else {
+                self.disambiguate_overloads(&matched_overloads)
+            };
             if let Some(idx) = selected_overload {
                 let overload = matched_overloads
                     .into_iter()
@@ -687,6 +691,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         // Step 6: if there are still multiple matches, pick the first one.
         Some(0)
+    }
+
+    fn disambiguate_overloads(&self, matched_overloads: &[CalledOverload]) -> Option<usize> {
+        // When a call to an overloaded function may match multiple overloads, the spec says to
+        // return Any when the return types are not all equivalent.
+        // However, neither mypy nor pyright fully follows this part of the spec, and many
+        // third-party libraries have come to rely on mypy and pyright's behavior. So we do the
+        // following for ecosystem compatibility:
+        //
+        // Step 6 (non-spec-compliant): does there exist a return type such that all
+        // materializations of every other return type are assignable to it? If so, use this
+        // return type. Else, return Any.
+        //
+        // We check materializations rather than assignability so that we end up with the most
+        // "general" return type. E.g., if the candidates are `A[None]` and `A[Any]`, we want
+        // to select `A[Any]`.
+        //
+        // First, find a candidate return type.
+        let mut candidate = 0;
+        for (i, o) in matched_overloads.iter().enumerate().skip(1) {
+            if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
+                candidate = i;
+            }
+        }
+        // We've already checked every return type after the candidate.
+        // Check every return type before the candidate.
+        for o in matched_overloads.iter().take(candidate) {
+            if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
+                return None;
+            }
+        }
+        Some(candidate)
     }
 
     fn call_overload(

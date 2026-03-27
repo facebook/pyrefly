@@ -1575,7 +1575,7 @@ def ndim(shape: tuple[int, ...]) -> int:
     return len(shape)
 
 def demo_gradual(s: tuple[Any, ...]):
-    assert_type(ndim(s), Any)
+    assert_type(ndim(s), int)
 
 def demo_one(s: tuple[int]):
     assert_type(ndim(s), Literal[1])
@@ -1604,7 +1604,34 @@ def f(x: None):
 );
 
 testcase!(
-    test_ambiguous,
+    test_resolve_ambiguous_precise,
+    r#"
+from typing import Any, overload, assert_type
+
+class A[T]:  # covariant
+    def get(self) -> T: ...
+
+@overload
+def op(l: A[None], r: A[None]) -> A[None]: ...
+@overload
+def op(l: A[None], r: A[Any]) -> A[None]: ...
+@overload
+def op(l: A[Any], r: A[None]) -> A[None]: ...
+@overload
+def op(l: A[Any], r: A[Any]) -> A[Any]: ...
+def op(l, r) -> A[None | Any]: ...
+
+def test(x: A[None], y: A[Any]) -> None:
+    assert_type(op(x, x), A[None])
+    assert_type(op(x, y), A[None])
+    assert_type(op(y, x), A[None])
+    assert_type(op(y, y), A[Any])
+    "#,
+);
+
+testcase!(
+    test_resolve_ambiguous_spec_compliant,
+    TestEnv::new().enable_spec_compliant_overloads(),
     r#"
 from typing import Any, overload, assert_type
 

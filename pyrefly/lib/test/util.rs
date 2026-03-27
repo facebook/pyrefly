@@ -273,7 +273,6 @@ impl TestEnv {
         self
     }
 
-    #[expect(dead_code)]
     pub fn enable_spec_compliant_overloads(mut self) -> Self {
         self.spec_compliant_overloads = true;
         self
