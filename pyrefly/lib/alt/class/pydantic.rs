@@ -301,6 +301,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return Some(PydanticConfig {
                     frozen: None,
                     validation_flags: PydanticValidationFlags::default(),
+                    validation_alias_generator: None,
                     extra: None,
                     strict: None,
                     pydantic_model_kind: PydanticModelKind::DataClass,
@@ -343,6 +344,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             strict,
             validate_by_name,
             validate_by_alias,
+            alias_generator,
         } = pydantic_config_dict;
 
         // Note: class keywords take precedence over ConfigDict keywords.
@@ -367,6 +369,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 default_flags.validate_by_alias,
             ),
         };
+        let validation_alias_generator = alias_generator.clone().or_else(|| {
+            self.find_inherited_keyword_value(bases_with_metadata, |dm| {
+                dm.init_defaults.alias_generator.clone()
+            })
+            .flatten()
+        });
 
         // Here, "ignore" and "allow" translate to true, while "forbid" translates to false.
         // With no keyword, the default is "true" and I default to "false" on a wrong keyword.
@@ -422,6 +430,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(PydanticConfig {
             frozen: Some(frozen),
             validation_flags,
+            validation_alias_generator,
             extra: Some(extra),
             strict: Some(strict),
             pydantic_model_kind,
@@ -556,6 +565,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn extract_pydantic_field_from_annotation(
         &self,
         annot: Idx<KeyAnnotation>,
+        field_name: &Name,
         metadata: &ClassMetadata,
     ) -> Option<DataclassFieldKeywords> {
         let dm = metadata.dataclass_metadata()?;
@@ -571,7 +581,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Look through metadata items and find a Field(...) call, then extract its keywords
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
-                    && let Some(keywords) = self.compute_dataclass_field_initialization(call, dm)
+                    && let Some(keywords) =
+                        self.compute_dataclass_field_initialization(call, field_name, dm)
                 {
                     return Some(keywords);
                 }

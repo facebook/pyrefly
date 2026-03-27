@@ -28,6 +28,7 @@ use vec1::Vec1;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::pydantic::PydanticModelKind;
+use crate::binding::pydantic::PydanticAliasGenerator;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::class::Class;
@@ -589,6 +590,7 @@ pub struct NamedTupleMetadata {
 pub struct InitDefaults {
     pub init_by_name: bool,
     pub init_by_alias: bool,
+    pub alias_generator: Option<PydanticAliasGenerator>,
 }
 
 impl Default for InitDefaults {
@@ -596,6 +598,7 @@ impl Default for InitDefaults {
         Self {
             init_by_name: false,
             init_by_alias: true,
+            alias_generator: None,
         }
     }
 }

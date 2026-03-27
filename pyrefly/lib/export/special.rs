@@ -51,6 +51,8 @@ pub enum SpecialExport {
     Generic,
     Protocol,
     PydanticConfigDict,
+    PydanticToCamel,
+    PydanticToPascal,
     HasAttr,
     GetAttr,
     Callable,
@@ -117,6 +119,8 @@ impl SpecialExport {
             "override" => Some(Self::Override),
             "abstractmethod" => Some(Self::AbstractMethod),
             "ConfigDict" => Some(Self::PydanticConfigDict),
+            "to_camel" => Some(Self::PydanticToCamel),
+            "to_pascal" => Some(Self::PydanticToPascal),
             "hasattr" => Some(Self::HasAttr),
             "getattr" => Some(Self::GetAttr),
             "TypeAliasType" => Some(Self::TypeAliasType),
@@ -209,6 +213,9 @@ impl SpecialExport {
             Self::OsExit => matches!(m.as_str(), "os"),
             Self::AbstractMethod | Self::AbstractClassMethod => matches!(m.as_str(), "abc"),
             Self::PydanticConfigDict => matches!(m.as_str(), "pydantic"),
+            Self::PydanticToCamel | Self::PydanticToPascal => {
+                m == ModuleName::pydantic_alias_generators()
+            }
             Self::Callable => matches!(
                 m.as_str(),
                 "typing" | "typing_extensions" | "collections.abc"
