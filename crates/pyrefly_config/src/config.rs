@@ -888,6 +888,14 @@ impl ConfigFile {
                  self.root.strict_callable_subtyping.unwrap())
     }
 
+    pub fn spec_compliant_overloads(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_spec_compliant_overloads, path)
+            .unwrap_or_else(||
+                 // we can use unwrap here, because the value in the root config must
+                 // be set in `ConfigFile::configure()`.
+                 self.root.spec_compliant_overloads.unwrap())
+    }
+
     pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
         self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path)
             .unwrap_or_else(||
@@ -1169,6 +1177,10 @@ impl ConfigFile {
 
         if self.root.strict_callable_subtyping.is_none() {
             self.root.strict_callable_subtyping = Some(false);
+        }
+
+        if self.root.spec_compliant_overloads.is_none() {
+            self.root.spec_compliant_overloads = Some(false);
         }
 
         let tools_from_permissive_ignores = match self.root.permissive_ignores {
@@ -1543,6 +1555,7 @@ mod tests {
                     enabled_ignores: None,
                     recursion_depth_limit: None,
                     recursion_overflow_handler: None,
+                    spec_compliant_overloads: None,
                 },
                 source_db: Default::default(),
                 sub_configs: vec![SubConfig {
@@ -1567,6 +1580,7 @@ mod tests {
                         enabled_ignores: None,
                         recursion_depth_limit: None,
                         recursion_overflow_handler: None,
+                        spec_compliant_overloads: None,
                     }
                 }],
                 typeshed_path: None,
@@ -1979,6 +1993,7 @@ output-format = "omit-errors"
                 enabled_ignores: None,
                 recursion_depth_limit: None,
                 recursion_overflow_handler: None,
+                spec_compliant_overloads: None,
             },
             sub_configs: vec![
                 SubConfig {
@@ -2292,6 +2307,7 @@ output-format = "omit-errors"
                 enabled_ignores: None,
                 recursion_depth_limit: None,
                 recursion_overflow_handler: None,
+                spec_compliant_overloads: None,
             },
             sub_configs: vec![],
             ..Default::default()
@@ -2330,6 +2346,7 @@ output-format = "omit-errors"
                 enabled_ignores: None,
                 recursion_depth_limit: None,
                 recursion_overflow_handler: None,
+                spec_compliant_overloads: None,
             },
             sub_configs: vec![],
             ..Default::default()

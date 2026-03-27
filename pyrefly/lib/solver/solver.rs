@@ -343,6 +343,7 @@ pub struct Solver {
     pub heap: TypeHeap,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
+    pub spec_compliant_overloads: bool,
 }
 
 impl Display for Solver {
@@ -364,6 +365,7 @@ impl Solver {
         infer_with_first_use: bool,
         tensor_shapes: bool,
         strict_callable_subtyping: bool,
+        spec_compliant_overloads: bool,
     ) -> Self {
         Self {
             variables: Default::default(),
@@ -372,6 +374,7 @@ impl Solver {
             heap: TypeHeap::new(),
             tensor_shapes,
             strict_callable_subtyping,
+            spec_compliant_overloads,
         }
     }
 

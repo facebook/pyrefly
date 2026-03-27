@@ -58,6 +58,7 @@ pub struct Context<'a, Lookup> {
     pub infer_with_first_use: bool,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
+    pub spec_compliant_overloads: bool,
     pub recursion_limit_config: Option<RecursionLimitConfig>,
     /// Pysa context for building PysaSolutions during the Solutions step.
     pub pysa_context: Option<PysaContext<'a>>,
@@ -414,6 +415,7 @@ impl Step {
             ctx.infer_with_first_use,
             ctx.tensor_shapes,
             ctx.strict_callable_subtyping,
+            ctx.spec_compliant_overloads,
         );
         let enable_index = ctx.require.keep_index();
         let enable_trace = ctx.require.keep_answers_trace() || ctx.pysa_context.is_some();

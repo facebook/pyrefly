@@ -115,6 +115,7 @@ pub struct TestEnv {
     missing_override_decorator_error: bool,
     not_required_key_access_error: bool,
     strict_callable_subtyping: bool,
+    spec_compliant_overloads: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
 }
@@ -141,6 +142,7 @@ impl TestEnv {
             missing_override_decorator_error: false,
             not_required_key_access_error: false,
             strict_callable_subtyping: false,
+            spec_compliant_overloads: false,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
         }
@@ -271,6 +273,12 @@ impl TestEnv {
         self
     }
 
+    #[expect(dead_code)]
+    pub fn enable_spec_compliant_overloads(mut self) -> Self {
+        self.spec_compliant_overloads = true;
+        self
+    }
+
     pub fn with_default_require_level(mut self, level: Require) -> Self {
         self.default_require_level = level;
         self
@@ -356,6 +364,7 @@ impl TestEnv {
         config.root.infer_return_types = Some(self.infer_return_types);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
+        config.root.spec_compliant_overloads = Some(self.spec_compliant_overloads);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };
