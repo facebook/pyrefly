@@ -681,6 +681,24 @@ assert_type(x, LiteralString)
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2517
+testcase!(
+    test_import_string_ascii_uppercase_dict_keys,
+    r#"
+from string import ascii_uppercase
+from typing import assert_type
+
+letter_to_index = {char: i for i, char in enumerate(ascii_uppercase)}
+assert_type(letter_to_index, dict[str, int])
+
+def encode(message: str) -> list[int]:
+    result = []
+    for letter in message:
+        result.append(letter_to_index[letter])
+    return result
+"#,
+);
+
 fn env_from_self_import_mod_in_package() -> TestEnv {
     let mut env = TestEnv::new();
     env.add_with_path(
