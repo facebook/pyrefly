@@ -767,6 +767,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn dataclass_field_keywords(
         &self,
         func: &Type,
+        field_name: &Name,
         args: &Arguments,
         dataclass_metadata: &DataclassMetadata,
         errors: &ErrorCollector,
@@ -845,6 +846,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &mut kw_only,
                 &mut alias,
             );
+        }
+        if alias.is_none() {
+            alias = dataclass_metadata
+                .init_defaults
+                .alias_generator
+                .as_ref()
+                .map(|generator| Name::new(generator.generate(field_name.as_str())));
         }
         DataclassFieldKeywords {
             init: init.unwrap_or(true),
