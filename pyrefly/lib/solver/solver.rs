@@ -1490,6 +1490,8 @@ pub enum SubsetError {
     TypeOfProtocolNeedsConcreteClass(Name),
     /// A `type` cannot accept special forms like `Callable`
     TypeCannotAcceptSpecialForms(SpecialForm),
+    /// A `type` cannot accept union types (e.g., `Optional[int]` or `int | None`)
+    TypeCannotAcceptUnion,
     // TODO(rechen): replace this with specific reasons
     Other,
 }
@@ -1521,6 +1523,9 @@ impl SubsetError {
                 "`type` cannot accept special form `{}` as an argument",
                 form
             )),
+            SubsetError::TypeCannotAcceptUnion => {
+                Some("`type` cannot accept union types as an argument".to_owned())
+            }
             SubsetError::Other => None,
         }
     }

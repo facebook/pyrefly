@@ -1563,6 +1563,31 @@ def f(cond: bool, x: LiteralString, y: str):
 );
 
 testcase!(
+    test_union_not_assignable_to_type,
+    r#"
+from typing import Optional, Dict, Any
+
+def accepts_type(t: type) -> None: ...
+def accepts_type_any(t: type[Any]) -> None: ...
+
+# Union types are not assignable to bare `type` / `type[Any]`
+accepts_type(Optional[int])  # E: not assignable to parameter `t` with type `type[Any]`
+accepts_type(int | None)  # E: not assignable to parameter `t` with type `type[Any]`
+accepts_type_any(Optional[int])  # E: not assignable to parameter `t` with type `type[Any]`
+accepts_type_any(int | None)  # E: not assignable to parameter `t` with type `type[Any]`
+
+# Concrete types are assignable to `type`
+accepts_type(int)
+accepts_type(str)
+accepts_type_any(int)
+accepts_type_any(str)
+
+# Union type in a Dict value position expecting type[Any]
+d: Dict[str, type[Any]] = {"a": Optional[int]}  # E: `type` cannot accept union types as an argument
+"#,
+);
+
+testcase!(
     test_typing_type_as_type_any,
     r#"
 from typing import Type
