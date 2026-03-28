@@ -1028,8 +1028,7 @@ def get_a():
     return ExampleA()
 "#;
         let output = r#"from __future__ import annotations
-from file_two import ExampleA
-from file_two import get_a
+from file_two import get_a, ExampleA
 def foo() -> ExampleA:
     return get_a()
 "#;
@@ -1054,8 +1053,7 @@ def get_a():
 "#;
         let output = r#""""Module docstring."""
 from __future__ import annotations
-from file_two import ExampleA
-from file_two import get_a
+from file_two import get_a, ExampleA
 def foo() -> ExampleA:
     return get_a()
 "#;
