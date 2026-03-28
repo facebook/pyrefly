@@ -1025,6 +1025,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!("Cannot call abstract method `{method_name}`"),
             );
         }
+        if let Some(meta) = metadata
+            && meta.kind == FunctionKind::Dataclass
+            && let Some(first_ty) = self.first_arg_type(args, errors)
+        {
+            let first_arg_range = args
+                .first()
+                .map(|a| a.range())
+                .unwrap_or(arguments_range);
+            self.map_over_union(&first_ty, |ty| {
+                if let Some((_, inner)) = self.unwrap_class_object_silently(ty) {
+                    if let Type::ClassType(ct) = inner
+                        && self.get_metadata_for_class(ct.class_object()).is_enum()
+                    {
+                        self.error(
+                            errors,
+                            first_arg_range,
+                            ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                            format!(
+                                "Cannot apply dataclasses.dataclass to Enum class `{}`",
+                                ct.class_object().name()
+                            ),
+                        );
+                    }
+                } else if let Type::ClassType(ct) = ty
+                    && self.get_metadata_for_class(ct.class_object()).is_enum()
+                {
+                    self.error(
+                        errors,
+                        first_arg_range,
+                        ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                        format!(
+                            "Cannot apply dataclasses.dataclass to Enum class `{}`",
+                            ct.class_object().name()
+                        ),
+                    );
+                }
+            });
+        }
         // Does this call target correspond to a function whose keyword arguments we should save?
         let kw_metadata = {
             if let Some(m) = metadata
