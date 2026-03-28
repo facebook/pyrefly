@@ -5,6 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::CodeLens;
+use lsp_types::Command;
+use lsp_types::Range;
+use lsp_types::Url;
 use pyrefly_build::handle::Handle;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
@@ -14,6 +18,7 @@ use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
 use ruff_text_size::TextRange;
+use serde_json::Value;
 
 use crate::state::state::Transaction;
 
@@ -32,8 +37,69 @@ pub struct CodeLensEntry {
     pub is_unittest: bool,
 }
 
+pub fn runnable_lsp_code_lens(
+    uri: &Url,
+    range: Range,
+    entry: CodeLensEntry,
+    cwd: Option<&str>,
+) -> CodeLens {
+    let (title, command, arguments) = match entry.kind {
+        CodeLensKind::Run => {
+            let mut args = serde_json::Map::new();
+            args.insert("uri".to_owned(), serde_json::json!(uri.to_string()));
+            if let Some(cwd) = cwd {
+                args.insert("cwd".to_owned(), serde_json::json!(cwd));
+            }
+            ("Run", "pyrefly.runMain", Some(vec![Value::Object(args)]))
+        }
+        CodeLensKind::Test => {
+            let mut args = serde_json::Map::new();
+            args.insert("uri".to_owned(), serde_json::json!(uri.to_string()));
+            if let Some(cwd) = cwd {
+                args.insert("cwd".to_owned(), serde_json::json!(cwd));
+            }
+            args.insert(
+                "position".to_owned(),
+                serde_json::json!({
+                    "line": range.start.line,
+                    "character": range.start.character,
+                }),
+            );
+            if let Some(test_name) = entry.test_name {
+                args.insert("testName".to_owned(), serde_json::json!(test_name));
+            }
+            if let Some(class_name) = entry.class_name {
+                args.insert("className".to_owned(), serde_json::json!(class_name));
+            }
+            args.insert(
+                "isUnittest".to_owned(),
+                serde_json::json!(entry.is_unittest),
+            );
+            ("Test", "pyrefly.runTest", Some(vec![Value::Object(args)]))
+        }
+    };
+
+    CodeLens {
+        range,
+        command: Some(Command {
+            title: title.to_owned(),
+            command: command.to_owned(),
+            arguments,
+        }),
+        data: None,
+    }
+}
+
 impl<'a> Transaction<'a> {
-    pub fn code_lens_entries(&self, handle: &Handle) -> Option<Vec<CodeLensEntry>> {
+    pub fn runnable_code_lens_entries(
+        &self,
+        handle: &Handle,
+        uri: &Url,
+        runnable_code_lens: bool,
+    ) -> Option<Vec<CodeLensEntry>> {
+        if !runnable_code_lens || uri.path().ends_with(".pyi") {
+            return Some(Vec::new());
+        }
         let ast = self.get_ast(handle)?;
         let mut entries = Vec::new();
         collect_module_entries(&ast.body, &mut entries);

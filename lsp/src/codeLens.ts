@@ -35,6 +35,61 @@ type RunTestArgs = {
 const TASK_SOURCE = 'pyrefly';
 const OPEN_RUNNABLE_CODE_LENS_SETTING = 'Open Runnable CodeLens Setting';
 const DISABLE_RUNNABLE_CODE_LENS = 'Disable Runnable CodeLens';
+const shownRunnableCodeLensErrors = new Set<string>();
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  return value != null && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+}
+
+function parsePosition(value: unknown): CodeLensPosition | undefined {
+  const position = asObject(value);
+  if (!position) {
+    return undefined;
+  }
+  const line = position.line;
+  const character = position.character;
+  return typeof line === 'number' && typeof character === 'number'
+    ? {line, character}
+    : undefined;
+}
+
+function parseRunMainArgs(args: unknown): RunMainArgs | undefined {
+  const parsed = asObject(args);
+  if (!parsed) {
+    return undefined;
+  }
+  return {
+    uri: typeof parsed.uri === 'string' ? parsed.uri : undefined,
+    cwd: typeof parsed.cwd === 'string' ? parsed.cwd : undefined,
+  };
+}
+
+function parseRunTestArgs(args: unknown): RunTestArgs | undefined {
+  const parsed = asObject(args);
+  if (!parsed) {
+    return undefined;
+  }
+  return {
+    uri: typeof parsed.uri === 'string' ? parsed.uri : undefined,
+    cwd: typeof parsed.cwd === 'string' ? parsed.cwd : undefined,
+    position: parsePosition(parsed.position),
+    testName: typeof parsed.testName === 'string' ? parsed.testName : undefined,
+    className: typeof parsed.className === 'string' ? parsed.className : undefined,
+    isUnittest:
+      typeof parsed.isUnittest === 'boolean' ? parsed.isUnittest : undefined,
+  };
+}
+
+function parseUri(rawUri: string | undefined): vscode.Uri | undefined {
+  if (!rawUri) {
+    return undefined;
+  }
+  try {
+    return vscode.Uri.parse(rawUri);
+  } catch {
+    return undefined;
+  }
+}
 
 async function interpreterForUri(
   uri: vscode.Uri,
@@ -64,8 +119,15 @@ async function disableRunnableCodeLens(uri: vscode.Uri): Promise<void> {
 
 async function showRunnableCodeLensError(
   uri: vscode.Uri,
+  kind: string,
   message: string,
 ): Promise<void> {
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+  const errorKey = `${kind}:${workspaceFolder?.uri.toString() ?? 'workspace'}`;
+  if (shownRunnableCodeLensErrors.has(errorKey)) {
+    return;
+  }
+  shownRunnableCodeLensErrors.add(errorKey);
   const action = await vscode.window.showErrorMessage(
     message,
     OPEN_RUNNABLE_CODE_LENS_SETTING,
@@ -167,14 +229,15 @@ async function runMainFile(
   args: RunMainArgs,
   pythonExtension: PythonExtension,
 ): Promise<void> {
-  if (!args.uri) {
+  const uri = parseUri(args.uri);
+  if (!uri) {
     return;
   }
-  const uri = vscode.Uri.parse(args.uri);
   const interpreter = await interpreterForUri(uri, pythonExtension);
   if (!interpreter) {
     void showRunnableCodeLensError(
       uri,
+      'missing-interpreter',
       'Pyrefly could not determine a Python interpreter for this file. Ensure the correct interpreter is selected in your IDE before using runnable CodeLens.',
     );
     return;
@@ -193,10 +256,10 @@ async function runTestAtLocation(
   args: RunTestArgs,
   pythonExtension: PythonExtension,
 ): Promise<void> {
-  if (!args.uri) {
+  const uri = parseUri(args.uri);
+  if (!uri) {
     return;
   }
-  const uri = vscode.Uri.parse(args.uri);
   const cwd = args.cwd;
   const className = args.className;
   const testName = args.testName;
@@ -210,6 +273,7 @@ async function runTestAtLocation(
   if (!interpreter) {
     void showRunnableCodeLensError(
       uri,
+      'missing-interpreter',
       'Pyrefly could not determine a Python interpreter for this file. Ensure the correct interpreter is selected in your IDE before using runnable CodeLens.',
     );
     return;
@@ -250,6 +314,7 @@ async function runTestAtLocation(
   if (!(await canImportModule(interpreter, 'pytest', cwd))) {
     void showRunnableCodeLensError(
       uri,
+      'missing-pytest',
       'Pyrefly could not import pytest from the selected interpreter. Select the correct interpreter or install pytest in that environment before using runnable CodeLens.',
     );
     return;
@@ -270,13 +335,21 @@ export function registerCodeLensCommands(
 ): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('pyrefly.runTest', async args => {
-      await runTestAtLocation(args as RunTestArgs, pythonExtension);
+      const parsedArgs = parseRunTestArgs(args);
+      if (!parsedArgs) {
+        return;
+      }
+      await runTestAtLocation(parsedArgs, pythonExtension);
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('pyrefly.runMain', async args => {
-      await runMainFile(args as RunMainArgs, pythonExtension);
+      const parsedArgs = parseRunMainArgs(args);
+      if (!parsedArgs) {
+        return;
+      }
+      await runMainFile(parsedArgs, pythonExtension);
     }),
   );
 }

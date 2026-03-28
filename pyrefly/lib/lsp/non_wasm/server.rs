@@ -46,7 +46,6 @@ use lsp_types::CodeActionTriggerKind;
 use lsp_types::CodeLens;
 use lsp_types::CodeLensOptions;
 use lsp_types::CodeLensParams;
-use lsp_types::Command;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionList;
 use lsp_types::CompletionOptions;
@@ -259,7 +258,7 @@ use crate::lsp::non_wasm::call_hierarchy::find_function_at_position_in_ast;
 use crate::lsp::non_wasm::call_hierarchy::prepare_call_hierarchy_item;
 use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
 use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
-use crate::lsp::non_wasm::code_lens::CodeLensKind;
+use crate::lsp::non_wasm::code_lens::runnable_lsp_code_lens;
 use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_actions;
 use crate::lsp::non_wasm::external_provider::ExternalProvider;
 use crate::lsp::non_wasm::external_provider::compute_qualified_name;
@@ -4809,20 +4808,16 @@ impl Server {
         params: CodeLensParams,
     ) -> Option<Vec<CodeLens>> {
         let uri = &params.text_document.uri;
-        if uri.path().ends_with(".pyi") {
-            return Some(Vec::new());
-        }
         let path = self.path_for_uri(uri)?;
         let runnable_code_lens = self
             .workspaces
             .get_with(path.clone(), |(_, workspace)| workspace.runnable_code_lens);
-        if !runnable_code_lens {
-            return Some(Vec::new());
-        }
         let maybe_cell_idx = self.maybe_get_cell_index(uri);
-        let handle = self.make_handle_if_enabled(uri, Some(CodeLensRequest::METHOD))?;
+        let handle = self
+            .make_handle_if_enabled(uri, Some(CodeLensRequest::METHOD))
+            .ok()?;
         let info = transaction.get_module_info(&handle)?;
-        let entries = transaction.code_lens_entries(&handle)?;
+        let entries = transaction.runnable_code_lens_entries(&handle, uri, runnable_code_lens)?;
         let cwd = self.runnable_code_lens_cwd(&path);
 
         let mut lenses = Vec::new();
@@ -4831,50 +4826,7 @@ impl Server {
                 continue;
             }
             let range = info.to_lsp_range(entry.range);
-            let (title, command, arguments) = match entry.kind {
-                CodeLensKind::Run => {
-                    let mut args = serde_json::Map::new();
-                    args.insert("uri".to_owned(), serde_json::json!(uri.to_string()));
-                    if let Some(cwd) = &cwd {
-                        args.insert("cwd".to_owned(), serde_json::json!(cwd));
-                    }
-                    ("Run", "pyrefly.runMain", Some(vec![Value::Object(args)]))
-                }
-                CodeLensKind::Test => {
-                    let mut args = serde_json::Map::new();
-                    args.insert("uri".to_owned(), serde_json::json!(uri.to_string()));
-                    if let Some(cwd) = &cwd {
-                        args.insert("cwd".to_owned(), serde_json::json!(cwd));
-                    }
-                    args.insert(
-                        "position".to_owned(),
-                        serde_json::json!({
-                            "line": range.start.line,
-                            "character": range.start.character,
-                        }),
-                    );
-                    if let Some(test_name) = entry.test_name {
-                        args.insert("testName".to_owned(), serde_json::json!(test_name));
-                    }
-                    if let Some(class_name) = entry.class_name {
-                        args.insert("className".to_owned(), serde_json::json!(class_name));
-                    }
-                    args.insert(
-                        "isUnittest".to_owned(),
-                        serde_json::json!(entry.is_unittest),
-                    );
-                    ("Test", "pyrefly.runTest", Some(vec![Value::Object(args)]))
-                }
-            };
-            lenses.push(CodeLens {
-                range,
-                command: Some(Command {
-                    title: title.to_owned(),
-                    command: command.to_owned(),
-                    arguments,
-                }),
-                data: None,
-            });
+            lenses.push(runnable_lsp_code_lens(uri, range, entry, cwd.as_deref()));
         }
 
         Some(lenses)
