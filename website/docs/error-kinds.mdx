@@ -20,12 +20,17 @@ The main use of error kinds is as short names ("slugs") that can be used in
 error suppression comments.
 
 Diagnostics have several possible severity levels, which can be [configured](../configuration#errors) in `pyrefly.toml` or via CLI:
-- ignore: the diagnostic is not emitted and does not cause a nonzero exit in the CLI
-- info: the diagnostic shows up blue in the IDE and does not cause a nonzero exit in the CLI
-- warn: the diagnostic shows up yellow in the IDE and causes a nonzero exit in the CLI
-- error: the diagnostic shows up red in the IDE and causes a nonzero exit in the CLI
+- **ignore**: the diagnostic is not emitted
+- **info**: the diagnostic shows up blue in the IDE and does not cause a nonzero exit in the CLI
+- **warn**: the diagnostic shows up yellow in the IDE and does not cause a nonzero exit in the CLI
+- **error**: the diagnostic shows up red in the IDE and causes a nonzero exit in the CLI
 
 The default severity for diagnostics is `error` unless otherwise noted. Diagnostics with default severity `ignore` must be explicitly enabled to be emitted.
+
+By default, `pyrefly check` only displays diagnostics with severity `error` or higher.
+Use the [`min-severity`](../configuration#min-severity) config option or `--min-severity` CLI flag to also show lower-severity diagnostics (e.g. `--min-severity warn`).
+
+In the IDE, diagnostics below `error` severity are only shown for files that are currently open in the editor.
 
 ## abstract-method-call
 
@@ -460,13 +465,24 @@ x = []  # error: infers list[Any]
 
 ## implicit-import
 
-A module exists, but was not imported. At runtime, if something has made this import
-before your code, it will work. But relies on whatever did the import to continue doing it.
+This error is emitted when a submodule is accessed through a parent package without being explicitly imported in the current file.
+
+While Python’s global module cache (`sys.modules`) might allow this to work if another part of your program performed the import earlier, relying on this side effect is fragile. If that external code is refactored or removed, your code will crash at runtime with an `AttributeError`.
+
+To fix this, always use an explicit import for the submodule you want to access.
 
 ```python
-import importlib
-importlib.util.find_spec("os")  # error, `importlib.util` was not imported
+import urllib
+# error: 'urllib' has no attribute 'request' (unless imported elsewhere)
+urllib.request.urlopen(...)
+
+# Fix:
+import urllib.request
+urllib.request.urlopen(...)
+
 ```
+
+The default severity of this diagnostic is `warn`.
 
 ## implicitly-defined-attribute
 
@@ -513,6 +529,22 @@ def f(x: int) -> int: ...
 def f(x: str) -> str: ...  # error, overload accepts `str` but implementation only accepts `int`
 def f(x: int) -> int | str:
     return x
+```
+
+## inconsistent-overload-default
+
+In an overloaded function, the type of a parameter in an overload signature is inconsistent with
+its default value in the implementation.
+
+Example:
+```python
+from typing import Literal, overload
+@overload
+def f(x: Literal[True] = ...) -> None: ...  # error, `x` has default `False`, which is inconsistent with type `Literal[True]`
+@overload
+def f(x: Literal[False]) -> int: ...
+def f(x: bool = False) -> int | None:
+    return 0 if x else None
 ```
 
 ## internal-error
@@ -905,6 +937,45 @@ def f(x: int | str) -> int | str:
 f(1.0)
 ```
 
+## non-convergent-recursion
+
+Some Python code has type analysis that is recursive. Consider, for example:
+```
+def f(): return g()
+def g(): return [f()]
+```
+Here, return-type inference for `f` depends on the return type of `g`, and vice versa
+so we get a cycle. Similarly, in
+```
+x = 1
+while some_condition():
+  x = [x]
+```
+the type of `x` at the end of the loop body depends on the type of `x` at the beginning,
+and this forms a cycle (and in this case the type doesn't converge to any closed form;
+the true type is a recursive type but Pyrefly will not infer an anonymous recursive type).
+
+Many more cycles are possible, sometimes involving harder-to-visualize problems like
+classes whose type parameters have constraints that are recursive, or class fields
+whose inferred types depend on one another.
+
+Pyrefly will attempt to resolve all such recursion using a *fixpoint*, where we
+repeatedly analyze the related entities in type inference. But because the results
+do not always converge (like `x = [x]` above), we have to limit the number of
+iterations, which means sometimes we cannot ensure that the inferred result
+is correct.
+
+In these cases, Pyrefly will produce a `non-convergent-recursion` error that
+warns you our fixpoint did not converge, and tells you the result we inferred
+based on the last iteration. In some cases, the error message will recommend
+that by adding more annotations you may be able to help Pyrefly determine the
+correct type.
+
+If you're filing a bug report for this error, set the environment variable
+`PYREFLY_FIXPOINT_DETAILS=1` when running Pyrefly and include additional
+diagnostic information in the issue that will help the Pyrefly team root cause
+the non-convergence.
+
 ## non-exhaustive-match
 
 Pyrefly warns when a `match` statement over an `Enum` attempts to enumerate the members
@@ -922,6 +993,8 @@ def describe(color: Color) -> str:
     case Color.RED:
       return "danger"
 ```
+
+The default severity of this diagnostic is `warn`.
 
 ## not-a-type
 
@@ -1113,19 +1186,23 @@ This error is used to indicate a type that's equivalent to True or False is used
 def f() -> bool:
   ...
 
-# This will throw error, as it's likely that the function needs to be invoked.
+# This is likely a mistake, as it's likely that the function needs to be invoked.
 if f:
   ...
-# This will throw error, as it's equivalent to `if True`.
+# This is likely a mistake, as it's equivalent to `if True`.
 if "abc":
   ...
 ```
+
+The default severity of this diagnostic is `warn`.
 
 ## reveal-type
 
 Pyrefly uses this diagnostic to communicate the output of the [`reveal_type`](https://typing.python.org/en/latest/spec/directives.html#reveal-type) function.
 
 The default severity of this diagnostic is `info`.
+
+`reveal_type` is a *directive* — it is always shown in CLI output regardless of the [`min-severity`](../configuration#min-severity) threshold, and is never subject to suppression or baseline exclusion. To hide it, set `reveal-type = "ignore"` in the [`errors`](../configuration#errors) table.
 
 ## unannotated-attribute
 
@@ -1208,6 +1285,15 @@ def takes_kwonly(*, x: int) -> int:
 takes_kwonly(1)  # should be `takes_kwonly(x=1)`!
 ```
 
+## unimported-directive
+
+Using a [type checker directive](https://typing.python.org/en/latest/spec/directives.html#type-checker-directives) without importing it from `typing` first will result in a runtime error.
+
+```python
+reveal_type(1)  # error
+assert_type(1, int)  # error
+```
+
 ## unknown-name
 
 `unknown-name` occurs when attempting to load a name from another scope, but the name cannot be found.
@@ -1269,6 +1355,28 @@ can produce multiple values:
 def valid_generator():
     yield 1
     yield 2  # This is valid
+```
+
+The default severity of this diagnostic is `warn`.
+
+## unresolvable-dunder-all
+
+Default severity: **warn**
+
+This warning is raised when `__all__` is defined but its value cannot be
+statically analyzed. This can happen when `__all__` is assigned a function call,
+a variable, a list comprehension, or any expression that Pyrefly cannot resolve
+at analysis time.
+
+When this occurs, Pyrefly falls back to inferring public exports from
+module-level definitions (all names that do not start with an underscore).
+
+```python
+def generate_all():
+    return ["x", "y"]
+
+__all__ = generate_all()
+# `__all__` could not be statically analyzed [unresolvable-dunder-all]
 ```
 
 ## unsafe-overlap

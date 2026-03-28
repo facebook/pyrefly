@@ -184,8 +184,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let class_obj = cls.class_object();
                 let targs = cls.targs().as_slice();
 
-                // Special handling for dict: don't expand key type (Mapping is invariant in key)
-                if class_obj == self.stdlib.dict_object() {
+                // Special handling for dict and Mapping: don't expand key type
+                // (Mapping is invariant in key, so expanding it would make
+                // dict[str, V] not assignable to Mapping[LaxStr, V])
+                if class_obj == self.stdlib.dict_object()
+                    || class_obj == self.stdlib.mapping_object()
+                {
                     let key_ty = targs
                         .first()
                         .cloned()

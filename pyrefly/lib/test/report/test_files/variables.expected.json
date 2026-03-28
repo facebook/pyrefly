@@ -1,0 +1,63 @@
+{
+  "variables": [
+    {
+      "name": "test.T",
+      "annotation": null,
+      "location": {
+        "line": 8,
+        "column": 1
+      }
+    },
+    {
+      "name": "test.x",
+      "annotation": null,
+      "location": {
+        "line": 9,
+        "column": 1
+      }
+    },
+    {
+      "name": "test.y",
+      "annotation": "Callable[[int], int]",
+      "location": {
+        "line": 10,
+        "column": 1
+      }
+    },
+    {
+      "name": "test.z",
+      "annotation": "str",
+      "location": {
+        "line": 11,
+        "column": 1
+      }
+    }
+  ],
+  "line_count": 20,
+  "functions": [
+    {
+      "name": "test.some_func",
+      "return_annotation": "None",
+      "is_return_type_known": true,
+      "parameters": [],
+      "is_type_known": true,
+      "location": {
+        "line": 14,
+        "column": 1
+      }
+    }
+  ],
+  "classes": [
+    {
+      "name": "test.SomeClass",
+      "incomplete_attributes": [],
+      "location": {
+        "line": 18,
+        "column": 1
+      }
+    }
+  ],
+  "suppressions": [],
+  "annotation_completeness": 100.0,
+  "type_completeness": 100.0
+}

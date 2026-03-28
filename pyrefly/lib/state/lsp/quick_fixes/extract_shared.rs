@@ -74,6 +74,21 @@ pub(super) fn line_indent_and_start(
     Some((indent, insert_position))
 }
 
+pub(super) fn find_enclosing_statement_range(
+    ast: &ModModule,
+    selection: TextRange,
+) -> Option<TextRange> {
+    let covering_nodes = Ast::locate_node(ast, selection.start());
+    for node in covering_nodes {
+        if let Some(stmt) = node.as_stmt_ref()
+            && stmt.range().contains_range(selection)
+        {
+            return Some(stmt.range());
+        }
+    }
+    None
+}
+
 pub(super) fn first_parameter_name(parameters: &Parameters) -> Option<String> {
     if let Some(param) = parameters.posonlyargs.first() {
         return Some(param.name().id.to_string());

@@ -413,9 +413,51 @@ testcase!(
     r#"
 from typing import Final
 x: Final   # E: Expected a type argument for `Final`
-y: Final[int]  # OK
+y: Final[int]  # E: Final name must be initialized with a value
 z: Final = 1  # OK
     "#,
+);
+
+testcase!(
+    test_final_stub_no_error,
+    TestEnv::one_with_path(
+        "stub",
+        "stub.pyi",
+        r#"
+from typing import Final
+x: Final[int]
+class C:
+    y: Final[int]
+"#,
+    ),
+    r#"
+from stub import x, C
+"#,
+);
+
+testcase!(
+    test_final_without_assign_should_error,
+    r#"
+from typing import Final
+x: Final[int]  # E: Final name must be initialized with a value
+def f() -> None:
+    y: Final[int]  # E: Final name must be initialized with a value
+class C:
+    z: Final[int]  # E: Final attribute declared in class body must be initialized with a value or in `__init__`
+"#,
+);
+
+testcase!(
+    test_final_alternate_init_forms_no_error,
+    r#"
+from typing import Final, TextIO
+x: Final[int]
+x, _ = 1, 2
+y: Final[int]
+z = (y := 3)
+f: Final[TextIO]
+with open('foo') as f: pass
+"#,
 );
 
 testcase!(
@@ -640,7 +682,7 @@ def expect_str(x: str) -> Any: ...
 class C:
     __iadd__: None = None
 def test(x: C):
-    x += expect_str(0) # E: Expected `__iadd__` to be a callable # E: Argument `Literal[0]` is not assignable to parameter `x` with type `str`
+    x += expect_str(0) # E: Argument `Literal[0]` is not assignable to parameter `x` with type `str`
 "#,
 );
 
@@ -891,4 +933,46 @@ class A:
         cls = None
         assert_type(cls, None)
     "#,
+);
+
+testcase!(
+    test_unpacked_annotation_override,
+    r#"
+from typing import assert_type
+
+def f() -> str:
+    return ""
+
+x: int
+x, y = f(), f()  # E: `str` is not assignable to `int`
+assert_type(x, int)
+assert_type(y, str)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2928
+testcase!(
+    bug = "Should detect too many values when unpacking a string literal",
+    test_unpack_string_too_many,
+    r#"
+a, b = "abc"
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2927
+testcase!(
+    bug = "Should detect too few values when unpacking a single-char string",
+    test_unpack_string_too_few,
+    r#"
+a, b = "x"
+"#,
+);
+
+testcase!(
+    bug = "Should detect zero step size in slice",
+    test_slice_zero_step,
+    r#"
+items = [1, 2, 3, 4]
+bad = items[::0]
+"#,
 );

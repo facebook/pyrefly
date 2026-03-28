@@ -270,6 +270,21 @@ vinv1_2: ShouldBeInvariant1[int] = ShouldBeInvariant1[float](1.1)  # E:
 );
 
 testcase!(
+    test_protocol_property_invariant,
+    r#"
+from typing import Protocol, TypeVar
+
+TypeT = TypeVar("TypeT")
+
+class HasP(Protocol[TypeT]):
+    @property
+    def p(self) -> TypeT: ...
+    @p.setter
+    def p(self, p: TypeT, /) -> None: ...
+"#,
+);
+
+testcase!(
     test_sequence_inheritance,
     r#"
 from typing import Sequence
@@ -303,6 +318,23 @@ class FooInferred[Node]:
 foo_int: FooInferred[int] = FooInferred[int]()
 foo_str: FooInferred[str] = FooInferred[str]()
 foo_union: FooInferred[int | str] = foo_int | foo_str
+"#,
+);
+
+// Regression test: this previously caused an infinite loop in variance inference.
+// The self parameter is excluded from variance inference to avoid self-referential
+// cycles. T only appears through C[T] in `a`, giving bivariant, which is treated
+// as invariant in practice (following mypy/pyright).
+testcase!(
+    test_self_referential_no_hang,
+    r#"
+class C[T]:
+    def f(self, a: C[T]) -> None:
+        pass
+
+good: C[int] = C[int]()
+bad1: C[float] = C[int]()  # E:
+bad2: C[int] = C[float]()  # E:
 "#,
 );
 
@@ -611,6 +643,24 @@ class Contra(Generic[T_contra]): ...
 class Foo(
     Contra[Contra[Contra[T_co]]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
 ): ...
+"#,
+);
+
+testcase!(
+    test_inherited_contravariance_from_parent,
+    r#"
+from typing import Self
+
+class SupportsLT[ComparableT]:  # contravariant
+    def __lt__(self, other: ComparableT, /) -> Self: ...
+
+def upcast_lt(arg: SupportsLT[object]) -> SupportsLT[float]:
+    return arg
+
+class Impl[T](SupportsLT[T]):  ...  # contravariant via inheritance
+
+def upcast(x: Impl[object]) -> Impl[float]:
+    return x
 "#,
 );
 

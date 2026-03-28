@@ -10,9 +10,13 @@ use std::iter;
 use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::LitEnum;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::tensor::TensorShape;
+use pyrefly_types::tensor::TensorType;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forall;
 use pyrefly_types::types::Forallable;
@@ -20,9 +24,11 @@ use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_types::types::Var;
 use pyrefly_util::suggest::best_suggestion;
+use ruff_python_ast::Expr;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 use vec1::vec1;
@@ -32,7 +38,9 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::expr::TypeOrExpr;
+use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyExport;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -40,6 +48,7 @@ use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::error::style::ErrorStyle;
 use crate::solver::solver::SubsetError;
 use crate::state::loader::FindingOrError;
 use crate::types::callable::FuncMetadata;
@@ -55,6 +64,7 @@ use crate::types::module::ModuleType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::read_only::ReadOnlyReason;
+use crate::types::tuple::Tuple;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
@@ -91,6 +101,10 @@ pub enum AttrSubsetError {
     Getattr,
     // either `got` or `want` is a module fallback
     ModuleFallback,
+    // `got` and `want` differ on whether they are ClassVar
+    ClassVarMismatch {
+        got_is_classvar: bool,
+    },
     // `got` is not a subtype of `want`
     // applies to methods, read-only attributes, and property getters
     Covariant {
@@ -118,7 +132,12 @@ pub enum AttrSubsetError {
 }
 
 impl AttrSubsetError {
-    pub fn to_error_msg(self, child_class: &Name, parent_class: &Name, attr_name: &Name) -> String {
+    pub fn to_error_msg(
+        &self,
+        child_class: &Name,
+        parent_class: &Name,
+        attr_name: &Name,
+    ) -> String {
         match self {
             AttrSubsetError::NoAccess => {
                 format!("`{child_class}.{attr_name}` is not accessible from the instance")
@@ -148,6 +167,17 @@ impl AttrSubsetError {
                     "`{child_class}.{attr_name}` or `{parent_class}.{attr_name}` are module fallbacks, which cannot be checked for override compatibility"
                 )
             }
+            AttrSubsetError::ClassVarMismatch { got_is_classvar } => {
+                if *got_is_classvar {
+                    format!(
+                        "`{child_class}.{attr_name}` is a ClassVar, but `{parent_class}.{attr_name}` is not"
+                    )
+                } else {
+                    format!(
+                        "`{child_class}.{attr_name}` is not a ClassVar, but `{parent_class}.{attr_name}` is"
+                    )
+                }
+            }
             AttrSubsetError::Covariant {
                 got,
                 want,
@@ -155,20 +185,20 @@ impl AttrSubsetError {
                 want_is_property,
                 subset_error: _,
             } => {
-                let got_desc = if got_is_property {
+                let got_desc = if *got_is_property {
                     "Property getter for "
                 } else {
                     ""
                 };
-                let want_desc = if want_is_property {
+                let want_desc = if *want_is_property {
                     ", the property getter for "
                 } else {
                     ", the type of "
                 };
                 format!(
                     "{got_desc}`{child_class}.{attr_name}` has type `{}`, which is not assignable to `{}`{want_desc}`{parent_class}.{attr_name}`",
-                    got.deterministic_printing(),
-                    want.deterministic_printing()
+                    got.clone().deterministic_printing(),
+                    want.clone().deterministic_printing()
                 )
             }
             AttrSubsetError::Invariant {
@@ -178,8 +208,8 @@ impl AttrSubsetError {
             } => {
                 format!(
                     "`{child_class}.{attr_name}` has type `{}`, which is not consistent with `{}` in `{parent_class}.{attr_name}` (the type of read-write attributes cannot be changed)",
-                    got.deterministic_printing(),
-                    want.deterministic_printing()
+                    got.clone().deterministic_printing(),
+                    want.clone().deterministic_printing()
                 )
             }
             AttrSubsetError::Contravariant {
@@ -188,15 +218,15 @@ impl AttrSubsetError {
                 got_is_property,
                 subset_error: _,
             } => {
-                let desc = if got_is_property {
+                let desc = if *got_is_property {
                     "The property setter for "
                 } else {
                     ""
                 };
                 format!(
                     "{desc}`{child_class}.{attr_name}` has type `{}`, which is not assignable from `{}`, the property getter for `{parent_class}.{attr_name}`",
-                    got.deterministic_printing(),
-                    want.deterministic_printing()
+                    got.clone().deterministic_printing(),
+                    want.clone().deterministic_printing()
                 )
             }
         }
@@ -456,6 +486,22 @@ enum AttributeBase1 {
     /// Bound methods prefer exposing builtin `types.MethodType` attributes but fall back to the
     /// underlying function's attributes when the builtin ones are missing.
     BoundMethod(BoundMethodType),
+    /// Tensor instance with shape information preserved for method resolution.
+    ///
+    /// This variant exists to handle `Type::Tensor` specially during attribute lookup.
+    /// Unlike `ClassInstance`, which only tracks the class type, `TensorInstance` preserves
+    /// the full `TensorType` including shape information.
+    ///
+    /// **Why this is needed:**
+    /// Tensor methods often use `Self` in their return type (e.g., `def reshape(self, ...) -> Self`).
+    /// When we look up such a method on `Tensor[N, M]`, we need to substitute `Self` with the
+    /// full tensor type so the result type is `Tensor[...]` with proper shape tracking, not
+    /// just the base class.
+    ///
+    /// **Invariant:** The `TensorType::base_class` is always a valid class type from which
+    /// attributes are looked up. The shape information in the tensor type is preserved through
+    /// the substitution of `Self` in attribute types.
+    TensorInstance(TensorType),
 }
 
 impl AttributeBase1 {
@@ -595,8 +641,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn add_class_fields(&self, class: &Class, candidates: &mut SmallSet<Name>) {
         let mut add_fields_for = |cls: &Class| {
-            for name in cls.fields() {
-                candidates.insert(name.clone());
+            if let Some(class_fields) = self.get_class_fields(cls) {
+                for name in class_fields.names() {
+                    candidates.insert(name.clone());
+                }
             }
         };
         add_fields_for(class);
@@ -682,6 +730,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return lookup_result.internal_error.is_empty() && lookup_result.not_found.is_empty();
         }
         false
+    }
+
+    /// Compute the narrowed attribute type for `hasattr` narrowing.
+    /// Returns `None` if the attribute exists on all union members (no narrowing needed).
+    /// Otherwise returns `Some(ty)` where `ty` is the union of attribute types from
+    /// members that have the attribute, plus `Any` for members that don't. This
+    /// preserves specific type information and ensures fixpoint convergence when
+    /// `hasattr` is used in loops with reassignment.
+    pub fn hasattr_narrow_type(
+        &self,
+        base: &Type,
+        attr_name: &Name,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let attr_base = self.as_attribute_base(base.clone())?;
+        let lookup_result = self.lookup_attr_from_base(attr_base, attr_name);
+        if lookup_result.internal_error.is_empty() && lookup_result.not_found.is_empty() {
+            return None;
+        }
+        let suppress_errors = ErrorCollector::new(errors.module().clone(), ErrorStyle::Never);
+        let mut types = vec![self.heap.mk_any_implicit()];
+        for (found_attr, _) in lookup_result.found {
+            if let Ok(ty) =
+                self.resolve_get_access(attr_name, found_attr, range, &suppress_errors, None)
+            {
+                types.push(ty);
+            }
+        }
+        Some(self.unions(types))
     }
 
     /// Compute the get (i.e., read) type of a magic dunder attribute, if it can
@@ -902,6 +980,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             should_narrow = false;
         }
         for not_found in lookup_not_found {
+            if let NotFoundOn::ClassInstance(ref cls, _) = not_found
+                && self.check_slots_violation(cls, attr_name, range, errors, context)
+            {
+                should_narrow = false;
+                continue;
+            }
             self.check_setattr(
                 attr_base.clone(),
                 attr_name,
@@ -919,6 +1003,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // If the attribute is not found, we fall back to `__setattr__`
                 Attribute::GetAttr(not_found, _, _)
                 | Attribute::ModuleFallback(not_found, _, _) => {
+                    if let NotFoundOn::ClassInstance(ref cls, _) = not_found
+                        && self.check_slots_violation(cls, attr_name, range, errors, context)
+                    {
+                        should_narrow = false;
+                        continue;
+                    }
                     self.check_setattr(
                         attr_base.clone(),
                         attr_name,
@@ -943,10 +1033,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 Attribute::ClassAttribute(class_attr) => {
+                    if let AttributeBase1::ClassInstance(cls) = &found_on
+                        && !matches!(
+                            class_attr,
+                            ClassAttribute::Property(..) | ClassAttribute::Descriptor(..)
+                        )
+                        && self.check_slots_violation(
+                            cls.class_object(),
+                            attr_name,
+                            range,
+                            errors,
+                            context,
+                        )
+                    {
+                        should_narrow = false;
+                        continue;
+                    }
                     // If we are writing to an instance, we may need access to
                     // the class to special-case dataclass converters.
                     let instance_class = match &found_on {
                         AttributeBase1::ClassInstance(cls) => Some(cls),
+                        AttributeBase1::TensorInstance(tensor) => Some(&tensor.base_class),
                         _ => None,
                     };
                     let class_base = match &found_on {
@@ -990,16 +1097,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ty = match &got {
             TypeOrExpr::Expr(got) => self.expr(
                 got,
-                Some((&attr_ty, &|| TypeCheckContext {
-                    kind: TypeCheckKind::Attribute(attr_name.clone()),
-                    context: context.map(|ctx| ctx()),
+                Some((&attr_ty, &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::Attribute(attr_name.clone()))
+                        .with_context(context.map(|ctx| ctx()))
                 })),
                 errors,
             ),
             TypeOrExpr::Type(got, _) => {
-                self.check_type(got, &attr_ty, range, errors, &|| TypeCheckContext {
-                    kind: TypeCheckKind::Attribute(attr_name.clone()),
-                    context: context.map(|ctx| ctx()),
+                self.check_type(got, &attr_ty, range, errors, &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::Attribute(attr_name.clone()))
+                        .with_context(context.map(|ctx| ctx()))
                 });
                 (*got).clone()
             }
@@ -1007,6 +1114,140 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if should_narrow {
             narrowed_types.push(ty);
         }
+    }
+
+    /// Extract slot names from a single class's `__slots__` definition.
+    /// Returns `None` if the class is unslotted or has a dynamic slots expression.
+    /// The first returned value is the set of declared slot names, the second
+    /// is `true` when `__dict__` appears in slots.
+    fn extract_local_slot_names(&self, cls: &Class) -> Option<(SmallSet<Name>, bool)> {
+        let metadata = self.get_metadata_for_class(cls);
+        if let Some(dc) = metadata.dataclass_metadata()
+            && dc.kws.slots
+        {
+            let mut names = SmallSet::new();
+            let has_dict = dc.fields.iter().any(|n| *n == dunder::DICT);
+            for name in dc.fields.iter() {
+                names.insert(name.clone());
+            }
+            return Some((names, has_dict));
+        }
+
+        let key = KeyClassField(cls.index(), dunder::SLOTS.clone());
+        let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        let binding = self.bindings().get::<KeyClassField>(idx);
+        let ClassFieldDefinition::AssignedInBody { value, .. } = &binding.definition else {
+            return None;
+        };
+        let ExprOrBinding::Expr(expr) = value.as_ref() else {
+            return None;
+        };
+
+        fn extract_names_from_elts(elts: &[Expr]) -> Option<(SmallSet<Name>, bool)> {
+            let mut names = SmallSet::new();
+            let mut has_dict = false;
+            for elt in elts {
+                let Expr::StringLiteral(s) = elt else {
+                    return None;
+                };
+                let name = Name::new(s.value.to_str());
+                if name == dunder::DICT {
+                    has_dict = true;
+                }
+                names.insert(name);
+            }
+            Some((names, has_dict))
+        }
+
+        match expr {
+            Expr::Tuple(t) => extract_names_from_elts(&t.elts),
+            Expr::List(l) => extract_names_from_elts(&l.elts),
+            Expr::StringLiteral(s) => {
+                let mut names = SmallSet::new();
+                let name = Name::new(s.value.to_str());
+                let has_dict = name == dunder::DICT;
+                names.insert(name);
+                Some((names, has_dict))
+            }
+            _ => None,
+        }
+    }
+
+    /// Compute the effective slots policy for a class instance write.
+    /// Returns `Some(allowed_names)` if slots enforcement should apply,
+    /// `None` if slots enforcement is disabled.
+    pub(crate) fn effective_slots_for_instance_write(&self, cls: &Class) -> Option<SmallSet<Name>> {
+        if self.has_custom_setattr(cls) {
+            return None;
+        }
+
+        let mut all_slot_names = SmallSet::new();
+
+        let Some((names, false)) = self.extract_local_slot_names(cls) else {
+            return None;
+        };
+        for name in names {
+            all_slot_names.insert(name);
+        }
+
+        let mro = self.get_mro_for_class(cls);
+        for ancestor in mro.ancestors_no_object() {
+            let Some((names, false)) = self.extract_local_slot_names(ancestor.class_object())
+            else {
+                return None;
+            };
+            for name in names {
+                all_slot_names.insert(name);
+            }
+        }
+
+        Some(all_slot_names)
+    }
+
+    /// Returns `true` if a slots violation was reported (caller should skip further processing).
+    fn check_slots_violation(
+        &self,
+        cls: &Class,
+        attr_name: &Name,
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> bool {
+        if let Some(allowed_slots) = self.effective_slots_for_instance_write(cls)
+            && !allowed_slots.contains(attr_name)
+        {
+            let class_name = cls.name();
+            self.error(
+                errors,
+                range,
+                ErrorInfo::new(ErrorKind::MissingAttribute, context),
+                format!(
+                    "Object of class `{class_name}` has no attribute `{attr_name}` \
+                     (not declared in `__slots__`)"
+                ),
+            );
+            return true;
+        }
+        false
+    }
+
+    fn has_custom_setattr(&self, cls: &Class) -> bool {
+        if self
+            .get_class_fields(cls)
+            .is_some_and(|f| f.contains(&dunder::SETATTR))
+        {
+            return true;
+        }
+        let mro = self.get_mro_for_class(cls);
+        for ancestor in mro.ancestors_no_object() {
+            if self
+                .get_class_fields(ancestor.class_object())
+                .is_some_and(|f| f.contains(&dunder::SETATTR))
+            {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn check_attr_delete(
@@ -1110,7 +1351,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             protocol.name().clone(),
                             self.for_display(got.clone()),
                             attr_name.clone(),
-                            err,
+                            *err,
                         )))
                     })?;
                 }
@@ -1134,7 +1375,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         got: &Attribute,
         want: &ClassAttribute,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
-    ) -> Result<(), AttrSubsetError> {
+    ) -> Result<(), Box<AttrSubsetError>> {
         match got {
             Attribute::ClassAttribute(got_class_attr) => {
                 self.is_class_attribute_subset(got_class_attr, want, is_subset)
@@ -1149,9 +1390,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Attribute::GetAttr(..) => {
                 // NOTE(grievejia): `__getattr__` does not participate in structural subtyping
                 // check for now. We may revisit this in the future if the need comes.
-                Err(AttrSubsetError::Getattr)
+                Err(Box::new(AttrSubsetError::Getattr))
             }
-            Attribute::ModuleFallback(..) => Err(AttrSubsetError::ModuleFallback),
+            Attribute::ModuleFallback(..) => Err(Box::new(AttrSubsetError::ModuleFallback)),
         }
     }
 
@@ -1271,13 +1512,70 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     base,
                 )),
             },
+            AttributeBase1::TensorInstance(tensor) => {
+                // Special handling for .shape property - return tuple of dimensions.
+                // Converts SizeExpr::Literal to Literal[n] and other dim types to Dim[...].
+                // For Unpacked shapes (including shapeless), this naturally produces an
+                // Unpacked tuple, e.g. Tensor[B, *Ts] → tuple[Dim[B], *Ts].
+                if attr_name.as_str() == "shape" {
+                    let dim_to_type = |dim: &Type| -> Type {
+                        match dim {
+                            Type::Size(SizeExpr::Literal(n)) => {
+                                Lit::Int(LitInt::new(*n)).to_implicit_type()
+                            }
+                            _ => self.heap.mk_dim(dim.clone()),
+                        }
+                    };
+                    let tuple_type = match &tensor.shape {
+                        TensorShape::Concrete(dims) => {
+                            Type::concrete_tuple(dims.iter().map(dim_to_type).collect())
+                        }
+                        TensorShape::Unpacked(box (prefix, middle, suffix)) => {
+                            Type::Tuple(Tuple::Unpacked(Box::new((
+                                prefix.iter().map(dim_to_type).collect(),
+                                middle.clone(),
+                                suffix.iter().map(dim_to_type).collect(),
+                            ))))
+                        }
+                    };
+                    acc.found_type(tuple_type, base);
+                    return;
+                }
+
+                // For all other attributes, delegate to get_tensor_attribute which
+                // handles Self-type substitution via InstanceKind::Tensor.
+                let metadata = self.get_metadata_for_class(tensor.base_class.class_object());
+                match self.get_tensor_attribute(tensor, attr_name) {
+                    Some(attr) => acc.found_class_attribute(attr, base),
+                    None if metadata.has_base_any() => {
+                        acc.found_type(Type::Any(AnyStyle::Implicit), base)
+                    }
+                    None => acc.not_found(NotFoundOn::ClassInstance(
+                        tensor.base_class.class_object().dupe(),
+                        base,
+                    )),
+                }
+            }
             AttributeBase1::ClassInstance(class) => {
+                // Special handling for nn.ModuleDict with TypedDict type argument
+                if let Some(attr) = self.try_nn_module_dict_attr(class, attr_name) {
+                    acc.found_class_attribute(attr, base);
+                    return;
+                }
+
+                // Normal class instance attribute lookup
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let attr_lookup_result =
                     self.get_enum_or_instance_attribute(class, &metadata, attr_name);
                 match attr_lookup_result {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
+                        acc.found_type(self.heap.mk_any_implicit(), base)
+                    }
+                    None if metadata
+                        .named_tuple_metadata()
+                        .is_some_and(|m| m.has_dynamic_fields) =>
+                    {
                         acc.found_type(self.heap.mk_any_implicit(), base)
                     }
                     None => {
@@ -1355,6 +1653,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // against a protocol, we prefer methods on the metaclass over methods on the
                     // class object. See test::enums::test_iterate for why we need to do this.
                     acc.found_class_attribute(attr, base)
+                } else if let AttributeBase1::ClassObject(class) = &**protocol_base
+                    && self
+                        .get_class_member(class.class_object(), attr_name)
+                        .is_some_and(|field| field.is_non_classvar_data_attribute())
+                {
+                    // Non-ClassVar class body attributes are instance variable defaults.
+                    // They should not satisfy protocol requirements when checking class objects,
+                    // because the protocol expects a proper attribute on the object, not just
+                    // a default value for instance creation.
+                    acc.not_found(NotFoundOn::ClassObject(class.class_object().dupe(), base))
                 } else {
                     self.lookup_attr_from_attribute_base1((**protocol_base).clone(), attr_name, acc)
                 }
@@ -1520,9 +1828,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             },
             AttributeBase1::Intersect(bases, fallback) => {
-                // For now, only handle the simplest case: if exactly one base has a successful lookup, use it.
+                // Try each base and collect successful lookups, filtering out
+                // GenericAlias lookups when the found attribute is inherited from
+                // `object`. Parametrized classes like `Foo[int]` are an intersection of
+                // a GenericAlias instance + the Foo class object. GenericAlias inherits
+                // dunders from `object` (e.g. `__init__`) that would shadow the class's
+                // own definitions, so we exclude those to let the class's version win.
                 let mut candidates = Vec::new();
-                for b in bases {
+                for b in bases.iter() {
+                    let exclude = match b {
+                        AttributeBase1::ClassInstance(cls)
+                            if cls.has_qname("types", "GenericAlias") =>
+                        {
+                            self.field_is_inherited_from(
+                                cls.class_object(),
+                                attr_name,
+                                ("builtins", "object"),
+                            )
+                        }
+                        _ => false,
+                    };
+                    if exclude {
+                        continue;
+                    }
                     let mut acc_candidate = LookupResult::empty();
                     self.lookup_attr_from_attribute_base1(b.clone(), attr_name, &mut acc_candidate);
                     if acc_candidate.not_found.is_empty() && acc_candidate.internal_error.is_empty()
@@ -1600,6 +1928,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ) =>
             {
                 acc.not_found(NotFoundOn::ClassInstance(cls.class_object().clone(), base))
+            }
+            AttributeBase1::TensorInstance(tensor)
+                if (*dunder_name == dunder::SETATTR
+                    || *dunder_name == dunder::DELATTR
+                    || *dunder_name == dunder::GETATTRIBUTE)
+                    && self.field_is_inherited_from(
+                        tensor.base_class.class_object(),
+                        dunder_name,
+                        (ModuleName::builtins().as_str(), "object"),
+                    ) =>
+            {
+                acc.not_found(NotFoundOn::ClassInstance(
+                    tensor.base_class.class_object().clone(),
+                    base,
+                ))
             }
             AttributeBase1::LiteralString
                 if *dunder_name == dunder::SETATTR
@@ -1746,6 +2089,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Extract the ClassType to use for attribute lookup on a quantified (TypeVar)
+    /// type from the attribute base of its bound.
+    fn quantified_bound_class(&self, base: AttributeBase1) -> Option<ClassType> {
+        match base {
+            AttributeBase1::ClassInstance(cls) => Some(cls),
+            // Handle `type[Any]`, which happens for TypeVars w/ `bound=type`
+            AttributeBase1::TypeAny(_) => Some(self.stdlib.builtins_type().clone()),
+            _ => None,
+        }
+    }
+
     fn as_attribute_base(&self, ty: Type) -> Option<AttributeBase> {
         let mut acc = Vec::new();
         self.as_attribute_base1(ty, &mut acc);
@@ -1778,6 +2132,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
                     self.stdlib.typed_dict_fallback().clone(),
                 )))
+            }
+            Type::Tensor(tensor) => {
+                // Use TensorInstance to preserve shape information through attribute lookup
+                acc.push(AttributeBase1::TensorInstance((*tensor).clone()))
+            }
+            Type::NNModule(module) => {
+                // NNModule delegates attribute access to its underlying class
+                acc.push(AttributeBase1::ClassInstance(module.class.clone()))
+            }
+            Type::Size(_) => {
+                // Dimension values behave like int for attribute access
+                acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
+            }
+            Type::Dim(_) => {
+                // Symbolic integers behave like int for attribute access
+                acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
             }
             Type::Tuple(tuple) => {
                 acc.push(AttributeBase1::ClassInstance(self.erase_tuple_type(tuple)))
@@ -1843,7 +2213,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let mut use_fallback = false;
                     if let Some(base) = self.as_attribute_base(ty.clone()) {
                         for base1 in base.0 {
-                            if let AttributeBase1::ClassInstance(cls) = base1 {
+                            if let Some(cls) = self.quantified_bound_class(base1) {
                                 acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
                                     (*quantified).clone(),
                                     cls,
@@ -1865,7 +2235,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     for ty in constraints {
                         if let Some(base) = self.as_attribute_base(ty.clone()) {
                             for base1 in base.0 {
-                                if let AttributeBase1::ClassInstance(cls) = base1 {
+                                if let Some(cls) = self.quantified_bound_class(base1) {
                                     acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
                                         (*quantified).clone(),
                                         cls,
@@ -2049,7 +2419,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let mut use_fallback = false;
                     if let Some(base) = self.as_attribute_base(ty.clone()) {
                         for base1 in base.0 {
-                            if let AttributeBase1::ClassInstance(cls) = base1 {
+                            if let Some(cls) = self.quantified_bound_class(base1) {
                                 acc.push(AttributeBase1::Quantified((*quantified).clone(), cls));
                             } else {
                                 use_fallback = true;
@@ -2068,7 +2438,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     for ty in constraints {
                         if let Some(base) = self.as_attribute_base(ty.clone()) {
                             for base1 in base.0 {
-                                if let AttributeBase1::ClassInstance(cls) = base1 {
+                                if let Some(cls) = self.quantified_bound_class(base1) {
                                     acc.push(AttributeBase1::Quantified(
                                         (*quantified).clone(),
                                         cls,
@@ -2103,14 +2473,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ElementOfTypeVarTuple(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.object().clone()))
             }
-            Type::Size(_) => {
-                // Dimension values behave like int for attribute access
-                acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
-            }
-            Type::Dim(_) => {
-                // Symbolic integers behave like int for attribute access
-                acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
-            }
+            // At runtime, `Annotated[T, ...]` is an instance of `typing._AnnotatedAlias`,
+            // which inherits from `typing._GenericAlias`. We model it as `GenericAlias`.
+            Type::Annotated(_, _) => acc.push(AttributeBase1::ClassInstance(
+                self.stdlib.generic_alias().clone(),
+            )),
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
             | Type::Type(_)
@@ -2233,11 +2600,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     {
         let mut seen = SmallSet::new();
         for c in mro {
+            let Some(class_fields) = self.get_class_fields(c) else {
+                continue;
+            };
             match expected_attribute_name {
                 None => {
-                    for fld in c.fields() {
+                    for fld in class_fields.names() {
                         if seen.insert(fld)
-                            && let Some(range) = c.field_decl_range(fld)
+                            && let Some(range) = class_fields.field_decl_range(fld)
                         {
                             res.push(AttrInfo {
                                 name: fld.clone(),
@@ -2246,7 +2616,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 definition: AttrDefinition::FullyResolved {
                                     cls: c.dupe(),
                                     range,
-                                    docstring_range: c.field_docstring_range(fld),
+                                    docstring_range: class_fields.field_docstring_range(fld),
                                 },
                                 is_reexport: false,
                             });
@@ -2254,7 +2624,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Some(expected_attribute_name) => {
-                    if let Some(range) = c.field_decl_range(expected_attribute_name) {
+                    if let Some(range) = class_fields.field_decl_range(expected_attribute_name) {
                         res.push(AttrInfo {
                             name: expected_attribute_name.clone(),
                             ty: None,
@@ -2262,7 +2632,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             definition: AttrDefinition::FullyResolved {
                                 cls: c.dupe(),
                                 range,
-                                docstring_range: c.field_docstring_range(expected_attribute_name),
+                                docstring_range: class_fields
+                                    .field_docstring_range(expected_attribute_name),
                             },
                             is_reexport: false,
                         });
@@ -2428,6 +2799,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | AttributeBase1::EnumLiteral(LitEnum { class, .. })
             | AttributeBase1::Quantified(_, class) => {
                 self.completions_class_type(class, expected_attribute_name, res)
+            }
+            AttributeBase1::TensorInstance(tensor) => {
+                self.completions_class_type(&tensor.base_class, expected_attribute_name, res)
             }
             AttributeBase1::LiteralString => {
                 self.completions_class_type(self.stdlib.str(), expected_attribute_name, res)

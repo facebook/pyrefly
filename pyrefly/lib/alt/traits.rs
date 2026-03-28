@@ -47,6 +47,7 @@ use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingTypeAlias;
 use crate::binding::binding::BindingUndecoratedFunction;
+use crate::binding::binding::BindingUndecoratedFunctionRange;
 use crate::binding::binding::BindingVariance;
 use crate::binding::binding::BindingVarianceCheck;
 use crate::binding::binding::BindingYield;
@@ -70,16 +71,19 @@ use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
+use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::NoneIfRecursive;
+use crate::binding::binding::UndecoratedFunctionRangeAnswer;
 use crate::error::collector::ErrorCollector;
 use crate::types::annotation::Annotation;
 use crate::types::class::Class;
 use crate::types::type_info::TypeInfo;
+use crate::types::types::AnyStyle;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
@@ -116,6 +120,21 @@ pub trait Solve<Ans: LookupAnswer>: Keyed {
     ) -> Arc<Self::Answer> {
         answer
     }
+
+    /// Check for a shortcut answer that bypasses CalcStack push and caching.
+    /// Called in `get_idx` before pushing to the CalcStack. If this returns `Some`,
+    /// the answer is returned directly without pushing, solving, or caching.
+    ///
+    /// Used by `Key` to intercept `ForwardToFirstUse` bindings during inline
+    /// first-use pinning: returns the stored partial answer so that the raw
+    /// (unpinned) type is visible to the first-use expression without being
+    /// written to the shared answer cache.
+    fn check_shortcut(
+        _answers: &AnswersSolver<Ans>,
+        _binding: &Self::Value,
+    ) -> Option<Arc<Self::Answer>> {
+        None
+    }
 }
 
 impl<Ans: LookupAnswer> Solve<Ans> for Key {
@@ -147,6 +166,20 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
             .arc_clone()
             .map_ty(|ty| answers.record_recursive(range, ty, recursive, errors));
         Arc::new(ty_info)
+    }
+
+    fn check_shortcut(answers: &AnswersSolver<Ans>, binding: &Binding) -> Option<Arc<TypeInfo>> {
+        match binding {
+            Binding::ForwardToFirstUse(fwd) => {
+                let def_idx = answers.def_idx_for_forward_to_first_use(*fwd)?;
+                answers.check_partial_answer(def_idx)
+            }
+            Binding::LambdaParameter(id, owner) => {
+                let var = answers.resolve_lambda_param_var(*id, *owner);
+                Some(Arc::new(TypeInfo::of_ty(var.to_type(answers.heap))))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -202,29 +235,23 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<Type> {
-        Arc::new(
-            answers
-                .solve_binding(&binding.0, range, errors)
-                .arc_clone_ty(),
-        )
+        let inner = match binding {
+            BindingExport::Forward(idx) => Binding::Forward(*idx),
+            BindingExport::AnnotatedForward(ann, idx) => {
+                Binding::AnnotatedType(*ann, Box::new(Binding::Forward(*idx)))
+            }
+        };
+        Arc::new(answers.solve_binding(&inner, range, errors).arc_clone_ty())
     }
 
-    fn create_recursive(answers: &AnswersSolver<Ans>, binding: &Self::Value) -> Var {
-        answers.create_recursive(&binding.0)
-    }
-
-    fn promote_recursive(_heap: &TypeHeap, x: Var) -> Self::Answer {
-        Type::Var(x)
-    }
-
-    fn record_recursive(
-        answers: &AnswersSolver<Ans>,
-        range: TextRange,
-        answer: Arc<Type>,
-        recursive: Var,
-        errors: &ErrorCollector,
-    ) -> Arc<Type> {
-        Arc::new(answers.record_recursive(range, answer.as_ref().clone(), recursive, errors))
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
+        // KeyExport delegates to the underlying Key via solve_binding, so the
+        // Key handles its own recursion-breaking with a Var in the correct
+        // module's solver. KeyExport does not need its own placeholder Var;
+        // returning Unknown here avoids leaking a Var across module boundaries
+        // in iterative-fixpoint SCC solving (where cross-module back-edges on
+        // KeyExport would otherwise return a Type::Var from a foreign solver).
+        Type::Any(AnyStyle::Implicit)
     }
 }
 
@@ -276,6 +303,21 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyUndecoratedFunction {
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         // This shouldn't happen
         UndecoratedFunction::recursive()
+    }
+}
+
+impl<Ans: LookupAnswer> Solve<Ans> for KeyUndecoratedFunctionRange {
+    fn solve(
+        _answers: &AnswersSolver<Ans>,
+        binding: &BindingUndecoratedFunctionRange,
+        _range: TextRange,
+        _errors: &ErrorCollector,
+    ) -> Arc<UndecoratedFunctionRangeAnswer> {
+        Arc::new(UndecoratedFunctionRangeAnswer(binding.0))
+    }
+
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
+        unreachable!("KeyUndecoratedFunctionRange should never be recursive")
     }
 }
 

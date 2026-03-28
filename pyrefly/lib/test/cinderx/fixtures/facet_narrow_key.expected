@@ -1,0 +1,16 @@
+  9:13-22: typing.Type[typing.Any]
+  10:4-5: typing.Optional[builtins.int]
+  10:7-17: typing.Type[typing.Optional[builtins.int]]
+  10:7-10: typing.Type[builtins.int]
+  10:13-17: None
+  13:9-15: typing.Type[facet_narrow_key.MyDict]
+  13:20-24: None
+  14:7-25: builtins.bool
+  14:7-13: typing.Optional[builtins.int]
+  14:7-8: facet_narrow_key.MyDict <typed_dict>
+  14:9-12: Literal['x'] -> builtins.str
+  14:21-25: None
+  15:8-9: builtins.int
+  15:12-18: builtins.int
+    unnarrowed: typing.Optional[builtins.int] (mismatch)
+  15:12-13: facet_narrow_key.MyDict <typed_dict>

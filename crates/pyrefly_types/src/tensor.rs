@@ -1,0 +1,1014 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+use std::cmp::Ordering;
+use std::fmt;
+use std::fmt::Display;
+use std::hash::Hash;
+use std::hash::Hasher;
+
+use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
+use pyrefly_derive::VisitMut;
+use pyrefly_util::display::commas_iter;
+
+use crate::class::ClassType;
+pub use crate::dimension::ShapeError;
+pub use crate::dimension::SizeExpr;
+use crate::dimension::canonicalize;
+pub use crate::dimension::contains_var_in_type;
+use crate::tuple::Tuple;
+use crate::types::Type;
+
+// ============================================================================
+// Tensor Types
+// ============================================================================
+
+/// Whether a tensor type was constructed using native (`Tensor[N, M]`) or
+/// jaxtyping (`Float[Tensor, "N M"]`) syntax. Controls display rendering and
+/// enables diagnostic checks (e.g., mixing both syntaxes in one function).
+///
+/// Transparent to equality, hashing, and ordering — syntax does not affect
+/// type identity. Two tensor types with different syntax but identical base
+/// class and shape are considered equal.
+#[derive(Debug, Clone, Copy, Default)]
+#[derive(Visit, VisitMut)]
+pub enum TensorSyntax {
+    #[default]
+    Native,
+    Jaxtyping,
+}
+
+// Syntax is a display/diagnostic concern, not a type identity concern.
+// All trait impls treat every TensorSyntax value as equal.
+
+impl PartialEq for TensorSyntax {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for TensorSyntax {}
+
+impl Hash for TensorSyntax {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
+}
+
+impl PartialOrd for TensorSyntax {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TensorSyntax {
+    fn cmp(&self, _other: &Self) -> Ordering {
+        Ordering::Equal
+    }
+}
+
+impl crate::equality::TypeEq for TensorSyntax {
+    fn type_eq(&self, _other: &Self, _ctx: &mut crate::equality::TypeEqCtx) -> bool {
+        true
+    }
+}
+
+/// A tensor type with shape information
+/// Example: Tensor[2, 3] represents a 2x3 tensor
+/// Example: Tensor (no brackets) represents a shapeless tensor (Unpacked with tuple[Unknown, ...])
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub struct TensorType {
+    /// Base tensor class (e.g., torch.Tensor)
+    pub base_class: ClassType,
+    /// Shape dimensions. Shapeless tensors use Unpacked([], tuple[Unknown, ...], []).
+    pub shape: TensorShape,
+    /// Whether this type was constructed from native or jaxtyping syntax.
+    pub syntax: TensorSyntax,
+}
+
+impl TensorType {
+    /// Create tensor type with shape information (defaults to Native syntax)
+    pub fn new(base_class: ClassType, shape: TensorShape) -> Self {
+        Self {
+            base_class,
+            shape,
+            syntax: TensorSyntax::Native,
+        }
+    }
+
+    /// Create shapeless tensor type (compatible with any shape)
+    /// Represented as Unpacked([], tuple[Unknown, ...], [])
+    pub fn shapeless(base_class: ClassType) -> Self {
+        Self {
+            base_class,
+            shape: TensorShape::Unpacked(Box::new((vec![], Type::any_tuple(), vec![]))),
+            syntax: TensorSyntax::Native,
+        }
+    }
+
+    /// Set the syntax for this tensor type.
+    pub fn with_syntax(mut self, syntax: TensorSyntax) -> Self {
+        self.syntax = syntax;
+        self
+    }
+
+    pub fn to_type(self) -> Type {
+        Type::Tensor(Box::new(self))
+    }
+
+    /// Returns rank if shape is concrete, None for variadic/shapeless
+    pub fn rank(&self) -> Option<usize> {
+        match &self.shape {
+            TensorShape::Concrete(dims) => Some(dims.len()),
+            TensorShape::Unpacked(_) => None,
+        }
+    }
+
+    /// Returns true if tensor has no shape information
+    /// (represented as Unpacked([], tuple[Unknown/Any, ...], []))
+    pub fn is_shapeless(&self) -> bool {
+        is_shapeless(&self.shape)
+    }
+}
+
+impl Display for TensorType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.syntax {
+            TensorSyntax::Native => {
+                if self.is_shapeless() {
+                    write!(f, "{}", self.base_class.name())
+                } else {
+                    write!(f, "{}[{}]", self.base_class.name(), self.shape)
+                }
+            }
+            TensorSyntax::Jaxtyping => {
+                write!(
+                    f,
+                    "Shaped[{}, \"{}\"]",
+                    self.base_class.name(),
+                    self.shape.fmt_jaxtyping()
+                )
+            }
+        }
+    }
+}
+
+/// Shape of a tensor
+/// Similar to Tuple, supports unpacked TypeVarTuple for variadic shapes
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub enum TensorShape {
+    /// Concrete shape: Tensor[2, 3, 4]
+    /// List of dimensions, where each dimension is a Type
+    /// Can be Type::Size(SizeExpr::Literal(n)), Type::Var(...), Type::Quantified(...), or Type::Any(...)
+    Concrete(Vec<Type>),
+    /// Variadic shape with unpacked TypeVarTuple: Tensor[2, *Shape, 4]
+    /// Stores (prefix dims, middle TypeVarTuple, suffix dims)
+    Unpacked(Box<(Vec<Type>, Type, Vec<Type>)>),
+}
+
+impl TensorShape {
+    pub fn new(dims: Vec<SizeExpr>) -> Self {
+        Self::Concrete(
+            dims.into_iter()
+                .map(|d| canonicalize(Type::Size(d)))
+                .collect(),
+        )
+    }
+
+    /// Create from Vec<Type> directly (for when dims are already wrapped)
+    /// Automatically normalizes dimensions to canonical form:
+    /// - Canonicalizes SizeExpr expressions (e.g., 2+3 -> 5, N+0 -> N)
+    /// - Leaves Quantified, Var, and Any as-is (already canonical)
+    pub fn from_types(dims: Vec<Type>) -> Self {
+        Self::Concrete(dims.into_iter().map(canonicalize).collect())
+    }
+
+    /// Create variadic shape with unpacked TypeVarTuple: Tensor[2, *Shape, 4]
+    pub fn unpacked(prefix: Vec<Type>, middle: Type, suffix: Vec<Type>) -> Self {
+        // Canonicalize all dimensions
+        let prefix: Vec<Type> = prefix.into_iter().map(canonicalize).collect();
+        let suffix: Vec<Type> = suffix.into_iter().map(canonicalize).collect();
+
+        Self::Unpacked(Box::new((prefix, middle, suffix)))
+    }
+
+    pub fn rank(&self) -> usize {
+        match self {
+            Self::Concrete(dims) => dims.len(),
+            Self::Unpacked(_) => {
+                // For unpacked shapes, rank is unknown at parse time
+                // This should not be called for variadic shapes
+                panic!("Cannot determine rank of variadic tensor shape")
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Concrete(dims) => dims.is_empty(),
+            Self::Unpacked(_) => false, // Variadic shapes are never empty
+        }
+    }
+
+    /// Get a slice of dimensions (only valid for concrete shapes)
+    pub fn dims_slice(&self) -> &[Type] {
+        match self {
+            Self::Concrete(dims) => dims,
+            Self::Unpacked(_) => {
+                panic!("Cannot get dims_slice for variadic tensor shape")
+            }
+        }
+    }
+
+    /// Get the concrete dims if this is a Concrete shape
+    pub fn as_concrete(&self) -> Option<&Vec<Type>> {
+        match self {
+            Self::Concrete(dims) => Some(dims),
+            Self::Unpacked(_) => None,
+        }
+    }
+
+    /// Get a mutable reference to concrete dims (for meta-shape operations)
+    /// Panics if called on Unpacked shape
+    pub fn dims_mut(&mut self) -> &mut Vec<Type> {
+        match self {
+            Self::Concrete(dims) => dims,
+            Self::Unpacked(_) => {
+                panic!("Cannot get mutable dims for variadic tensor shape")
+            }
+        }
+    }
+
+    /// Get dims as a Vec for concrete shapes, panics for unpacked
+    /// This is used by meta-shape code that doesn't support variadic shapes yet
+    pub fn dims(&self) -> &Vec<Type> {
+        match self {
+            Self::Concrete(dims) => dims,
+            Self::Unpacked(_) => {
+                panic!("Meta-shape operations do not yet support variadic tensor shapes")
+            }
+        }
+    }
+
+    /// Check if this is a variadic shape with unpacked TypeVarTuple
+    pub fn is_unpacked(&self) -> bool {
+        matches!(self, Self::Unpacked(_))
+    }
+
+    /// Check if all dimensions are literal (concrete integers)
+    /// Returns false for variadic shapes
+    pub fn all_literal(&self) -> bool {
+        match self {
+            Self::Concrete(dims) => dims
+                .iter()
+                .all(|ty| matches!(ty, Type::Size(SizeExpr::Literal(_)))),
+            Self::Unpacked(_) => false,
+        }
+    }
+
+    /// Extract literal dimension values if all are literal
+    /// Returns None for variadic shapes
+    pub fn as_literals(&self) -> Option<Vec<i64>> {
+        match self {
+            Self::Concrete(dims) if self.all_literal() => Some(
+                dims.iter()
+                    .filter_map(|ty| {
+                        if let Type::Size(SizeExpr::Literal(n)) = ty {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
+    /// Get a dimension by index (only for concrete shapes)
+    pub fn get_dim(&self, index: usize) -> Type {
+        match self {
+            Self::Concrete(dims) => dims.get(index).unwrap().clone(),
+            Self::Unpacked(_) => {
+                panic!("Cannot get dimension by index for variadic tensor shape")
+            }
+        }
+    }
+
+    /// Normalize a dimension index to handle negative indices
+    ///
+    /// Negative indices count from the end: -1 is the last dimension, -2 is second-to-last, etc.
+    /// Returns an error if the index is out of range.
+    pub fn normalize_dim(&self, dim: i64) -> Result<usize, ShapeError> {
+        // Check for variadic shape first - cannot normalize dims for unpacked shapes
+        if let Self::Unpacked(_) = self {
+            return Err(ShapeError::InvalidDimension {
+                value: dim,
+                reason: "Cannot normalize dimension index for variadic tensor shape".to_owned(),
+            });
+        }
+
+        let rank = self.rank() as i64;
+
+        if rank == 0 {
+            return Err(ShapeError::InvalidDimension {
+                value: dim,
+                reason: "Cannot normalize dimension for scalar tensor (rank 0)".to_owned(),
+            });
+        }
+
+        let normalized = if dim < 0 { rank + dim } else { dim };
+
+        if normalized < 0 || normalized >= rank {
+            return Err(ShapeError::InvalidDimension {
+                value: dim,
+                reason: format!(
+                    "Dimension {} out of range for tensor with rank {} (valid range: {} to {})",
+                    dim,
+                    rank,
+                    -rank,
+                    rank - 1
+                ),
+            });
+        }
+
+        Ok(normalized as usize)
+    }
+
+    /// Format the shape using jaxtyping syntax (space-separated, no parens for scalar).
+    ///
+    /// Handles all jaxtyping dimension types:
+    /// - `Type::Any` → `_` (anonymous dim)
+    /// - `Type::Size(Literal(n))` → `n`
+    /// - `Type::Size(Add/Sub)` → `a+b` / `a-b` (no parens, no spaces)
+    /// - `Type::Quantified` → dim name
+    /// - Unpacked with `tuple[Any, ...]` middle → `...` (ellipsis)
+    /// - Unpacked with TypeVarTuple middle → `*name`
+    pub fn fmt_jaxtyping(&self) -> String {
+        match self {
+            Self::Concrete(dims) => {
+                if dims.is_empty() {
+                    String::new() // Scalar: empty string inside quotes
+                } else {
+                    dims.iter()
+                        .map(fmt_jaxtyping_dim)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                }
+            }
+            Self::Unpacked(box (prefix, middle, suffix)) => {
+                let mut parts: Vec<String> = prefix.iter().map(fmt_jaxtyping_dim).collect();
+
+                // Ellipsis: tuple[Any, ...] middle renders as "..."
+                // Named TypeVarTuple renders as "*name"
+                if *middle == Type::any_tuple() {
+                    parts.push("...".to_owned());
+                } else {
+                    parts.push(format!("*{middle}"));
+                }
+
+                parts.extend(suffix.iter().map(fmt_jaxtyping_dim));
+                parts.join(" ")
+            }
+        }
+    }
+}
+
+/// Format a single dimension type in jaxtyping syntax.
+///
+/// Jaxtyping uses different rendering than native tensor syntax:
+/// - `Type::Any(_)` → `_` (anonymous dim, not "Any")
+/// - `SizeExpr::Add/Sub` → `a+b` / `a-b` (no parens, no spaces)
+/// - Negative literal in Add → rendered as subtraction: `Add(-1, n)` → `n-1`
+/// - All other types use their default Display
+fn fmt_jaxtyping_dim(d: &Type) -> String {
+    match d {
+        Type::Any(_) => "_".to_owned(),
+        Type::Size(expr) => fmt_jaxtyping_size_expr(expr),
+        _ => format!("{d}"),
+    }
+}
+
+/// Format a SizeExpr in jaxtyping syntax (no parens, no spaces around operators).
+fn fmt_jaxtyping_size_expr(expr: &SizeExpr) -> String {
+    match expr {
+        SizeExpr::Literal(n) => n.to_string(),
+        SizeExpr::Add(left, right) => {
+            // After canonicalization, Sub(a,b) becomes Add(Literal(-b), a).
+            // Detect this and render as subtraction: Add(-n, x) → x-n
+            if let Type::Size(SizeExpr::Literal(n)) = left.as_ref()
+                && *n < 0
+            {
+                return format!("{}-{}", fmt_jaxtyping_dim(right), n.wrapping_neg());
+            }
+            format!("{}+{}", fmt_jaxtyping_dim(left), fmt_jaxtyping_dim(right))
+        }
+        SizeExpr::Sub(left, right) => {
+            format!("{}-{}", fmt_jaxtyping_dim(left), fmt_jaxtyping_dim(right))
+        }
+        // Mul/FloorDiv fall back to default SizeExpr display (rare in jaxtyping)
+        _ => format!("{expr}"),
+    }
+}
+
+impl Display for TensorShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Concrete(dims) => {
+                if dims.is_empty() {
+                    write!(f, "()") // Scalar tensor: Tensor[()]
+                } else {
+                    write!(f, "{}", commas_iter(|| dims.iter()))
+                }
+            }
+            Self::Unpacked(box (prefix, middle, suffix)) => {
+                let prefix_str = if prefix.is_empty() {
+                    "".to_owned()
+                } else {
+                    format!("{}, ", commas_iter(|| prefix.iter()))
+                };
+                let suffix_str = if suffix.is_empty() {
+                    "".to_owned()
+                } else {
+                    format!(", {}", commas_iter(|| suffix.iter()))
+                };
+                write!(f, "{}*{}{}", prefix_str, middle, suffix_str)
+            }
+        }
+    }
+}
+
+/// Check if a shape is shapeless: Unpacked([], tuple[Any,...], [])
+fn is_shapeless(shape: &TensorShape) -> bool {
+    matches!(
+        shape,
+        TensorShape::Unpacked(box (prefix, Type::Tuple(Tuple::Unbounded(box Type::Any(_))), suffix))
+            if prefix.is_empty() && suffix.is_empty()
+    )
+}
+
+/// Compute the broadcasted shape of two tensor shapes following NumPy/PyTorch broadcasting rules:
+/// - Dimensions are aligned from right to left
+/// - Each dimension must either match or one of them must be 1
+/// - Missing dimensions are treated as 1
+///
+/// For shapes with variadic middles (Unpacked), the algorithm:
+/// 1. Consume concrete suffix dims from both sides, right-to-left, broadcasting each pair.
+///    Stop when either side runs out of concrete dims (hits a middle or exhausts its dims).
+/// 2. Analyze what remains after suffix consumption:
+///    - empty + anything → result is the other side
+///    - concrete + unpacked(p, m, []) → shapeless if m is unbounded; error if m is TypeVarTuple
+///    - unpacked + unpacked → if same TypeVarTuple with no extra suffix, broadcast prefixes;
+///      if either is unbounded, shapeless; otherwise error
+/// 3. Assemble result from step 2 output + broadcast suffix.
+pub fn broadcast_shapes(a: &TensorShape, b: &TensorShape) -> Result<TensorShape, ShapeError> {
+    match (a, b) {
+        (TensorShape::Concrete(a_dims), TensorShape::Concrete(b_dims)) => {
+            broadcast_concrete(a_dims, b_dims)
+        }
+        (TensorShape::Concrete(concrete), TensorShape::Unpacked(box (prefix, middle, suffix)))
+        | (TensorShape::Unpacked(box (prefix, middle, suffix)), TensorShape::Concrete(concrete)) => {
+            broadcast_concrete_with_unpacked(concrete, prefix, middle, suffix)
+        }
+        (
+            TensorShape::Unpacked(box (ap, am, a_suf)),
+            TensorShape::Unpacked(box (bp, bm, b_suf)),
+        ) => broadcast_unpacked_with_unpacked(ap, am, a_suf, bp, bm, b_suf),
+    }
+}
+
+/// Check if a middle type is an unbounded tuple (e.g., tuple[int, ...])
+fn is_unbounded_middle(middle: &Type) -> bool {
+    matches!(middle, Type::Tuple(Tuple::Unbounded(_)))
+}
+
+/// Broadcast a Concrete shape with an Unpacked shape.
+///
+/// Right-aligns concrete dims against the Unpacked's suffix, broadcasting pairwise.
+/// After suffix consumption:
+/// - If no concrete dims remain: preserve the Unpacked's prefix + middle.
+/// - If concrete dims remain and middle is unbounded: result middle is tuple[Any, ...].
+/// - If concrete dims remain and middle is TypeVarTuple: error.
+fn broadcast_concrete_with_unpacked(
+    concrete: &[Type],
+    prefix: &[Type],
+    middle: &Type,
+    suffix: &[Type],
+) -> Result<TensorShape, ShapeError> {
+    let matched = concrete.len().min(suffix.len());
+
+    // Build result suffix: unmatched suffix dims on the left pass through,
+    // then broadcast the matched pairs (right-aligned).
+    let mut result_suffix = suffix[..suffix.len() - matched].to_vec();
+    for i in 0..matched {
+        let c_idx = concrete.len() - matched + i;
+        let s_idx = suffix.len() - matched + i;
+        result_suffix.push(broadcast_dim(&concrete[c_idx], &suffix[s_idx], s_idx)?);
+    }
+
+    // Remaining concrete dims not consumed by suffix matching
+    let remaining = &concrete[..concrete.len() - matched];
+
+    if remaining.is_empty() {
+        // All concrete dims consumed → preserve prefix + middle
+        Ok(TensorShape::Unpacked(Box::new((
+            prefix.to_vec(),
+            middle.clone(),
+            result_suffix,
+        ))))
+    } else if is_unbounded_middle(middle) {
+        // Can't align remaining concrete with unbounded middle
+        Ok(TensorShape::Unpacked(Box::new((
+            vec![],
+            Type::any_tuple(),
+            result_suffix,
+        ))))
+    } else {
+        Err(ShapeError::ShapeComputation {
+            message: "Cannot broadcast concrete dims with variadic shape: alignment is ambiguous"
+                .to_owned(),
+        })
+    }
+}
+
+/// Broadcast two Unpacked shapes.
+///
+/// Right-aligns suffixes, broadcasting matched pairs. Then analyzes the middles:
+/// - Same TypeVarTuple with no extra suffix dims: cancel middles, broadcast prefixes.
+/// - Either middle is unbounded: result is shapeless + broadcast suffix.
+/// - Otherwise: error.
+fn broadcast_unpacked_with_unpacked(
+    ap: &[Type],
+    am: &Type,
+    a_suf: &[Type],
+    bp: &[Type],
+    bm: &Type,
+    b_suf: &[Type],
+) -> Result<TensorShape, ShapeError> {
+    let matched = a_suf.len().min(b_suf.len());
+
+    // Broadcast matched suffix pairs (right-aligned)
+    let mut result_suffix = Vec::new();
+    for i in 0..matched {
+        let a_idx = a_suf.len() - matched + i;
+        let b_idx = b_suf.len() - matched + i;
+        result_suffix.push(broadcast_dim(&a_suf[a_idx], &b_suf[b_idx], 0)?);
+    }
+
+    // Unmatched suffix dims (at most one side has them)
+    let a_extra = &a_suf[..a_suf.len() - matched];
+    let b_extra = &b_suf[..b_suf.len() - matched];
+    let has_extra = !a_extra.is_empty() || !b_extra.is_empty();
+
+    let am_canon = canonicalize(am.clone());
+    let bm_canon = canonicalize(bm.clone());
+
+    if !has_extra && am_canon == bm_canon && !is_unbounded_middle(am) {
+        // Same TypeVarTuple, no extra suffix → cancel middles, broadcast prefixes
+        let prefix = match broadcast_concrete(ap, bp)? {
+            TensorShape::Concrete(dims) => dims,
+            _ => unreachable!(),
+        };
+        Ok(TensorShape::Unpacked(Box::new((
+            prefix,
+            am.clone(),
+            result_suffix,
+        ))))
+    } else if is_unbounded_middle(am) || is_unbounded_middle(bm) {
+        // At least one unbounded middle → can't determine alignment
+        Ok(TensorShape::Unpacked(Box::new((
+            vec![],
+            Type::any_tuple(),
+            result_suffix,
+        ))))
+    } else {
+        // Different TypeVarTuples or structural mismatch
+        Err(ShapeError::ShapeComputation {
+            message: format!(
+                "Cannot broadcast variadic shapes: incompatible middles *{} vs *{}",
+                am, bm
+            ),
+        })
+    }
+}
+
+/// Broadcast two concrete dimension lists following NumPy/PyTorch rules.
+/// Returns a Concrete TensorShape.
+fn broadcast_concrete(a_dims: &[Type], b_dims: &[Type]) -> Result<TensorShape, ShapeError> {
+    let max_rank = a_dims.len().max(b_dims.len());
+    let mut result_dims = Vec::with_capacity(max_rank);
+
+    // Iterate from right to left
+    for i in 0..max_rank {
+        let a_idx = a_dims.len().wrapping_sub(i + 1);
+        let b_idx = b_dims.len().wrapping_sub(i + 1);
+
+        let a_dim = if a_idx < a_dims.len() {
+            Some(&a_dims[a_idx])
+        } else {
+            None // Treat as implicit 1
+        };
+
+        let b_dim = if b_idx < b_dims.len() {
+            Some(&b_dims[b_idx])
+        } else {
+            None // Treat as implicit 1
+        };
+
+        let result_dim = match (a_dim, b_dim) {
+            (Some(a_ty), Some(b_ty)) => broadcast_dim(a_ty, b_ty, max_rank - i - 1)?,
+            // One shape ran out of dimensions, use the other
+            (Some(dim), None) | (None, Some(dim)) => dim.clone(),
+            (None, None) => unreachable!(),
+        };
+
+        result_dims.push(result_dim);
+    }
+
+    // Reverse to get left-to-right order
+    result_dims.reverse();
+    Ok(TensorShape::from_types(result_dims))
+}
+
+/// Broadcast a single pair of dimensions.
+/// Canonicalizes both sides so symbolic expressions that reduce to literals are caught.
+fn broadcast_dim(a_ty: &Type, b_ty: &Type, position: usize) -> Result<Type, ShapeError> {
+    let a_ty = canonicalize(a_ty.clone());
+    let b_ty = canonicalize(b_ty.clone());
+    match (&a_ty, &b_ty) {
+        // Any is compatible with anything; prefer the non-Any side
+        (Type::Any(_), _) => Ok(b_ty.clone()),
+        (_, Type::Any(_)) => Ok(a_ty.clone()),
+        // Equal dimensions (after canonicalization): compatible
+        _ if a_ty == b_ty => Ok(a_ty.clone()),
+        // Size(1) broadcasts to anything
+        (Type::Size(SizeExpr::Literal(1)), _) => Ok(b_ty.clone()),
+        (_, Type::Size(SizeExpr::Literal(1))) => Ok(a_ty.clone()),
+        // Different non-broadcastable types: incompatible
+        _ => Err(ShapeError::ShapeComputation {
+            message: format!(
+                "Cannot broadcast dimension {} with dimension {} at position {}",
+                a_ty, b_ty, position
+            ),
+        }),
+    }
+}
+
+// ============================================================================
+// Tensor Indexing / Slicing
+// ============================================================================
+
+/// A single index operation, pre-classified by the type checker.
+/// The type checker resolves Expr nodes into these before calling shape functions.
+pub enum IndexOp {
+    /// Integer index: removes the dimension
+    Int,
+    /// Slice: replaces dimension with (stop - start) / step.
+    /// `start` defaults to 0, `stop` defaults to the dimension size.
+    /// `step` defaults to 1 (no stride).
+    Slice {
+        start: Option<Type>,
+        stop: Option<Type>,
+        /// Step/stride for the slice. `None` means step=1 (default).
+        /// Can be a literal `Size(Literal(n))`, a symbolic `Size(Var(...))`,
+        /// a `Dim[S]`, or a `Quantified` type variable.
+        step: Option<Type>,
+    },
+    /// Tensor index: replaces dimension with the index tensor's dims
+    TensorIndex(Vec<Type>),
+    /// Tuple/list fancy index: dimension becomes known size or unknown.
+    /// `Some(n)` for concrete tuple of length n, `None` for list/unknown.
+    Fancy(Option<i64>),
+    /// None/np.newaxis index: inserts a new dimension of size 1.
+    /// Does not consume a shape dimension.
+    NewAxis,
+}
+
+/// Apply a single integer index — removes first dimension.
+/// E.g. `Tensor[10, 20][i]` -> `Tensor[20]`
+pub fn index_shape_int(shape: &TensorShape) -> Result<TensorShape, ShapeError> {
+    match shape {
+        TensorShape::Concrete(dims) => {
+            if dims.is_empty() {
+                return Err(ShapeError::ScalarIndex);
+            }
+            Ok(TensorShape::Concrete(dims[1..].to_vec()))
+        }
+        TensorShape::Unpacked(box (prefix, middle, suffix)) if !prefix.is_empty() => {
+            Ok(TensorShape::Unpacked(Box::new((
+                prefix[1..].to_vec(),
+                middle.clone(),
+                suffix.clone(),
+            ))))
+        }
+        // First dim is in variadic middle; can't determine result
+        TensorShape::Unpacked(_) => Ok(shapeless_shape()),
+    }
+}
+
+/// Apply a single slice to first dimension.
+/// E.g. `Tensor[10, 20][2:5]` -> `Tensor[3, 20]`
+/// With step: `Tensor[100][::2]` -> `Tensor[50]` (ceil_div(100, 2))
+pub fn index_shape_slice(
+    shape: &TensorShape,
+    start: Option<Type>,
+    stop: Option<Type>,
+    step: Option<Type>,
+) -> Result<TensorShape, ShapeError> {
+    match shape {
+        TensorShape::Concrete(dims) => {
+            if dims.is_empty() {
+                return Err(ShapeError::ScalarIndex);
+            }
+            let start = adjust_negative(
+                start.unwrap_or_else(|| Type::Size(SizeExpr::Literal(0))),
+                &dims[0],
+            );
+            let stop = adjust_negative(stop.unwrap_or_else(|| dims[0].clone()), &dims[0]);
+            let range_dim = sub_dim(stop, start);
+            let new_first_dim = apply_step(range_dim, step);
+            let mut new_dims = vec![new_first_dim];
+            new_dims.extend_from_slice(&dims[1..]);
+            Ok(TensorShape::from_types(new_dims))
+        }
+        TensorShape::Unpacked(box (prefix, middle, suffix)) if !prefix.is_empty() => {
+            let start = adjust_negative(
+                start.unwrap_or_else(|| Type::Size(SizeExpr::Literal(0))),
+                &prefix[0],
+            );
+            let stop = adjust_negative(stop.unwrap_or_else(|| prefix[0].clone()), &prefix[0]);
+            let range_dim = sub_dim(stop, start);
+            let new_first_dim = apply_step(range_dim, step);
+            let mut new_prefix = vec![new_first_dim];
+            new_prefix.extend_from_slice(&prefix[1..]);
+            Ok(TensorShape::Unpacked(Box::new((
+                new_prefix,
+                middle.clone(),
+                suffix.clone(),
+            ))))
+        }
+        // Empty prefix: dim0 is hidden in the variadic middle
+        TensorShape::Unpacked(_) => Ok(shapeless_shape()),
+    }
+}
+
+/// Apply tensor-as-index — replaces first dim with index tensor's dims.
+/// E.g. `Tensor[B, D1, D2][Tensor[T]]` -> `Tensor[T, D1, D2]`
+pub fn index_shape_tensor(
+    shape: &TensorShape,
+    idx_dims: &[Type],
+) -> Result<TensorShape, ShapeError> {
+    match shape {
+        TensorShape::Concrete(dims) => {
+            if dims.is_empty() {
+                return Err(ShapeError::ScalarIndex);
+            }
+            let mut new_dims = idx_dims.to_vec();
+            new_dims.extend_from_slice(&dims[1..]);
+            Ok(TensorShape::from_types(new_dims))
+        }
+        TensorShape::Unpacked(box (prefix, middle, suffix)) if !prefix.is_empty() => {
+            let mut new_prefix = idx_dims.to_vec();
+            new_prefix.extend_from_slice(&prefix[1..]);
+            Ok(TensorShape::Unpacked(Box::new((
+                new_prefix,
+                middle.clone(),
+                suffix.clone(),
+            ))))
+        }
+        // First dim is in variadic middle; can't determine result
+        TensorShape::Unpacked(_) => Ok(shapeless_shape()),
+    }
+}
+
+/// Count how many shape dimensions a sequence of ops consumes.
+/// `NewAxis` ops don't consume a dimension; all others consume one.
+fn ops_dims_consumed(ops: &[IndexOp]) -> usize {
+    ops.iter()
+        .filter(|op| !matches!(op, IndexOp::NewAxis))
+        .count()
+}
+
+/// Apply multi-axis indexing with optional ellipsis.
+/// `pre_ops` are applied left-to-right from dim 0.
+/// `post_ops` are applied from the end (only when `has_ellipsis` is true).
+/// Dims between pre and post (the ellipsis range) are preserved.
+pub fn index_shape_multi(
+    shape: &TensorShape,
+    pre_ops: &[IndexOp],
+    post_ops: &[IndexOp],
+    has_ellipsis: bool,
+) -> Result<TensorShape, ShapeError> {
+    match shape {
+        TensorShape::Concrete(shape_dims) => {
+            let pre_consumed = ops_dims_consumed(pre_ops);
+            let post_consumed = ops_dims_consumed(post_ops);
+            let total_consumed = pre_consumed + post_consumed;
+            if total_consumed > shape_dims.len() {
+                return Err(ShapeError::TooManyIndices {
+                    got: total_consumed,
+                    max: shape_dims.len(),
+                });
+            }
+
+            let (pre_result, _) = apply_ops_to_dims(pre_ops, &shape_dims[..pre_consumed])?;
+
+            let post_start = if has_ellipsis {
+                shape_dims.len() - post_consumed
+            } else {
+                pre_consumed
+            };
+            let (post_result, _) = apply_ops_to_dims(post_ops, &shape_dims[post_start..])?;
+
+            let mut new_dims = pre_result;
+            if has_ellipsis {
+                // Preserve ellipsis-covered dims
+                new_dims.extend_from_slice(&shape_dims[pre_consumed..post_start]);
+            } else {
+                // No ellipsis: append remaining unindexed dims
+                new_dims.extend_from_slice(&shape_dims[pre_consumed..]);
+            }
+            new_dims.extend(post_result);
+
+            Ok(TensorShape::from_types(new_dims))
+        }
+        TensorShape::Unpacked(box (prefix, middle, suffix)) => {
+            let pre_consumed = ops_dims_consumed(pre_ops);
+            let post_consumed = ops_dims_consumed(post_ops);
+            if pre_consumed > prefix.len() || post_consumed > suffix.len() {
+                return Ok(shapeless_shape());
+            }
+
+            let (pre_result, _) = apply_ops_to_dims(pre_ops, &prefix[..pre_consumed])?;
+
+            let post_suffix_start = suffix.len() - post_consumed;
+            let (post_result, _) = apply_ops_to_dims(post_ops, &suffix[post_suffix_start..])?;
+
+            let remaining_prefix = &prefix[pre_consumed..];
+            let remaining_suffix = &suffix[..post_suffix_start];
+
+            let mut result_prefix = pre_result;
+            result_prefix.extend_from_slice(remaining_prefix);
+            let mut result_suffix = remaining_suffix.to_vec();
+            result_suffix.extend(post_result);
+
+            Ok(TensorShape::Unpacked(Box::new((
+                result_prefix,
+                middle.clone(),
+                result_suffix,
+            ))))
+        }
+    }
+}
+
+/// Create a shapeless shape (compatible with any shape).
+fn shapeless_shape() -> TensorShape {
+    TensorShape::Unpacked(Box::new((vec![], Type::any_tuple(), vec![])))
+}
+
+/// Adjust a negative slice bound by adding dim size (Python negative index semantics).
+/// E.g. -1 on dim N becomes N + (-1) = N - 1.
+/// Also handles symbolic negation: -1 * X (from unary `-` on a Dim/Size expression)
+/// becomes dim_size + (-1 * X) = dim_size - X.
+fn adjust_negative(bound: Type, dim_size: &Type) -> Type {
+    let is_negative = match &bound {
+        // Literal negative: -1, -2, etc.
+        Type::Size(SizeExpr::Literal(v)) => *v < 0,
+        // Symbolic negation: (-1 * X), (-2 * X), etc. from unary negation
+        Type::Size(SizeExpr::Mul(box Type::Size(SizeExpr::Literal(v)), _)) => *v < 0,
+        _ => false,
+    };
+    if is_negative {
+        Type::Size(SizeExpr::Add(Box::new(dim_size.clone()), Box::new(bound)))
+    } else {
+        bound
+    }
+}
+
+/// Compute stop - start, simplifying x - 0 to x.
+fn sub_dim(stop: Type, start: Type) -> Type {
+    match &start {
+        Type::Size(SizeExpr::Literal(0)) => stop,
+        _ => Type::Size(SizeExpr::Sub(Box::new(stop), Box::new(start))),
+    }
+}
+
+/// Apply step (stride) to a range dimension: ceil_div(range, step).
+/// step=None or step=Literal(1) is identity. For literal range and step,
+/// computes the exact integer ceiling division. For symbolic steps (Dim, Size,
+/// Quantified), builds a symbolic ceil_div expression.
+fn apply_step(range_dim: Type, step: Option<Type>) -> Type {
+    let step = match step {
+        None => return range_dim,
+        Some(s) => s,
+    };
+    // Extract the inner type for Dim[S] → S
+    let step_inner = match &step {
+        Type::Dim(inner) => (**inner).clone(),
+        other => other.clone(),
+    };
+    match &step_inner {
+        // Literal step: exact arithmetic
+        Type::Size(SizeExpr::Literal(1)) => range_dim,
+        Type::Size(SizeExpr::Literal(s)) if *s > 1 => {
+            let s = *s;
+            if let Type::Size(SizeExpr::Literal(n)) = &range_dim {
+                Type::Size(SizeExpr::Literal((*n + s - 1) / s))
+            } else {
+                // Symbolic range, literal step: ceil_div(range, step)
+                let step_minus_1 = Type::Size(SizeExpr::Literal(s - 1));
+                let numerator =
+                    Type::Size(SizeExpr::Add(Box::new(range_dim), Box::new(step_minus_1)));
+                Type::Size(SizeExpr::FloorDiv(
+                    Box::new(numerator),
+                    Box::new(Type::Size(SizeExpr::Literal(s))),
+                ))
+            }
+        }
+        Type::Size(SizeExpr::Literal(s)) if *s <= 0 => {
+            // Negative or zero step: degenerate, return unknown
+            Type::any_implicit()
+        }
+        // Symbolic step (Size var, Quantified): build ceil_div(range, step) symbolically
+        _ => {
+            // ceil_div(range, step) = (range + step - 1) // step
+            let step_minus_1 = Type::Size(SizeExpr::Sub(
+                Box::new(step_inner.clone()),
+                Box::new(Type::Size(SizeExpr::Literal(1))),
+            ));
+            let numerator = Type::Size(SizeExpr::Add(Box::new(range_dim), Box::new(step_minus_1)));
+            Type::Size(SizeExpr::FloorDiv(
+                Box::new(numerator),
+                Box::new(step_inner),
+            ))
+        }
+    }
+}
+
+/// Apply a single `IndexOp` to a known dimension.
+/// Returns `Some(new_dim)` for ops that keep the dim, `None` for `Int` (dim removed).
+/// Must not be called with `NewAxis` — that is handled by `apply_ops_to_dims`.
+fn apply_index_op(op: &IndexOp, dim: &Type) -> Option<Type> {
+    match op {
+        IndexOp::Int => None,
+        IndexOp::Slice { start, stop, step } => {
+            let start = adjust_negative(
+                start
+                    .clone()
+                    .unwrap_or_else(|| Type::Size(SizeExpr::Literal(0))),
+                dim,
+            );
+            let stop = adjust_negative(stop.clone().unwrap_or_else(|| dim.clone()), dim);
+            let range_dim = sub_dim(stop, start);
+            Some(apply_step(range_dim, step.clone()))
+        }
+        IndexOp::TensorIndex(idx_dims) => {
+            // Multi-axis tensor indexing: this case shouldn't appear in apply_index_op
+            // since tensor indexing replaces dims entirely. Treat as fancy.
+            if idx_dims.is_empty() {
+                None
+            } else {
+                // Return the first dim of the index tensor; the rest are handled
+                // at a higher level. For multi-axis, this degrades to unknown.
+                Some(Type::any_implicit())
+            }
+        }
+        IndexOp::Fancy(Some(n)) => Some(Type::Size(SizeExpr::Literal(*n))),
+        IndexOp::Fancy(None) => Some(Type::any_implicit()),
+        IndexOp::NewAxis => unreachable!("NewAxis handled by apply_ops_to_dims"),
+    }
+}
+
+/// Apply a sequence of `IndexOp`s to a slice of dimensions.
+/// `NewAxis` ops insert a dim of size 1 without consuming a shape dimension.
+/// Other ops consume one shape dimension each.
+/// Returns (result_dims, number_of_shape_dims_consumed).
+fn apply_ops_to_dims(ops: &[IndexOp], dims: &[Type]) -> Result<(Vec<Type>, usize), ShapeError> {
+    let mut new_dims = Vec::new();
+    let mut dim_idx = 0;
+    for op in ops {
+        match op {
+            IndexOp::NewAxis => {
+                new_dims.push(Type::Size(SizeExpr::Literal(1)));
+            }
+            _ => {
+                if dim_idx >= dims.len() {
+                    return Err(ShapeError::TooManyIndices {
+                        got: dim_idx + 1,
+                        max: dims.len(),
+                    });
+                }
+                if let Some(new_dim) = apply_index_op(op, &dims[dim_idx]) {
+                    new_dims.push(new_dim);
+                }
+                dim_idx += 1;
+            }
+        }
+    }
+    Ok((new_dims, dim_idx))
+}

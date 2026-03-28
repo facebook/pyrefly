@@ -1,0 +1,72 @@
+{
+  "variables": [],
+  "line_count": 26,
+  "functions": [
+    {
+      "name": "test.outer",
+      "return_annotation": "None",
+      "is_return_type_known": true,
+      "parameters": [],
+      "is_type_known": true,
+      "location": {
+        "line": 7,
+        "column": 1
+      }
+    },
+    {
+      "name": "test.top_level",
+      "return_annotation": "bool",
+      "is_return_type_known": true,
+      "parameters": [
+        {
+          "name": "x",
+          "annotation": "int",
+          "is_type_known": true,
+          "location": {
+            "line": 19,
+            "column": 15
+          }
+        }
+      ],
+      "is_type_known": true,
+      "location": {
+        "line": 19,
+        "column": 1
+      }
+    },
+    {
+      "name": "test.TopLevel.method",
+      "return_annotation": "None",
+      "is_return_type_known": true,
+      "parameters": [
+        {
+          "name": "self",
+          "annotation": null,
+          "is_type_known": true,
+          "location": {
+            "line": 24,
+            "column": 16
+          }
+        }
+      ],
+      "is_type_known": true,
+      "location": {
+        "line": 24,
+        "column": 5
+      }
+    }
+  ],
+  "classes": [
+    {
+      "name": "test.TopLevel",
+      "incomplete_attributes": [],
+      "location": {
+        "line": 23,
+        "column": 1
+      }
+    }
+  ],
+  "suppressions": [],
+  "annotation_completeness": 100.0,
+  "type_completeness": 100.0
+}

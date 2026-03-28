@@ -49,6 +49,7 @@
     "react-dom": "^18.0.0",
     "react-json-view": "^1.21.3",
     "react-lite-youtube-embed": "^2.3.52",
+    "serialize-javascript": "7.0.3",
     "url-loader": "^4.1.1",
     "vscode-oniguruma": "^1.6.2",
     "vscode-textmate": "^7.0.1"

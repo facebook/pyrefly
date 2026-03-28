@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe as _;
+use lsp_types::Location;
 use lsp_types::Url;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
@@ -27,6 +28,8 @@ use crate::state::state::State;
 /// Used for setups where file paths need to be transformed when converting
 /// to URIs.
 pub type PathRemapper = Arc<dyn Fn(&Path) -> Cow<'_, Path> + Send + Sync>;
+
+pub type ThriftRemapper = Arc<dyn Fn(&Location) -> Option<Location> + Send + Sync>;
 
 /// Convert ModuleInfo to URI with optional path remapping.
 /// When a path remapper is provided, the path is transformed before

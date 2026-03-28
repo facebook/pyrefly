@@ -403,3 +403,56 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor i
 assert_type(x, LiteralString)
     "#,
 );
+
+testcase!(
+    test_literal_try_except_import,
+    r#"
+from typing import assert_type
+
+try:
+    from typing import Literal
+except ImportError:
+    from typing_extensions import Literal
+
+def fun(param: Literal["test"] = "test"):
+    assert_type(param, Literal["test"])
+
+x: Literal["a", "b"] = "a"
+assert_type(x, Literal["a", "b"])
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2633
+testcase!(
+    test_literal_union_annotated,
+    r#"
+from typing import Annotated, Literal, TypeAlias
+
+One: TypeAlias = Literal[1]
+Two: TypeAlias = Annotated[Literal[2], "irrelevant"]
+OneOrTwo: TypeAlias = One | Two
+
+Spam: TypeAlias = Literal[OneOrTwo]
+"#,
+);
+
+testcase!(
+    bug = "enumerate promotes Literal types to their base type",
+    test_enumerate_preserves_literal_type,
+    r#"
+from typing import Literal
+
+def test(x: Literal["a", "b"]) -> None:
+    pass
+
+c = ("a", "b")
+
+# Direct iteration preserves Literal types
+for i in c:
+    test(i)
+
+# enumerate loses Literal types due to TypeVar promotion
+for i, j in enumerate(c):
+    test(j) # E: Argument `str` is not assignable to parameter `x` with type `Literal['a', 'b']` in function `test`
+    "#,
+);

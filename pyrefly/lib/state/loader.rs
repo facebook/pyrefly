@@ -21,6 +21,7 @@ use vec1::vec1;
 
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
+use crate::config::config::FallbackSearchPath;
 use crate::config::config::ImportLookupPathPart;
 use crate::error::context::ErrorContext;
 use crate::module::finder::find_import;
@@ -56,7 +57,7 @@ impl FindError {
     ) -> FindError {
         let config_suffix = match config_source {
             ConfigSource::File(p) => format!(" (from config in `{}`)", p.display()),
-            ConfigSource::Marker(p) => {
+            ConfigSource::PythonToolMarker(p) | ConfigSource::Marker(p) => {
                 format!(
                     " (from default config for project root marked by `{}`)",
                     p.display()
@@ -165,7 +166,7 @@ impl<T> FindingOrError<T> {
         }
     }
 
-    pub fn map<T2>(self, f: impl Fn(T) -> T2) -> FindingOrError<T2> {
+    pub fn map<T2>(self, f: impl FnOnce(T) -> T2) -> FindingOrError<T2> {
         match self {
             Self::Finding(Finding { finding, error }) => FindingOrError::Finding(Finding {
                 finding: f(finding),
@@ -189,6 +190,11 @@ impl<T> FindingOrError<T> {
 #[derive(Debug)]
 pub struct LoaderFindCache {
     config: ArcId<ConfigFile>,
+    /// When true, all import resolution steps are origin-independent: no
+    /// source_db, no sub_configs, and fallback_search_path is not
+    /// DirectoryRelative. This lets us cache every module by ModuleName
+    /// alone instead of (ModuleName, Option<ModulePath>).
+    is_origin_independent: bool,
     cache: LockedMap<
         (ModuleName, Option<ModulePath>),
         (FindingOrError<ModulePath>, Arc<Vec<PathBuf>>),
@@ -199,8 +205,19 @@ pub struct LoaderFindCache {
 
 impl LoaderFindCache {
     pub fn new(config: ArcId<ConfigFile>) -> Self {
+        // When no config feature uses origin, all import resolutions produce
+        // the same result regardless of which file is importing. We can then
+        // cache by ModuleName alone, reducing millions of cache entries
+        // (112K files × thousands of modules) to just thousands.
+        let is_origin_independent = config.source_db.is_none()
+            && config.sub_configs.is_empty()
+            && !matches!(
+                config.fallback_search_path,
+                FallbackSearchPath::DirectoryRelative(_)
+            );
         Self {
             config,
+            is_origin_independent,
             cache: Default::default(),
             executable_cache: Default::default(),
         }
@@ -241,15 +258,45 @@ impl LoaderFindCache {
         module: ModuleName,
         origin: Option<&ModulePath>,
     ) -> FindingOrError<ModulePath> {
-        self.cache
-            .ensure(&(module.dupe(), origin.cloned()), || {
+        // When all resolution steps are origin-independent, use None as the
+        // cache key. This reduces entries from O(files × modules) to O(modules).
+        let effective_origin = if self.is_origin_independent {
+            None
+        } else {
+            origin.cloned()
+        };
+
+        // Fast path: if origin is Some, check (module, None) first for
+        // previously-promoted bundled results that resolve identically
+        // regardless of origin.
+        if effective_origin.is_some()
+            && let Some(cached) = self.cache.get(&(module.dupe(), None))
+        {
+            return cached.0.dupe();
+        }
+
+        let result = self
+            .cache
+            .ensure(&(module.dupe(), effective_origin.clone()), || {
                 let phantom_paths = Vec::new();
                 let result = find_import(&self.config, module, origin, None);
                 (result, Arc::new(phantom_paths))
             })
             .0
             .0
-            .dupe()
+            .dupe();
+
+        // Promote bundled modules to (module, None) so future lookups from
+        // other origins hit the cache without redundant resolution.
+        if effective_origin.is_some()
+            && let FindingOrError::Finding(ref import) = result
+            && import.finding.is_bundled()
+        {
+            self.cache
+                .insert((module, None), (result.dupe(), Arc::new(Vec::new())));
+        }
+
+        result
     }
 
     #[allow(unused)] // will be used soon

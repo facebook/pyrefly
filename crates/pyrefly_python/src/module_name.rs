@@ -27,6 +27,7 @@ use static_interner::Intern;
 use static_interner::Interner;
 use thiserror::Error;
 
+use crate::PYTHON_EXTENSIONS;
 use crate::dunder;
 
 static MODULE_NAME_INTERNER: Interner<String> = Interner::new();
@@ -250,7 +251,6 @@ impl ModuleName {
         Self::from_str("pydantic.main")
     }
 
-    #[allow(dead_code)]
     pub fn pydantic_settings() -> Self {
         Self::from_str("pydantic_settings.main")
     }
@@ -259,13 +259,20 @@ impl ModuleName {
         Self::from_str("pydantic.root_model")
     }
 
-    #[allow(dead_code)]
     pub fn pydantic_dataclasses() -> Self {
         Self::from_str("pydantic.dataclasses")
     }
 
     pub fn django_models_enums() -> Self {
         Self::from_str("django.db.models.enums")
+    }
+
+    pub fn attr() -> Self {
+        Self::from_str("attr")
+    }
+
+    pub fn attrs() -> Self {
+        Self::from_str("attrs")
     }
 
     pub fn django_models() -> Self {
@@ -324,9 +331,7 @@ impl ModuleName {
             None => {}
             Some(file_name) => {
                 let splits: Vec<&str> = file_name.rsplitn(2, '.').collect();
-                if splits.len() != 2
-                    || !(splits[0] == "py" || splits[0] == "pyi" || splits[0] == "ipynb")
-                {
+                if splits.len() != 2 || !PYTHON_EXTENSIONS.contains(&splits[0]) {
                     return Err(anyhow::anyhow!(PathConversionError::InvalidExtension {
                         file_name: file_name.to_owned(),
                     }));
@@ -339,7 +344,40 @@ impl ModuleName {
         Ok(ModuleName::from_parts(components))
     }
 
+    /// Convert a relative file path to a module name, stripping the file extension.
+    /// For example, `foo/bar.py` → `foo.bar`, `foo/bar/__init__.py` → `foo.bar`.
     pub fn from_relative_path(path: &Path) -> anyhow::Result<Self> {
+        let components = Self::path_to_components(path)?;
+        Self::from_relative_path_components(components)
+    }
+
+    /// Convert a relative file path to a module name, with support for extra file
+    /// extensions (e.g., `.cinc`, `.cconf`). For extra extensions, the entire
+    /// dotted filename becomes part of the module name:
+    /// `foo/bar.cinc` → `foo.bar.cinc`, `foo/bar.baz.cinc` → `foo.bar.baz.cinc`.
+    pub fn from_relative_path_with_extensions(
+        path: &Path,
+        extra_extensions: &[String],
+    ) -> anyhow::Result<Self> {
+        let components = Self::path_to_components(path)?;
+
+        // Check if the last component has an extra extension. If so, the entire
+        // dotted filename becomes part of the module name (dots become separators).
+        if let Some(file_name) = components.last() {
+            let ext = file_name.rsplit('.').next().unwrap_or("");
+            if extra_extensions.iter().any(|e| e == ext) {
+                let mut parts: Vec<&str> = components[..components.len() - 1].to_vec();
+                for part in file_name.split('.') {
+                    parts.push(part);
+                }
+                return Ok(ModuleName::from_parts(parts));
+            }
+        }
+
+        Self::from_relative_path_components(components)
+    }
+
+    fn path_to_components(path: &Path) -> anyhow::Result<Vec<&str>> {
         let mut components = Vec::new();
         for raw_component in path.components() {
             if let Some(component) = raw_component.as_os_str().to_str() {
@@ -350,7 +388,7 @@ impl ModuleName {
                 }));
             }
         }
-        Self::from_relative_path_components(components)
+        Ok(components)
     }
 
     pub fn relative_module_name_between(from: &Path, to: &Path) -> Option<ModuleName> {
@@ -570,6 +608,34 @@ mod tests {
         assert_conversion_error("foo/bar.derp");
         assert_conversion_error("foo/bar/baz");
         assert_conversion_error("foo/bar/__init__.derp");
+    }
+
+    #[test]
+    fn test_from_relative_path_with_extra_extensions() {
+        let extra = vec!["cinc".to_owned(), "cconf".to_owned(), "mcconf".to_owned()];
+        fn assert_module_name(path: &str, extra: &[String], expected: &str) {
+            assert_eq!(
+                ModuleName::from_relative_path_with_extensions(Path::new(path), extra).unwrap(),
+                ModuleName::from_str(expected)
+            );
+        }
+        // Extra extension becomes part of the module name.
+        assert_module_name("foo.cinc", &extra, "foo.cinc");
+        assert_module_name("foo.cconf", &extra, "foo.cconf");
+        assert_module_name("foo.mcconf", &extra, "foo.mcconf");
+        // Dots in the filename become module separators.
+        assert_module_name("foo.bar.cinc", &extra, "foo.bar.cinc");
+        assert_module_name("foo.bar.baz.cconf", &extra, "foo.bar.baz.cconf");
+        // Directory components work normally.
+        assert_module_name("dir/foo.cinc", &extra, "dir.foo.cinc");
+        assert_module_name("dir/sub/foo.bar.cinc", &extra, "dir.sub.foo.bar.cinc");
+        // Standard Python extensions still work with extra extensions configured.
+        assert_module_name("foo.py", &extra, "foo");
+        assert_module_name("foo/bar.pyi", &extra, "foo.bar");
+        // Unknown extensions still error.
+        assert!(
+            ModuleName::from_relative_path_with_extensions(Path::new("foo.derp"), &extra).is_err()
+        );
     }
 
     #[test]

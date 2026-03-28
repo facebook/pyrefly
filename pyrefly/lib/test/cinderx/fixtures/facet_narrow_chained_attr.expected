@@ -1,0 +1,18 @@
+  8:4-9: typing.Optional[builtins.int]
+  8:11-21: typing.Type[typing.Optional[builtins.int]]
+  8:11-14: typing.Type[builtins.int]
+  8:17-21: None
+  12:4-9: facet_narrow_chained_attr.Inner
+  12:11-16: typing.Type[facet_narrow_chained_attr.Inner]
+  15:13-18: typing.Type[facet_narrow_chained_attr.Outer]
+  15:23-27: None
+  16:7-36: builtins.bool
+  16:7-24: typing.Optional[builtins.int]
+  16:7-18: facet_narrow_chained_attr.Inner
+  16:7-12: facet_narrow_chained_attr.Outer
+  16:32-36: None
+  17:8-9: builtins.int
+  17:12-29: builtins.int
+    unnarrowed: typing.Optional[builtins.int] (mismatch)
+  17:12-23: facet_narrow_chained_attr.Inner
+  17:12-17: facet_narrow_chained_attr.Outer

@@ -66,3 +66,17 @@ def bar(yes: bool) -> None:
     foo(**kwargs)
 "#,
 );
+
+testcase!(
+    test_get_dict_value_even_with_error,
+    r#"
+from typing import assert_type
+d: dict[str, int] = {}
+def f(k: str | None):
+    # We should report the mismatch between `str` and `str | None` rather than "No matching overload".
+    v = d.get(k)  # E: Argument `str | None` is not assignable to parameter `key` with type `str`
+    # Because only one overload of `dict.get` can match based on argument count, we should use its
+    # return type of `int | None`.
+    assert_type(v, int | None)
+    "#,
+);

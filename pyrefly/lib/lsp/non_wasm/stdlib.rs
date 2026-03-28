@@ -17,7 +17,6 @@ use crate::error::error::Error;
 use crate::lsp::non_wasm::server::TypeErrorDisplayStatus;
 use crate::state::lsp::DisplayTypeErrors;
 
-#[allow(dead_code)]
 pub fn should_show_stdlib_error(
     config: &ArcId<ConfigFile>,
     type_error_status: TypeErrorDisplayStatus,

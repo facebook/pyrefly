@@ -5,7 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use dupe::Dupe;
+
+use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::context::PysaResolver;
 use crate::report::pysa::is_test_module::is_test_module;
 use crate::report::pysa::module::ModuleIds;
 use crate::test::pysa::utils::create_state;
@@ -18,9 +22,22 @@ fn test_is_test_module(python_code: &str, expected: bool) {
     let module_ids = ModuleIds::new(&handles);
 
     let test_module_handle = get_handle_for_module_name("test", &transaction);
-    let context = ModuleContext::create(test_module_handle, &transaction, &module_ids).unwrap();
+    let resolver = PysaResolver::new_for_test(
+        &transaction,
+        &module_ids,
+        test_module_handle.dupe(),
+        &handles,
+    );
+    let context = ModuleContext {
+        answers_context: ModuleAnswersContext::create(
+            test_module_handle.dupe(),
+            &transaction,
+            &module_ids,
+        ),
+        resolver: &resolver,
+    };
 
-    let result = is_test_module(&context);
+    let result = is_test_module(&context.answers_context);
     assert_eq!(result, expected);
 }
 

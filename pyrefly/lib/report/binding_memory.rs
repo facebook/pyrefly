@@ -146,7 +146,6 @@ mod tests {
             ClassDefIndex(0),
             Identifier::new("my_class", TextRange::default()),
             NestingContext::toplevel(),
-            SmallMap::new(),
         );
         assert_eq!(
             ReportKey::new(module, &v),

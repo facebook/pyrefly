@@ -100,6 +100,11 @@ pub enum LspDisplayMode {
     Hover,
     /// Signature help mode: Single-line for LSP compatibility
     SignatureHelp,
+    /// Query mode: Used by programmatic consumers (e.g. type query endpoints).
+    /// Formats types with explicit wrappers (e.g. BoundMethod[...]) so that
+    /// consumers can unambiguously parse the type without relying on parameter
+    /// name heuristics.
+    Query,
 }
 
 #[derive(Debug, Default)]
@@ -229,12 +234,14 @@ impl<'a> TypeDisplayContext<'a> {
     }
 
     pub(crate) fn fmt_targs(&self, targs: &TArgs, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if !targs.is_empty() {
+        let display_count = targs.display_count();
+        if display_count > 0 {
             write!(
                 f,
                 "[{}]",
                 commas_iter(|| targs
                     .iter_paired()
+                    .take(display_count)
                     .map(|(param, arg)| Fmt(|f| self.fmt_targ(param, arg, f))))
             )
         } else {
@@ -355,11 +362,22 @@ impl<'a> TypeDisplayContext<'a> {
             }
             // Display Dim[Unknown] as just "Dim" for cleaner output
             Type::ClassType(class_type)
-                if class_type.qname().id().as_str() == "Dim"
+                if class_type.has_qname("torch_shapes", "Dim")
                     && class_type.targs().as_slice().len() == 1
                     && matches!(
                         class_type.targs().as_slice()[0],
                         Type::Any(AnyStyle::Implicit | AnyStyle::Error)
+                    ) =>
+            {
+                output.write_qname(class_type.qname())
+            }
+            // Display Tensor[*tuple[Unknown, ...]] as just "Tensor"
+            Type::ClassType(class_type)
+                if class_type.has_qname("torch", "Tensor")
+                    && class_type.targs().as_slice().len() == 1
+                    && matches!(
+                        &class_type.targs().as_slice()[0],
+                        Type::Tuple(Tuple::Unbounded(box Type::Any(_)))
                     ) =>
             {
                 output.write_qname(class_type.qname())
@@ -400,6 +418,11 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
+            Type::Tensor(tensor) => output.write_str(&format!("{}", tensor)),
+            Type::NNModule(module) => {
+                // Display as the class name (e.g., MaxPool2d)
+                self.fmt_helper_generic(&Type::ClassType(module.class.clone()), false, output)
+            }
             Type::Size(dim) => {
                 // Display dimension value directly without Literal wrapper
                 output.write_str(&format!("{}", dim))
@@ -527,8 +550,15 @@ impl<'a> TypeDisplayContext<'a> {
                 x.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))?;
                 output.write_str("]")
             }
-            Type::BoundMethod(box BoundMethod { obj: _, func }) => {
+            Type::BoundMethod(box BoundMethod { obj, func }) => {
                 match self.lsp_display_mode {
+                    LspDisplayMode::Query => {
+                        output.write_str("BoundMethod[")?;
+                        self.fmt_helper_generic(obj, false, output)?;
+                        output.write_str(", ")?;
+                        self.fmt_helper_generic(&func.clone().as_type(), is_toplevel, output)?;
+                        output.write_str("]")
+                    }
                     LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
                         match func {
                             BoundMethodType::Function(Function {
@@ -550,7 +580,7 @@ impl<'a> TypeDisplayContext<'a> {
                                             self.fmt_helper_generic(t, false, o)
                                         })?;
                                     }
-                                    LspDisplayMode::Standard => unreachable!(),
+                                    _ => unreachable!(),
                                 }
                                 output.write_str(": ...")
                             }
@@ -584,7 +614,7 @@ impl<'a> TypeDisplayContext<'a> {
                                             self.fmt_helper_generic(t, false, o)
                                         })?;
                                     }
-                                    LspDisplayMode::Standard => unreachable!(),
+                                    _ => unreachable!(),
                                 }
                                 output.write_str(": ...")
                             }
@@ -828,19 +858,41 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str("]")
             }
             Type::TypeGuard(ty) => {
-                self.maybe_fmt_with_module("typing", "TypeGuard", output)?;
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("TypeGuard");
+                output.write_builtin("TypeGuard", qname)?;
                 output.write_str("[")?;
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
             Type::TypeIs(ty) => {
-                self.maybe_fmt_with_module("typing", "TypeIs", output)?;
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("TypeIs");
+                output.write_builtin("TypeIs", qname)?;
+                output.write_str("[")?;
+                self.fmt_helper_generic(ty, false, output)?;
+                output.write_str("]")
+            }
+            Type::Annotated(ty, _metadata) => {
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("Annotated");
+                output.write_builtin("Annotated", qname)?;
                 output.write_str("[")?;
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
             Type::Unpack(box ty @ Type::TypedDict(_)) => {
-                self.maybe_fmt_with_module("typing", "Unpack", output)?;
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("Unpack");
+                output.write_builtin("Unpack", qname)?;
                 output.write_str("[")?;
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
@@ -1072,6 +1124,7 @@ pub mod tests {
 
     use super::*;
     use crate::callable::Callable;
+    use crate::callable::DefaultValue;
     use crate::callable::FuncMetadata;
     use crate::callable::Function;
     use crate::callable::Param;
@@ -1113,7 +1166,6 @@ pub mod tests {
             NestingContext::toplevel(),
             mi,
             None,
-            SmallMap::new(),
         )
     }
 
@@ -1177,6 +1229,7 @@ pub mod tests {
                     class.dupe().module().dupe(),
                     class.dupe(),
                     Name::new(method_name),
+                    None,
                 ),
             }),
         }))
@@ -1219,6 +1272,7 @@ pub mod tests {
                         class.dupe().module().dupe(),
                         class.dupe(),
                         Name::new(method_name),
+                        None,
                     ),
                 },
             }),
@@ -1590,7 +1644,6 @@ pub mod tests {
             Name::new_static("MyAlias"),
             Type::None,
             TypeAliasStyle::LegacyImplicit,
-            Vec::new(),
         ))));
         let wrapped = Type::concrete_tuple(vec![alias.clone()]);
         let mut ctx = TypeDisplayContext::new(&[]);
@@ -1643,12 +1696,12 @@ pub mod tests {
         let param2 = Param::Pos(
             Name::new_static("y"),
             Type::any_explicit(),
-            Required::Optional(Some(Lit::Bool(true).to_implicit_type())),
+            Required::Optional(Some(DefaultValue::new(Lit::Bool(true).to_implicit_type()))),
         );
         let param3 = Param::Pos(
             Name::new_static("z"),
             Type::any_explicit(),
-            Required::Optional(Some(Type::None)),
+            Required::Optional(Some(DefaultValue::new(Type::None))),
         );
         let callable = Callable::list(ParamList::new(vec![param1, param2, param3]), Type::None);
         let callable_type = Type::Callable(Box::new(callable));
@@ -1755,6 +1808,11 @@ pub mod tests {
     y: Any
 ) -> None: ..."#
         );
+        ctx.set_lsp_display_mode(LspDisplayMode::Query);
+        assert_eq!(
+            ctx.display(&bound_method).to_string(),
+            "BoundMethod[type[MyClass], (self: Any, x: Any, y: Any) -> None]"
+        );
     }
 
     #[test]
@@ -1780,6 +1838,11 @@ pub mod tests {
     y: Any
 ) -> None: ..."#
         );
+        ctx.set_lsp_display_mode(LspDisplayMode::Query);
+        assert_eq!(
+            ctx.display(&bound_method).to_string(),
+            "BoundMethod[type[MyClass], [T](self: Any, x: Any, y: Any) -> None]"
+        );
     }
 
     #[test]
@@ -1799,6 +1862,7 @@ pub mod tests {
                 class.dupe().module().dupe(),
                 class.dupe(),
                 Name::new_static("overloaded_func"),
+                None,
             ),
         };
 
@@ -1822,6 +1886,7 @@ pub mod tests {
                 class.dupe().module().dupe(),
                 class.dupe(),
                 Name::new_static("overloaded_func"),
+                None,
             ),
         };
 

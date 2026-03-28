@@ -10,6 +10,7 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::docstring::Docstring;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use crate::state::lsp::FindPreference;
 use crate::state::state::State;
@@ -23,6 +24,8 @@ fn test_report_factory(
         let results = state
             .transaction()
             .find_definition(handle, position, FindPreference::default())
+            .map(Vec1::into_vec)
+            .unwrap_or_default()
             .into_iter()
             .filter_map(|t| {
                 let docstring_range = t.docstring_range?;

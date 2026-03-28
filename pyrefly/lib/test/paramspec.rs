@@ -7,6 +7,7 @@
 
 //! Many of these tests come from <https://typing.readthedocs.io/en/latest/spec/generics.html#paramspec>.
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -88,7 +89,7 @@ def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
 def foo[T](x: T, y: T) -> T:
     return x
 foo2 = identity(foo)
-reveal_type(foo2)  # E: revealed type: (x: @_, y: @_) -> @_
+reveal_type(foo2)  # E: revealed type: (x: Unknown, y: Unknown) -> Unknown
 "#,
 );
 
@@ -520,12 +521,194 @@ def wrap(f: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
 );
 
 testcase!(
+    test_paramspec_forwarding_between_generic_helpers,
+    r#"
+from typing import Callable, ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def run_and_get_code(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def run_and_get_kernels(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    return run_and_get_code(fn, *args, **kwargs)
+"#,
+);
+
+testcase!(
+    test_paramspec_forwarding_bad_args,
+    r#"
+from typing import Callable, ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def inner(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def outer(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    return inner(fn, 1, 2)  # E: Expected *-unpacked P.args and **-unpacked P.kwargs
+"#,
+);
+
+testcase!(
+    test_paramspec_forwarding_with_concatenate,
+    r#"
+from typing import Callable, Concatenate, ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def inner(fn: Callable[Concatenate[int, P], R], x: int, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def outer(fn: Callable[Concatenate[int, P], R], x: int, *args: P.args, **kwargs: P.kwargs) -> R:
+    return inner(fn, x, *args, **kwargs)
+"#,
+);
+
+testcase!(
+    test_paramspec_forwarding_extra_concrete_arg,
+    r#"
+from typing import Callable, ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def inner(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def outer(fn: Callable[P, R], extra: int, *args: P.args, **kwargs: P.kwargs) -> R:
+    return inner(fn, *args, **kwargs)
+"#,
+);
+
+testcase!(
+    test_paramspec_forwarding_chained,
+    r#"
+from typing import Callable, ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def level1(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def level2(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    return level1(fn, *args, **kwargs)
+
+def level3(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    return level2(fn, *args, **kwargs)
+"#,
+);
+
+testcase!(
+    test_paramspec_forwarding_extra_arg_before_star,
+    r#"
+from typing import Callable, ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def inner(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def outer(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    return inner(fn, 1, *args, **kwargs)  # E: Expected *-unpacked P.args and **-unpacked P.kwargs
+"#,
+);
+
+testcase!(
+    test_paramspec_forwarding_extra_arg_after_star,
+    r#"
+from typing import Callable, ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def inner(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def outer(fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    return inner(fn, *args, 1, **kwargs)  # E: Expected *-unpacked P.args and **-unpacked P.kwargs
+"#,
+);
+
+testcase!(
+    test_paramspec_forwarding_kwargs_only,
+    r#"
+from typing import Callable, Concatenate, ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def inner(fn: Callable[Concatenate[int, P], R], x: int, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def outer(fn: Callable[Concatenate[int, P], R], x: int, *args: P.args, **kwargs: P.kwargs) -> R:
+    return inner(fn, x, **kwargs)  # E: Expected *-unpacked P.args and **-unpacked P.kwargs
+"#,
+);
+
+testcase!(
     test_param_spec_ellipsis,
     r#"
 from typing import Callable
 def test[**P](v: Callable[P, None]):
     a: Callable[..., None] = v
     b: Callable[P, None] = a
+"#,
+);
+
+testcase!(
+    test_functools_partial_reassignment_paramspec,
+    r#"
+import functools
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar, assert_type
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+def run_sync(func: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    func = functools.partial(func, *args, **kwargs)
+    return func()
+
+def greet(name: str, greeting: str) -> int:
+    return 0
+
+assert_type(run_sync(greet, "Alice", greeting="Hi"), int)
+"#,
+);
+
+testcase!(
+    test_functools_partial_reassignment_paramspec_concatenate,
+    r#"
+import functools
+from collections.abc import Callable
+from typing import Concatenate, ParamSpec, TypeVar, assert_type
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+def run_sync(func: Callable[Concatenate[int, P], T], x: int, *args: P.args, **kwargs: P.kwargs) -> T:
+    func = functools.partial(func, x, *args, **kwargs)
+    return func()
+
+def greet(x: int, name: str) -> str:
+    return ""
+
+assert_type(run_sync(greet, 1, "Alice"), str)
+"#,
+);
+
+testcase!(
+    test_functools_partial_reassignment_paramspec_strict,
+    TestEnv::new().enable_strict_callable_subtyping(),
+    r#"
+import functools
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+def run_sync(func: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    func = functools.partial(func, *args, **kwargs)  # E: `partial[T]` is not assignable to variable `func` with type `(ParamSpec(P)) -> T`
+    return func()  # E: Expected *-unpacked P.args and **-unpacked P.kwargs
 "#,
 );
 

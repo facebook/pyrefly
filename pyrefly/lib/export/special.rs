@@ -69,6 +69,7 @@ pub enum SpecialExport {
     BuiltinsFrozenset,
     BuiltinsFloat,
     Deprecated,
+    Final,
     TypingMapping,
 }
 
@@ -130,6 +131,7 @@ impl SpecialExport {
             "frozenset" => Some(Self::BuiltinsFrozenset),
             "float" => Some(Self::BuiltinsFloat),
             "deprecated" => Some(Self::Deprecated),
+            "Final" => Some(Self::Final),
             "Mapping" => Some(Self::TypingMapping),
             _ => None,
         }
@@ -137,10 +139,11 @@ impl SpecialExport {
 
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
+            Self::TypeVar | Self::TypeVarTuple => {
+                matches!(m.as_str(), "typing" | "typing_extensions" | "torch_shapes")
+            }
             Self::TypeAlias
-            | Self::TypeVar
             | Self::ParamSpec
-            | Self::TypeVarTuple
             | Self::Annotated
             | Self::Literal
             | Self::TypedDict
@@ -161,6 +164,7 @@ impl SpecialExport {
             | Self::TypingDict
             | Self::TypingList
             | Self::TypingTuple
+            | Self::Final
             | Self::TypingMapping => {
                 matches!(m.as_str(), "typing" | "typing_extensions")
             }

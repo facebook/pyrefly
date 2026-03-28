@@ -75,14 +75,12 @@ impl Subscriber for TestSubscriber {
 }
 
 impl TestSubscriber {
-    #[allow(dead_code)] // Only in test code
     pub fn new() -> Self {
         Self::default()
     }
 
     /// For each handle, return a pair of (the number of times each handle started, the final load state).
     /// Panics if any handle was started but not finished.
-    #[allow(dead_code)] // Only in test code
     pub fn finish(self) -> SmallMap<Handle, (usize, Option<Arc<Load>>)> {
         mem::take(&mut *self.0.lock())
     }

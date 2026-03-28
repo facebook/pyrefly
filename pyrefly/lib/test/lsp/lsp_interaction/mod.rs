@@ -5,7 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#![cfg(test)]
+#![feature(box_patterns)]
+#![feature(closure_lifetime_binder)]
+#![feature(if_let_guard)]
+
+mod init;
 
 mod basic;
 mod call_hierarchy;
@@ -17,6 +21,7 @@ mod definition;
 mod diagnostic;
 mod did_change;
 mod document_symbols;
+mod empty_response_reason;
 mod file_watcher;
 mod folding_range;
 mod hover;
@@ -26,22 +31,32 @@ mod io;
 mod notebook_code_action;
 mod notebook_completion;
 mod notebook_definition;
+mod notebook_document_highlight;
+mod notebook_document_symbols;
+mod notebook_folding_range;
 mod notebook_hover;
+mod notebook_implementation;
 mod notebook_inlay_hint;
+mod notebook_provide_type;
 mod notebook_references;
+mod notebook_rename;
 mod notebook_signature_help;
 mod notebook_sync;
 mod notebook_tokens;
+mod notebook_type_definition;
+mod notebook_type_error_display_status;
 mod object_model;
 mod provide_type;
 mod pytorch_benchmark;
 mod references;
 mod rename;
+mod safe_delete_file;
 mod semantic_tokens;
 mod type_definition;
 mod type_hierarchy;
 mod unsaved_file;
 mod util;
 mod will_rename_files;
+mod workspace_diagnostics;
 mod workspace_folders;
 mod workspace_symbol;

@@ -14,6 +14,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 
 use dupe::Dupe;
+use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
@@ -32,7 +33,9 @@ use vec1::vec1;
 
 use crate::class::Class;
 use crate::class::ClassType;
+use crate::display::TypeDisplayContext;
 use crate::equality::TypeEq;
+use crate::equality::TypeEqCtx;
 use crate::keywords::DataclassTransformMetadata;
 use crate::type_output::TypeOutput;
 use crate::types::Type;
@@ -90,6 +93,7 @@ impl ArgCount {
 pub struct ArgCounts {
     pub positional: ArgCount,
     pub keyword: ArgCount,
+    pub overall: ArgCount,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -243,24 +247,30 @@ impl Params {
                 let mut counts = ArgCounts {
                     positional: ArgCount::none_allowed(),
                     keyword: ArgCount::none_allowed(),
+                    overall: ArgCount::none_allowed(),
                 };
                 for param in params.items() {
                     match param {
                         Param::PosOnly(_, _, req) => {
                             counts.positional.add_arg(req);
+                            counts.overall.add_arg(req);
                         }
-                        Param::Pos(..) => {
+                        Param::Pos(_, _, req) => {
                             counts.positional.add_arg(&Required::Optional(None));
                             counts.keyword.add_arg(&Required::Optional(None));
+                            counts.overall.add_arg(req);
                         }
                         Param::KwOnly(_, _, req) => {
                             counts.keyword.add_arg(req);
+                            counts.overall.add_arg(req);
                         }
                         Param::VarArg(..) => {
                             counts.positional.max = None;
+                            counts.overall.max = None;
                         }
                         Param::Kwargs(..) => {
                             counts.keyword.max = None;
+                            counts.overall.max = None;
                         }
                     }
                 }
@@ -269,6 +279,7 @@ impl Params {
             Self::Ellipsis | Self::Materialization => ArgCounts {
                 positional: ArgCount::any_allowed(),
                 keyword: ArgCount::any_allowed(),
+                overall: ArgCount::any_allowed(),
             },
             Self::ParamSpec(prefix, _) => ArgCounts {
                 positional: ArgCount {
@@ -276,6 +287,10 @@ impl Params {
                     max: None,
                 },
                 keyword: ArgCount::any_allowed(),
+                overall: ArgCount {
+                    min: prefix.len(),
+                    max: None,
+                },
             },
         }
     }
@@ -291,13 +306,63 @@ pub enum Param {
     Kwargs(Option<Name>, Type),
 }
 
+/// The default value of an optional parameter, containing its type and an optional
+/// display string for values whose types don't preserve the literal value (e.g. floats).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DefaultValue {
+    pub ty: Type,
+    /// Display string for defaults that can't be recovered from the type alone,
+    /// e.g. `"3.14"` for float literals whose type is just `float`.
+    pub display: Option<String>,
+}
+
+/// Visit/VisitMut/TypeEq delegate to `ty` only; `display` is display-only metadata.
+impl<To> Visit<To> for DefaultValue
+where
+    Type: Visit<To>,
+{
+    const RECURSE_CONTAINS: bool = <Type as Visit<To>>::RECURSE_CONTAINS;
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
+        self.ty.recurse(f);
+    }
+}
+
+impl<To> VisitMut<To> for DefaultValue
+where
+    Type: VisitMut<To>,
+{
+    const RECURSE_CONTAINS: bool = <Type as VisitMut<To>>::RECURSE_CONTAINS;
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
+        self.ty.recurse_mut(f);
+    }
+}
+
+impl TypeEq for DefaultValue {
+    fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
+        self.ty.type_eq(&other.ty, ctx)
+    }
+}
+
+impl DefaultValue {
+    pub fn new(ty: Type) -> Self {
+        Self { ty, display: None }
+    }
+
+    pub fn with_display(ty: Type, display: String) -> Self {
+        Self {
+            ty,
+            display: Some(display),
+        }
+    }
+}
+
 /// Requiredness for a function parameter.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Required {
     Required,
-    /// The parameter is optional, with the `Type` being the type of its default value, if available.
-    Optional(Option<Type>),
+    /// The parameter is optional, with the default value info if available.
+    Optional(Option<DefaultValue>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -315,12 +380,13 @@ pub struct FuncMetadata {
 }
 
 impl FuncMetadata {
-    pub fn def(module: Module, cls: Class, func: Name) -> Self {
+    pub fn def(module: Module, cls: Class, func: Name, def_index: Option<FuncDefIndex>) -> Self {
         Self {
             kind: FunctionKind::Def(Box::new(FuncId {
                 module,
                 cls: Some(cls),
                 name: func,
+                def_index,
             })),
             flags: FuncFlags::default(),
         }
@@ -397,11 +463,27 @@ pub struct FuncFlags {
     pub dataclass_transform_metadata: Option<DataclassTransformMetadata>,
 }
 
+impl FuncFlags {
+    /// Whether the function lacks a runtime implementation and is not defined in a stub file.
+    /// This indicates a method that cannot actually be called at runtime (e.g. an abstract
+    /// method or protocol method with a `...` or `pass` body in a `.py` file).
+    pub fn lacks_runtime_implementation(&self) -> bool {
+        self.lacks_implementation && !self.defined_in_stub_file
+    }
+}
+
+/// The index of a function definition (`def ..():` statement) within the module,
+/// used as a reference to data associated with the function.
+#[derive(Debug, Clone, Dupe, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(Display, Visit, VisitMut, TypeEq)]
+pub struct FuncDefIndex(pub u32);
+
 #[derive(Debug, Clone)]
 pub struct FuncId {
     pub module: Module,
     pub cls: Option<Class>,
     pub name: Name,
+    pub def_index: Option<FuncDefIndex>,
 }
 
 impl PartialEq for FuncId {
@@ -439,16 +521,33 @@ impl Visit<Type> for FuncId {
 }
 
 impl FuncId {
-    fn key_eq(&self) -> (ModuleName, ModulePath, Option<Class>, &Name) {
+    fn key_eq(
+        &self,
+    ) -> (
+        ModuleName,
+        ModulePath,
+        Option<Class>,
+        &Name,
+        Option<FuncDefIndex>,
+    ) {
         (
             self.module.name(),
             self.module.path().to_key_eq(),
             self.cls.clone(),
             &self.name,
+            self.def_index,
         )
     }
 
-    fn key_ord(&self) -> (ModuleName, ModulePath, Option<Class>, &Name) {
+    fn key_ord(
+        &self,
+    ) -> (
+        ModuleName,
+        ModulePath,
+        Option<Class>,
+        &Name,
+        Option<FuncDefIndex>,
+    ) {
         self.key_eq()
     }
 
@@ -702,10 +801,17 @@ impl Callable {
 }
 
 impl Param {
-    fn fmt_default(&self, default: &Option<Type>) -> String {
+    fn fmt_default(&self, default: &Option<DefaultValue>) -> String {
         match default {
-            Some(Type::Literal(lit)) => format!("{}", lit.value),
-            Some(Type::None) => "None".to_owned(),
+            Some(DefaultValue {
+                display: Some(text),
+                ..
+            }) => text.clone(),
+            Some(DefaultValue {
+                ty: Type::Literal(lit),
+                ..
+            }) => format!("{}", lit.value),
+            Some(DefaultValue { ty: Type::None, .. }) => "None".to_owned(),
             _ => "...".to_owned(),
         }
     }
@@ -805,7 +911,7 @@ impl Param {
     ///
     /// This is similar to the `Display` impl, but allows passing in a `TypeDisplayContext`
     /// for context-aware formatting (e.g., disambiguating types with the same name).
-    pub fn format_for_signature(&self, type_ctx: &crate::display::TypeDisplayContext) -> String {
+    pub fn format_for_signature(&self, type_ctx: &TypeDisplayContext) -> String {
         use pyrefly_util::display::Fmt;
 
         use crate::type_output::DisplayOutput;
@@ -837,7 +943,12 @@ impl Display for Param {
 }
 
 impl FunctionKind {
-    pub fn from_name(module: Module, cls: Option<Class>, func: &Name) -> Self {
+    pub fn from_name(
+        module: Module,
+        cls: Option<Class>,
+        func: &Name,
+        def_index: Option<FuncDefIndex>,
+    ) -> Self {
         match (module.name().as_str(), cls.as_ref(), func.as_str()) {
             ("builtins", None, "isinstance") => Self::IsInstance,
             ("builtins", None, "issubclass") => Self::IsSubclass,
@@ -864,6 +975,7 @@ impl FunctionKind {
                 module,
                 cls,
                 name: func.clone(),
+                def_index,
             })),
         }
     }

@@ -47,6 +47,7 @@ function requireSetting<T>(path: string): T {
   return ret;
 }
 
+
 /**
  * This function adds the pythonPath to any section with configuration of 'python'.
  * Our language server expects the pythonPath from VSCode configurations but this setting is not stored in VSCode

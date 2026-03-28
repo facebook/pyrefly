@@ -292,7 +292,7 @@ impl QuerySourceDatabase {
 }
 
 impl SourceDatabase for QuerySourceDatabase {
-    fn modules_to_check(&self) -> Vec<crate::handle::Handle> {
+    fn modules_to_check(&self) -> Vec<Handle> {
         // TODO(connernilsen): implement modules_to_check
         vec![]
     }

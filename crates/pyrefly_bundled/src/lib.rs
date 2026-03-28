@@ -43,15 +43,6 @@ impl PathFilter {
         }
     }
 
-    #[allow(dead_code)]
-    fn should_skip_next_component(&self) -> bool {
-        match self {
-            PathFilter::Stdlib => false,
-            PathFilter::ThirdPartyTypeshedStubs => true, // Skip package directory
-            PathFilter::ThirdPartyStubs => false,        // Skip package directory
-        }
-    }
-
     fn archive_bytes(&self) -> &'static [u8] {
         match self {
             PathFilter::Stdlib | PathFilter::ThirdPartyTypeshedStubs => BUNDLED_TYPESHED_BYTES,
@@ -127,7 +118,6 @@ pub fn bundled_typeshed() -> anyhow::Result<SmallMap<PathBuf, String>> {
     extract_pyi_files_from_archive(PathFilter::Stdlib)
 }
 
-#[allow(dead_code)]
 pub fn bundled_third_party_stubs() -> anyhow::Result<SmallMap<PathBuf, String>> {
     extract_pyi_files_from_archive(PathFilter::ThirdPartyTypeshedStubs)
 }

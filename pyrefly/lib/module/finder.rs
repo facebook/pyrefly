@@ -121,6 +121,7 @@ fn find_one_part_in_root(
     phantom_paths: &mut Option<&mut Vec<PathBuf>>,
 ) -> Option<FindResult> {
     let candidate_dir = root.join(name.as_str());
+
     // Do not filter by style filter here since __init__.pyi could potentially have .py files covered under it.
     // Instead, use `ModuleStyle` as a preference.
     let candidate_init_suffixes = if style_filter.is_some_and(|s| s == ModuleStyle::Executable) {
@@ -129,16 +130,29 @@ fn find_one_part_in_root(
         ["__init__.pyi", "__init__.py"]
     };
 
-    // First check if `name` corresponds to a regular package.
-    for candidate_init_suffix in candidate_init_suffixes {
-        let init_path = candidate_dir.join(candidate_init_suffix);
-        if init_path.exists() {
-            return Some(FindResult::RegularPackage(init_path, candidate_dir));
-        } else if let Some(v) = phantom_paths.as_deref_mut() {
-            v.push(init_path);
+    // Check if the directory exists first — this is a single stat call that
+    // lets us skip the __init__.py[i] lookups when the directory doesn't exist,
+    // saving 2 stat calls per non-existent directory path component.
+    let dir_exists = candidate_dir.is_dir();
+
+    if dir_exists {
+        // Check if `name` corresponds to a regular package.
+        for candidate_init_suffix in candidate_init_suffixes {
+            let init_path = candidate_dir.join(candidate_init_suffix);
+            if init_path.exists() {
+                return Some(FindResult::RegularPackage(init_path, candidate_dir));
+            } else if let Some(v) = phantom_paths.as_deref_mut() {
+                v.push(init_path);
+            }
+        }
+    } else if let Some(v) = phantom_paths.as_deref_mut() {
+        // Record phantom paths for the init files we would have checked.
+        for candidate_init_suffix in candidate_init_suffixes {
+            v.push(candidate_dir.join(candidate_init_suffix));
         }
     }
-    // Second check if `name` corresponds to a single-file module.
+
+    // Check if `name` corresponds to a single-file module.
     for candidate_file_suffix in ["pyi", "py"] {
         let candidate_path = root.join(format!("{name}.{candidate_file_suffix}"));
         if candidate_path.exists() {
@@ -175,11 +189,10 @@ fn find_one_part_in_root(
             v.push(candidate_path);
         }
     }
+
     // Finally check if `name` corresponds to a namespace package.
-    if candidate_dir.is_dir() {
-        let result = FindResult::NamespacePackage(Vec1::new(candidate_dir));
-        // Namespace packages don't have a style in the same sense, so we return them regardless of filter
-        return Some(result);
+    if dir_exists {
+        return Some(FindResult::NamespacePackage(Vec1::new(candidate_dir)));
     } else if let Some(v) = phantom_paths.as_deref_mut() {
         v.push(candidate_dir);
     }
@@ -592,6 +605,74 @@ fn find_module_prefixes<'a>(
     results.iter().map(|(_, name)| *name).collect::<Vec<_>>()
 }
 
+/// Attempt to find a module that uses an extra file extension where dots in
+/// filenames act as module separators.
+///
+/// Given module `a.b.c.cinc` and search roots, tries to find the file by
+/// progressively collapsing the rightmost module components into a dotted
+/// filename. The search order (from most to fewest directory components) is:
+///   1. `<root>/a/b/c.cinc`
+///   2. `<root>/a/b.c.cinc`
+///   3. `<root>/a.b.c.cinc`
+///
+/// Files "closer" to the source directory (more directory components) take
+/// precedence over files further away.
+fn find_extra_extension_module<'a>(
+    module: ModuleName,
+    roots: impl Iterator<Item = &'a PathBuf>,
+    extra_extensions: &[String],
+    phantom_paths: &mut Option<&mut Vec<PathBuf>>,
+) -> Option<FindingOrError<ModulePath>> {
+    let components = module.components();
+    let Ok(components) = Vec1::try_from_vec(components) else {
+        return None;
+    };
+    if components.len() < 2 {
+        return None;
+    }
+    let last = components.last();
+    // The last component must be a recognized extra extension.
+    if !extra_extensions.iter().any(|ext| ext == last.as_str()) {
+        return None;
+    }
+
+    for root in roots {
+        let mut dir = root.clone();
+        // Push directory components for the first (most-directories) candidate.
+        // The max dir_count is len-2 since the last component is the extension.
+        for part in &components[..components.len() - 2] {
+            dir.push(part.as_str());
+        }
+        // Try splitting at each point: dir_count components form the directory
+        // path and the remaining components form a dot-joined filename.
+        // We start from the highest dir_count (most directories) for precedence,
+        // so that "closer" files win.
+        // e.g., for module `a.b.c.cinc`:
+        //   dir_count=2: dir=root/a/b, filename=c.cinc
+        //   dir_count=1: dir=root/a,   filename=b.c.cinc
+        //   dir_count=0: dir=root,     filename=a.b.c.cinc
+        for dir_count in (0..components.len() - 1).rev() {
+            // Form the dotted filename from the remaining components.
+            let filename: String = components[dir_count..]
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            let candidate = dir.join(&filename);
+            if candidate.is_file() {
+                return Some(FindingOrError::new_finding(ModulePath::filesystem(
+                    candidate,
+                )));
+            } else if let Some(v) = phantom_paths.as_deref_mut() {
+                v.push(candidate);
+            }
+            // Pop the last directory component for the next iteration.
+            dir.pop();
+        }
+    }
+    None
+}
+
 /// This function will find either third party typeshed stubs or other third party stubs
 /// Here a decision is being made to prioritize typeshed stubs over other third party stubs that are bundled.
 /// Since we run the typeshed update script with a more regular cadence, it is more likely that
@@ -729,6 +810,15 @@ pub fn find_import_internal(
         from_real_config_file,
         phantom_paths,
     ) {
+        path
+    } else if config.has_extra_file_extensions()
+        && let Some(path) = find_extra_extension_module(
+            module,
+            config.search_path().chain(config.site_package_path()),
+            &config.extra_file_extensions,
+            phantom_paths,
+        )
+    {
         path
     } else if let Some(namespace) = namespaces_found.into_iter().next() &&
         // only use namespaces if style filter is none, since otherwise we might be
@@ -2477,7 +2567,7 @@ mod tests {
         );
     }
 
-    // ==================== Phantom Paths Tests ====================
+    // -------------- Phantom Paths Tests --------------------
 
     fn get_config_with_search_path(search_path: Vec<PathBuf>) -> ConfigFile {
         let mut interpreters = Interpreters::default();
@@ -2963,6 +3053,171 @@ mod tests {
         assert_eq!(
             phantom_paths, expected,
             "Should collect phantom paths at all nesting levels"
+        );
+    }
+
+    #[test]
+    fn test_find_extra_extension_module_simple() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // Create a directory with extra-extension files (.cinc and .cconf).
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "service",
+                vec![
+                    TestPath::file("config.cinc"),
+                    TestPath::file("settings.cconf"),
+                ],
+            )],
+        );
+        let extra = vec!["cinc".to_owned(), "cconf".to_owned()];
+
+        // `import service.config.cinc` should find `service/config.cinc`
+        assert_eq!(
+            find_extra_extension_module(
+                ModuleName::from_str("service.config.cinc"),
+                [root.to_path_buf()].iter(),
+                &extra,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("service/config.cinc")))
+        );
+
+        // `import service.settings.cconf` should find `service/settings.cconf`
+        assert_eq!(
+            find_extra_extension_module(
+                ModuleName::from_str("service.settings.cconf"),
+                [root.to_path_buf()].iter(),
+                &extra,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("service/settings.cconf")
+            ))
+        );
+
+        // Module without an extra extension should return None.
+        assert!(
+            find_extra_extension_module(
+                ModuleName::from_str("service.config.py"),
+                [root.to_path_buf()].iter(),
+                &extra,
+                &mut None,
+            )
+            .is_none()
+        );
+
+        // Module without extra extension as last component should return None.
+        assert!(
+            find_extra_extension_module(
+                ModuleName::from_str("service.config"),
+                [root.to_path_buf()].iter(),
+                &extra,
+                &mut None,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn test_find_extra_extension_module_cinc_py_not_resolved() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // A file like `foo.cinc.py` has `.py` as its real extension, not `.cinc`.
+        // The extra extension finder should not resolve it because `py` is not
+        // in the extra extensions list.
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "service",
+                vec![TestPath::file("config.cinc.py")],
+            )],
+        );
+        let extra = vec!["cinc".to_owned(), "cconf".to_owned()];
+
+        assert!(
+            find_extra_extension_module(
+                ModuleName::from_str("service.config.cinc.py"),
+                [root.to_path_buf()].iter(),
+                &extra,
+                &mut None,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn test_find_extra_extension_module_dotted_filename() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // Create a flat file with dots in its name.
+        TestPath::setup_test_directory(root, vec![TestPath::file("service.config.cinc")]);
+        let extra = vec!["cinc".to_owned()];
+
+        // `import service.config.cinc` should find `service.config.cinc`
+        // (the flat dotted filename) when no directory structure exists.
+        assert_eq!(
+            find_extra_extension_module(
+                ModuleName::from_str("service.config.cinc"),
+                [root.to_path_buf()].iter(),
+                &extra,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("service.config.cinc")))
+        );
+    }
+
+    #[test]
+    fn test_find_extra_extension_module_precedence() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // When both `a/b.cinc` and `a.b.cinc` exist, prefer the one with more
+        // directory components (closer to source).
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir("a", vec![TestPath::file("b.cinc")]),
+                TestPath::file("a.b.cinc"),
+            ],
+        );
+        let extra = vec!["cinc".to_owned()];
+
+        assert_eq!(
+            find_extra_extension_module(
+                ModuleName::from_str("a.b.cinc"),
+                [root.to_path_buf()].iter(),
+                &extra,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("a/b.cinc")))
+        );
+    }
+
+    #[test]
+    fn test_find_extra_extension_module_phantom_paths() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // No files exist — all candidates should be recorded as phantom paths.
+        let extra = vec!["cinc".to_owned()];
+        let mut phantom_paths = Vec::new();
+        let result = find_extra_extension_module(
+            ModuleName::from_str("a.b.cinc"),
+            [root.to_path_buf()].iter(),
+            &extra,
+            &mut Some(&mut phantom_paths),
+        );
+        assert!(result.is_none());
+        // For module `a.b.cinc` with one root, the finder checks two candidates:
+        //   dir_count=1: root/a/b.cinc
+        //   dir_count=0: root/a.b.cinc
+        assert_eq!(
+            phantom_paths,
+            vec![root.join("a/b.cinc"), root.join("a.b.cinc")]
         );
     }
 }

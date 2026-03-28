@@ -35,6 +35,7 @@ use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::state::State;
+use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::TestEnv;
 
 #[test]
@@ -58,7 +59,7 @@ else:
         "import lib; x: str = lib.value  # E: `Literal[42]` is not assignable to `str`",
     );
     let config_file = test_env.config();
-    let state = State::new(test_env.config_finder());
+    let state = State::new(test_env.config_finder(), TEST_THREAD_COUNT);
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
@@ -75,7 +76,7 @@ else:
     ];
     let mut transaction = state.new_transaction(Require::Exports, None);
     transaction.set_memory(test_env.get_memory());
-    transaction.run(&handles, Require::Everything);
+    transaction.run(&handles, Require::Everything, None);
     transaction
         .get_errors(&handles)
         .check_against_expectations()
@@ -112,7 +113,10 @@ fn test_multiple_path() {
     config.configure();
     let config = ArcId::new(config);
 
-    let state = State::new(ConfigFinder::new_constant(config.clone()));
+    let state = State::new(
+        ConfigFinder::new_constant(config.clone()),
+        TEST_THREAD_COUNT,
+    );
     let handles = config.source_db.as_ref().unwrap().modules_to_check();
     let mut transaction = state.new_transaction(Require::Exports, None);
     transaction.set_memory(FILES.map(|(_, path, contents)| {
@@ -121,18 +125,18 @@ fn test_multiple_path() {
             Some(Arc::new(FileContents::from_source((*contents).to_owned()))),
         )
     }));
-    transaction.run(&handles, Require::Everything);
+    transaction.run(&handles, Require::Everything, None);
     let loads = transaction.get_errors(handles.iter());
     let project_root = PathBuf::new();
-    print_errors(project_root.as_path(), &loads.collect_errors().shown);
+    print_errors(project_root.as_path(), &loads.collect_errors().ordinary);
     loads.check_against_expectations().unwrap();
-    assert_eq!(loads.collect_errors().shown.len(), 3);
+    assert_eq!(loads.collect_errors().ordinary.len(), 3);
 }
 
 #[test]
 fn test_change_require() {
     let env = TestEnv::one("foo", "x: str = 1\ny: int = 'x'");
-    let state = State::new(env.config_finder());
+    let state = State::new(env.config_finder(), TEST_THREAD_COUNT);
     let handle = Handle::new(
         ModuleName::from_str("foo"),
         ModulePath::memory(PathBuf::from("foo.py")),
@@ -141,7 +145,7 @@ fn test_change_require() {
 
     let mut t = state.new_committable_transaction(Require::Exports, None);
     t.as_mut().set_memory(env.get_memory());
-    t.as_mut().run(&[handle.dupe()], Require::Exports);
+    t.as_mut().run(&[handle.dupe()], Require::Exports, None);
     state.commit_transaction(t, None);
 
     assert_eq!(
@@ -149,7 +153,7 @@ fn test_change_require() {
             .transaction()
             .get_errors([&handle])
             .collect_errors()
-            .shown
+            .ordinary
             .len(),
         0
     );
@@ -162,13 +166,14 @@ fn test_change_require() {
         },
         None,
         None,
+        None,
     );
     assert_eq!(
         state
             .transaction()
             .get_errors([&handle])
             .collect_errors()
-            .shown
+            .ordinary
             .len(),
         2
     );
@@ -181,13 +186,14 @@ fn test_change_require() {
         },
         None,
         None,
+        None,
     );
     assert_eq!(
         state
             .transaction()
             .get_errors([&handle])
             .collect_errors()
-            .shown
+            .ordinary
             .len(),
         2
     );
@@ -208,20 +214,37 @@ fn test_crash_on_search() {
         PathBuf::from("foo.py"),
         Some(Arc::new(FileContents::from_source("x = 3".to_owned()))),
     )]);
-    t.as_mut().run(&[], Require::Everything); // This run breaks reproduction (but is now required)
+    t.as_mut().run(&[], Require::Everything, None); // This run breaks reproduction (but is now required)
     state.commit_transaction(t, None);
 
     // Now we need to increment the step counter.
     let mut t = state.new_committable_transaction(REQUIRE, None);
-    t.as_mut().run(&[], Require::Everything);
+    t.as_mut().run(&[], Require::Everything, None);
     state.commit_transaction(t, None);
 
     // Now we run two searches, this used to crash
     let t = state.new_transaction(REQUIRE, None);
     eprintln!("First search");
-    t.search_exports_exact("x");
+    t.search_exports_exact("x", None).unwrap();
     eprintln!("Second search");
-    t.search_exports_exact("x");
+    t.search_exports_exact("x", None).unwrap();
+}
+
+#[test]
+fn test_search_exports_cancellation() {
+    let mut t = TestEnv::new();
+    t.add("foo", "x = 1");
+    let (state, _) = t.to_state();
+
+    let t = state.new_transaction(Require::Everything, None);
+
+    // Cancel the transaction before searching.
+    // The cancellation check in search_exports' get_module loop fires immediately.
+    t.get_cancellation_handle().cancel();
+    assert!(
+        t.search_exports_exact("x", None).is_err(),
+        "search_exports_exact should return Err(Cancelled) when cancelled"
+    );
 }
 
 #[test]
@@ -283,7 +306,10 @@ x: int = 1
     config.configure();
     let config = ArcId::new(config);
 
-    let state = State::new(ConfigFinder::new_constant(config.clone()));
+    let state = State::new(
+        ConfigFinder::new_constant(config.clone()),
+        TEST_THREAD_COUNT,
+    );
     let handle = Handle::new(module_name, module_path, sys_info);
 
     let mut transaction = state.new_transaction(Require::Everything, None);
@@ -291,7 +317,7 @@ x: int = 1
         PathBuf::from("test_module.py"),
         Some(Arc::new(FileContents::from_source(test_code.to_owned()))),
     )]);
-    transaction.run(&[handle.dupe()], Require::Everything);
+    transaction.run(&[handle.dupe()], Require::Everything, None);
 
     let errors = transaction.get_errors([&handle]).collect_errors();
 
@@ -308,7 +334,11 @@ x: int = 1
     // Verify the specific error is the expected type mismatch. This is specific
     // error is an indication that we are not using the typeshed bundled with Pyrefly
     // and not the typeshed provided through the config.
-    let error_messages: Vec<String> = errors.shown.iter().map(|e| e.msg().to_string()).collect();
+    let error_messages: Vec<String> = errors
+        .ordinary
+        .iter()
+        .map(|e| e.msg().to_string())
+        .collect();
     let has_literal_int_error = error_messages
         .iter()
         .any(|msg| msg.contains("Literal[1]") && msg.contains("int"));
@@ -411,14 +441,14 @@ fn test_notebook_reload_after_parse_failure() {
     config.configure();
     let config = ArcId::new(config);
     let sys_info = config.get_sys_info();
-    let state = State::new(ConfigFinder::new_constant(config));
+    let state = State::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT);
     let module_name = ModuleName::from_str("test");
     let module_path = ModulePath::filesystem(notebook_path.clone());
     let handle = Handle::new(module_name, module_path, sys_info);
 
     // First run: malformed notebook produces load error
     let mut t = state.new_committable_transaction(Require::Exports, None);
-    t.as_mut().run(&[handle.dupe()], Require::Errors);
+    t.as_mut().run(&[handle.dupe()], Require::Errors, None);
     state.commit_transaction(t, None);
     assert_eq!(
         1,
@@ -426,7 +456,7 @@ fn test_notebook_reload_after_parse_failure() {
             .transaction()
             .get_errors([&handle])
             .collect_errors()
-            .shown
+            .ordinary
             .len()
     );
 
@@ -443,7 +473,7 @@ fn test_notebook_reload_after_parse_failure() {
     let mut t = state.new_committable_transaction(Require::Exports, None);
     t.as_mut()
         .invalidate_disk(std::slice::from_ref(&notebook_path));
-    t.as_mut().run(&[handle.dupe()], Require::Errors);
+    t.as_mut().run(&[handle.dupe()], Require::Errors, None);
     state.commit_transaction(t, None);
 
     assert_eq!(
@@ -452,7 +482,7 @@ fn test_notebook_reload_after_parse_failure() {
             .transaction()
             .get_errors([&handle])
             .collect_errors()
-            .shown
+            .ordinary
             .len()
     );
 }
@@ -507,12 +537,58 @@ fn test_crash_on_cross_module_type_alias_ref() {
     )
     .unwrap();
 
-    let finder = default_config_finder();
+    let finder = default_config_finder(None);
     let main_path = ModulePath::filesystem(main_proj.join("main.py"));
     let sys_info = SysInfo::new(PythonVersion::default(), PythonPlatform::linux());
     let handle = Handle::new(ModuleName::from_str("main"), main_path, sys_info);
 
-    let state = State::new(finder);
+    let state = State::new(finder, TEST_THREAD_COUNT);
     let mut transaction = state.new_transaction(Require::Exports, None);
-    transaction.run(&[handle], Require::Everything);
+    transaction.run(&[handle], Require::Everything, None);
+}
+
+/// Verify that stdlib computation is cached across transaction runs.
+///
+/// The first run must compute the stdlib from bundled typeshed stubs (expensive,
+/// 80-150ms single-threaded). Subsequent runs within the same transaction, or
+/// new transactions created after committing, should reuse the cached stdlib
+/// and report `compute_stdlib_cached = true`.
+#[test]
+fn test_stdlib_cached_on_recheck() {
+    let env = TestEnv::one("foo", "x: int = 1");
+    let state = State::new(env.config_finder(), TEST_THREAD_COUNT);
+    let handle = Handle::new(
+        ModuleName::from_str("foo"),
+        ModulePath::memory(PathBuf::from("foo.py")),
+        env.sys_info(),
+    );
+
+    // First run: stdlib must be computed from scratch.
+    let mut t1 = state.new_committable_transaction(Require::Exports, None);
+    t1.as_mut().set_memory(env.get_memory());
+    t1.as_mut().run(&[handle.dupe()], Require::Everything, None);
+    assert!(
+        !t1.as_ref().compute_stdlib_cached(),
+        "First run should compute stdlib, not use cache"
+    );
+    assert!(
+        t1.as_ref().compute_stdlib_prewarm_time() > Duration::ZERO,
+        "Pre-warming should take nonzero time on first run"
+    );
+    state.commit_transaction(t1, None);
+
+    // Second run (recheck): stdlib should be cached because it was committed.
+    let mut t2 = state.new_committable_transaction(Require::Exports, None);
+    t2.as_mut().set_memory(env.get_memory());
+    t2.as_mut().run(&[handle.dupe()], Require::Everything, None);
+    assert!(
+        t2.as_ref().compute_stdlib_cached(),
+        "Recheck should use cached stdlib, not recompute"
+    );
+    assert_eq!(
+        t2.as_ref().compute_stdlib_prewarm_time(),
+        Duration::ZERO,
+        "Cached stdlib should skip pre-warming entirely"
+    );
+    state.commit_transaction(t2, None);
 }

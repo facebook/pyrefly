@@ -6,6 +6,7 @@
  */
 
 use std::cmp::max;
+use std::collections::HashMap;
 
 use itertools::Either;
 use itertools::Itertools;
@@ -25,6 +26,7 @@ use vec1::Vec1;
 use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers::OverloadTrace;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::TargetWithTParams;
 use crate::alt::callable::CallArg;
@@ -48,22 +50,29 @@ struct CalledOverload {
     res: Type,
     ctor_targs: Option<TArgs>,
     call_errors: ErrorCollector,
+    /// Maps each argument's source range to the parameter type it was matched against.
+    expected_types: HashMap<TextRange, Type>,
 }
 
 /// Performs argument type expansion for arguments to an overloaded function.
-struct ArgsExpander<'a> {
+pub struct ArgsExpander<'a, Ans: LookupAnswer> {
     /// The index of the next argument to expand. Left is positional args; right, keyword args.
     idx: Either<usize, usize>,
     /// Current argument lists.
     arg_lists: Vec<(Vec<CallArg<'a>>, Vec<CallKeyword<'a>>)>,
     /// Hard-coded limit to how many times we'll expand.
     gas: Gas,
+    solver: &'a AnswersSolver<'a, Ans>,
 }
 
-impl<'a> ArgsExpander<'a> {
+impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
     const GAS: usize = 100;
 
-    fn new(posargs: Vec<CallArg<'a>>, keywords: Vec<CallKeyword<'a>>) -> Self {
+    pub fn new(
+        posargs: Vec<CallArg<'a>>,
+        keywords: Vec<CallKeyword<'a>>,
+        solver: &'a AnswersSolver<'a, Ans>,
+    ) -> Self {
         Self {
             idx: if posargs.is_empty() {
                 Either::Right(0)
@@ -72,13 +81,13 @@ impl<'a> ArgsExpander<'a> {
             },
             arg_lists: vec![(posargs, keywords)],
             gas: Gas::new(Self::GAS as isize),
+            solver,
         }
     }
 
     /// Expand the next argument and return the expanded argument lists.
-    fn expand<Ans: LookupAnswer>(
+    pub fn expand(
         &mut self,
-        solver: &'a AnswersSolver<Ans>,
         errors: &ErrorCollector,
         owner: &'a Owner<Type>,
     ) -> Option<Vec<(Vec<CallArg<'a>>, Vec<CallKeyword<'a>>)>> {
@@ -105,10 +114,10 @@ impl<'a> ArgsExpander<'a> {
                 return None;
             }
         };
-        let expanded_types = Self::expand_type(value.infer(solver, errors), solver);
+        let expanded_types = self.expand_type(value.infer(self.solver, errors));
         if expanded_types.is_empty() {
             // Nothing to expand here, try the next argument.
-            self.expand(solver, errors, owner)
+            self.expand(errors, owner)
         } else {
             let expanded_types = expanded_types.into_map(|t| owner.push(t));
             let mut new_arg_lists = Vec::new();
@@ -148,7 +157,7 @@ impl<'a> ArgsExpander<'a> {
     }
 
     /// Expands a type according to https://typing.python.org/en/latest/spec/overload.html#argument-type-expansion.
-    fn expand_type<Ans: LookupAnswer>(ty: Type, solver: &AnswersSolver<Ans>) -> Vec<Type> {
+    fn expand_type(&self, ty: Type) -> Vec<Type> {
         match ty {
             Type::Union(box Union { members: ts, .. }) => ts,
             Type::ClassType(cls) if cls.is_builtin("bool") => {
@@ -157,22 +166,27 @@ impl<'a> ArgsExpander<'a> {
                     Lit::Bool(false).to_implicit_type(),
                 ]
             }
-            Type::ClassType(cls) if solver.get_metadata_for_class(cls.class_object()).is_enum() => {
-                solver
+            Type::ClassType(cls)
+                if self
+                    .solver
+                    .get_metadata_for_class(cls.class_object())
+                    .is_enum() =>
+            {
+                self.solver
                     .get_enum_members(cls.class_object())
                     .into_iter()
                     .map(Lit::to_implicit_type)
                     .collect()
             }
             Type::Type(box Type::Union(box Union { members: ts, .. })) => {
-                ts.into_map(|t| solver.heap.mk_type_form(t))
+                ts.into_map(|t| self.solver.heap.mk_type_form(t))
             }
             Type::Tuple(Tuple::Concrete(elements)) => {
                 let mut count: usize = 1;
                 let mut changed = false;
                 let mut element_expansions = Vec::new();
                 for e in elements {
-                    let element_expansion = Self::expand_type(e.clone(), solver);
+                    let element_expansion = self.expand_type(e.clone());
                     if element_expansion.is_empty() {
                         element_expansions.push(vec![e].into_iter());
                     } else {
@@ -190,7 +204,7 @@ impl<'a> ArgsExpander<'a> {
                     element_expansions
                         .into_iter()
                         .multi_cartesian_product()
-                        .map(|x| solver.heap.mk_concrete_tuple(x))
+                        .map(|x| self.solver.heap.mk_concrete_tuple(x))
                         .collect()
                 } else {
                     Vec::new()
@@ -206,7 +220,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn call_overloads(
         &self,
         overloads: Vec1<TargetWithTParams<Function>>,
-        metadata: FuncMetadata,
+        metadata: &FuncMetadata,
         self_obj: Option<Type>,
         args: &[CallArg],
         keywords: &[CallKeyword],
@@ -251,6 +265,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     res: self.heap.mk_any_error(),
                     ctor_targs: None,
                     call_errors: self.error_collector(),
+                    expected_types: HashMap::new(),
                 },
                 false,
             ),
@@ -259,7 +274,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Note: steps 4-6 are performed in `find_closest_overload`.
                 let (mut closest_overload, mut matched) = self.find_closest_overload(
                     &arity_compatible_overloads,
-                    &metadata,
+                    metadata,
                     self_obj.as_ref(),
                     &args,
                     &keywords,
@@ -270,10 +285,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
 
                 // Step 3: perform argument type expansion.
-                let mut args_expander = ArgsExpander::new(args.clone(), keywords.clone());
+                let mut args_expander = ArgsExpander::new(args.clone(), keywords.clone(), self);
                 let owner = Owner::new();
-                'outer: while !matched
-                    && let Some(arg_lists) = args_expander.expand(self, errors, &owner)
+                'outer: while !matched && let Some(arg_lists) = args_expander.expand(errors, &owner)
                 {
                     // Expand by one argument (for example, try splitting up union types), and try the call with each
                     // resulting arguments list.
@@ -284,7 +298,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     for (cur_args, cur_keywords) in arg_lists.clone().iter() {
                         let (cur_closest, cur_matched) = self.find_closest_overload(
                             &arity_compatible_overloads,
-                            &metadata,
+                            metadata,
                             self_obj.as_ref(),
                             cur_args,
                             cur_keywords,
@@ -302,6 +316,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         closest_overload = CalledOverload {
                             func: first_overload.func.clone(),
                             ctor_targs: first_overload.ctor_targs.clone(),
+                            expected_types: first_overload.expected_types.clone(),
                             res: self.unions(matched_overloads.into_map(|o| o.res)),
                             call_errors: self.error_collector(),
                         };
@@ -309,7 +324,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         break;
                     }
                 }
-                (closest_overload, matched)
+                (
+                    closest_overload,
+                    // If there was only one overload with the right arity, it definitely matched.
+                    matched || arity_compatible_overloads.len() == 1,
+                )
             }
         };
 
@@ -320,10 +339,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             *targs = chosen_targs;
         }
         // Record the closest overload to power IDE services.
+        let mut overload_trace = |target: &TargetWithTParams<Function>| {
+            let tparams = target
+                .0
+                .as_ref()
+                .filter(|tparams| !tparams.is_empty())
+                .cloned();
+            OverloadTrace::new(target.1.signature.clone(), tparams)
+        };
+        let all_overload_traces = overloads.iter().map(&mut overload_trace).collect();
+        let closest_overload_trace = overload_trace(&closest_overload.func);
         self.record_overload_trace(
             arguments_range,
-            overloads.map(|TargetWithTParams(_, Function { signature, .. })| signature),
-            &closest_overload.func.1.signature,
+            all_overload_traces,
+            closest_overload_trace,
             matched,
         );
         if matched {
@@ -344,6 +373,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     msg,
                 );
             }
+            errors.extend(closest_overload.call_errors);
             (closest_overload.res, closest_overload.func.1.signature)
         } else {
             // Build a string showing the argument types for error messages
@@ -436,8 +466,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let max_mismatch = n.saturating_sub(count.max.unwrap_or(n));
             max(min_mismatch, max_mismatch)
         };
-        mismatch_size(&expected_arg_counts.positional, n_posargs, has_varargs)
-            + mismatch_size(&expected_arg_counts.keyword, n_keywords, has_kwargs)
+        let pos_mismatch = mismatch_size(&expected_arg_counts.positional, n_posargs, has_varargs);
+        let kw_mismatch = mismatch_size(&expected_arg_counts.keyword, n_keywords, has_kwargs);
+        let overall_mismatch = mismatch_size(
+            &expected_arg_counts.overall,
+            n_posargs + n_keywords,
+            has_varargs || has_kwargs,
+        );
+        // overall_mismatch will double-count, but this is ok because all we care about is whether
+        // the mismatch is 0 (correct arity) and relative mismatch sizes between overloads
+        pos_mismatch + kw_mismatch + overall_mismatch
     }
 
     /// Returns the overload that matches the given arguments, or the one that produces the fewest
@@ -457,7 +495,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut matched_overloads = Vec::with_capacity(overloads.len());
         let mut closest_unmatched_overload: Option<CalledOverload> = None;
         for callable in overloads {
-            let called_overload = self.try_call_overload(
+            let called_overload = self.call_overload(
                 callable,
                 metadata,
                 self_obj,
@@ -465,7 +503,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 keywords,
                 arguments_range,
                 errors,
-                hint,
+                None, // don't use the hint yet, it shouldn't influence overload selection
                 ctor_targs,
             );
             if called_overload.call_errors.is_empty() {
@@ -487,52 +525,80 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If there are multiple overloads, use steps 4-6 here to select one:
             // https://typing.python.org/en/latest/spec/overload.html#overload-call-evaluation.
             if matched_overloads.len() > 1 {
-                // Step 4: if any arguments supply an unknown number of args and at least one
-                // overload has a corresponding variadic parameter, eliminate overloads without
-                // this parameter.
+                // Step 4:
+                // * (spec-compliant): if any arguments supply an unknown number of args and at least one overload
+                //   has a corresponding variadic parameter, eliminate overloads without this parameter, and
+                // * (non-spec-compliant): if a fixed number of positional or keyword arguments is supplied and at least one
+                //   overload does not have a corresponding variadic parameter, eliminate overloads with this parameter.
                 let nargs_unknown = args.iter().any(|arg| match arg {
                     CallArg::Arg(_) => false,
                     CallArg::Star(val, _) => {
                         !matches!(val.infer(self, errors), Type::Tuple(Tuple::Concrete(_)))
                     }
                 });
-                if nargs_unknown {
-                    let has_varargs = |o: &CalledOverload| {
-                        matches!(
-                            &o.func.1.signature.params, Params::List(params)
-                            if params.items().iter().any(|p| matches!(p, Param::VarArg(..))))
-                    };
-                    if matched_overloads.iter().any(has_varargs) {
-                        matched_overloads.retain(has_varargs);
-                    }
+                let varargs_compatible = |o: &CalledOverload| {
+                    matches!(
+                        &o.func.1.signature.params, Params::List(params)
+                        if params.items().iter().any(|p| matches!(p, Param::VarArg(..))))
+                        == nargs_unknown
+                };
+                if matched_overloads.iter().any(varargs_compatible) {
+                    matched_overloads.retain(varargs_compatible);
                 }
                 let nkeywords_unknown = keywords.iter().any(|kw| {
                     kw.arg.is_none() && !matches!(kw.value.infer(self, errors), Type::TypedDict(_))
                 });
-                if nkeywords_unknown {
-                    let has_kwargs = |o: &CalledOverload| {
-                        matches!(
+                let kwargs_compatible = |o: &CalledOverload| {
+                    matches!(
                             &o.func.1.signature.params, Params::List(params)
                             if params.items().iter().any(|p| matches!(p, Param::Kwargs(..))))
-                    };
-                    if matched_overloads.iter().any(has_kwargs) {
-                        matched_overloads.retain(has_kwargs);
-                    }
+                        == nkeywords_unknown
+                };
+                if matched_overloads.iter().any(kwargs_compatible) {
+                    matched_overloads.retain(kwargs_compatible);
                 }
             }
             if matched_overloads.len() > 1 {
                 // Step 5, part 1: for each overload, check whether it's the case that all possible
                 // materializations of each argument are assignable to the corresponding parameter.
                 // If so, eliminate all subsequent overloads.
+                //
+                // Additional filter (non-spec-compliant): only materialize arguments that have
+                // multiple possible parameter types. If an argument contains `Any` but has the
+                // same parameter type in all candidate overloads, it does not contribute to
+                // ambiguity in overload selection. This matches pyright, mypy, and ty.
                 let owner = Owner::new();
                 let mut changed = false;
+                let has_multiple_param_types = |arg_range| {
+                    let mut param_types = matched_overloads
+                        .iter()
+                        .filter_map(|o| o.expected_types.get(&arg_range));
+                    let Some(first) = param_types.next() else {
+                        // If we can't find the expected type, be conservative and assume there may be multiple.
+                        return true;
+                    };
+                    for t in param_types {
+                        if !self.is_equivalent(first, t) {
+                            return true;
+                        }
+                    }
+                    false
+                };
                 let materialized_args = args.map(|arg| {
-                    let (materialized_arg, arg_changed) = arg.materialize(self, errors, &owner);
+                    let (materialized_arg, arg_changed) = if has_multiple_param_types(arg.range()) {
+                        arg.materialize(self, errors, &owner)
+                    } else {
+                        (arg.clone(), false)
+                    };
                     changed |= arg_changed;
                     materialized_arg
                 });
                 let materialized_keywords = keywords.map(|kw| {
-                    let (materialized_kw, kw_changed) = kw.materialize(self, errors, &owner);
+                    let (materialized_kw, kw_changed) = if has_multiple_param_types(kw.range()) {
+                        kw.materialize(self, errors, &owner)
+                    } else {
+                        (kw.clone(), false)
+                    };
                     changed |= kw_changed;
                     materialized_kw
                 });
@@ -544,7 +610,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     matched_overloads
                         .iter()
                         .find_position(|o| {
-                            let res = self.try_call_overload(
+                            let res = self.call_overload(
                                 &o.func,
                                 metadata,
                                 self_obj,
@@ -552,7 +618,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &materialized_keywords,
                                 arguments_range,
                                 errors,
-                                hint,
+                                None, // don't use the hint yet, it shouldn't influence overload selection
                                 &None,
                             );
                             res.call_errors.is_empty()
@@ -567,7 +633,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If not, the call is ambiguous.
             let mut matched_overloads = matched_overloads.into_iter();
             let first_overload = matched_overloads.next().unwrap();
-            if matched_overloads.any(|o| !self.is_equal(&first_overload.res, &o.res)) {
+            if matched_overloads.any(|o| !self.is_consistent(&first_overload.res, &o.res)) {
                 return (
                     CalledOverload {
                         res: self.heap.mk_any_implicit(),
@@ -577,11 +643,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
             // Step 6: if there are still multiple matches, pick the first one.
-            (first_overload, true)
+            // Now that we've selected an overload, use the hint to contextually type the arguments.
+            let contextual_overload = self.call_overload(
+                &first_overload.func,
+                metadata,
+                self_obj,
+                args,
+                keywords,
+                arguments_range,
+                &self.error_collector(),
+                hint,
+                ctor_targs,
+            );
+            (
+                if contextual_overload.call_errors.is_empty() {
+                    contextual_overload
+                } else {
+                    first_overload
+                },
+                true,
+            )
         }
     }
 
-    fn try_call_overload(
+    fn call_overload(
         &self,
         callable: &TargetWithTParams<Function>,
         metadata: &FuncMetadata,
@@ -600,43 +685,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut overload_ctor_targs = ctor_targs.as_ref().map(|x| (**x).clone());
         let tparams = callable.0.as_deref();
 
-        let mut try_call = |hint| {
-            let call_errors = self.error_collector();
-            let res = self.callable_infer(
-                callable.1.signature.clone(),
-                Some(&metadata.kind),
-                tparams,
-                self_obj.cloned(),
-                args,
-                keywords,
-                arguments_range,
-                errors,
-                &call_errors,
-                // We intentionally drop the context here, as arg errors don't need it,
-                // and if there are any call errors, we'll log a "No matching overloads"
-                // error with the necessary context.
-                None,
-                hint,
-                overload_ctor_targs.as_mut(),
-            );
-            (call_errors, res)
-        };
-
-        // We want to use our hint to contextually type the arguments, but errors resulting
-        // from the hint should not influence overload selection. If there are call errors, we
-        // try again without a hint in case we can still match this overload.
-        let (call_errors, res) = try_call(hint);
-        let (call_errors, res) = if tparams.is_some() && hint.is_some() && !call_errors.is_empty() {
-            try_call(None)
-        } else {
-            (call_errors, res)
-        };
+        let call_errors = self.error_collector();
+        let (res, specialization_errors, expected_types) = self.callable_infer(
+            callable.1.signature.clone(),
+            Some(&metadata.kind),
+            tparams,
+            self_obj.cloned(),
+            args,
+            keywords,
+            arguments_range,
+            errors,
+            &call_errors,
+            // We intentionally drop the context here, as arg errors don't need it,
+            // and if there are any call errors, we'll log a "No matching overloads"
+            // error with the necessary context.
+            None,
+            hint,
+            overload_ctor_targs.as_mut(),
+            // Overload errors get a "No matching overloads" message, so callee annotation is not useful here.
+            None,
+        );
+        if let Ok(errors) = Vec1::try_from_vec(specialization_errors) {
+            self.add_specialization_errors(errors, arguments_range, &call_errors, None);
+        }
 
         CalledOverload {
             func: callable.clone(),
             res,
             ctor_targs: overload_ctor_targs,
             call_errors,
+            expected_types,
         }
     }
 }
