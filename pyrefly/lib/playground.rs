@@ -623,6 +623,7 @@ impl Playground {
         };
         transaction
             .goto_definition(handle, position)
+            .unwrap_or_default()
             .into_iter()
             .map(|r| DefinitionLocation {
                 filename: r.module.path().as_path().to_string_lossy().to_string(),
