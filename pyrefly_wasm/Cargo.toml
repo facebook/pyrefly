@@ -11,7 +11,7 @@ path = "lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
-tar = "0.4.44"
+tar = "0.4.45"
 zstd = { version = "0.13" }
 
 [dependencies]

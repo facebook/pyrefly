@@ -12,10 +12,10 @@ build = "build.rs"
 [dependencies]
 anyhow = "1.0.102"
 starlark_map = "0.13.0"
-tar = "0.4.44"
+tar = "0.4.45"
 zstd = "0.13"
 
 [build-dependencies]
 sha2 = "0.10.6"
-tar = "0.4.44"
+tar = "0.4.45"
 zstd = { version = "0.13.3", features = ["experimental", "zstdmt"] }
