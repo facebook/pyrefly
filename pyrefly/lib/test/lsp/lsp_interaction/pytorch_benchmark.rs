@@ -48,7 +48,7 @@ fn test_pytorch_error_propagation_latency() {
     };
     // Use all available cores for realistic benchmarking
     let mut interaction =
-        LspInteraction::new_with_args(args, NoTelemetry, Some(ThreadCount::AllThreads));
+        LspInteraction::new_with_args(args, NoTelemetry, Some(ThreadCount::AllThreads), None);
     interaction.set_root(pytorch_root.clone());
 
     interaction
