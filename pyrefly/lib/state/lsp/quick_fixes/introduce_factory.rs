@@ -20,6 +20,7 @@ use ruff_python_ast::StmtClassDef;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use super::extract_shared::line_end_position;
 use super::extract_shared::line_indent_and_start;
@@ -54,6 +55,8 @@ pub(crate) fn introduce_factory_code_actions(
             class_def.name.range().start(),
             FindPreference::default(),
         )
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
         .into_iter()
         .find(|def| {
             def.module.path() == module_info.path()
