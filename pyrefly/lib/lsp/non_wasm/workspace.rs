@@ -92,8 +92,12 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
             self.0.get_with(dir.to_owned(), |(workspace_root, w)| {
                 if let Some(workspace_config_path) = &w.workspace_config {
                     let (new_config, new_errors) = ConfigFile::from_file(workspace_config_path);
-                    config = new_config;
-                    errors = new_errors;
+                    if new_errors.is_empty() {
+                        config = new_config;
+                        errors = vec![];
+                    } else {
+                        errors = new_errors;
+                    }
                 }
                 if let Some(search_path) = w.search_path.clone() {
                     config.search_path_from_args = search_path;
