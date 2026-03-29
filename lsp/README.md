@@ -38,7 +38,7 @@ settings:
   but not find-references.
 - `pyrefly.lspPath` [string: '']: if your platform is not supported, you can
   build pyrefly from source and specify the binary here.
-- `pyrefly.configPath` [string: '']: path to a `pyrefly.toml` or
+- `python.pyrefly.configPath` [string: '']: path to a `pyrefly.toml` or
   `pyproject.toml` configuration file. When set, the LSP will use this config
   for all files in your workspace instead of the default Pyrefly config-finding logic
   wherever possible.
