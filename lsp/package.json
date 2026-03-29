@@ -245,7 +245,7 @@
                 "pyrefly.configPath": {
                     "type": "string",
                     "default": "",
-                    "description": "Path to a pyrefly.toml or pyproject.toml configuration file. When set, the LSP will use this config for all files instead of an upward-filesystem-walk config discovery approach.",
+                    "description": "Path to a pyrefly.toml or pyproject.toml configuration file. When set, the LSP will use this config for all files in your workspace instead of the default Pyrefly config-finding logic. Prefer to use default logic wherever possible.",
                     "scope": "resource"
                 }
             }
