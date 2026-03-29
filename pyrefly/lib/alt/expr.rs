@@ -719,6 +719,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRefOld>,
         errors: &ErrorCollector,
     ) -> Type {
+        if let Some(hint) = hint
+            && let Some(ty) = self.tuple_infer_matching_union_branch(x, hint)
+        {
+            return ty;
+        }
+        self.tuple_infer_with_hint(x, hint, errors)
+    }
+
+    fn tuple_infer_matching_union_branch(&self, x: &ExprTuple, hint: HintRefOld) -> Option<Type> {
+        let (tuples, _) = self.split_tuple_hint(hint.ty());
+        if tuples.len() <= 1 {
+            return None;
+        }
+        let mut matching = Vec::new();
+        for tuple in tuples {
+            let branch_errors = self.error_collector();
+            let branch_hint = Type::Tuple(tuple.clone());
+            let inferred = self.tuple_infer_with_hint(
+                x,
+                Some(HintRefOld::new(&branch_hint, Some(&branch_errors))),
+                &branch_errors,
+            );
+            if branch_errors.is_empty() && self.is_subset_eq(&inferred, &branch_hint) {
+                matching.push(inferred);
+            }
+        }
+        (!matching.is_empty()).then(|| self.unions(matching))
+    }
+
+    fn tuple_infer_with_hint(
+        &self,
+        x: &ExprTuple,
+        hint: Option<HintRefOld>,
+        errors: &ErrorCollector,
+    ) -> Type {
         let owner = Owner::new();
         let has_hint = hint.is_some();
         let (hint_ts, default_hint) = if let Some(hint) = &hint {

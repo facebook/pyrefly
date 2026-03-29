@@ -683,6 +683,23 @@ x: tuple[Literal["a", "b"], ...] = tuple(CONSTS)
 );
 
 testcase!(
+    test_tuple_return_contextual_union_hint,
+    r#"
+def check_type[T](
+    value: object,
+    expected_type: type[T],
+) -> T: ...
+
+def login(username: str | int) -> tuple[bool, int] | tuple[bool, str]:
+    return True, check_type(username, int)
+
+def login_via_local(username: str | int) -> tuple[bool, int] | tuple[bool, str]:
+    result = True, check_type(username, int)
+    return result
+    "#,
+);
+
+testcase!(
     test_callable_tuple_mismatch,
     r#"
 from typing import Callable
