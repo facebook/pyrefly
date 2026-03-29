@@ -70,6 +70,7 @@ pub struct Workspace {
     pub lsp_analysis_config: Option<LspAnalysisConfig>,
     pub stream_diagnostics: Option<bool>,
     pub diagnostic_mode: Option<DiagnosticMode>,
+    pub workspace_config: Option<PathBuf>,
 }
 
 impl Workspace {
@@ -89,6 +90,11 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
     ) -> (ArcId<ConfigFile>, Vec<pyrefly_config::finder::ConfigError>) {
         if let Some(dir) = root {
             self.0.get_with(dir.to_owned(), |(workspace_root, w)| {
+                if let Some(workspace_config_path) = &w.workspace_config {
+                    let (new_config, new_errors) = ConfigFile::from_file(workspace_config_path);
+                    config = new_config;
+                    errors = new_errors;
+                }
                 if let Some(search_path) = w.search_path.clone() {
                     config.search_path_from_args = search_path;
                 }
@@ -183,6 +189,7 @@ struct PyreflyClientConfig {
     #[serde(default)]
     disabled_language_services: Option<DisabledLanguageServices>,
     stream_diagnostics: Option<bool>,
+    config_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -408,6 +415,9 @@ impl Workspaces {
             if let Some(analysis) = pyrefly.analysis {
                 self.update_ide_settings(modified, scope_uri, analysis);
             }
+            if let Some(config_path) = pyrefly.config_path {
+                self.update_workspace_config(modified, scope_uri, config_path);
+            }
         }
         // Always handle analysis at top level (no longer conditional on analysis_handled)
         if let Some(analysis) = config.analysis {
@@ -574,6 +584,36 @@ impl Workspaces {
             None => {
                 *modified = true;
                 self.default.write().search_path = Some(search_paths);
+            }
+        }
+    }
+
+    /// Update workspace config path for scope_uri, None if default workspace.
+    /// An empty path clears the workspace config (reverts to auto-discovery).
+    fn update_workspace_config(
+        &self,
+        modified: &mut bool,
+        scope_uri: &Option<Url>,
+        config_path: PathBuf,
+    ) {
+        let workspace_config = if config_path.as_os_str().is_empty() {
+            None
+        } else {
+            Some(config_path)
+        };
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(workspace_path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&workspace_path)
+                {
+                    *modified = true;
+                    workspace.workspace_config = workspace_config;
+                }
+            }
+            None => {
+                *modified = true;
+                self.default.write().workspace_config = workspace_config;
             }
         }
     }
