@@ -1828,13 +1828,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Type(box Type::Callable(_)), Type::Type(_)) => Err(
                 SubsetError::TypeCannotAcceptSpecialForms(SpecialForm::Callable),
             ),
-            // Union types (e.g., `Optional[int]`, `int | None`) are not valid arguments to bare
-            // `type` / `type[Any]`. At runtime these evaluate to `UnionType`, not `type`.
-            // Only reject against Type::Any (bare `type`), not Type::TypeVar or Type::ClassType,
-            // to allow legitimate patterns like `type[T]` binding and `type[int | None]`.
-            (Type::Type(box Type::Union(_)), Type::Type(box Type::Any(_))) => {
-                Err(SubsetError::TypeCannotAcceptUnion)
-            }
             (Type::Type(l), Type::Type(u)) => self.is_subset_eq(l, u),
             (Type::Type(_), _) => self.is_subset_eq(
                 &self

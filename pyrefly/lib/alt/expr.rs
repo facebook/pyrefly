@@ -301,7 +301,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::Subscript(x) => {
                 // TODO: We don't deal properly with hint here, we should.
                 let base = self.expr_infer_type_info_with_hint(&x.value, None, errors);
-                self.subscript_infer(&base, &x.slice, x.range(), errors)
+                let result = self.subscript_infer(&base, &x.slice, x.range(), errors);
+                // For subscript expressions that produce union type forms
+                // (e.g., Optional[int], Union[int, None]), when the hint is bare
+                // `type` / `type[Any]`, return the raw union instead of the type
+                // form. At runtime, these evaluate to `types.UnionType`, not `type`.
+                if let Type::Type(inner) = result.ty() {
+                    if matches!(inner.as_ref(), Type::Union(_)) {
+                        if let Some(ref hint) = hint {
+                            if matches!(hint.ty(), Type::Type(box Type::Any(_))) {
+                                TypeInfo::of_ty(*inner.clone())
+                            } else {
+                                result
+                            }
+                        } else {
+                            result
+                        }
+                    } else {
+                        result
+                    }
+                } else {
+                    result
+                }
             }
             Expr::Named(x) => match &*x.target {
                 Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => self

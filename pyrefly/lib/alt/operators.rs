@@ -345,7 +345,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
             && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
         {
-            return self.heap.mk_type_form(self.union(l, r));
+            let union_ty = self.union(l, r);
+            // When the hint is bare `type` / `type[Any]`, return the raw union
+            // instead of wrapping it in Type::Type. At runtime, `int | None`
+            // evaluates to `types.UnionType`, not `type`, so it should fail
+            // the assignability check against `type[Any]`.
+            if let Some(ref hint) = hint {
+                if matches!(hint.ty(), Type::Type(box Type::Any(_))) {
+                    return union_ty;
+                }
+            }
+            return self.heap.mk_type_form(union_ty);
         }
 
         self.distribute_over_union(&lhs, |lhs| {
@@ -362,7 +372,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
                     && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
                 {
-                    self.heap.mk_type_form(self.union(l, r))
+                    let union_ty = self.union(l, r);
+                    if let Some(ref hint) = hint {
+                        if matches!(hint.ty(), Type::Type(box Type::Any(_))) {
+                            return union_ty;
+                        }
+                    }
+                    self.heap.mk_type_form(union_ty)
                 } else if x.op == Operator::Add
                     && ((matches!(lhs, Type::LiteralString(_)) && rhs.is_literal_string())
                         || (matches!(rhs, Type::LiteralString(_)) && lhs.is_literal_string()))
