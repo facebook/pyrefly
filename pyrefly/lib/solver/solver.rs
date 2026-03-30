@@ -997,6 +997,14 @@ impl Solver {
         }
     }
 
+    /// Get current bound from a set of bounds of an unfinished variable.
+    fn get_current_bound(&self, bounds: Vec<Type>) -> Option<Type> {
+        if bounds.is_empty() {
+            return None;
+        }
+        Some(unions(bounds, &self.heap))
+    }
+
     /// Solve one set of bounds (upper or lower)
     fn solve_one_bounds(&self, mut bounds: Vec<Type>) -> Option<Type> {
         if bounds.is_empty() {
@@ -1949,7 +1957,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                     | Variable::Unwrap(bounds)
                         if let Some(lower_bound) =
-                            self.solver.solve_one_bounds(bounds.lower.clone()) =>
+                            self.solver.get_current_bound(bounds.lower.clone()) =>
                     {
                         drop(v1_ref);
                         drop(variables);
