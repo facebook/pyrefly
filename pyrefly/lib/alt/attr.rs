@@ -2817,23 +2817,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 false,
             );
 
-            if let Some(dunder_bool_ty) = dunder_bool_ty
-                && !dunder_bool_ty.is_never()
-            {
-                let dunder_bool_ty = match self.as_call_target(dunder_bool_ty) {
-                    CallTargetLookup::Ok(_) => return,
-                    CallTargetLookup::Error(ty, _) | CallTargetLookup::CircularCall(ty) => ty,
-                };
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::InvalidArgument,
-                    format!(
-                        "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
-                        self.for_display(union_member_ty.clone()),
-                        self.for_display(dunder_bool_ty),
-                    ),
-                );
+            if let Some(dunder_bool_ty) = dunder_bool_ty {
+                if dunder_bool_ty.is_never() {
+                    return;
+                }
+
+                match self.as_call_target(dunder_bool_ty.clone()) {
+                    CallTargetLookup::Ok(_) => {}
+                    CallTargetLookup::Error(ty, _) | CallTargetLookup::CircularCall(ty) => {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::InvalidArgument,
+                            format!(
+                                "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
+                                self.for_display(union_member_ty.clone()),
+                                self.for_display(ty),
+                            ),
+                        );
+                        return;
+                    }
+                }
+
+                if dunder_bool_ty
+                    .callable_return_type(self.heap)
+                    .is_some_and(|ret| ret.is_never())
+                {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidArgument,
+                        format!(
+                            "The `__bool__` method of `{}` returns `Never`, so it cannot be used as a boolean",
+                            self.for_display(union_member_ty.clone()),
+                        ),
+                    );
+                }
             }
         };
         self.map_over_union(type_of_term_used_as_bool, f)
