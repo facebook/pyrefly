@@ -2009,6 +2009,19 @@ def test(o: C):
 );
 
 testcase!(
+    test_dunder_bool_returning_never,
+    r#"
+from typing import Never
+
+class Foo:
+    def __bool__(self) -> Never:
+        raise TypeError
+
+if Foo(): ...  # E: The `__bool__` method of `Foo` returns `Never`, so it cannot be used as a boolean
+"#,
+);
+
+testcase!(
     test_union_dunder_bool,
     r#"
 from typing import Literal
