@@ -407,7 +407,6 @@ f(g(0)) # OK
 );
 
 testcase!(
-    bug = "Propagating the hint should still allow for a narrower inferred type",
     test_context_return_narrow,
     r#"
 from typing import assert_type
@@ -417,7 +416,7 @@ def f[T](x: T) -> T:
 
 def test(x: int | str):
     x = f(0)
-    assert_type(x, int) # E: assert_type(int | str, int) failed
+    assert_type(x, int)
 "#,
 );
 

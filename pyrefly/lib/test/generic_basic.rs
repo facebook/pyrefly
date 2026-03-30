@@ -110,16 +110,30 @@ assert_type(C2[int], type[C2[int, *tuple[()]]])
 );
 
 testcase!(
-    test_generics,
+    test_generics_invariant,
     r#"
 from typing import Literal
 class C[T]: ...
 def append[T](x: C[T], y: T):
     pass
 v: C[int] = C()
+append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
+"#,
+);
+
+testcase!(
+    test_generics_covariant,
+    r#"
+from typing import Literal
+class C[T]:
+    def f(self) -> T: ...
+def append[T](x: C[T], y: T):
+    pass
+v: C[int] = C()
 append(v, "test")
 "#,
 );
+
 testcase!(
     test_call_hint_does_not_override_arg,
     r#"
@@ -749,5 +763,14 @@ def f[T](x: T, y: T) -> T: ...
 def g(x: Any):
     # `list[Any]` absorbs `list[int]`
     assert_type(f([x], [1]), list[Any])
+    "#,
+);
+
+testcase!(
+    test_lists_of_different_element_types,
+    r#"
+from typing import assert_type
+def f[T](x: T, y: T) -> T: ...
+assert_type(f([""], [0]), list[int] | list[str])
     "#,
 );

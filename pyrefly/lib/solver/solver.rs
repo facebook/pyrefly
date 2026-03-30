@@ -1984,19 +1984,26 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         quantified: _,
                         bounds,
                     }
-                    | Variable::Unwrap(bounds)
-                        if let Some(lower_bound) =
-                            self.solver.get_current_bound(bounds.lower.clone()) =>
-                    {
+                    | Variable::Unwrap(bounds) => {
+                        let lower_bound = self.solver.get_current_bound(bounds.lower.clone());
                         drop(v1_ref);
                         drop(variables);
-                        self.is_subset_eq(&lower_bound, t2)
+                        let res = if let Some(lower_bound) = lower_bound {
+                            self.is_subset_eq(&lower_bound, t2)
+                        } else {
+                            Ok(())
+                        };
+                        self.solver.add_upper_bound(
+                            *v1,
+                            if res.is_ok() {
+                                t2.clone()
+                            } else {
+                                Type::any_error()
+                            },
+                        );
+                        res
                     }
-                    Variable::Quantified {
-                        quantified: q,
-                        bounds: _,
-                    }
-                    | Variable::PartialQuantified(q) => {
+                    Variable::PartialQuantified(q) => {
                         let is_partial = matches!(&*v1_ref, Variable::PartialQuantified(_));
                         let name = q.name.clone();
                         let restriction = q.restriction().clone();
@@ -2079,7 +2086,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         variables.update(*v1, Variable::Answer(answer));
                         Ok(())
                     }
-                    Variable::Unwrap(_) | Variable::Recursive => {
+                    Variable::Recursive => {
                         drop(v1_ref);
                         variables.update(*v1, Variable::Answer(t2.clone()));
                         Ok(())

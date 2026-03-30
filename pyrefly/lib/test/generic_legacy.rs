@@ -576,7 +576,6 @@ reveal_type(TypeForm)  # E: revealed type: type[type[T]]
 );
 
 testcase!(
-    bug = "TODO(https://github.com/facebook/pyrefly/issues/105): collect upper bounds on typevars",
     test_generics_legacy_unqualified,
     r#"
 from typing import TypeVar, Generic
@@ -585,12 +584,11 @@ class C(Generic[T]): ...
 def append(x: C[T], y: T):
     pass
 v: C[int] = C()
-append(v, "test")  # should error
+append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
 "#,
 );
 
 testcase!(
-    bug = "TODO(https://github.com/facebook/pyrefly/issues/105): collect upper bounds on typevars",
     test_generics_legacy_qualified,
     r#"
 import typing
@@ -599,7 +597,7 @@ class C(typing.Generic[T]): ...
 def append(x: C[T], y: T):
     pass
 v: C[int] = C()
-append(v, "test")  # should error
+append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
 "#,
 );
 

@@ -8037,6 +8037,17 @@
     },
     {
       "code": -2,
+      "column": 50,
+      "concise_description": "`str` is not assignable to upper bound `LiteralString` of type variable `T`",
+      "description": "`str` is not assignable to upper bound `LiteralString` of type variable `T`",
+      "line": 133,
+      "name": "bad-specialization",
+      "severity": "error",
+      "stop_column": 53,
+      "stop_line": 133
+    },
+    {
+      "code": -2,
       "column": 51,
       "concise_description": "Argument `str` is not assignable to parameter `value` with type `LiteralString` in function `Container.__init__`",
       "description": "Argument `str` is not assignable to parameter `value` with type `LiteralString` in function `Container.__init__`",

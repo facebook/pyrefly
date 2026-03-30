@@ -30,7 +30,6 @@ def test(f: type[A | B]) -> A | B:
 );
 
 testcase!(
-    bug = "There should be no errors",
     test_generic_class,
     r#"
 from typing import assert_type
@@ -38,7 +37,7 @@ class Box[T]:
     def __init__(self, x: T): pass
 
     def wrap(self) -> Box[Box[T]]:
-        return Box(self)  # E: Argument `Box[Box[Box[T]]]` is not assignable to parameter `self`  # E: `Self@Box` is not assignable to parameter `x`
+        return Box(self)
 
 def f() -> int:
     return 1
@@ -92,7 +91,6 @@ class A[T]:
 );
 
 testcase!(
-    bug = "Spurious 'Box[Box[Box[T]]] is not assignable...' errors",
     test_generic_init_in_generic_class,
     r#"
 from typing import assert_type
@@ -101,9 +99,9 @@ class Box[T]:
         pass
     def wrap(self, x: bool) -> Box[Box[T]]:
         if x:
-            return Box(self, self)  # E: `Box[Box[Box[T]]]` is not assignable to parameter `self`
+            return Box(self, self)
         else:
-            return Box(self, 42)  # E: `Box[Box[Box[T]]]` is not assignable to parameter `self`
+            return Box(self, 42)
 b = Box[int]("hello", "world")
 assert_type(b, Box[int])
 assert_type(b.wrap(True), Box[Box[int]])
