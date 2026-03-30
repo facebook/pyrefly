@@ -1971,6 +1971,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         self.is_subset_eq(&t1, t2)
                     }
                     Variable::Quantified {
+                        quantified: q,
+                        bounds: _,
+                    } if q.kind() != QuantifiedKind::TypeVar => {
+                        // TODO(https://github.com/facebook/pyrefly/issues/105): figure out what to
+                        // do with ParamSpec and TypeVarTuple.
+                        drop(v1_ref);
+                        variables.update(*v1, Variable::Answer(t2.clone()));
+                        Ok(())
+                    }
+                    Variable::Quantified {
                         quantified: _,
                         bounds,
                     }
