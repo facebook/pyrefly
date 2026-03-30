@@ -996,18 +996,15 @@ impl Solver {
         })
     }
 
-    pub fn add_upper_bound(&self, v: Var, bound: Type) {
-        let lock = self.variables.lock();
-        match &mut *lock.get_mut(v) {
-            Variable::Quantified {
-                quantified: _,
-                bounds,
-            }
-            | Variable::Unwrap(bounds) => {
-                bounds.upper.push(bound);
-            }
-            _ => {}
-        }
+    pub fn add_upper_bound(
+        &self,
+        v: Var,
+        bound: Type,
+        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
+    ) {
+        self.add_bound(v, bound, is_subset, &|bounds| &bounds.upper, &|bounds| {
+            &mut bounds.upper
+        })
     }
 
     /// Get current bound from a set of bounds of an unfinished variable.
@@ -2013,6 +2010,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             } else {
                                 Type::any_error()
                             },
+                            &mut |got, want| self.is_subset_eq(got, want).is_ok(),
                         );
                         res
                     }

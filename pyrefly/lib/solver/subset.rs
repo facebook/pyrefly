@@ -1214,7 +1214,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (_, Type::Any(_)) => {
                 for var in got.collect_maybe_quantified_vars() {
                     // Variables in `got` now have `Any` as an upper bound.
-                    self.solver.add_upper_bound(var, want.clone());
+                    self.solver
+                        .add_upper_bound(var, want.clone(), &mut |got, want| {
+                            self.is_subset_eq(got, want).is_ok()
+                        });
                 }
                 Ok(())
             }
