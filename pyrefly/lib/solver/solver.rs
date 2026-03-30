@@ -921,12 +921,14 @@ impl Solver {
         }
     }
 
-    /// Add a lower bound to the variable if it is a Quantified or Unwrap
-    pub fn add_lower_bound(
+    /// Add a bound to the variable if it is a Quantified or Unwrap
+    fn add_bound(
         &self,
         v: Var,
         bound: Type,
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
+        get: &dyn Fn(&Bounds) -> &Vec<Type>,
+        get_mut: &dyn Fn(&mut Bounds) -> &mut Vec<Type>,
     ) {
         let lock = self.variables.lock();
         let e = lock.get(v);
@@ -937,7 +939,7 @@ impl Solver {
                 bounds,
             }
             | Variable::Unwrap(bounds) => {
-                if let Some(first) = bounds.lower.first() {
+                if let Some(first) = get(bounds).first() {
                     first_bound = Some(first.clone());
                 }
             }
@@ -945,11 +947,11 @@ impl Solver {
         }
         drop(e);
         drop(lock);
-        // Check if the new lower bound can absorb or be absorbed into the first bound.
+        // Check if the new bound can absorb or be absorbed into the first bound.
         // Examples: `float` absorbs `int`, `list[Any]` absorbs `list[int]`.
         // TODO(https://github.com/facebook/pyrefly/issues/105): there are a few fishy things:
         // * We're only checking against the first bound.
-        // * We're keeping `Any` separate so it can be filtered out in `solve_lower_bounds`.
+        // * We're keeping `Any` separate so it can be filtered out in `solve_one_bounds`.
         // * We're relying on `is_subset` to pin vars.
         let new_first_bound = first_bound.and_then(|first| {
             let can_absorb = |t: &Type| !t.is_any() && t.collect_all_vars().is_empty();
@@ -972,15 +974,26 @@ impl Solver {
             }
             | Variable::Unwrap(bounds) => {
                 if let Some(new_first) = new_first_bound
-                    && let Some(old_first) = bounds.lower.first_mut()
+                    && let Some(old_first) = get_mut(bounds).first_mut()
                 {
                     *old_first = new_first;
                 } else {
-                    bounds.lower.push(bound);
+                    get_mut(bounds).push(bound);
                 }
             }
             _ => {}
         }
+    }
+
+    pub fn add_lower_bound(
+        &self,
+        v: Var,
+        bound: Type,
+        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
+    ) {
+        self.add_bound(v, bound, is_subset, &|bounds| &bounds.lower, &|bounds| {
+            &mut bounds.lower
+        })
     }
 
     pub fn add_upper_bound(&self, v: Var, bound: Type) {
