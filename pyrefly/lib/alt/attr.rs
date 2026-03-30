@@ -2562,20 +2562,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 false,
             );
 
-            if let Some(dunder_bool_ty) = dunder_bool_ty
-                && !dunder_bool_ty.is_never()
-                && self.as_call_target(dunder_bool_ty.clone()).is_error()
-            {
-                self.error(
-                    errors,
-                    range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                    format!(
-                        "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
-                        self.for_display(union_member_ty.clone()),
-                        self.for_display(dunder_bool_ty.clone()),
-                    ),
-                );
+            if let Some(dunder_bool_ty) = dunder_bool_ty {
+                if dunder_bool_ty.is_never() {
+                    return;
+                }
+
+                if self.as_call_target(dunder_bool_ty.clone()).is_error() {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        format!(
+                            "The `__bool__` attribute of `{}` has type `{}`, which is not callable",
+                            self.for_display(union_member_ty.clone()),
+                            self.for_display(dunder_bool_ty.clone()),
+                        ),
+                    );
+                    return;
+                }
+
+                if dunder_bool_ty
+                    .callable_return_type(self.heap)
+                    .is_some_and(|ret| ret.is_never())
+                {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        format!(
+                            "The `__bool__` method of `{}` returns `Never`, so it cannot be used as a boolean",
+                            self.for_display(union_member_ty.clone()),
+                        ),
+                    );
+                }
             }
         };
         self.map_over_union(type_of_term_used_as_bool, f)
