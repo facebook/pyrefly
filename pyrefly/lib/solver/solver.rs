@@ -1743,10 +1743,23 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         &mut self,
         t1: &Type,
         q: &Quantified,
+        upper_bound: Option<&Type>,
     ) -> (Type, Option<TypeVarSpecializationError>) {
-        let t1_p = t1
-            .clone()
-            .promote_implicit_literals(self.type_order.stdlib());
+        let t1_p = {
+            let t1_p = t1
+                .clone()
+                .promote_implicit_literals(self.type_order.stdlib());
+            if let Some(upper_bound) = upper_bound {
+                // Don't promote literals if doing so would violate a literal upper bound.
+                if self.is_subset_eq(&t1_p, upper_bound).is_ok() {
+                    t1_p
+                } else {
+                    t1.clone()
+                }
+            } else {
+                t1_p
+            }
+        };
         let bound = q.bound_type(self.type_order.stdlib(), &self.solver.heap);
         // For constrained TypeVars, promote to the matching constraint type.
         if let Restriction::Constraints(ref constraints) = q.restriction {
@@ -2075,12 +2088,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                     Variable::Quantified {
                         quantified: q,
-                        bounds: _,
+                        bounds,
                     } => {
                         let q = q.clone();
+                        let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
                         drop(v2_ref);
                         drop(variables);
-                        let (answer, specialization_error) = self.is_subset_eq_quantified(t1, &q);
+                        let (answer, specialization_error) =
+                            self.is_subset_eq_quantified(t1, &q, upper_bound.as_ref());
                         if let Some(specialization_error) = specialization_error {
                             self.solver
                                 .instantiation_errors
@@ -2110,7 +2125,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         let q = q.clone();
                         drop(v2_ref);
                         drop(variables);
-                        let (answer, specialization_error) = self.is_subset_eq_quantified(t1, &q);
+                        let (answer, specialization_error) =
+                            self.is_subset_eq_quantified(t1, &q, None);
                         if let Some(specialization_error) = specialization_error {
                             self.solver
                                 .instantiation_errors
