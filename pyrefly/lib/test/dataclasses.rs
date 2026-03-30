@@ -1848,6 +1848,33 @@ dataclass(Printable)
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2921
+testcase!(
+    test_dataclass_decorator_on_protocol,
+    r#"
+from dataclasses import dataclass
+from typing import Protocol
+
+@dataclass  # E: @dataclass cannot be applied to a Protocol class
+class MyProto(Protocol):
+    x: int
+    def display(self) -> str: ...
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2921
+testcase!(
+    test_dataclass_decorator_with_args_on_protocol,
+    r#"
+from dataclasses import dataclass
+from typing import Protocol
+
+@dataclass(frozen=True)  # E: @dataclass cannot be applied to a Protocol class
+class MyProto(Protocol):
+    x: int
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/2920
 testcase!(
     bug = "Should reject overriding __setattr__ and __delattr__ in frozen dataclass",

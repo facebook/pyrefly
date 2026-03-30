@@ -390,6 +390,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             );
         }
+
+        // @dataclass should not be applied to Protocol classes.
+        if protocol_metadata.is_some() {
+            for (decorator, range) in &decorators {
+                let is_dataclass = match decorator.ty.callee_kind() {
+                    Some(CalleeKind::Function(FunctionKind::Dataclass)) => true,
+                    _ if let Type::KwCall(call) = &decorator.ty
+                        && call.has_function_kind(FunctionKind::Dataclass) =>
+                    {
+                        true
+                    }
+                    _ => false,
+                };
+                if is_dataclass {
+                    self.error(
+                        errors,
+                        *range,
+                        ErrorInfo::Kind(ErrorKind::InvalidDecorator),
+                        "@dataclass cannot be applied to a Protocol class".to_owned(),
+                    );
+                }
+            }
+        }
         let extends_abc = self.extends_abc(&bases_with_metadata, metaclass);
 
         // Compute final base class list.
