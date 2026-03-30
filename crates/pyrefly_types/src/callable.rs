@@ -387,6 +387,7 @@ impl FuncMetadata {
                 cls: Some(cls),
                 name: func,
                 def_index,
+                outer_funcs: None,
             })),
             flags: FuncFlags::default(),
         }
@@ -484,6 +485,9 @@ pub struct FuncId {
     pub cls: Option<Class>,
     pub name: Name,
     pub def_index: Option<FuncDefIndex>,
+    /// Dot-separated path of enclosing function names (e.g. `"f1"` for a function nested inside `f1`).
+    /// `None` for top-level and class-method functions.
+    pub outer_funcs: Option<Name>,
 }
 
 impl PartialEq for FuncId {
@@ -948,6 +952,7 @@ impl FunctionKind {
         cls: Option<Class>,
         func: &Name,
         def_index: Option<FuncDefIndex>,
+        outer_funcs: Option<Name>,
     ) -> Self {
         match (module.name().as_str(), cls.as_ref(), func.as_str()) {
             ("builtins", None, "isinstance") => Self::IsInstance,
@@ -976,6 +981,7 @@ impl FunctionKind {
                 cls,
                 name: func.clone(),
                 def_index,
+                outer_funcs,
             })),
         }
     }
@@ -1055,6 +1061,13 @@ impl FunctionKind {
             Self::TotalOrdering => None,
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
+        }
+    }
+
+    pub fn outer_funcs(&self) -> Option<&Name> {
+        match self {
+            Self::Def(func_id) => func_id.outer_funcs.as_ref(),
+            _ => None,
         }
     }
 

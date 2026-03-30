@@ -32,7 +32,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
-
+use pyrefly_python::module_name::ModuleName;
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
@@ -257,14 +257,45 @@ impl<'a> BindingsBuilder<'a> {
         func_name: &Identifier,
         class_key: Option<Idx<KeyClass>>,
         usage: &mut Usage,
+        parent: &NestingContext,
     ) -> (
         Option<(TextRange, Idx<KeyAnnotation>)>,
         Vec<Idx<KeyLegacyTypeParam>>,
     ) {
+        let module = self.module_info.name();
         let tparams = x
             .type_params
             .as_mut()
-            .map(|tparams| self.type_params(tparams));
+            .map(|tparams| {
+                let owner = if module != ModuleName::builtins() {
+                    let mut parts: Vec<&str> = Vec::new();
+                    let mut ctx = parent;
+                    loop {
+                        if ctx.is_toplevel() {
+                            break;
+                        }
+                        if let Some(id) = ctx.identifier() {
+                            parts.push(self.module_info.code_at(id.range()));
+                        }
+                        if let Some(p) = ctx.parent() {
+                            ctx = p;
+                        } else {
+                            break;
+                        }
+                    }
+                    parts.reverse();
+                    let func_name_str = func_name.id.as_str();
+                    let owner_str = if parts.is_empty() {
+                        format!("{}.{}", module, func_name_str)
+                    } else {
+                        format!("{}.{}.{}", module, parts.join("."), func_name_str)
+                    };
+                    Some(Name::new(owner_str))
+                } else {
+                    None
+                };
+                self.type_params_with_owner(tparams, owner)
+            });
 
         let mut legacy = Some(LegacyTParamCollector::new(tparams.is_some()));
 
@@ -691,7 +722,7 @@ impl<'a> BindingsBuilder<'a> {
 
         self.scopes.push(Scope::annotation(x.range));
         let (return_ann_with_range, legacy_tparams) =
-            self.function_header(&mut x, &func_name, class_key, def_idx.usage());
+            self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
 
         let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
 
@@ -714,6 +745,32 @@ impl<'a> BindingsBuilder<'a> {
         self.scopes.pop();
         self.scopes
             .record_self_assignments_if_applicable(self_assignments);
+        // Collect enclosing function names from the parent NestingContext (skipping classes).
+        let outer_funcs = {
+            let mut parts: Vec<&str> = Vec::new();
+            let mut ctx = parent;
+            loop {
+                if ctx.is_toplevel() {
+                    break;
+                }
+                if ctx.is_function() {
+                    if let Some(id) = ctx.identifier() {
+                        parts.push(self.module_info.code_at(id.range()));
+                    }
+                }
+                if let Some(p) = ctx.parent() {
+                    ctx = p;
+                } else {
+                    break;
+                }
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                parts.reverse();
+                Some(Name::new(parts.join(".")))
+            }
+        };
         let undecorated_idx = self.insert_binding_idx(
             undecorated_idx,
             BindingUndecoratedFunction {
@@ -724,6 +781,7 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: decorators.decorators,
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
                 module_style: self.module_info.path().style(),
+                outer_funcs,
             },
         );
 

@@ -31,7 +31,6 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
-
 use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::base_class::BaseClassGenericKind;
@@ -247,7 +246,33 @@ impl<'a> BindingsBuilder<'a> {
         let scoped_type_param_names = x
             .type_params
             .as_mut()
-            .map(|x| self.type_params(x))
+            .map(|tp| {
+                let module = self.module_info.name();
+                let mut parts: Vec<&str> = Vec::new();
+                let mut ctx = parent;
+                loop {
+                    if ctx.is_toplevel() {
+                        break;
+                    }
+                    if let Some(id) = ctx.identifier() {
+                        parts.push(self.module_info.code_at(id.range()));
+                    }
+                    if let Some(p) = ctx.parent() {
+                        ctx = p;
+                    } else {
+                        break;
+                    }
+                }
+                parts.reverse();
+                let class_name = x.name.id.as_str();
+                let owner_str = if parts.is_empty() {
+                    format!("{}.{}", module, class_name)
+                } else {
+                    format!("{}.{}.{}", module, parts.join("."), class_name)
+                };
+                let owner = Some(Name::new(owner_str));
+                self.type_params_with_owner(tp, owner)
+            })
             .unwrap_or_default();
 
         let mut legacy = Some(LegacyTParamCollector::new(x.type_params.is_some()));

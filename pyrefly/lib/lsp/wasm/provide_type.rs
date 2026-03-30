@@ -62,8 +62,7 @@ pub fn provide_type(
         let text_size = info.from_lsp_position(position, None);
         if let Some(ty) = transaction.get_type_at(handle, text_size) {
             let mut c = TypeDisplayContext::new(&[&ty]);
-            c.set_lsp_display_mode(LspDisplayMode::Hover);
-            c.always_display_module_name();
+            c.set_lsp_display_mode(LspDisplayMode::ProvideType);
             contents.push(MarkupContent {
                 kind: MarkupKind::PlainText,
                 value: c.display(&ty).to_string(),

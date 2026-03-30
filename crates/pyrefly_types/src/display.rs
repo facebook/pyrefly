@@ -7,6 +7,7 @@
 
 //! Display a type. The complexity comes from if we have two classes with the same name,
 //! we want to display disambiguating information (e.g. module name or location).
+use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Display;
 
@@ -16,6 +17,7 @@ use pyrefly_python::qname::QName;
 use pyrefly_util::display::Fmt;
 use pyrefly_util::display::append;
 use pyrefly_util::display::commas_iter;
+use pyrefly_util::uniques::Unique;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
@@ -23,7 +25,9 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 
+use crate::callable::Callable;
 use crate::callable::Function;
+use crate::callable::Params;
 use crate::class::Class;
 use crate::literal::Lit;
 use crate::quantified::Quantified;
@@ -35,6 +39,7 @@ use crate::type_output::DisplayOutput;
 use crate::type_output::OutputWithLocations;
 use crate::type_output::TypeOutput;
 use crate::typed_dict::TypedDict;
+use crate::type_var::Restriction;
 use crate::types::AnyStyle;
 use crate::types::BoundMethod;
 use crate::types::BoundMethodType;
@@ -105,6 +110,10 @@ pub enum LspDisplayMode {
     /// consumers can unambiguously parse the type without relying on parameter
     /// name heuristics.
     Query,
+    /// Provide-type mode: Used by the types/provide-type LSP endpoint.
+    /// Shows fully-qualified names (including builtins module) and function signatures
+    /// with their names
+    ProvideType,
 }
 
 #[derive(Debug, Default)]
@@ -116,6 +125,11 @@ pub struct TypeDisplayContext<'a> {
     always_display_expanded_unions: bool,
     /// Optional stdlib reference for resolving builtin type locations
     stdlib: Option<&'a Stdlib>,
+    /// Stack of unique IDs of type variables currently bound by enclosing Foralls.
+    /// Owner display is suppressed for a variable if its unique is in this stack (it is
+    /// quantified by an enclosing Forall), but shown for free variables from outer scopes
+    /// (e.g. `F1@bar.f1` inside a nested function `f2[F2]` — F1 is free, F2 is bound).
+    forall_tparam_uniques: RefCell<Vec<Unique>>,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -140,6 +154,13 @@ impl<'a> TypeDisplayContext<'a> {
         t.universe(&mut |t| {
             if let Some(qname) = t.qname() {
                 self.add_qname(qname);
+            }
+            if let Type::SuperInstance(box (cls, obj)) = t {
+                self.add_qname(cls.qname());
+                let obj_qname = match obj {
+                    SuperObj::Instance(obj) | SuperObj::Class(obj) => obj.qname(),
+                };
+                self.add_qname(obj_qname);
             }
         })
     }
@@ -180,6 +201,9 @@ impl<'a> TypeDisplayContext<'a> {
     /// Set the context to display in LSP.
     pub fn set_lsp_display_mode(&mut self, display_mode: LspDisplayMode) {
         self.lsp_display_mode = display_mode;
+        if display_mode == LspDisplayMode::Query || display_mode == LspDisplayMode::ProvideType {
+            self.always_display_module_name();
+        }
     }
 
     pub fn set_stdlib(&mut self, stdlib: &'a Stdlib) {
@@ -233,6 +257,27 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
+    /// Formats a `TParam` with its restriction and default.
+    /// e.g. `T: int = bool`
+    fn fmt_tparam(&self, param: &Quantified, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", param.name)?;
+        match param.restriction() {
+            Restriction::Bound(ty) => write!(f, ": {}", self.display_internal(ty))?,
+            Restriction::Constraints(tys) if !tys.is_empty() => {
+                write!(
+                    f,
+                    ": ({})",
+                    commas_iter(|| tys.iter().map(|ty| self.display_internal(ty)))
+                )?;
+            }
+            _ => {}
+        }
+        if let Some(default) = param.default() {
+            write!(f, " = {}", self.display_internal(default))?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn fmt_targs(&self, targs: &TArgs, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let display_count = targs.display_count();
         if display_count > 0 {
@@ -279,10 +324,8 @@ impl<'a> TypeDisplayContext<'a> {
         if self.always_display_module_name {
             output.write_str(module)?;
             output.write_str(".")?;
-            output.write_str(name)
-        } else {
-            output.write_str(name)
         }
+        output.write_str(name)
     }
 
     /// Helper function to format a sequence of types with a separator.
@@ -346,6 +389,9 @@ impl<'a> TypeDisplayContext<'a> {
         match t {
             // Things that have QName's and need qualifying
             Type::ClassDef(cls) => {
+                if self.always_display_module_name {
+                    output.write_str("builtins.")?;
+                }
                 output.write_str("type[")?;
                 output.write_qname(cls.qname())?;
                 output.write_str("]")
@@ -493,24 +539,41 @@ impl<'a> TypeDisplayContext<'a> {
                 signature,
                 metadata,
             }) => match self.lsp_display_mode {
-                LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
+                LspDisplayMode::Hover | LspDisplayMode::SignatureHelp | LspDisplayMode::ProvideType
+                    if is_toplevel =>
+                {
                     let func_name = metadata.kind.function_name();
+                    let module = metadata.kind.module_name();
                     output.write_str("def ")?;
-                    output.write_str(func_name.as_ref().as_str())?;
+                    if self.always_display_module_name {
+                        if let Some(cls) = metadata.kind.class() {
+                            write!(output, "{module}.{}.{func_name}", Fmt(|f| cls.qname().fmt_name(f)))?;
+                        } else if let Some(outer) = metadata.kind.outer_funcs() {
+                            write!(output, "{module}.{outer}.{func_name}")?;
+                        } else {
+                            write!(output, "{module}.{func_name}")?;
+                        }
+                    } else {
+                        output.write_str(func_name.as_ref().as_str())?;
+                    }
                     match self.lsp_display_mode {
                         LspDisplayMode::Hover => {
                             signature.fmt_with_type_with_newlines(output, &|t, o| {
                                 self.fmt_helper_generic(t, false, o)
                             })?;
                         }
-                        LspDisplayMode::SignatureHelp => {
+                        LspDisplayMode::SignatureHelp | LspDisplayMode::ProvideType => {
                             signature.fmt_with_type(output, &|t, o| {
                                 self.fmt_helper_generic(t, false, o)
                             })?;
                         }
                         _ => unreachable!(),
                     }
-                    output.write_str(": ...")
+                    if self.lsp_display_mode == LspDisplayMode::ProvideType {
+                        Ok(())
+                    } else {
+                        output.write_str(": ...")
+                    }
                 }
                 _ => signature.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o)),
             },
@@ -524,21 +587,22 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                     Ok(())
                 } else {
-                    if is_toplevel {
+                    let multiline = is_toplevel && self.lsp_display_mode != LspDisplayMode::ProvideType;
+                    if multiline {
                         output.write_str("Overload[\n  ")?;
                     } else {
                         output.write_str("Overload[")?;
                     }
-                    self.fmt_helper_generic(&overload.signatures.first().as_type(), false, output)?;
+                    self.fmt_helper_generic(&overload.signatures.first().as_type(), is_toplevel, output)?;
                     for sig in overload.signatures.iter().skip(1) {
-                        if is_toplevel {
+                        if multiline {
                             output.write_str("\n  ")?;
                         } else {
                             output.write_str(", ")?;
                         }
-                        self.fmt_helper_generic(&sig.as_type(), false, output)?;
+                        self.fmt_helper_generic(&sig.as_type(), is_toplevel, output)?;
                     }
-                    if is_toplevel {
+                    if multiline {
                         output.write_str("\n]")
                     } else {
                         output.write_str("]")
@@ -559,7 +623,7 @@ impl<'a> TypeDisplayContext<'a> {
                         self.fmt_helper_generic(&func.clone().as_type(), is_toplevel, output)?;
                         output.write_str("]")
                     }
-                    LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
+                    LspDisplayMode::Hover | LspDisplayMode::SignatureHelp | LspDisplayMode::ProvideType if is_toplevel => {
                         match func {
                             BoundMethodType::Function(Function {
                                 signature,
@@ -567,22 +631,44 @@ impl<'a> TypeDisplayContext<'a> {
                             }) => {
                                 let func_name = metadata.kind.function_name();
                                 output.write_str("def ")?;
-                                output.write_str(func_name.as_ref().as_str())?;
+                                if self.always_display_module_name {
+                                    let module = metadata.kind.module_name();
+                                    if let Some(cls) = metadata.kind.class() {
+                                        write!(output, "{module}.{}.{func_name}", Fmt(|f| cls.qname().fmt_name(f)))?;
+                                    } else {
+                                        write!(output, "{module}.{func_name}")?;
+                                    }
+                                } else {
+                                    output.write_str(func_name.as_ref().as_str())?;
+                                }
+                                let effective_sig = match &signature.params {
+                                    Params::List(params) => {
+                                        if let Some((_, rest)) = params.split_first() {
+                                            Callable::list(rest, signature.ret.clone())
+                                        } else {
+                                            signature.clone()
+                                        }
+                                    }
+                                    _ => signature.clone(),
+                                };
                                 match self.lsp_display_mode {
                                     LspDisplayMode::Hover => {
-                                        signature
+                                        effective_sig
                                             .fmt_with_type_with_newlines(output, &|t, o| {
                                                 self.fmt_helper_generic(t, false, o)
                                             })?;
                                     }
-                                    LspDisplayMode::SignatureHelp => {
-                                        signature.fmt_with_type(output, &|t, o| {
+                                    _ => {
+                                        effective_sig.fmt_with_type(output, &|t, o| {
                                             self.fmt_helper_generic(t, false, o)
                                         })?;
                                     }
-                                    _ => unreachable!(),
                                 }
-                                output.write_str(": ...")
+                                if self.always_display_module_name {
+                                    Ok(())
+                                } else {
+                                    output.write_str(": ...")
+                                }
                             }
                             BoundMethodType::Forall(Forall {
                                 tparams,
@@ -593,30 +679,56 @@ impl<'a> TypeDisplayContext<'a> {
                                     },
                             }) => {
                                 let func_name = metadata.kind.function_name();
+                                let module = metadata.kind.module_name();
                                 output.write_str("def ")?;
-                                output.write_str(func_name.as_ref().as_str())?;
+                                if self.always_display_module_name {
+                                    if let Some(cls) = metadata.kind.class() {
+                                        write!(output, "{module}.{}.{func_name}", Fmt(|f| cls.qname().fmt_name(f)))?;
+                                    } else {
+                                        write!(output, "{module}.{func_name}")?;
+                                    }
+                                } else {
+                                    output.write_str(func_name.as_ref().as_str())?;
+                                }
                                 output.write_str("[")?;
                                 write!(
                                     output,
                                     "{}",
-                                    commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                                    commas_iter(|| tparams.iter().map(|q| Fmt(|f| self.fmt_tparam(q, f))))
                                 )?;
                                 output.write_str("]")?;
-                                match self.lsp_display_mode {
+                                let effective_sig = match &signature.params {
+                                    Params::List(params) => {
+                                        if let Some((_, rest)) = params.split_first() {
+                                            Callable::list(rest, signature.ret.clone())
+                                        } else {
+                                            signature.clone()
+                                        }
+                                    }
+                                    _ => signature.clone(),
+                                };
+                                let forall_start = self.forall_tparam_uniques.borrow().len();
+                                self.forall_tparam_uniques.borrow_mut().extend(tparams.iter().map(|q| q.unique()));
+                                let result = match self.lsp_display_mode {
                                     LspDisplayMode::Hover => {
-                                        signature
+                                        effective_sig
                                             .fmt_with_type_with_newlines(output, &|t, o| {
                                                 self.fmt_helper_generic(t, false, o)
-                                            })?;
+                                            })
                                     }
-                                    LspDisplayMode::SignatureHelp => {
-                                        signature.fmt_with_type(output, &|t, o| {
+                                    _ => {
+                                        effective_sig.fmt_with_type(output, &|t, o| {
                                             self.fmt_helper_generic(t, false, o)
-                                        })?;
+                                        })
                                     }
-                                    _ => unreachable!(),
+                                };
+                                self.forall_tparam_uniques.borrow_mut().truncate(forall_start);
+                                result?;
+                                if self.always_display_module_name {
+                                    Ok(())
+                                } else {
+                                    output.write_str(": ...")
                                 }
-                                output.write_str(": ...")
                             }
                             BoundMethodType::Overload(_) => {
                                 // Use display instead of display_internal to show overloads w/ top-level formatting
@@ -760,6 +872,9 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::Intersect(x) => self.fmt_type_sequence(x.0.iter(), " & ", true, output),
             Type::Tuple(t) => {
+                if self.always_display_module_name {
+                    output.write_str("builtins.")?;
+                }
                 let tuple_qname = self.stdlib.map(|s| s.tuple_object().qname());
                 t.fmt_with_type(output, tuple_qname, &|ty, o| {
                     self.fmt_helper_generic(ty, false, o)
@@ -800,41 +915,65 @@ impl<'a> TypeDisplayContext<'a> {
                         ..
                     }),
             }) => match self.lsp_display_mode {
-                LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
+                LspDisplayMode::Hover | LspDisplayMode::SignatureHelp | LspDisplayMode::ProvideType
+                    if is_toplevel =>
+                {
                     let func_name = metadata.kind.function_name();
+                    let module = metadata.kind.module_name();
                     output.write_str("def ")?;
-                    output.write_str(func_name.as_ref().as_str())?;
+                    if self.always_display_module_name {
+                        if let Some(cls) = metadata.kind.class() {
+                            write!(output, "{module}.{}.{func_name}", Fmt(|f| cls.qname().fmt_name(f)))?;
+                        } else if let Some(outer) = metadata.kind.outer_funcs() {
+                            write!(output, "{module}.{outer}.{func_name}")?;
+                        } else {
+                            write!(output, "{module}.{func_name}")?;
+                        }
+                    } else {
+                        output.write_str(func_name.as_ref().as_str())?;
+                    }
                     output.write_str("[")?;
                     write!(
                         output,
                         "{}",
-                        commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                        commas_iter(|| tparams.iter().map(|q| Fmt(|f| self.fmt_tparam(q, f))))
                     )?;
                     output.write_str("]")?;
-                    match self.lsp_display_mode {
+                    let forall_start = self.forall_tparam_uniques.borrow().len();
+                    self.forall_tparam_uniques.borrow_mut().extend(tparams.iter().map(|q| q.unique()));
+                    let result = match self.lsp_display_mode {
                         LspDisplayMode::Hover => {
                             signature.fmt_with_type_with_newlines(output, &|t, o| {
                                 self.fmt_helper_generic(t, false, o)
-                            })?;
+                            })
                         }
-                        LspDisplayMode::SignatureHelp => {
+                        _ => {
                             signature.fmt_with_type(output, &|t, o| {
                                 self.fmt_helper_generic(t, false, o)
-                            })?;
+                            })
                         }
-                        _ => unreachable!(),
+                    };
+                    self.forall_tparam_uniques.borrow_mut().truncate(forall_start);
+                    result?;
+                    if self.always_display_module_name {
+                        Ok(())
+                    } else {
+                        output.write_str(": ...")
                     }
-                    output.write_str(": ...")
                 }
                 _ => {
                     output.write_str("[")?;
                     write!(
                         output,
                         "{}",
-                        commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                        commas_iter(|| tparams.iter().map(|q| Fmt(|f| self.fmt_tparam(q, f))))
                     )?;
                     output.write_str("]")?;
-                    self.fmt_helper_generic(&body.clone().as_type(), false, output)
+                    let forall_start = self.forall_tparam_uniques.borrow().len();
+                    self.forall_tparam_uniques.borrow_mut().extend(tparams.iter().map(|q| q.unique()));
+                    let result = self.fmt_helper_generic(&body.clone().as_type(), false, output);
+                    self.forall_tparam_uniques.borrow_mut().truncate(forall_start);
+                    result
                 }
             },
             Type::Forall(box Forall {
@@ -848,11 +987,22 @@ impl<'a> TypeDisplayContext<'a> {
                         Some(tparams),
                     )
                 } else {
+                    if self.always_display_module_name {
+                        output.write_str("builtins.")?;
+                    }
                     write!(output, "type[{}{}]", ta.name(), tparams)
                 }
             }
-            Type::Type(box Type::Any(_)) => output.write_str("type[Any]"),
+            Type::Type(box Type::Any(_)) => {
+                if self.always_display_module_name {
+                    output.write_str("builtins.")?;
+                }
+                output.write_str("type[Any]")
+            },
             Type::Type(ty) => {
+                if self.always_display_module_name {
+                    output.write_str("builtins.")?;
+                }
                 output.write_str("type[")?;
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
@@ -917,7 +1067,15 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str("]")
             }
             Type::Var(var) => write!(output, "{var}"),
-            Type::Quantified(var) => write!(output, "{var}"),
+            Type::Quantified(var) => {
+                write!(output, "{}", var.name)?;
+                if self.always_display_module_name && !self.forall_tparam_uniques.borrow().contains(&var.unique()) {
+                    if let Some(owner) = &var.owner {
+                        write!(output, "@{owner}")?;
+                    }
+                }
+                Ok(())
+            }
             Type::QuantifiedValue(var) => write!(output, "{var}"),
             Type::ElementOfTypeVarTuple(var) => write!(output, "ElementOf[{var}]"),
             Type::Args(q) => {
@@ -950,8 +1108,16 @@ impl<'a> TypeDisplayContext<'a> {
                 TypeAliasData::Value(ta) if is_toplevel => {
                     ta.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o), None)
                 }
-                TypeAliasData::Value(ta) => write!(output, "type[{}]", ta.name),
+                TypeAliasData::Value(ta) => {
+                    if self.always_display_module_name {
+                        output.write_str("builtins.")?;
+                    }
+                    write!(output, "type[{}]", ta.name)
+                },
                 TypeAliasData::Ref(r) => {
+                    if self.always_display_module_name {
+                        output.write_str("builtins.")?;
+                    }
                     output.write_str("type[")?;
                     self.fmt_helper_type_alias_ref(r, output)?;
                     output.write_str("]")
@@ -962,16 +1128,18 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::UntypedAlias(ta) => output.write_str(ta.name().as_str()),
             Type::SuperInstance(box (cls, obj)) => {
+                if self.always_display_module_name {
+                    output.write_str("builtins.")?;
+                }
                 output.write_str("super[")?;
-                output.write_qname(cls.qname())?;
+                self.fmt_helper_generic(&Type::ClassType(cls.clone()), false, output)?;
                 output.write_str(", ")?;
                 match obj {
                     SuperObj::Instance(obj) => {
-                        output.write_qname(obj.qname())?;
-                        output.write_targs(obj.targs())?;
+                        self.fmt_helper_generic(&Type::ClassType(obj.clone()), false, output)?;
                     }
                     SuperObj::Class(cls) => {
-                        output.write_qname(cls.qname())?;
+                        self.fmt_helper_generic(&Type::ClassType(cls.clone()), false, output)?;
                     }
                 }
                 output.write_str("]")

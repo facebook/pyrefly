@@ -41,6 +41,9 @@ pub struct Quantified {
     /// We store it here for convenience of our variance inference and checking
     /// infrastructure so it can directly read it from the type
     variance: PreInferenceVariance,
+    /// Qualified owner, e.g. `"mod.func"`, set for function type params to enable
+    /// disambiguation in display (e.g. `T@mod.func`).
+    pub owner: Option<Name>,
 }
 
 impl Quantified {
@@ -52,6 +55,7 @@ impl Quantified {
             kind: self.kind,
             default: self.default,
             variance: self.variance,
+            owner: self.owner,
         }
     }
 }
@@ -145,7 +149,13 @@ impl Quantified {
             default,
             restriction,
             variance,
+            owner: None,
         }
+    }
+
+    pub fn with_owner(mut self, owner: Name) -> Self {
+        self.owner = Some(owner);
+        self
     }
 
     pub fn type_var(
@@ -280,6 +290,10 @@ impl Quantified {
 
     pub fn is_type_var_tuple(&self) -> bool {
         matches!(self.kind, QuantifiedKind::TypeVarTuple)
+    }
+
+    pub fn unique(&self) -> Unique {
+        self.unique
     }
 
     pub fn as_gradual_type_helper(kind: QuantifiedKind, default: Option<&Type>) -> Type {

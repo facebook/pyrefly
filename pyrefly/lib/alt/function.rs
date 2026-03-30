@@ -439,6 +439,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorators: &[Idx<KeyDecorator>],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
         module_style: ModuleStyle,
+        outer_funcs: Option<Name>,
         errors: &ErrorCollector,
     ) -> Arc<UndecoratedFunction> {
         let defining_cls = class_key.and_then(|k| self.get_idx(*k).0.dupe());
@@ -542,6 +543,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             defining_cls.clone(),
             &def.name.id,
             Some(def_index),
+            outer_funcs,
         );
         let metadata = FuncMetadata { kind, flags };
 

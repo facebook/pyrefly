@@ -1788,14 +1788,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             ));
         }
-        Quantified::new(
+        let q = Quantified::new(
             tp.unique,
             tp.name.clone(),
             tp.kind,
             default_ty,
             restriction,
             PreInferenceVariance::Undefined,
-        )
+        );
+        if let Some(owner) = &tp.owner {
+            q.with_owner(owner.clone())
+        } else {
+            q
+        }
     }
 
     pub fn scoped_type_params(
@@ -4919,6 +4924,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &x.decorators,
             &x.legacy_tparams,
             x.module_style,
+            x.outer_funcs.clone(),
             errors,
         )
     }

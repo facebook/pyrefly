@@ -705,6 +705,7 @@ mod tests {
                 cls: None,
                 name: Name::new(func_name),
                 def_index: None,
+                outer_funcs: None,
             })),
             flags: FuncFlags::default(),
         };

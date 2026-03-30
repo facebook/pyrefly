@@ -214,7 +214,7 @@ fn test_references_cross_file_no_config() {
 
     interaction
         .client
-        .references("bar.py", 10, 1, true)
+        .references("bar.py", 13, 1, true)
         .expect_response(json!([
             {
                 "range": {"start":{"line":6,"character":16},"end":{"character":19,"line":6}},
@@ -245,7 +245,15 @@ fn test_references_cross_file_no_config() {
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
-                "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
+                "range": {"start":{"line":13,"character":0},"end":{"character":3,"line":13}},
+                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":15,"character":0},"end":{"character":3,"line":15}},
+                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":16,"character":0},"end":{"character":3,"line":16}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
         ]))
@@ -276,7 +284,7 @@ fn test_include_declaration_respects_false() {
 
     interaction
         .client
-        .references("bar.py", 10, 1, false)
+        .references("bar.py", 13, 1, false)
         .expect_response(json!([
             {
                 "range": {"start":{"line":6,"character":16},"end":{"character":19,"line":6}},
@@ -303,7 +311,15 @@ fn test_include_declaration_respects_false() {
                 "uri": Url::from_file_path(foo_relative.clone()).unwrap().to_string()
             },
             {
-                "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
+                "range": {"start":{"line":13,"character":0},"end":{"character":3,"line":13}},
+                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":15,"character":0},"end":{"character":3,"line":15}},
+                "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":16,"character":0},"end":{"character":3,"line":16}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
         ]))

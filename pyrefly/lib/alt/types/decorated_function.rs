@@ -121,6 +121,7 @@ impl UndecoratedFunction {
                     cls: None,
                     name: Name::default(),
                     def_index: None,
+                    outer_funcs: None,
                 })),
                 flags: FuncFlags::default(),
             },
