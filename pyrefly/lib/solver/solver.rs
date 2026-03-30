@@ -2124,12 +2124,24 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                                 .variables
                                 .lock()
                                 .update(*v2, Variable::Answer(answer));
+                            Ok(())
                         } else {
-                            self.solver.add_lower_bound(*v2, answer, &mut |got, want| {
-                                self.is_subset_eq(got, want).is_ok()
-                            });
+                            let res = if let Some(upper_bound) = upper_bound {
+                                self.is_subset_eq(&answer, &upper_bound)
+                            } else {
+                                Ok(())
+                            };
+                            self.solver.add_lower_bound(
+                                *v2,
+                                if res.is_ok() {
+                                    answer
+                                } else {
+                                    Type::any_error()
+                                },
+                                &mut |got, want| self.is_subset_eq(got, want).is_ok(),
+                            );
+                            res
                         }
-                        Ok(())
                     }
                     Variable::PartialQuantified(q) => {
                         let q = q.clone();
@@ -2172,14 +2184,25 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         variables.update(*v2, Variable::Answer(answer));
                         Ok(())
                     }
-                    Variable::Unwrap(_) => {
+                    Variable::Unwrap(bounds) => {
+                        let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
                         drop(v2_ref);
                         drop(variables);
-                        self.solver
-                            .add_lower_bound(*v2, t1.clone(), &mut |got, want| {
-                                self.is_subset_eq(got, want).is_ok()
-                            });
-                        Ok(())
+                        let res = if let Some(upper_bound) = upper_bound {
+                            self.is_subset_eq(t1, &upper_bound)
+                        } else {
+                            Ok(())
+                        };
+                        self.solver.add_lower_bound(
+                            *v2,
+                            if res.is_ok() {
+                                t1.clone()
+                            } else {
+                                Type::any_error()
+                            },
+                            &mut |got, want| self.is_subset_eq(got, want).is_ok(),
+                        );
+                        res
                     }
                     Variable::Recursive => {
                         drop(v2_ref);
