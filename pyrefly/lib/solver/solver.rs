@@ -2004,7 +2004,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         res
                     }
                     Variable::PartialQuantified(q) => {
-                        let is_partial = matches!(&*v1_ref, Variable::PartialQuantified(_));
                         let name = q.name.clone();
                         let restriction = q.restriction().clone();
                         let bound = q.bound_type(self.type_order.stdlib(), &self.solver.heap);
@@ -2054,19 +2053,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                         // Widen None to None | Any for PartialQuantified, matching
                         // the PartialContained behavior (see comment there).
-                        if is_partial {
-                            let variables = self.solver.variables.lock();
-                            let v1_current = variables.get(*v1);
-                            if let Variable::Answer(t) = &*v1_current
-                                && t.is_none()
-                            {
-                                let widened = self
-                                    .solver
-                                    .heap
-                                    .mk_union(vec![t.clone(), Type::any_implicit()]);
-                                drop(v1_current);
-                                variables.update(*v1, Variable::Answer(widened));
-                            }
+                        let variables = self.solver.variables.lock();
+                        let v1_current = variables.get(*v1);
+                        if let Variable::Answer(t) = &*v1_current
+                            && t.is_none()
+                        {
+                            let widened = self
+                                .solver
+                                .heap
+                                .mk_union(vec![t.clone(), Type::any_implicit()]);
+                            drop(v1_current);
+                            variables.update(*v1, Variable::Answer(widened));
                         }
                         Ok(())
                     }
