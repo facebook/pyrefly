@@ -98,7 +98,7 @@ impl Bounds {
     }
 
     fn is_empty(&self) -> bool {
-        self.lower.is_empty()
+        self.lower.is_empty() && self.upper.is_empty()
     }
 }
 
@@ -1019,7 +1019,13 @@ impl Solver {
     }
 
     fn solve_bounds(&self, bounds: Bounds) -> Option<Type> {
-        self.solve_one_bounds(bounds.lower)
+        // Prefer non-Any bound > Any bound > no bound
+        let lower_bound = self.solve_one_bounds(bounds.lower);
+        if lower_bound.as_ref().is_none_or(|b| b.is_any()) {
+            self.solve_one_bounds(bounds.upper).or(lower_bound)
+        } else {
+            lower_bound
+        }
     }
 
     /// Called after a quantified function has been called. Given `def f[T](x: int): list[T]`,
