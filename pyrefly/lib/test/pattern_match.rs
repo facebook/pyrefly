@@ -812,6 +812,42 @@ def test_multi_match2(o1: object, o2: object) -> None:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2932
+testcase!(
+    test_match_multi_subject_tuple_catch_all_is_exhaustive,
+    r#"
+from typing import assert_type
+
+def test(x: int | None, y: int | None) -> None:
+    match x, y:
+        case None, None:
+            raise ValueError
+        case int(m), None:
+            u = m * 3
+            v = m
+        case None, int(n):
+            u = n
+            v = n // 3
+        case _, _:
+            raise ValueError
+
+    assert_type(u, int)
+    assert_type(v, int)
+"#,
+);
+
+testcase!(
+    test_match_multi_subject_tuple_catch_all_counts_for_return_analysis,
+    r#"
+def test(x: int | None, y: int | None) -> int:
+    match x, y:
+        case None, None:
+            return 0
+        case _, _:
+            return 1
+"#,
+);
+
 testcase!(
     test_exhaustive_enum_or_pattern_no_missing_return,
     r#"

@@ -12,6 +12,7 @@ use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStringLiteral;
+use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Int;
 use ruff_python_ast::MatchCase;
 use ruff_python_ast::Number;
@@ -42,6 +43,47 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::types::facet::UnresolvedFacetKind;
+
+fn sequence_pattern_is_syntactically_exhaustive(subjects: &[Expr], patterns: &[Pattern]) -> bool {
+    let Some(star_idx) = patterns
+        .iter()
+        .position(|pattern| matches!(pattern, Pattern::MatchStar(_)))
+    else {
+        return subjects.len() == patterns.len()
+            && subjects.iter().zip(patterns).all(|(subject, pattern)| {
+                pattern_is_syntactically_exhaustive_for_subject(subject, pattern)
+            });
+    };
+    let suffix_len = patterns.len() - star_idx - 1;
+    if subjects.len() + 1 < patterns.len() {
+        return false;
+    }
+    patterns[..star_idx]
+        .iter()
+        .zip(&subjects[..star_idx])
+        .all(|(pattern, subject)| pattern_is_syntactically_exhaustive_for_subject(subject, pattern))
+        && patterns[star_idx + 1..]
+            .iter()
+            .zip(&subjects[subjects.len() - suffix_len..])
+            .all(|(pattern, subject)| {
+                pattern_is_syntactically_exhaustive_for_subject(subject, pattern)
+            })
+}
+
+pub(crate) fn pattern_is_syntactically_exhaustive_for_subject(
+    subject: &Expr,
+    pattern: &Pattern,
+) -> bool {
+    if pattern.is_wildcard() || pattern.is_irrefutable() {
+        return true;
+    }
+    match (subject, pattern) {
+        (Expr::Tuple(ExprTuple { elts, .. }), Pattern::MatchSequence(x)) => {
+            sequence_pattern_is_syntactically_exhaustive(elts, &x.patterns)
+        }
+        _ => false,
+    }
+}
 
 #[derive(Clone, Debug)]
 enum MatchSubject {
@@ -538,7 +580,8 @@ impl<'a> BindingsBuilder<'a> {
                 ..
             } = case;
             self.start_branch();
-            let case_is_irrefutable = pattern.is_wildcard() || pattern.is_irrefutable();
+            let case_is_irrefutable =
+                pattern_is_syntactically_exhaustive_for_subject(&subject_expr, &pattern);
             if case_is_irrefutable {
                 exhaustive = true;
             }
