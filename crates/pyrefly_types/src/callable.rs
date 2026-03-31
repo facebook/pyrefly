@@ -139,17 +139,7 @@ impl ParamList {
 
     /// Convert all `Pos` params to `PosOnly` (per PEP 612, Concatenate params are positional-only).
     pub fn as_pos_only(&self) -> ParamList {
-        ParamList(
-            self.0
-                .iter()
-                .map(|p| match p {
-                    Param::Pos(name, ty, req) => {
-                        Param::PosOnly(Some(name.clone()), ty.clone(), req.clone())
-                    }
-                    _ => p.clone(),
-                })
-                .collect(),
-        )
+        ParamList(self.iter_pos_only().collect())
     }
 
     /// Prepend params as position-only (per PEP 612, Concatenate params are positional-only).
@@ -158,16 +148,7 @@ impl ParamList {
             Cow::Borrowed(self)
         } else {
             Cow::Owned(ParamList(
-                pre.0
-                    .iter()
-                    .map(|p| match p {
-                        Param::Pos(name, ty, req) => {
-                            Param::PosOnly(Some(name.clone()), ty.clone(), req.clone())
-                        }
-                        _ => p.clone(),
-                    })
-                    .chain(self.0.iter().cloned())
-                    .collect(),
+                pre.iter_pos_only().chain(self.0.iter().cloned()).collect(),
             ))
         }
     }
@@ -269,6 +250,15 @@ impl ParamList {
             Param::VarArg(None, Type::any_implicit()),
             Param::Kwargs(None, Type::any_implicit()),
         ])
+    }
+
+    fn iter_pos_only(&self) -> impl Iterator<Item = Param> {
+        self.0.iter().map(|p| match p {
+            Param::Pos(name, ty, req) => {
+                Param::PosOnly(Some(name.clone()), ty.clone(), req.clone())
+            }
+            _ => p.clone(),
+        })
     }
 }
 
