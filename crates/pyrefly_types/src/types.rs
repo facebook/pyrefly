@@ -1113,12 +1113,8 @@ impl Type {
         matches!(self, Type::Unpack(_))
     }
 
-    pub fn callable_concatenate(
-        args: Box<[(Type, Required)]>,
-        param_spec: Type,
-        ret: Type,
-    ) -> Self {
-        Type::Callable(Box::new(Callable::concatenate(args, param_spec, ret)))
+    pub fn callable_concatenate(prefix: ParamList, param_spec: Type, ret: Type) -> Self {
+        Type::Callable(Box::new(Callable::concatenate(prefix, param_spec, ret)))
     }
 
     pub fn type_form(inner: Type) -> Self {

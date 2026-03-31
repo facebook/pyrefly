@@ -124,6 +124,54 @@ impl ParamList {
         }
     }
 
+    /// Convert to (Type, Required) tuples, losing parameter names and kinds.
+    pub fn to_type_required_pairs(&self) -> Vec<(Type, Required)> {
+        self.0
+            .iter()
+            .filter_map(|p| match p {
+                Param::PosOnly(_, ty, req) | Param::Pos(_, ty, req) => {
+                    Some((ty.clone(), req.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Convert all `Pos` params to `PosOnly` (per PEP 612, Concatenate params are positional-only).
+    pub fn as_pos_only(&self) -> ParamList {
+        ParamList(
+            self.0
+                .iter()
+                .map(|p| match p {
+                    Param::Pos(name, ty, req) => {
+                        Param::PosOnly(Some(name.clone()), ty.clone(), req.clone())
+                    }
+                    _ => p.clone(),
+                })
+                .collect(),
+        )
+    }
+
+    /// Prepend params as position-only (per PEP 612, Concatenate params are positional-only).
+    pub fn prepend_params(&self, pre: &ParamList) -> Cow<'_, ParamList> {
+        if pre.is_empty() {
+            Cow::Borrowed(self)
+        } else {
+            Cow::Owned(ParamList(
+                pre.0
+                    .iter()
+                    .map(|p| match p {
+                        Param::Pos(name, ty, req) => {
+                            Param::PosOnly(Some(name.clone()), ty.clone(), req.clone())
+                        }
+                        _ => p.clone(),
+                    })
+                    .chain(self.0.iter().cloned())
+                    .collect(),
+            ))
+        }
+    }
+
     pub fn fmt_with_type<O: TypeOutput>(
         &self,
         output: &mut O,
@@ -237,7 +285,7 @@ pub enum Params {
     /// E.g. `Concatenate[int, str, P]` would be `ParamSpec([int, str], P)`,
     /// while `P` alone would be `ParamSpec([], P)`.
     /// `P` may resolve to `Type::ParamSpecValue`, `Type::Concatenate`, or `Type::Ellipsis`
-    ParamSpec(Box<[(Type, Required)]>, Type),
+    ParamSpec(ParamList, Type),
 }
 
 impl Params {
@@ -281,17 +329,24 @@ impl Params {
                 keyword: ArgCount::any_allowed(),
                 overall: ArgCount::any_allowed(),
             },
-            Self::ParamSpec(prefix, _) => ArgCounts {
-                positional: ArgCount {
-                    min: prefix.len(),
-                    max: None,
-                },
-                keyword: ArgCount::any_allowed(),
-                overall: ArgCount {
-                    min: prefix.len(),
-                    max: None,
-                },
-            },
+            Self::ParamSpec(prefix, _) => {
+                let prefix_count = prefix
+                    .items()
+                    .iter()
+                    .filter(|p| matches!(p, Param::PosOnly(..) | Param::Pos(..)))
+                    .count();
+                ArgCounts {
+                    positional: ArgCount {
+                        min: prefix_count,
+                        max: None,
+                    },
+                    keyword: ArgCount::any_allowed(),
+                    overall: ArgCount {
+                        min: prefix_count,
+                        max: None,
+                    },
+                }
+            }
         }
     }
 }
@@ -635,29 +690,29 @@ impl Callable {
                 output.write_str("(Materialization) -> ")?;
                 write_type(&self.ret, output)
             }
-            Params::ParamSpec(args, pspec) => {
+            Params::ParamSpec(prefix, pspec) => {
                 output.write_str("(")?;
-                for (i, arg) in args.iter().enumerate() {
+                for (i, param) in prefix.items().iter().enumerate() {
                     if i > 0 {
                         output.write_str(", ")?;
                     }
-                    write_type(&arg.0, output)?;
+                    write_type(param.as_type(), output)?;
                 }
                 match pspec {
                     Type::ParamSpecValue(params) => {
-                        if !args.is_empty() && !params.is_empty() {
+                        if !prefix.is_empty() && !params.is_empty() {
                             output.write_str(", ")?;
                         }
                         params.fmt_with_type(output, write_type)?;
                     }
                     Type::Ellipsis => {
-                        if !args.is_empty() {
+                        if !prefix.is_empty() {
                             output.write_str(", ")?;
                         }
                         output.write_str("...")?;
                     }
                     _ => {
-                        if !args.is_empty() {
+                        if !prefix.is_empty() {
                             output.write_str(", ")?;
                         }
                         output.write_str("ParamSpec(")?;
@@ -709,14 +764,14 @@ impl Callable {
 
     pub fn param_spec(p: Type, ret: Type) -> Self {
         Self {
-            params: Params::ParamSpec(Box::default(), p),
+            params: Params::ParamSpec(ParamList::default(), p),
             ret,
         }
     }
 
-    pub fn concatenate(args: Box<[(Type, Required)]>, param_spec: Type, ret: Type) -> Self {
+    pub fn concatenate(prefix: ParamList, param_spec: Type, ret: Type) -> Self {
         Self {
-            params: Params::ParamSpec(args, param_spec),
+            params: Params::ParamSpec(prefix, param_spec),
             ret,
         }
     }
@@ -734,11 +789,8 @@ impl Callable {
                 params: Params::ParamSpec(ts, p),
                 ret,
             } => {
-                let ((first, _), rest) = ts.split_first()?;
-                Some((
-                    first,
-                    Self::concatenate(rest.iter().cloned().collect(), p.clone(), ret.clone()),
-                ))
+                let (first, rest) = ts.split_first()?;
+                Some((first, Self::concatenate(rest, p.clone(), ret.clone())))
             }
             Self {
                 params: Params::Ellipsis,
@@ -762,7 +814,7 @@ impl Callable {
             Self {
                 params: Params::ParamSpec(ts, _),
                 ret: _,
-            } => ts.first().cloned().map(|x| x.0),
+            } => ts.items().first().map(|p| p.as_type().clone()),
             Self {
                 params: Params::Ellipsis,
                 ret: _,
@@ -1210,11 +1262,10 @@ mod tests {
     #[test]
     fn test_arg_counts_paramspec() {
         let callable = Callable::concatenate(
-            vec![
-                (Type::None, Required::Required),
-                (Type::None, Required::Required),
-            ]
-            .into_boxed_slice(),
+            ParamList::new(vec![
+                Param::PosOnly(None, Type::None, Required::Required),
+                Param::PosOnly(None, Type::None, Required::Required),
+            ]),
             Type::any_implicit(),
             Type::None,
         );

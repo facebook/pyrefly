@@ -169,8 +169,8 @@ fn on_type(
                     // Unknown params
                 }
                 Params::ParamSpec(prefix, param_spec) => {
-                    for (ty, _) in prefix.iter() {
-                        on_type(variance.inv(), inj, ty, on_edge, on_var);
+                    for param in prefix.items() {
+                        on_type(variance.inv(), inj, param.as_type(), on_edge, on_var);
                     }
                     on_type(variance.inv(), inj, param_spec, on_edge, on_var);
                 }
@@ -263,8 +263,8 @@ fn on_type(
                     // Unknown params
                 }
                 Params::ParamSpec(prefix, param_spec) => {
-                    for (ty, _) in prefix.iter() {
-                        on_type(variance.inv(), inj, ty, on_edge, on_var);
+                    for param in prefix.items() {
+                        on_type(variance.inv(), inj, param.as_type(), on_edge, on_var);
                     }
                     on_type(variance.inv(), inj, param_spec, on_edge, on_var);
                 }

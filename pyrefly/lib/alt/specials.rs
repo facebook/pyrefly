@@ -28,6 +28,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::types::callable::Param;
+use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
@@ -451,9 +452,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     x @ Expr::Subscript(_) => {
                         let ty = self.expr_untype(x, TypeFormContext::TypeArgument, errors);
                         match ty {
-                            Type::Concatenate(args, pspec) => self
-                                .heap
-                                .mk_type_form(self.heap.mk_callable_concatenate(args, *pspec, ret)),
+                            Type::Concatenate(args, pspec) => {
+                                self.heap.mk_type_form(self.heap.mk_callable_concatenate(
+                                    ParamList::new_types(args.into_vec()),
+                                    *pspec,
+                                    ret,
+                                ))
+                            }
                             _ => {
                                 self.error(errors, x.range(),ErrorInfo::Kind(ErrorKind::BadSpecialization), format!("Callable types can only have `Concatenate` in this position, got `{}`", self.for_display(ty)));
                                 self.heap.mk_type_form(

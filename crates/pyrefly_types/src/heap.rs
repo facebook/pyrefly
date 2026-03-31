@@ -321,13 +321,8 @@ impl TypeHeap {
     }
 
     /// Create a `Type::Callable` with concatenate.
-    pub fn mk_callable_concatenate(
-        &self,
-        params: Box<[(Type, Required)]>,
-        param_spec: Type,
-        ret: Type,
-    ) -> Type {
-        Type::callable_concatenate(params, param_spec, ret)
+    pub fn mk_callable_concatenate(&self, prefix: ParamList, param_spec: Type, ret: Type) -> Type {
+        Type::callable_concatenate(prefix, param_spec, ret)
     }
 
     /// Create a `Type::Type` wrapping an inner type (type form).

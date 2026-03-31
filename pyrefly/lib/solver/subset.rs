@@ -706,15 +706,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     fn is_paramlist_subset_of_paramspec(
         &mut self,
         got: &ParamList,
-        want_ts: &[(Type, Required)],
+        want_prefix: &ParamList,
         want_pspec: &Type,
     ) -> Result<(), SubsetError> {
-        if got.len() < want_ts.len() {
+        if got.len() < want_prefix.len() {
             return Err(SubsetError::Other);
         }
-        let args = ParamList::new_types(want_ts.to_owned());
-        let (pre, post) = got.items().split_at(args.len());
-        self.is_subset_param_list(pre, args.items())?;
+        let (pre, post) = got.items().split_at(want_prefix.len());
+        self.is_subset_param_list(pre, want_prefix.items())?;
         self.is_subset_eq(
             &self
                 .solver
@@ -726,16 +725,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
     fn is_paramspec_subset_of_paramlist(
         &mut self,
-        got_ts: &[(Type, Required)],
+        got_prefix: &ParamList,
         got_pspec: &Type,
         want: &ParamList,
     ) -> Result<(), SubsetError> {
-        if want.len() < got_ts.len() {
+        if want.len() < got_prefix.len() {
             return Err(SubsetError::Other);
         }
-        let args = ParamList::new_types(got_ts.to_owned());
-        let (pre, post) = want.items().split_at(args.len());
-        self.is_subset_param_list(args.items(), pre)?;
+        let (pre, post) = want.items().split_at(got_prefix.len());
+        self.is_subset_param_list(got_prefix.items(), pre)?;
         self.is_subset_eq(
             got_pspec,
             &self
@@ -747,45 +745,43 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
     fn is_paramspec_subset_of_paramspec(
         &mut self,
-        got_ts: &[(Type, Required)],
+        got_prefix: &ParamList,
         got_pspec: &Type,
-        want_ts: &[(Type, Required)],
+        want_prefix: &ParamList,
         want_pspec: &Type,
     ) -> Result<(), SubsetError> {
         // TODO: consider required-ness in prepended params
-        match got_ts.len().cmp(&want_ts.len()) {
+        match got_prefix.len().cmp(&want_prefix.len()) {
             Ordering::Greater => {
-                let (got_ts_pre, got_ts_post) = got_ts.split_at(want_ts.len());
-                for (l, u) in got_ts_pre.iter().zip(want_ts.iter()) {
-                    self.is_subset_eq(&u.0, &l.0)?;
-                }
-                let got_ts_post = got_ts_post.to_vec().into_boxed_slice();
+                let (got_pre, got_post) = got_prefix.items().split_at(want_prefix.len());
+                self.is_subset_param_list(got_pre, want_prefix.items())?;
+                let got_post_pairs: Box<[(Type, Required)]> = ParamList::new(got_post.to_vec())
+                    .to_type_required_pairs()
+                    .into_boxed_slice();
                 self.is_subset_eq(
                     want_pspec,
                     &self
                         .solver
                         .heap
-                        .mk_concatenate(got_ts_post, got_pspec.clone()),
+                        .mk_concatenate(got_post_pairs, got_pspec.clone()),
                 )
             }
             Ordering::Less => {
-                let (want_ts_pre, want_ts_post) = want_ts.split_at(got_ts.len());
-                for (l, u) in got_ts.iter().zip(want_ts_pre.iter()) {
-                    self.is_subset_eq(&u.0, &l.0)?;
-                }
-                let want_ts_post = want_ts_post.to_vec().into_boxed_slice();
+                let (want_pre, want_post) = want_prefix.items().split_at(got_prefix.len());
+                self.is_subset_param_list(got_prefix.items(), want_pre)?;
+                let want_post_pairs: Box<[(Type, Required)]> = ParamList::new(want_post.to_vec())
+                    .to_type_required_pairs()
+                    .into_boxed_slice();
                 self.is_subset_eq(
                     &self
                         .solver
                         .heap
-                        .mk_concatenate(want_ts_post, want_pspec.clone()),
+                        .mk_concatenate(want_post_pairs, want_pspec.clone()),
                     got_pspec,
                 )
             }
             Ordering::Equal => {
-                for (l, u) in got_ts.iter().zip(want_ts.iter()) {
-                    self.is_subset_eq(&u.0, &l.0)?;
-                }
+                self.is_subset_param_list(got_prefix.items(), want_prefix.items())?;
                 self.is_subset_eq(want_pspec, got_pspec)
             }
         }
@@ -1927,15 +1923,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::ParamSpecValue(ls), Type::ParamSpecValue(us)) => {
                 self.is_subset_param_list(ls.items(), us.items())
             }
-            (Type::ParamSpecValue(ls), Type::Concatenate(us, u_pspec)) => {
-                self.is_paramlist_subset_of_paramspec(ls, us, u_pspec)
-            }
-            (Type::Concatenate(ls, l_pspec), Type::ParamSpecValue(us)) => {
-                self.is_paramspec_subset_of_paramlist(ls, l_pspec, us)
-            }
-            (Type::Concatenate(ls, l_pspec), Type::Concatenate(us, u_pspec)) => {
-                self.is_paramspec_subset_of_paramspec(ls, l_pspec, us, u_pspec)
-            }
+            (Type::ParamSpecValue(ls), Type::Concatenate(us, u_pspec)) => self
+                .is_paramlist_subset_of_paramspec(ls, &ParamList::new_types(us.to_vec()), u_pspec),
+            (Type::Concatenate(ls, l_pspec), Type::ParamSpecValue(us)) => self
+                .is_paramspec_subset_of_paramlist(&ParamList::new_types(ls.to_vec()), l_pspec, us),
+            (Type::Concatenate(ls, l_pspec), Type::Concatenate(us, u_pspec)) => self
+                .is_paramspec_subset_of_paramspec(
+                    &ParamList::new_types(ls.to_vec()),
+                    l_pspec,
+                    &ParamList::new_types(us.to_vec()),
+                    u_pspec,
+                ),
             (Type::Ellipsis, _)
                 if let Some(ellipsis) = self.type_order.stdlib().ellipsis_type() =>
             {

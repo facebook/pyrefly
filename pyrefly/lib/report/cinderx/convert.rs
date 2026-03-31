@@ -63,8 +63,9 @@ fn callable_to_structured(
             .collect(),
         Params::Ellipsis | Params::Materialization => vec![],
         Params::ParamSpec(prefix, _) => prefix
+            .items()
             .iter()
-            .map(|(t, _)| type_to_structured(t, table, pending_class_traits))
+            .map(|p| type_to_structured(p.as_type(), table, pending_class_traits))
             .collect(),
     };
     let ret_idx = type_to_structured(ret, table, pending_class_traits);

@@ -648,14 +648,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let callable = if let Some(q) = &def.paramspec {
             Callable::concatenate(
-                def.params
-                    .iter()
-                    .filter_map(|p| match p {
-                        Param::PosOnly(_, ty, req) => Some((ty.clone(), req.clone())),
-                        Param::Pos(_, ty, req) => Some((ty.clone(), req.clone())),
-                        _ => None,
-                    })
-                    .collect(),
+                ParamList::new(
+                    def.params
+                        .iter()
+                        .filter(|p| matches!(p, Param::PosOnly(..) | Param::Pos(..)))
+                        .cloned()
+                        .collect(),
+                ),
                 self.heap.mk_quantified(q.clone()),
                 ret,
             )

@@ -699,7 +699,7 @@ impl Solver {
                 };
                 match pspec {
                     Type::ParamSpecValue(paramlist) => {
-                        let params = mem::take(paramlist).prepend_types(ts).into_owned();
+                        let params = mem::take(paramlist).prepend_params(ts).into_owned();
                         let new_callable = new_callable(Callable::list(params, ret.clone()));
                         *x = new_callable;
                     }
@@ -707,8 +707,16 @@ impl Solver {
                         *x = new_callable(Callable::ellipsis(ret.clone()));
                     }
                     Type::Concatenate(ts2, pspec) => {
+                        let ts2_params = ParamList::new_types(ts2.to_vec());
+                        let merged = ParamList::new(
+                            ts.items()
+                                .iter()
+                                .chain(ts2_params.items().iter())
+                                .cloned()
+                                .collect(),
+                        );
                         *x = new_callable(Callable::concatenate(
-                            ts.iter().chain(ts2.iter()).cloned().collect(),
+                            merged,
                             (**pspec).clone(),
                             ret.clone(),
                         ));
