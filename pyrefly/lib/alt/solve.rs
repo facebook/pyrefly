@@ -5151,6 +5151,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Some(*t)
             }
+            // UnionType represents the runtime `types.UnionType` from value expressions like `int | None`.
+            // When used in a type annotation context (e.g., `x = int | None; def f(a: x): ...`),
+            // we unwrap it to get the underlying union type.
+            Type::UnionType(box Union { members, .. }) => Some(self.unions(members)),
             Type::None => Some(self.heap.mk_none()), // Both a value and a type
             Type::Ellipsis => Some(self.heap.mk_ellipsis()), // A bit weird because of tuples, so just promote it
             Type::Any(style) => Some(style.propagate()),

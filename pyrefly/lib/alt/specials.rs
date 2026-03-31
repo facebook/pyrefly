@@ -311,12 +311,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         match special_form {
             SpecialForm::Optional if arguments.len() == 1 => {
-                self.heap
-                    .mk_type_form(self.heap.mk_optional(self.expr_untype(
-                        &arguments[0],
-                        TypeFormContext::TypeArgument,
-                        errors,
-                    )))
+                let inner = self.expr_untype(
+                    &arguments[0],
+                    TypeFormContext::TypeArgument,
+                    errors,
+                );
+                Type::union_type_form(Union {
+                    members: vec![inner, self.heap.mk_none()],
+                    display_name: None,
+                })
             }
             SpecialForm::Optional => self.error(
                 errors,
@@ -327,9 +330,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     arguments.len()
                 ),
             ),
-            SpecialForm::Union => self.heap.mk_type_form(self.unions(
-                arguments.map(|arg| self.expr_untype(arg, TypeFormContext::TypeArgument, errors)),
-            )),
+            SpecialForm::Union => {
+                let members: Vec<Type> = arguments
+                    .iter()
+                    .map(|arg| self.expr_untype(arg, TypeFormContext::TypeArgument, errors))
+                    .collect();
+                Type::union_type_form(Union {
+                    members,
+                    display_name: None,
+                })
+            }
             SpecialForm::Tuple => match self.check_args_and_construct_tuple(arguments, errors) {
                 Some((tuple, _)) => self.heap.mk_type_form(self.heap.mk_tuple(tuple)),
                 None => self

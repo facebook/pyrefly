@@ -423,5 +423,37 @@ pub(crate) fn type_to_structured(
         | Type::Tensor(_)
         | Type::Size(_)
         | Type::Dim(_) => insert_simple_other_form("typing.Any", table),
+        // UnionType from value expressions like `int | None` - treat same as Type::Type(Union(...))
+        Type::UnionType(box Union { members, .. }) => {
+            let has_none = members.iter().any(|m| matches!(m, Type::None));
+            let non_none: Vec<&Type> = members
+                .iter()
+                .filter(|m| !matches!(m, Type::None))
+                .collect();
+
+            if has_none && !non_none.is_empty() {
+                // Optional[inner]: wrap the non-None part
+                let inner_idx = if non_none.len() == 1 {
+                    type_to_structured(non_none[0], table, pending_class_traits)
+                } else {
+                    let inner_union = Type::Union(Box::new(Union {
+                        members: non_none.into_iter().cloned().collect(),
+                        display_name: None,
+                    }));
+                    type_to_structured(&inner_union, table, pending_class_traits)
+                };
+                insert_wrapper_other_form("typing.Optional", inner_idx, table)
+            } else if !has_none {
+                // Union without None
+                let arg_indices: Vec<usize> = members
+                    .iter()
+                    .map(|m| type_to_structured(m, table, pending_class_traits))
+                    .collect();
+                insert_other_form_with_args("typing.Union", arg_indices, table)
+            } else {
+                // All None (degenerate)
+                type_to_structured(&Type::None, table, pending_class_traits)
+            }
+        }
     }
 }

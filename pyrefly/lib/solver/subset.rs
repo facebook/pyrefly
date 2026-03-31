@@ -1828,6 +1828,20 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Type(box Type::Callable(_)), Type::Type(_)) => Err(
                 SubsetError::TypeCannotAcceptSpecialForms(SpecialForm::Callable),
             ),
+            // UnionType (from value expressions like `int | None`) is NOT assignable to bare `type` or `type[Any]`.
+            // At runtime, `int | None` evaluates to `types.UnionType`, not `type`.
+            (Type::UnionType(_), Type::Type(box Type::Any(_))) => Err(SubsetError::Other),
+            (Type::UnionType(_), Type::ClassType(cls)) if cls.is_builtin("type") => {
+                Err(SubsetError::Other)
+            }
+            // UnionType IS assignable to `type[T]` where T is a TypeVar - unwrap and check
+            (Type::UnionType(u), Type::Type(want)) => {
+                let got_as_type = self
+                    .solver
+                    .heap
+                    .mk_type_form(self.solver.heap.mk_union(u.members.clone()));
+                self.is_subset_eq(&got_as_type, &Type::Type(want.clone()))
+            }
             (Type::Type(l), Type::Type(u)) => self.is_subset_eq(l, u),
             (Type::Type(_), _) => self.is_subset_eq(
                 &self

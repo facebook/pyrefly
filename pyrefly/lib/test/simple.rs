@@ -107,6 +107,32 @@ def g(x: type[int] | type[str]):
 );
 
 testcase!(
+    test_union_value_not_assignable_to_type,
+    r#"
+from typing import Optional
+
+def accepts_type(x: type) -> None: ...
+
+# Direct usage - value expressions should error
+accepts_type(int | None)        # E: Argument `type[int | None]` is not assignable to parameter `x` with type `type[Any]`
+accepts_type(Optional[int])     # E: Argument `type[int | None]` is not assignable to parameter `x` with type `type[Any]`
+
+# Assignment to type annotation - should error
+a: type = int | None            # E: `type[int | None]` is not assignable to `type[Any]`
+
+# Indirect usage - should ALSO error
+x = int | None
+b: type = x                     # E: `type[int | None]` is not assignable to `type[Any]`
+
+# But annotated variables are ok
+c: type[int | None] = int
+d: type = c                     # ok
+e: type[int] | type[None] = int
+f: type = e                     # ok
+    "#,
+);
+
+testcase!(
     test_simple_call,
     r#"
 from typing import assert_type

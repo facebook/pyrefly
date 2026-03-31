@@ -2406,6 +2406,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.as_attribute_base1(self.heap.mk_type_form(ty), acc)
                 }
             }
+            // UnionType from value expressions like `int | None` - behaves like Type::Type(Union(...))
+            Type::UnionType(box Union { members, .. }) => {
+                for ty in members {
+                    self.as_attribute_base1(self.heap.mk_type_form(ty), acc)
+                }
+            }
             Type::Type(box Type::Intersect(box (_, fallback))) => {
                 // TODO(rechen): implement attribute access on `type[A & B]`
                 self.as_attribute_base1(self.heap.mk_type_form(fallback), acc)

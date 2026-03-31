@@ -43,6 +43,7 @@ use crate::error::context::TypeCheckKind;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
+use crate::types::types::Union;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn callable_dunder_helper(
@@ -345,17 +346,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
             && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
         {
-            let union_ty = self.union(l, r);
-            // When the hint is bare `type` / `type[Any]`, return the raw union
-            // instead of wrapping it in Type::Type. At runtime, `int | None`
-            // evaluates to `types.UnionType`, not `type`, so it should fail
-            // the assignability check against `type[Any]`.
-            if let Some(ref hint) = hint {
-                if matches!(hint.ty(), Type::Type(box Type::Any(_))) {
-                    return union_ty;
-                }
-            }
-            return self.heap.mk_type_form(union_ty);
+            // Return Type::UnionType to represent the runtime `types.UnionType` object.
+            // This is NOT assignable to `type`/`type[Any]`, unlike `Type::Type(Union(...))`.
+            return Type::union_type_form(Union {
+                members: vec![l, r],
+                display_name: None,
+            });
         }
 
         self.distribute_over_union(&lhs, |lhs| {
@@ -372,13 +368,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
                     && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
                 {
-                    let union_ty = self.union(l, r);
-                    if let Some(ref hint) = hint {
-                        if matches!(hint.ty(), Type::Type(box Type::Any(_))) {
-                            return union_ty;
-                        }
-                    }
-                    self.heap.mk_type_form(union_ty)
+                    Type::union_type_form(Union {
+                        members: vec![l, r],
+                        display_name: None,
+                    })
                 } else if x.op == Operator::Add
                     && ((matches!(lhs, Type::LiteralString(_)) && rhs.is_literal_string())
                         || (matches!(rhs, Type::LiteralString(_)) && lhs.is_literal_string()))

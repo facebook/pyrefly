@@ -306,20 +306,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // (e.g., Optional[int], Union[int, None]), when the hint is bare
                 // `type` / `type[Any]`, return the raw union instead of the type
                 // form. At runtime, these evaluate to `types.UnionType`, not `type`.
-                if let Type::Type(inner) = result.ty() {
-                    if matches!(inner.as_ref(), Type::Union(_)) {
-                        if let Some(ref hint) = hint {
-                            if matches!(hint.ty(), Type::Type(box Type::Any(_))) {
-                                TypeInfo::of_ty(*inner.clone())
-                            } else {
-                                result
-                            }
-                        } else {
-                            result
-                        }
-                    } else {
-                        result
-                    }
+                if let Type::Type(inner) = result.ty()
+                    && matches!(inner.as_ref(), Type::Union(_))
+                    && let Some(ref hint) = hint
+                    && matches!(hint.ty(), Type::Type(box Type::Any(_)))
+                {
+                    TypeInfo::of_ty(*inner.clone())
                 } else {
                     result
                 }

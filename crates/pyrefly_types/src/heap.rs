@@ -331,6 +331,13 @@ impl TypeHeap {
         Type::type_form(inner)
     }
 
+    /// Create a `Type::UnionType` wrapping a Union.
+    ///
+    /// This represents the runtime `types.UnionType` from union value expressions like `int | None`.
+    pub fn mk_union_type(&self, u: Union) -> Type {
+        Type::union_type_form(u)
+    }
+
     /// Create a `Type::Literal` from a Literal.
     pub fn mk_literal(&self, literal: Literal) -> Type {
         Type::Literal(Box::new(literal))

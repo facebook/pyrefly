@@ -853,6 +853,11 @@ impl<'a> TypeDisplayContext<'a> {
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
+            Type::UnionType(box Union { members, .. }) => {
+                output.write_str("type[")?;
+                self.fmt_type_sequence(members, " | ", true, output)?;
+                output.write_str("]")
+            }
             Type::TypeGuard(ty) => {
                 if self.always_display_module_name {
                     output.write_str("typing.")?;

@@ -718,6 +718,10 @@ pub enum Type {
     KwargsValue(Box<Quantified>),
     /// Used to represent a type that has a value representation, e.g. a class
     Type(Box<Type>),
+    /// Represents the runtime `types.UnionType` object from a union value expression like `int | None`.
+    /// This is distinct from `Type::Type(Union(...))` which represents the type annotation `type[int | None]`.
+    /// The distinction matters because `types.UnionType` is NOT assignable to `type`/`type[Any]`.
+    UnionType(Box<Union>),
     Ellipsis,
     Any(AnyStyle),
     Never(NeverStyle),
@@ -796,6 +800,7 @@ impl Visit for Type {
             Type::ArgsValue(x) => x.visit(f),
             Type::KwargsValue(x) => x.visit(f),
             Type::Type(x) => x.visit(f),
+            Type::UnionType(x) => x.visit(f),
             Type::Ellipsis => {}
             Type::Any(x) => x.visit(f),
             Type::Never(x) => x.visit(f),
@@ -849,6 +854,7 @@ impl VisitMut for Type {
             Type::ArgsValue(x) => x.visit_mut(f),
             Type::KwargsValue(x) => x.visit_mut(f),
             Type::Type(x) => x.visit_mut(f),
+            Type::UnionType(x) => x.visit_mut(f),
             Type::Ellipsis => {}
             Type::Any(x) => x.visit_mut(f),
             Type::Never(x) => x.visit_mut(f),
@@ -936,6 +942,10 @@ impl Type {
 
     pub fn type_form(inner: Type) -> Self {
         Type::Type(Box::new(inner))
+    }
+
+    pub fn union_type_form(inner: Union) -> Self {
+        Type::UnionType(Box::new(inner))
     }
 
     pub fn concrete_tuple(elts: Vec<Type>) -> Self {
