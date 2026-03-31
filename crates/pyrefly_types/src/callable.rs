@@ -680,29 +680,29 @@ impl Callable {
                 output.write_str("(Materialization) -> ")?;
                 write_type(&self.ret, output)
             }
-            Params::ParamSpec(prefix, pspec) => {
+            Params::ParamSpec(args, pspec) => {
                 output.write_str("(")?;
-                for (i, param) in prefix.items().iter().enumerate() {
+                for (i, arg) in args.items().iter().enumerate() {
                     if i > 0 {
                         output.write_str(", ")?;
                     }
-                    write_type(param.as_type(), output)?;
+                    write_type(arg.as_type(), output)?;
                 }
                 match pspec {
                     Type::ParamSpecValue(params) => {
-                        if !prefix.is_empty() && !params.is_empty() {
+                        if !args.is_empty() && !params.is_empty() {
                             output.write_str(", ")?;
                         }
                         params.fmt_with_type(output, write_type)?;
                     }
                     Type::Ellipsis => {
-                        if !prefix.is_empty() {
+                        if !args.is_empty() {
                             output.write_str(", ")?;
                         }
                         output.write_str("...")?;
                     }
                     _ => {
-                        if !prefix.is_empty() {
+                        if !args.is_empty() {
                             output.write_str(", ")?;
                         }
                         output.write_str("ParamSpec(")?;
