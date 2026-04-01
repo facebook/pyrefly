@@ -1412,7 +1412,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.heap.mk_class_type(cls)
                 }
             }
-            Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped") => {
+            Type::ClassType(cls)
+                if cls.has_qname("functools", "_Wrapped")
+                    || (original_decoratee.property_metadata().is_some()
+                        && cls.has_qname("functools", "_lru_cache_wrapper")) =>
+            {
                 original_decoratee.clone()
             }
             returned_ty => returned_ty,

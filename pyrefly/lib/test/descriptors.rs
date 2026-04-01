@@ -178,6 +178,23 @@ def f(c: C) -> None:
 );
 
 testcase!(
+    test_property_decorated_with_lru_cache,
+    r#"
+import functools
+
+class Foo:
+    @property
+    @functools.lru_cache
+    def foo(self) -> dict[str, str]:
+        return {"a": "b"}
+
+def main() -> None:
+    Foo.foo.get("a")
+    Foo().foo.get("a")
+    "#,
+);
+
+testcase!(
     bug = "cached_property's __name__ should not exist and attrname should be a str",
     test_cached_property_attrname,
     r#"
