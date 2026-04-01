@@ -815,7 +815,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 _ => {
-                    let ty = self.expr_infer_type_no_trace(
+                    let ty = self.expr_infer_with_hint(
                         elt,
                         if unbounded.is_empty() {
                             hint_ts_iter.next().or(default_hint)

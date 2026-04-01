@@ -560,6 +560,27 @@ lhs @ rhs
 }
 
 #[test]
+fn hover_over_tuple_element_literal_uses_element_type() {
+    let code = r#"
+tup = (1, +2)
+#      ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | tup = (1, +2)
+           ^
+```python
+Literal[1]
+```
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn hover_over_getitem_operator_shows_dunder_name() {
     let code = r#"
 class Container:
