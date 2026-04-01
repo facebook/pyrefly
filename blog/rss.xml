@@ -4,10 +4,119 @@
         <title>Pyrefly Blog</title>
         <link>https://pyrefly.org/blog/</link>
         <description>Pyrefly Blog</description>
-        <lastBuildDate>Wed, 18 Mar 2026 00:00:00 GMT</lastBuildDate>
+        <lastBuildDate>Wed, 01 Apr 2026 00:00:00 GMT</lastBuildDate>
         <docs>https://validator.w3.org/feed/docs/rss2.html</docs>
         <generator>https://github.com/jpmonette/feed</generator>
         <language>en</language>
+        <item>
+            <title><![CDATA[Reaching 100% Type Coverage by Deleting Unannotated Code]]></title>
+            <link>https://pyrefly.org/blog/100-percent-type-coverage/</link>
+            <guid>https://pyrefly.org/blog/100-percent-type-coverage/</guid>
+            <pubDate>Wed, 01 Apr 2026 00:00:00 GMT</pubDate>
+            <description><![CDATA[We finally solved the type coverage problem. The answer was surprisingly simple.]]></description>
+            <content:encoded><![CDATA[<p><img decoding="async" loading="lazy" alt="Hero image" src="https://pyrefly.org/assets/images/pyrefly-prune-hero-febf15297469711e0d56ea1bb18185ad.png" width="1424" height="752" class="img_ev3q"></p>
+<p>At Pyrefly, we've always believed that type coverage is one of the most important indicators of code quality. Over the past year, we've worked closely with teams across large Python codebases here at Meta - improving performance, tightening soundness, and making type checking a seamless part of everyday development.</p>
+<p>But one question kept coming up: <em>What would it take to reach 100% type coverage?</em></p>
+<p>Today, we're excited to share a breakthrough.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="the-problem-with-almost-typed">The Problem with "Almost Typed"<a href="https://pyrefly.org/blog/100-percent-type-coverage/#the-problem-with-almost-typed" class="hash-link" aria-label="Direct link to The Problem with &quot;Almost Typed&quot;" title="Direct link to The Problem with &quot;Almost Typed&quot;">​</a></h2>
+<p>Most teams plateau somewhere between 70–95% type coverage. The remaining gap is stubborn:</p>
+<ul>
+<li>Legacy modules with unclear ownership</li>
+<li>Dynamic code paths that resist annotation</li>
+<li>Utility functions that "just work" and nobody wants to touch</li>
+</ul>
+<p>Traditional approaches - manual annotation, AI-assisted typing, gradual typing strategies - help, but they all share a common flaw: They assume all code is worth keeping.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="a-new-approach-coverage-first-development">A New Approach: Coverage-First Development<a href="https://pyrefly.org/blog/100-percent-type-coverage/#a-new-approach-coverage-first-development" class="hash-link" aria-label="Direct link to A New Approach: Coverage-First Development" title="Direct link to A New Approach: Coverage-First Development">​</a></h2>
+<p>We decided to reverse the problem. Instead of asking <em>"How do we annotate the remaining code?"</em>, we asked:</p>
+<p><em>"What if the remaining code simply didn't exist?"</em></p>
+<p>Introducing <strong>Pyrefly Prune™</strong>, a new experimental mode that guarantees <strong>100% type coverage</strong> by removing any code that isn't fully typed.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="how-it-works">How It Works<a href="https://pyrefly.org/blog/100-percent-type-coverage/#how-it-works" class="hash-link" aria-label="Direct link to How It Works" title="Direct link to How It Works">​</a></h2>
+<p>When you run:</p>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#F8F8F2"><span class="token plain">pyrefly check --enforce-total-coverage</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn"><span class="copyButtonIcons_eSgA" aria-hidden="true"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N"><path fill="currentColor" d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"></path></svg><svg viewBox="0 0 24 24" class="copyButtonSuccessIcon_LjdS"><path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"></path></svg></span></button></div></div></div>
+<p>Pyrefly will:</p>
+<ul>
+<li>Identify any function, class, or module lacking complete type annotations</li>
+<li>Recursively analyze dependencies to ensure soundness</li>
+<li>Safely remove unannotated code paths</li>
+<li>Recompute coverage (now 100%)</li>
+</ul>
+<p>The result is a codebase consisting entirely of fully typed, sound, and verifiable Python.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="early-results">Early Results<a href="https://pyrefly.org/blog/100-percent-type-coverage/#early-results" class="hash-link" aria-label="Direct link to Early Results" title="Direct link to Early Results">​</a></h2>
+<p>We piloted this approach on several large repositories.</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="case-study-web-serving-service">Case Study: Web Serving Service<a href="https://pyrefly.org/blog/100-percent-type-coverage/#case-study-web-serving-service" class="hash-link" aria-label="Direct link to Case Study: Web Serving Service" title="Direct link to Case Study: Web Serving Service">​</a></h3>
+<ul>
+<li>Before:<!-- -->
+<ul>
+<li>82% type coverage</li>
+<li>1.2M lines of code</li>
+</ul>
+</li>
+<li>After running Pyrefly Prune™:<!-- -->
+<ul>
+<li>100% type coverage</li>
+<li>47 lines of code</li>
+</ul>
+</li>
+</ul>
+<p>The remaining code was described by one engineer as: "Incredibly well-typed. Also, it doesn't do anything anymore."</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="case-study-machine-learning-pipeline">Case Study: Machine Learning Pipeline<a href="https://pyrefly.org/blog/100-percent-type-coverage/#case-study-machine-learning-pipeline" class="hash-link" aria-label="Direct link to Case Study: Machine Learning Pipeline" title="Direct link to Case Study: Machine Learning Pipeline">​</a></h3>
+<ul>
+<li>Before: complex data ingestion, feature engineering, training loops</li>
+<li>After: a single, beautifully annotated function:</li>
+</ul>
+<div class="language-python codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-python codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#F8F8F2"><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">def</span><span class="token plain"> </span><span class="token function" style="color:rgb(80, 250, 123)">model</span><span class="token punctuation" style="color:rgb(248, 248, 242)">(</span><span class="token plain">x</span><span class="token punctuation" style="color:rgb(248, 248, 242)">:</span><span class="token plain"> </span><span class="token builtin" style="color:rgb(189, 147, 249)">float</span><span class="token punctuation" style="color:rgb(248, 248, 242)">)</span><span class="token plain"> </span><span class="token operator">-</span><span class="token operator">&gt;</span><span class="token plain"> </span><span class="token builtin" style="color:rgb(189, 147, 249)">float</span><span class="token punctuation" style="color:rgb(248, 248, 242)">:</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">   </span><span class="token keyword" style="color:rgb(189, 147, 249);font-style:italic">return</span><span class="token plain"> x</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn"><span class="copyButtonIcons_eSgA" aria-hidden="true"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N"><path fill="currentColor" d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"></path></svg><svg viewBox="0 0 24 24" class="copyButtonSuccessIcon_LjdS"><path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"></path></svg></span></button></div></div></div>
+<p>Training time improved dramatically.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="developer-experience-improvements">Developer Experience Improvements<a href="https://pyrefly.org/blog/100-percent-type-coverage/#developer-experience-improvements" class="hash-link" aria-label="Direct link to Developer Experience Improvements" title="Direct link to Developer Experience Improvements">​</a></h2>
+<p>Surprisingly, developers reported several benefits:</p>
+<ul>
+<li><strong>Zero type errors</strong> (by construction)</li>
+<li><strong>Blazing-fast CI</strong> (nothing left to check)</li>
+<li><strong>Perfect IDE navigation</strong> (all remaining symbols are trivially understood)</li>
+<li><strong>Reduced cognitive load</strong> ("There's just... less")</li>
+</ul>
+<p>One team noted that onboarding time dropped from weeks to seconds.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="soundness-perfected">Soundness, Perfected<a href="https://pyrefly.org/blog/100-percent-type-coverage/#soundness-perfected" class="hash-link" aria-label="Direct link to Soundness, Perfected" title="Direct link to Soundness, Perfected">​</a></h2>
+<p>By eliminating all untyped code, Pyrefly Prune™ achieves a new level of soundness:</p>
+<ul>
+<li>No implicit Any</li>
+<li>No missing imports</li>
+<li>No edge cases</li>
+</ul>
+<p>In fact, we believe this is the first system to achieve <strong>total program soundness by strategic absence</strong>. We call this approach <strong>Subtractive Soundness™</strong>.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="advanced-configuration">Advanced Configuration<a href="https://pyrefly.org/blog/100-percent-type-coverage/#advanced-configuration" class="hash-link" aria-label="Direct link to Advanced Configuration" title="Direct link to Advanced Configuration">​</a></h2>
+<p>For teams that want more control, we offer fine-grained pruning strategies:</p>
+<div class="language-toml codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-toml codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#F8F8F2"><span class="token punctuation" style="color:rgb(248, 248, 242)">[</span><span class="token table class-name">tool.pyrefly.prune</span><span class="token punctuation" style="color:rgb(248, 248, 242)">]</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token key property">aggressiveness</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(248, 248, 242)">=</span><span class="token plain"> </span><span class="token string" style="color:rgb(255, 121, 198)">"maximal"</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token key property">preserve_comments</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(248, 248, 242)">=</span><span class="token plain"> </span><span class="token boolean">false</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token key property">preserve_readme</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(248, 248, 242)">=</span><span class="token plain"> </span><span class="token string" style="color:rgb(255, 121, 198)">"optional"</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token comment" style="color:rgb(98, 114, 164)"># We also support selective retention:</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token key property">keep_if_funny</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(248, 248, 242)">=</span><span class="token plain"> </span><span class="token boolean">true</span><span class="token plain"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain"></span><span class="token key property">keep_if_git_blame_is_yours</span><span class="token plain"> </span><span class="token punctuation" style="color:rgb(248, 248, 242)">=</span><span class="token plain"> </span><span class="token boolean">true</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn"><span class="copyButtonIcons_eSgA" aria-hidden="true"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N"><path fill="currentColor" d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"></path></svg><svg viewBox="0 0 24 24" class="copyButtonSuccessIcon_LjdS"><path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"></path></svg></span></button></div></div></div>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="roadmap">Roadmap<a href="https://pyrefly.org/blog/100-percent-type-coverage/#roadmap" class="hash-link" aria-label="Direct link to Roadmap" title="Direct link to Roadmap">​</a></h2>
+<p>We're actively working on several enhancements:</p>
+<ul>
+<li><strong>Auto-replacement with TODOs</strong>
+Replace deleted code with thoughtfully written TODO comments that no one will ever complete</li>
+<li><strong>LLM-assisted hallucinated implementations</strong>
+When code is deleted, generate a plausible replacement that type-checks but may not correspond to reality</li>
+<li><strong>Executive dashboard metrics</strong>
+Track KPIs like:<!-- -->
+<ul>
+<li>Lines of code deleted per sprint</li>
+<li>% of engineers quietly panicking</li>
+<li>Revenue impact (TBD)</li>
+</ul>
+</li>
+</ul>
+<p><img decoding="async" loading="lazy" alt="Pyrefly - Eliminate Your Bugs" src="https://pyrefly.org/assets/images/eliminate-your-bugs-0d7b294daa4cdc9ca06e8492b6609958.png" width="4996" height="1766" class="img_ev3q"></p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="frequently-asked-questions">Frequently Asked Questions<a href="https://pyrefly.org/blog/100-percent-type-coverage/#frequently-asked-questions" class="hash-link" aria-label="Direct link to Frequently Asked Questions" title="Direct link to Frequently Asked Questions">​</a></h2>
+<p><strong>Q: Does this delete production code?</strong>
+A: Yes.</p>
+<p><strong>Q: Is there a rollback mechanism?</strong>
+A: We recommend strong git hygiene and emotional resilience.</p>
+<p><strong>Q: What about business logic?</strong>
+A: Fully typed business logic is preserved. Untyped business logic was, by definition, suspect.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="looking-ahead">Looking Ahead<a href="https://pyrefly.org/blog/100-percent-type-coverage/#looking-ahead" class="hash-link" aria-label="Direct link to Looking Ahead" title="Direct link to Looking Ahead">​</a></h2>
+<p>As AI agents increasingly generate and modify code, we believe the future belongs to systems that can maintain strong guarantees. Sometimes, the best way to ensure correctness... is to remove uncertainty entirely.</p>
+<p>And if a small amount of functionality happens to be removed along the way - that's a trade-off we're finally ready to make.</p>
+<p><strong>Pyrefly Prune™</strong> is available today behind the <code>--enforce-total-coverage</code> flag. Happy April Fools!</p>]]></content:encoded>
+            <category>typechecking</category>
+            <category>coverage</category>
+        </item>
         <item>
             <title><![CDATA[Lessons from Pyre that Shaped Pyrefly]]></title>
             <link>https://pyrefly.org/blog/lessons-from-pyre/</link>
