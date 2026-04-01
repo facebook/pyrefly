@@ -1855,8 +1855,8 @@ testcase!(
 from dataclasses import dataclass
 from typing import Protocol
 
-@dataclass  # E: @dataclass cannot be applied to a Protocol class
-class MyProto(Protocol):
+@dataclass
+class MyProto(Protocol):  # E: @dataclass cannot be applied to a Protocol class
     x: int
     def display(self) -> str: ...
 "#,
@@ -1869,8 +1869,8 @@ testcase!(
 from dataclasses import dataclass
 from typing import Protocol
 
-@dataclass(frozen=True)  # E: @dataclass cannot be applied to a Protocol class
-class MyProto(Protocol):
+@dataclass(frozen=True)
+class MyProto(Protocol):  # E: @dataclass cannot be applied to a Protocol class
     x: int
 "#,
 );
