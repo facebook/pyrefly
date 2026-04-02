@@ -991,7 +991,7 @@ assert_type(x, int)
 );
 
 testcase!(
-    test_reassigned_var_does_not_preserve_annotation_over_any,
+    test_reassigned_var_preserves_annotation_over_any,
     r#"
 from typing import Any, assert_type
 
@@ -999,7 +999,7 @@ def f() -> Any: ...
 
 x: str = "hello"
 x = f()
-assert_type(x, Any)
+assert_type(x, str)
 "#,
 );
 
@@ -1017,7 +1017,6 @@ assert_type(x, int)
 );
 
 testcase!(
-    bug = "Context manager should preserve declared type over Any (github #2227)",
     test_annotated_var_context_manager_any,
     r#"
 from typing import Any, assert_type
@@ -1028,7 +1027,7 @@ class CM:
 
 x: int
 with CM() as x:
-    assert_type(x, int)  # E: assert_type(Any, int) failed
+    assert_type(x, int)
 "#,
 );
 

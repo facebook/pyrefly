@@ -3125,13 +3125,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // For direct assignments, user-provided annotation takes
                     // precedence over inferred expr type.
                     annot_ty.unwrap_or(expr_ty)
-                } else if style == &AnnotationStyle::ForwardedInitial
-                    && expr_ty.is_any()
+                } else if expr_ty.is_any()
                     && let Some(annot) = annot_ty
                 {
-                    // First assignment after a bare annotation: if the expression
-                    // is Any, preserve the declared type since Any provides no
-                    // useful narrowing information.
+                    // Any is assignable to every type, so narrowing Any against
+                    // the declared type yields the declared type. Preserve it
+                    // rather than letting Any erase the type boundary.
+                    // This matches pyright's behavior in narrowTypeBasedOnAssignment.
                     annot
                 } else {
                     // For reassignment or non-Any expressions, the expression
@@ -3861,9 +3861,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(ann) = ann {
             self.check_final_reassignment(&ann, range, errors);
             if let Some(ty) = ann.ty(self.heap, self.stdlib) {
-                self.check_and_return_type(context_value, &ty, range, errors, &|| {
-                    TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(&ann.target))
-                })
+                if context_value.is_any() {
+                    // Any provides no useful narrowing information, so preserve
+                    // the declared type rather than letting Any leak through.
+                    ty
+                } else {
+                    self.check_and_return_type(context_value, &ty, range, errors, &|| {
+                        TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(
+                            &ann.target,
+                        ))
+                    })
+                }
             } else {
                 context_value
             }
