@@ -900,6 +900,19 @@ The default severity of this diagnostic is `ignore`.
 
 Pyrefly has bundled stubs for a package, but no corresponding source package was found.
 
+## name-mismatch
+
+This warning indicates that the first string argument to a functional type definition does not
+match the name it is assigned to.
+
+```python
+from collections import namedtuple
+from enum import Enum
+
+RepoDetails = namedtuple("repo_details", ["source_dir", "age"])
+DviState = Enum("_dvistate", "pre outer inpage")
+```
+
 ## no-access
 
 The `no-access` error indicates that an attribute exists, but it cannot be used in this way.
