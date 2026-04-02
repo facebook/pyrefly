@@ -583,6 +583,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(ann) = ann.map(|k| self.get_idx(k)) {
             self.check_final_reassignment(&ann, x.range(), errors);
             if let Some(ann_ty) = ann.ty(self.heap, self.stdlib) {
+                if result.is_any() {
+                    // Any provides no useful narrowing information, so preserve
+                    // the declared type rather than letting Any leak through.
+                    return ann_ty;
+                }
                 return self.check_and_return_type(result, &ann_ty, x.range(), errors, tcc);
             }
         }
