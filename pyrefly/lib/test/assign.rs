@@ -1017,6 +1017,22 @@ assert_type(x, int)
 );
 
 testcase!(
+    bug = "Context manager should preserve declared type over Any (github #2227)",
+    test_annotated_var_context_manager_any,
+    r#"
+from typing import Any, assert_type
+
+class CM:
+    def __enter__(self) -> Any: ...
+    def __exit__(self, *args: Any) -> None: ...
+
+x: int
+with CM() as x:
+    assert_type(x, int)  # E: assert_type(Any, int) failed
+"#,
+);
+
+testcase!(
     test_annotated_var_for_loop_any,
     r#"
 from typing import Any, assert_type
