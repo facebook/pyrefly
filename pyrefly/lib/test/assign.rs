@@ -1004,6 +1004,20 @@ assert_type(x, Any)
 );
 
 testcase!(
+    bug = "Augmented assignment should preserve declared type over Any (github #2227)",
+    test_annotated_var_augassign_any,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: int = 0
+x += f()
+assert_type(x, int)  # E: assert_type(Unknown, int) failed
+"#,
+);
+
+testcase!(
     test_annotated_var_for_loop_any,
     r#"
 from typing import Any, assert_type
