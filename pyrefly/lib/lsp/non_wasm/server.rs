@@ -202,6 +202,7 @@ use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::globs::FilteredGlobs;
+use pyrefly_util::globs::HiddenDirFilter;
 use pyrefly_util::includes::Includes as _;
 use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::Mutex;
@@ -235,6 +236,7 @@ use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 use uuid::Uuid;
 use vec1::Vec1;
 
@@ -280,6 +282,7 @@ use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
 use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
+use crate::lsp::non_wasm::stdlib::no_config_severity_override;
 use crate::lsp::non_wasm::stdlib::should_show_error_for_display_mode;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
@@ -304,6 +307,7 @@ use crate::lsp::wasm::provide_type::ProvideType;
 use crate::lsp::wasm::provide_type::ProvideTypeParams;
 use crate::lsp::wasm::provide_type::ProvideTypeResponse;
 use crate::lsp::wasm::provide_type::provide_type;
+use crate::module::bundled::BundledStub;
 use crate::state::load::LspFile;
 use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
@@ -1261,6 +1265,7 @@ pub fn lsp_loop(
     external_references: Arc<dyn ExternalProvider>,
     wrapper: Option<ConfigConfigurerWrapper>,
     thread_count: ThreadCount,
+    lsp_start_time: Instant,
 ) -> anyhow::Result<()> {
     info!("Reading messages");
     let lsp_queue = LspQueue::new();
@@ -1283,6 +1288,7 @@ pub fn lsp_loop(
         external_references,
         wrapper,
         thread_count,
+        lsp_start_time,
     );
     std::thread::scope(|scope| {
         // Spawn the event processing loop on a thread with a large stack
@@ -1296,7 +1302,16 @@ pub fn lsp_loop(
             .spawn_scoped(scope, || {
                 let mut ide_transaction_manager = TransactionManager::default();
                 let mut canceled_requests = HashSet::new();
-                let mut next_task_id = 0_usize;
+                // Start at 1 because task_id 0 is used by the startup event below.
+                let mut next_task_id = 1_usize;
+                TelemetryEvent::new_task(
+                    TelemetryEventKind::LspStartup,
+                    server.telemetry_state(),
+                    QueueName::LspQueue,
+                    0,
+                    lsp_start_time,
+                )
+                .finish_and_record(telemetry, None);
                 while let Ok((subsequent_mutation, event, enqueue_time)) = server.lsp_queue.recv() {
                     let task_id = next_task_id;
                     next_task_id += 1;
@@ -2335,6 +2350,7 @@ impl Server {
         external_references: Arc<dyn ExternalProvider>,
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
+        lsp_start_time: Instant,
     ) -> Self {
         let folders = if let Some(capability) = &initialize_params.capabilities.workspace
             && let Some(true) = capability.workspace_folders
@@ -2411,7 +2427,7 @@ impl Server {
             pending_watched_file_changes: Mutex::new(Vec::new()),
             pending_invalidation_events: Arc::new(Mutex::new(CategorizedEvents::default())),
             external_references,
-            server_start_time: Instant::now(),
+            server_start_time: lsp_start_time,
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
@@ -2551,6 +2567,17 @@ impl Server {
                 return None;
             }
 
+            // In NoConfigFile mode, downgrade certain error kinds to Warn severity
+            // so users without a config file see critical issues as warnings.
+            let overridden;
+            let e = match no_config_severity_override(e, type_error_status) {
+                Some(severity) => {
+                    overridden = e.with_severity(severity);
+                    &overridden
+                }
+                None => e,
+            };
+
             if let Some(lsp_file) = open_files.get(&path)
                 && config.project_includes.covers(&path)
                 && !config.project_excludes.covers(&path)
@@ -2620,9 +2647,9 @@ impl Server {
                 // In this case, we have a config file like mypy.ini, or a pyproject.toml
                 // with Python tool sections but no [tool.pyrefly]. We don't parse it for
                 // pyrefly config, so treat it as if we don't have any config.
-                ConfigSource::PythonToolMarker(_) | ConfigSource::Marker(_) => {
-                    TypeErrorDisplayStatus::NoConfigFile
-                }
+                ConfigSource::PythonToolMarker(_)
+                | ConfigSource::Marker(_)
+                | ConfigSource::FailedParse(_) => TypeErrorDisplayStatus::NoConfigFile,
                 // We actually have a pyrefly.toml, so we can decide based on the config.
                 ConfigSource::File(_) => {
                     if config.disable_type_errors_in_ide(path) {
@@ -3052,7 +3079,12 @@ impl Server {
 
             let includes =
                 ConfigFile::default_project_includes().from_root(workspace_root.as_path());
-            let globs = FilteredGlobs::new(includes, ConfigFile::required_project_excludes(), None);
+            let globs = FilteredGlobs::new(
+                includes,
+                ConfigFile::required_project_excludes(),
+                Some(workspace_root.as_path()),
+                HiddenDirFilter::RelativeTo(vec![workspace_root.clone()]),
+            );
             let paths = globs
                 .files_with_limit(self.workspace_indexing_limit)
                 .unwrap_or_default();
@@ -3297,9 +3329,12 @@ impl Server {
         let version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
         if version < *old_version {
-            return Err(anyhow::anyhow!(
-                "new_version < old_version in `textDocument/didChange` notification: new_version={version:?} old_version={old_version:?} text_document.uri={uri:?}"
-            ));
+            // Log a warning but proceed — some clients reset version numbers
+            // between editing sessions, and silently dropping the edit causes
+            // worse bugs than accepting an out-of-order version.
+            warn!(
+                "textDocument/didChange: version went backwards (new={version:?} < old={old_version:?}) for {uri}, applying anyway"
+            );
         }
         drop(version_info);
         let mut lock = self.open_files.write();
@@ -5939,7 +5974,7 @@ impl TspInterface for Server {
         // internal heuristics, not stable directories the client should depend
         // on.
         let mut seen = std::collections::HashSet::new();
-        let paths: Vec<String> = config
+        let mut paths: Vec<String> = config
             .search_path()
             .chain(config.site_package_path())
             .filter_map(|p| {
@@ -5949,6 +5984,19 @@ impl TspInterface for Server {
             })
             .filter(|uri| seen.insert(uri.clone()))
             .collect();
+
+        // Include the materialized typeshed stdlib path so the client can
+        // remap declaration URIs that reference our bundled typeshed.
+        if let Ok(ts) = crate::module::typeshed::typeshed()
+            && let Ok(ts_path) = ts.materialized_path_on_disk()
+            && let Ok(url) = Url::from_file_path(&ts_path)
+        {
+            let uri = url.to_string();
+            if seen.insert(uri.clone()) {
+                paths.push(uri);
+            }
+        }
+
         Ok(paths)
     }
 

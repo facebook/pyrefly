@@ -285,7 +285,6 @@ reveal_type(transform(bar)) # Should return (a: str, /, *args: bool) -> bool # E
 );
 
 testcase!(
-    bug = "conformance: P.args and P.kwargs should only work when P is in scope",
     test_paramspec_component_usage,
     r#"
 from typing import Callable, ParamSpec
@@ -297,7 +296,7 @@ def puts_p_into_scope(f: Callable[P, int]) -> None:
   def mixed_up(*args: P.kwargs, **kwargs: P.args) -> None: pass  # E: `ParamSpec` **kwargs is only allowed in a **kwargs annotation # E: `ParamSpec` *args is only allowed in an *args annotation
   def misplaced(x: P.args) -> None: pass                         # E: `ParamSpec` *args is only allowed in an *args annotation
 
-def out_of_scope(*args: P.args, **kwargs: P.kwargs) -> None: # Rejected
+def out_of_scope(*args: P.args, **kwargs: P.kwargs) -> None: # E: Expected a type form, got instance of `ParamSpecArgs` # E: Expected a type form, got instance of `ParamSpecKwargs`
   pass
 "#,
 );
@@ -386,7 +385,9 @@ from typing import Callable, ParamSpec
 P1 = ParamSpec("P1")
 P2 = ParamSpec("P2")
 
-def foo(x: int, *args: P1.args, **kwargs: P2.kwargs) -> None: ...  # E: *args and **kwargs must come from the same `ParamSpec`
+def test1(x: Callable[P1, None], y: Callable[P2, None], *args: P1.args, **kwargs: P2.kwargs) -> None: ...  # E: *args and **kwargs must come from the same `ParamSpec`
+
+def test2(x: int, *args: P1.args, **kwargs: P2.kwargs) -> None: ...  # E: Expected a type form, got instance of `ParamSpecArgs` # E: Expected a type form, got instance of `ParamSpecKwargs`
 "#,
 );
 

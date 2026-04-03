@@ -33,6 +33,7 @@ use enum_iterator::Sequence;
 use fxhash::FxHashMap;
 use itertools::Itertools;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ignore::parse_ignore_all;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -42,7 +43,6 @@ use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::fs_anyhow;
-use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::locked_map::LockedMap;
@@ -114,7 +114,9 @@ use crate::module::typeshed::BundledTypeshedStdlib;
 use crate::solver::solver::VarRecurser;
 use crate::state::epoch::Epoch;
 use crate::state::errors::Errors;
-use crate::state::errors::sorted_multi_line_fstring_ranges;
+use crate::state::errors::ModuleRanges;
+use crate::state::errors::sorted_backslash_continuation_ranges;
+use crate::state::errors::sorted_multi_line_string_ranges;
 use crate::state::load::FileContents;
 use crate::state::load::Load;
 use crate::state::loader::FindingOrError;
@@ -508,6 +510,8 @@ pub(crate) struct TransactionData<'a> {
     subscriber: Option<Box<dyn Subscriber + 'a>>,
     /// When set, pysa reporting is done during answer solving and before memory eviction.
     pysa_reporter: Option<Box<crate::report::pysa::PysaReporter>>,
+    /// When set, CinderX reporting writes per-module output during answer solving.
+    cinderx_reporter: Option<Box<crate::report::cinderx::CinderxReporter>>,
 }
 
 impl<'a> TransactionData<'a> {
@@ -574,6 +578,21 @@ impl<'a> Transaction<'a> {
     /// Take the pysa reporter out of the transaction, consuming ownership.
     pub fn take_pysa_reporter(&mut self) -> Option<Box<crate::report::pysa::PysaReporter>> {
         self.data.pysa_reporter.take()
+    }
+
+    /// Set the cinderx reporter for inline extraction during type checking.
+    pub fn set_cinderx_reporter(
+        &mut self,
+        reporter: Option<Box<crate::report::cinderx::CinderxReporter>>,
+    ) {
+        self.data.cinderx_reporter = reporter;
+    }
+
+    /// Take the cinderx reporter out of the transaction, consuming ownership.
+    pub fn take_cinderx_reporter(
+        &mut self,
+    ) -> Option<Box<crate::report::cinderx::CinderxReporter>> {
+        self.data.cinderx_reporter.take()
     }
 
     /// Mark this transaction as freshly created (not restored from saved state).
@@ -651,11 +670,23 @@ impl<'a> Transaction<'a> {
                 .filter_map(|handle| {
                     self.with_module_config_inner(handle, |config, x| {
                         let load = x.get_load()?;
-                        let fstring_ranges = x
+                        let mut multi_line = x
                             .get_ast()
-                            .map(|ast| sorted_multi_line_fstring_ranges(&ast, &load.module_info))
+                            .map(|ast| sorted_multi_line_string_ranges(&ast, &load.module_info))
                             .unwrap_or_default();
-                        Some((load, config.dupe(), fstring_ranges))
+                        let lines: Vec<&str> = load.module_info.contents().lines().collect();
+                        multi_line
+                            .extend(sorted_backslash_continuation_ranges(&lines, &multi_line));
+                        multi_line.sort();
+                        let ignore_all = parse_ignore_all(load.module_info.contents(), &multi_line);
+                        Some((
+                            load,
+                            config.dupe(),
+                            ModuleRanges {
+                                multi_line,
+                                ignore_all,
+                            },
+                        ))
                     })
                 })
                 .collect(),
@@ -663,15 +694,21 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn get_all_errors(&self) -> Errors {
-        /// Extract f-string ranges from the AST if available.
-        fn fstring_ranges_from(
-            state: &dyn ModuleStateReader,
-            load: &Load,
-        ) -> Vec<(LineNumber, LineNumber)> {
-            state
+        /// Extract multi-line ranges and ignore-all directives from the AST
+        /// and source text.
+        fn module_ranges_from(state: &dyn ModuleStateReader, load: &Load) -> ModuleRanges {
+            let mut multi_line = state
                 .get_ast()
-                .map(|ast| sorted_multi_line_fstring_ranges(&ast, &load.module_info))
-                .unwrap_or_default()
+                .map(|ast| sorted_multi_line_string_ranges(&ast, &load.module_info))
+                .unwrap_or_default();
+            let lines: Vec<&str> = load.module_info.contents().lines().collect();
+            multi_line.extend(sorted_backslash_continuation_ranges(&lines, &multi_line));
+            multi_line.sort();
+            let ignore_all = parse_ignore_all(load.module_info.contents(), &multi_line);
+            ModuleRanges {
+                multi_line,
+                ignore_all,
+            }
         }
 
         if self.data.updated_modules.is_empty() {
@@ -682,7 +719,7 @@ impl<'a> Transaction<'a> {
                     .values()
                     .filter_map(|x| {
                         let load = x.state.get_load()?;
-                        let ranges = fstring_ranges_from(&x.state, &load);
+                        let ranges = module_ranges_from(&x.state, &load);
                         Some((load, x.config.dupe(), ranges))
                     })
                     .collect(),
@@ -694,7 +731,7 @@ impl<'a> Transaction<'a> {
             .iter_unordered()
             .filter_map(|x| {
                 let load = x.1.state.get_load()?;
-                let ranges = fstring_ranges_from(&x.1.state, &load);
+                let ranges = module_ranges_from(&x.1.state, &load);
                 Some((load, x.1.config.read().dupe(), ranges))
             })
             .collect::<Vec<_>>();
@@ -702,7 +739,7 @@ impl<'a> Transaction<'a> {
             if self.data.updated_modules.get(k).is_none()
                 && let Some(load) = v.state.get_load()
             {
-                let ranges = fstring_ranges_from(&v.state, &load);
+                let ranges = module_ranges_from(&v.state, &load);
                 res.push((load, v.config.dupe(), ranges));
             }
         }
@@ -1140,8 +1177,11 @@ impl<'a> Transaction<'a> {
                 tensor_shapes: config.tensor_shapes(module_data.handle.path().as_path()),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(module_data.handle.path().as_path()),
+                spec_compliant_overloads: config
+                    .spec_compliant_overloads(module_data.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context,
+                cinderx_enabled: self.data.cinderx_reporter.is_some(),
             };
 
             // Compute the step. This stores the result and advances current_step,
@@ -1191,15 +1231,27 @@ impl<'a> Transaction<'a> {
                     changed
                 );
             }
-            if todo == Step::Answers && !require.keep_ast() && self.data.pysa_reporter.is_none() {
-                // We have captured the Ast, and must have already built Exports (we do it serially),
-                // so won't need the Ast again.
-                post.evict_ast();
+            if todo == Step::Answers {
+                if !require.keep_ast()
+                    && self.data.pysa_reporter.is_none()
+                    && self.data.cinderx_reporter.is_none()
+                {
+                    // We have captured the Ast, and must have already built Exports (we do it serially),
+                    // so won't need the Ast again.
+                    post.evict_ast();
+                }
             } else if todo == Step::Solutions {
+                if let Some(cinderx_reporter) = self.data.cinderx_reporter.as_ref() {
+                    cinderx_reporter
+                        .report_module(&module_data.handle, self)
+                        .expect("Failed to write CinderX module report");
+                }
                 if let Some(pysa_reporter) = self.data.pysa_reporter.as_ref() {
                     pysa_reporter.report_module(&module_data.handle, self);
-                    // With pysa, we delayed AST eviction past Answers (needed for
-                    // report_module). Evict it now that report_module has completed.
+                }
+                if self.data.pysa_reporter.is_some() || self.data.cinderx_reporter.is_some() {
+                    // With inline report writers, we delay AST eviction past Answers because
+                    // reporting needs the AST. Evict it now that reporting has completed.
                     post.evict_ast();
                 }
                 if !require.keep_bindings() && !require.keep_answers() {
@@ -2058,8 +2110,11 @@ impl<'a> Transaction<'a> {
                 tensor_shapes: config.tensor_shapes(m.handle.path().as_path()),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(m.handle.path().as_path()),
+                spec_compliant_overloads: config
+                    .spec_compliant_overloads(m.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context: None,
+                cinderx_enabled: false,
             };
             while let Some(step) = alt.next_step() {
                 let start = Instant::now();
@@ -2161,6 +2216,29 @@ impl<'a> Transaction<'a> {
             .pysa_solutions()
             .expect("pysa_solutions must exist when pysa reporting is enabled")
             .clone()
+    }
+
+    /// Demand that a module reaches Solutions and return its CinderXSolutions.
+    pub fn resolve_cinderx_solutions(
+        &self,
+        handle: &Handle,
+    ) -> Arc<crate::report::cinderx::CinderxSolutions> {
+        let module_data = self.get_module(handle);
+        self.demand(module_data, Step::last());
+        let solutions = module_data
+            .state
+            .get_solutions()
+            .expect("solutions must exist after demand");
+        if let Some(cinderx_solutions) = solutions.cinderx_solutions() {
+            return cinderx_solutions.clone();
+        }
+        let bindings = self
+            .get_bindings(handle)
+            .expect("bindings must be available to build cinderx_solutions");
+        let answers = self
+            .get_answers(handle)
+            .expect("answers must be available to build cinderx_solutions");
+        crate::report::cinderx::CinderxSolutions::build_from_answers(&bindings, &answers)
     }
 }
 
@@ -2584,7 +2662,7 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
                 // Only extend errors if this write won the first-write-wins race.
                 if did_write && let (Some(errors), Some(target_load)) = (errors, load) {
                     // The errors Arc should have refcount 1 here: batch_commit_scc
-                    // consumes the Scc (moved into the method), and each NodeState::Done
+                    // consumes the Scc (moved into the method), and each SccNodeState::Done
                     // is destructured by the for loop, so no other references remain.
                     // If this invariant is violated, something is holding an unexpected
                     // reference to the error collector, which could cause silent error
@@ -2844,6 +2922,7 @@ impl State {
                 dirty: Default::default(),
                 subscriber,
                 pysa_reporter: None,
+                cinderx_reporter: None,
             },
         }
     }
@@ -2914,6 +2993,7 @@ impl State {
                             dirty,
                             subscriber: _,
                             pysa_reporter: _,
+                            cinderx_reporter: _,
                         },
                 },
             committing_transaction_guard,

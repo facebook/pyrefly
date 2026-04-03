@@ -629,6 +629,23 @@ impl<'a> Transaction<'a> {
     }
 
     fn type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        self.type_from_expression_at_impl(handle, position, false)
+    }
+
+    /// Like `type_from_expression_at`, but prefers the result type (`get_type_trace`)
+    /// over the callee/method type (`get_chosen_overload_trace`). This is used by the
+    /// provide-type endpoint where operator expressions should return the result
+    /// (e.g. `Literal[False]` for `+pos`) rather than the dunder method signature.
+    fn result_type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        self.type_from_expression_at_impl(handle, position, true)
+    }
+
+    fn type_from_expression_at_impl(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        prefer_result_type: bool,
+    ) -> Option<Type> {
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
         for node in covering_nodes {
@@ -636,11 +653,20 @@ impl<'a> Transaction<'a> {
                 continue;
             }
             let range = node.range();
-            if let Some(callable) = self.get_chosen_overload_trace(handle, range) {
-                return Some(callable);
-            }
-            if let Some(ty) = self.get_type_trace(handle, range) {
-                return Some(ty);
+            if prefer_result_type {
+                if let Some(ty) = self.get_type_trace(handle, range) {
+                    return Some(ty);
+                }
+                if let Some(callable) = self.get_chosen_overload_trace(handle, range) {
+                    return Some(callable);
+                }
+            } else {
+                if let Some(callable) = self.get_chosen_overload_trace(handle, range) {
+                    return Some(callable);
+                }
+                if let Some(ty) = self.get_type_trace(handle, range) {
+                    return Some(ty);
+                }
             }
         }
         None
@@ -1029,6 +1055,17 @@ impl<'a> Transaction<'a> {
                 self.get_type(handle, &key)
             }
             None => self.type_from_expression_at(handle, position),
+        }
+    }
+
+    /// Like `get_type_at`, but for non-identifier expressions (operators, etc.)
+    /// prefers the result type over the dunder method signature. Used by the
+    /// provide-type endpoint where `+pos` should return `Literal[False]` rather
+    /// than the `__pos__` method signature.
+    pub fn get_result_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        match self.identifier_at(handle, position) {
+            None => self.result_type_from_expression_at(handle, position),
+            _ => self.get_type_at(handle, position),
         }
     }
 

@@ -152,6 +152,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ret
     }
 
+    /// Handle `TypeForm(expr)` — validates the argument is a valid type expression
+    /// and returns `TypeForm[T]` where `T` is the resolved type.
+    pub fn call_typeform(
+        &self,
+        args: &[Expr],
+        keywords: &[Keyword],
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        if !keywords.is_empty() {
+            return self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::UnexpectedKeyword),
+                "`TypeForm` does not accept keyword arguments".to_owned(),
+            );
+        }
+        if args.len() != 1 {
+            return self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::BadArgumentCount),
+                format!(
+                    "`TypeForm` expected 1 positional argument, got {}",
+                    args.len()
+                ),
+            );
+        }
+        // Validate that the argument has valid type annotation syntax (e.g., reject
+        // call expressions like `type(1)` which are not valid type forms).
+        if !self.has_valid_annotation_syntax(&args[0], errors) {
+            return Type::TypeForm(Box::new(self.heap.mk_any_error()));
+        }
+        let inner = self.expr_untype(&args[0], TypeFormContext::TypeArgument, errors);
+        Type::TypeForm(Box::new(inner))
+    }
+
     /// Simulates a call to `typing.cast`, whose signature is
     /// `(typ: type[T], val: Any) -> T: ...`
     /// (ignoring corner cases like special forms and forward references).

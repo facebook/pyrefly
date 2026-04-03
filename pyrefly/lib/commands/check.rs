@@ -259,6 +259,9 @@ struct OutputArgs {
     /// Generate a Pysa-compatible JSON file for each module
     #[arg(long, value_name = "OUTPUT_FILE")]
     report_pysa: Option<PathBuf>,
+    /// Format for pysa report output (json or capnp)
+    #[arg(long, value_enum, default_value_t = report::pysa::PysaFormat::Json)]
+    report_pysa_format: report::pysa::PysaFormat,
     /// Generate a CinderX-format type report (experimental, internal-only).
     #[arg(long, value_name = "OUTPUT_DIR", hide = true)]
     report_cinderx: Option<PathBuf>,
@@ -267,6 +270,10 @@ struct OutputArgs {
     /// cross-referencing the JSON. Intended for debugging; mirrors view_types.py output.
     #[arg(long, hide = true)]
     cinderx_include_readable: bool,
+    /// Include all transitively-imported dependency modules in the CinderX report,
+    /// not just the explicitly type-checked project files.
+    #[arg(long, hide = true)]
+    cinderx_include_deps: bool,
     /// Count the number of each error kind. Prints the top N [default=5] errors, sorted by count, or all errors if N is 0.
     #[arg(
         long,
@@ -885,8 +892,7 @@ impl CheckArgs {
         let retain = self.output.report_binding_memory.is_some()
             || self.output.debug_info.is_some()
             || self.output.report_trace.is_some()
-            || self.output.report_glean.is_some()
-            || self.output.report_cinderx.is_some();
+            || self.output.report_glean.is_some();
         RequireLevels {
             specified: if retain {
                 Require::Everything
@@ -898,6 +904,7 @@ impl CheckArgs {
             } else if self.behavior.check_all
                 || stdlib_search_path().is_some()
                 || self.output.report_pysa.is_some()
+                || self.output.report_cinderx.is_some()
             {
                 Require::Errors
             } else {
@@ -917,8 +924,28 @@ impl CheckArgs {
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         if let Some(pysa_directory) = &self.output.report_pysa {
-            let reporter = report::pysa::PysaReporter::new(pysa_directory, handles)?;
+            let reporter = report::pysa::PysaReporter::new(
+                pysa_directory,
+                handles,
+                self.output.report_pysa_format,
+            )?;
             transaction.set_pysa_reporter(Some(reporter));
+        }
+        if let Some(cinderx_directory) = &self.output.report_cinderx {
+            let cinderx_reporter = if self.output.cinderx_include_deps {
+                report::cinderx::CinderxReporter::new(
+                    cinderx_directory,
+                    None,
+                    self.output.cinderx_include_readable,
+                )?
+            } else {
+                report::cinderx::CinderxReporter::new(
+                    cinderx_directory,
+                    Some(handles),
+                    self.output.cinderx_include_readable,
+                )?
+            };
+            transaction.set_cinderx_reporter(Some(cinderx_reporter));
         }
 
         let type_check_start = Instant::now();
@@ -981,7 +1008,7 @@ impl CheckArgs {
         } else {
             (errors.directives, errors.ordinary)
         };
-        let mut ordinary_errors: Vec<_> = if let Some(only) = &self.output.only {
+        let ordinary_errors: Vec<_> = if let Some(only) = &self.output.only {
             let only = only.iter().collect::<SmallSet<_>>();
             let filtered: Vec<_> = unused_ignore_errors
                 .ordinary
@@ -1017,7 +1044,9 @@ impl CheckArgs {
         // Filter by minimum severity. Directives are not subject to this
         // filter — they are merged separately in the output step below.
         let min_severity = self.output.min_severity.unwrap_or(Severity::Error);
-        ordinary_errors.retain(|e| e.severity() >= min_severity);
+        let (ordinary_errors, hidden_errors): (Vec<_>, Vec<_>) = ordinary_errors
+            .into_iter()
+            .partition(|e| e.severity() >= min_severity);
 
         // We update the baseline file if requested, after reporting any new
         // errors using the old baseline. Directives are structurally excluded
@@ -1083,15 +1112,35 @@ impl CheckArgs {
 
         if self.output.summary != Summary::None {
             let suppress_count = errors.suppressed.len();
-            if suppress_count == 0 {
-                info!("{}", count(ordinary_errors_count, "error"))
+            let mut parts = vec![count(ordinary_errors_count, "error")];
+            if suppress_count > 0 {
+                parts.push(format!("{} suppressed", number_thousands(suppress_count)));
+            }
+            if !hidden_errors.is_empty() {
+                let mut hidden_warnings = 0;
+                let mut hidden_info = 0;
+                for e in hidden_errors {
+                    match e.severity() {
+                        Severity::Error => panic!("Error-level findings can never be hidden"),
+                        Severity::Warn => hidden_warnings += 1,
+                        Severity::Info => hidden_info += 1,
+                        Severity::Ignore => {}
+                    }
+                }
+                let mut hidden_parts = Vec::new();
+                if hidden_warnings > 0 {
+                    hidden_parts.push(count(hidden_warnings, "warning"));
+                }
+                if hidden_info > 0 {
+                    hidden_parts.push(count(hidden_info, "info message"));
+                }
+                parts.push(format!("{} not shown", hidden_parts.join(" and ")));
+            }
+            if parts.len() == 1 {
+                info!("{}", parts[0]);
             } else {
-                info!(
-                    "{} ({} suppressed)",
-                    count(ordinary_errors_count, "error"),
-                    number_thousands(suppress_count)
-                )
-            };
+                info!("{} ({})", parts[0], parts[1..].join(", "));
+            }
         }
         if self.output.summary == Summary::Full {
             let user_handles: HashSet<&Handle> = handles.iter().collect();
@@ -1137,12 +1186,8 @@ impl CheckArgs {
         if let Some(pysa_reporter) = transaction.take_pysa_reporter() {
             report::pysa::write_project_file(&pysa_reporter, transaction, handles, &output_errors)?;
         }
-        if let Some(cinderx_directory) = &self.output.report_cinderx {
-            report::cinderx::write_results(
-                cinderx_directory,
-                transaction,
-                self.output.cinderx_include_readable,
-            )?;
+        if let Some(cinderx_reporter) = transaction.take_cinderx_reporter() {
+            cinderx_reporter.write_project_files(transaction)?;
         }
         if let Some(path) = &self.output.report_binding_memory {
             fs_anyhow::write(path, report::binding_memory::binding_memory(transaction))?;

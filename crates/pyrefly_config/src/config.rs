@@ -42,6 +42,7 @@ use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Glob;
 use pyrefly_util::globs::Globs;
+use pyrefly_util::globs::HiddenDirFilter;
 use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
@@ -102,6 +103,10 @@ pub enum ConfigSource {
     /// "marker" file that contains no pyrefly configuration but marks a project root (e.g., a
     /// `pyproject.toml` file with no `[tool.pyrefly]` section)
     Marker(PathBuf),
+    /// We found a config file and attempted to read/parse it, but failed. The config values
+    /// are defaults, but we respect the file's location for project root detection (similar
+    /// to `Marker`).
+    FailedParse(PathBuf),
     #[default]
     Synthetic,
 }
@@ -135,7 +140,10 @@ pub enum OutputFormat {
 impl ConfigSource {
     pub fn root(&self) -> Option<&Path> {
         match &self {
-            Self::File(path) | Self::PythonToolMarker(path) | Self::Marker(path) => path.parent(),
+            Self::File(path)
+            | Self::PythonToolMarker(path)
+            | Self::Marker(path)
+            | Self::FailedParse(path) => path.parent(),
             Self::Synthetic => None,
         }
     }
@@ -662,7 +670,20 @@ impl ConfigFile {
         } else {
             None
         };
-        FilteredGlobs::new(self.project_includes.clone(), project_excludes, root)
+        let hidden_dir_filter = if self.disable_project_excludes_heuristics {
+            HiddenDirFilter::Disabled
+        } else {
+            match root {
+                Some(r) => HiddenDirFilter::RelativeTo(vec![r.to_path_buf()]),
+                None => HiddenDirFilter::All,
+            }
+        };
+        FilteredGlobs::new(
+            self.project_includes.clone(),
+            project_excludes,
+            root,
+            hidden_dir_filter,
+        )
     }
 }
 
@@ -700,8 +721,6 @@ impl ConfigFile {
             "**/__pycache__".to_owned(),
             // match any `venv` directory
             "**/venv/**".to_owned(),
-            // Dot directories aside from `.` and `..` (will include .venv and .env)
-            "**/.[!/.]*/**".to_owned(),
         ])
         .unwrap_or_else(|_| Globs::empty())
     }
@@ -886,6 +905,14 @@ impl ConfigFile {
                  // we can use unwrap here, because the value in the root config must
                  // be set in `ConfigFile::configure()`.
                  self.root.strict_callable_subtyping.unwrap())
+    }
+
+    pub fn spec_compliant_overloads(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_spec_compliant_overloads, path)
+            .unwrap_or_else(||
+                 // we can use unwrap here, because the value in the root config must
+                 // be set in `ConfigFile::configure()`.
+                 self.root.spec_compliant_overloads.unwrap())
     }
 
     pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
@@ -1171,6 +1198,10 @@ impl ConfigFile {
             self.root.strict_callable_subtyping = Some(false);
         }
 
+        if self.root.spec_compliant_overloads.is_none() {
+            self.root.spec_compliant_overloads = Some(false);
+        }
+
         let tools_from_permissive_ignores = match self.root.permissive_ignores {
             Some(true) => Some(Tool::all()),
             Some(false) => Some(Tool::default_enabled()),
@@ -1325,7 +1356,7 @@ impl ConfigFile {
                 Ok(result) => result,
                 Err(e) => {
                     errors.push(ConfigError::error(e));
-                    (None, ConfigSource::File(config_path.to_path_buf()))
+                    (None, ConfigSource::FailedParse(config_path.to_path_buf()))
                 }
             };
             let mut config = match config_path.parent() {
@@ -1543,6 +1574,7 @@ mod tests {
                     enabled_ignores: None,
                     recursion_depth_limit: None,
                     recursion_overflow_handler: None,
+                    spec_compliant_overloads: None,
                 },
                 source_db: Default::default(),
                 sub_configs: vec![SubConfig {
@@ -1567,6 +1599,7 @@ mod tests {
                         enabled_ignores: None,
                         recursion_depth_limit: None,
                         recursion_overflow_handler: None,
+                        spec_compliant_overloads: None,
                     }
                 }],
                 typeshed_path: None,
@@ -1979,6 +2012,7 @@ output-format = "omit-errors"
                 enabled_ignores: None,
                 recursion_depth_limit: None,
                 recursion_overflow_handler: None,
+                spec_compliant_overloads: None,
             },
             sub_configs: vec![
                 SubConfig {
@@ -2167,20 +2201,19 @@ output-format = "omit-errors"
                         "**/node_modules".to_owned(),
                         "**/__pycache__".to_owned(),
                         "**/venv/**".to_owned(),
-                        "**/.[!/.]*/**".to_owned(),
                     ]
                     .into_iter()
                     .chain(vec![
                         "**/node_modules".to_owned(),
                         "**/__pycache__".to_owned(),
                         "**/venv/**".to_owned(),
-                        "**/.[!/.]*/**".to_owned(),
                     ])
                     .chain(expected_site_package_path.clone())
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>(),
                 )
                 .unwrap(),
                 None,
+                HiddenDirFilter::All,
             )
         );
         assert_eq!(
@@ -2196,13 +2229,13 @@ output-format = "omit-errors"
                             "**/node_modules".to_owned(),
                             "**/__pycache__".to_owned(),
                             "**/venv/**".to_owned(),
-                            "**/.[!/.]*/**".to_owned(),
                         ])
                         .chain(expected_site_package_path)
-                        .collect::<Vec<_>>()
+                        .collect::<Vec<_>>(),
                 )
                 .unwrap(),
                 None,
+                HiddenDirFilter::All,
             )
         );
     }
@@ -2292,6 +2325,7 @@ output-format = "omit-errors"
                 enabled_ignores: None,
                 recursion_depth_limit: None,
                 recursion_overflow_handler: None,
+                spec_compliant_overloads: None,
             },
             sub_configs: vec![],
             ..Default::default()
@@ -2330,6 +2364,7 @@ output-format = "omit-errors"
                 enabled_ignores: None,
                 recursion_depth_limit: None,
                 recursion_overflow_handler: None,
+                spec_compliant_overloads: None,
             },
             sub_configs: vec![],
             ..Default::default()
@@ -2440,5 +2475,21 @@ output-format = "omit-errors"
         full_project_excludes.append(ConfigFile::required_project_excludes().globs());
         full_project_excludes.append(&[Glob::new("spp".to_owned()).unwrap()]);
         assert_eq!(&enabled_config.project_excludes, &full_project_excludes);
+    }
+
+    #[test]
+    fn test_failed_parse_on_invalid_toml() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        fs::write(&path, "not valid toml [[[").unwrap();
+        let (config, errors) = ConfigFile::from_file(&path);
+        assert!(
+            matches!(config.source, ConfigSource::FailedParse(_)),
+            "Expected FailedParse, got {:?}",
+            config.source
+        );
+        assert!(!errors.is_empty(), "Expected errors for invalid TOML");
+        // The config should still respect the file's location for project root detection.
+        assert_eq!(config.source.root(), Some(root.path()));
     }
 }

@@ -112,7 +112,7 @@ impl UndecoratedFunction {
                 TextRange::default(),
             )),
             metadata: FuncMetadata {
-                kind: FunctionKind::Def(Box::new(FuncId {
+                kind: FunctionKind::Def(Arc::new(FuncId {
                     module: Module::new(
                         ModuleName::from_str("__undecorated_function_recursive__"),
                         ModulePath::filesystem(PathBuf::default()),
@@ -121,6 +121,7 @@ impl UndecoratedFunction {
                     cls: None,
                     name: Name::default(),
                     def_index: None,
+                    outer_funcs: None,
                 })),
                 flags: FuncFlags::default(),
             },

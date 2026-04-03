@@ -78,6 +78,7 @@ use crate::binding::binding::TypeAliasRefBinding;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::metadata::BindingsMetadata;
+use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::scope::Exportable;
 use crate::binding::scope::FlowStyle;
@@ -251,6 +252,11 @@ pub struct BindingsBuilder<'a> {
     pub scopes: Scopes,
     table: BindingTable,
     pub check_unannotated_defs: bool,
+    /// When true, unannotated function bodies are still analyzed (creating
+    /// bindings for the solver) even when `check_unannotated_defs` is false,
+    /// so that IDE features like hover and goto-def work inside them.
+    /// In CLI batch-check mode this is false to avoid wasted work.
+    pub analyze_unannotated_for_ide: bool,
     pub infer_return_types: InferReturnTypes,
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
@@ -510,6 +516,7 @@ impl Bindings {
         uniques: &UniqueFactory,
         enable_trace: bool,
         check_unannotated_defs: bool,
+        analyze_unannotated_for_ide: bool,
         infer_return_types: InferReturnTypes,
     ) -> Self {
         let mut builder = BindingsBuilder {
@@ -527,6 +534,7 @@ impl Bindings {
             scopes: Scopes::module(x.range, enable_trace),
             table: Default::default(),
             check_unannotated_defs,
+            analyze_unannotated_for_ide,
             infer_return_types,
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
@@ -1042,7 +1050,7 @@ impl<'a> BindingsBuilder<'a> {
 
     fn inject_builtins(&mut self, builtins_module: ModuleName, ignore_if_missing: bool) {
         match self.lookup.module_exists(builtins_module) {
-            FindingOrError::Error(err @ FindError::NotFound(..)) if !ignore_if_missing => {
+            FindingOrError::Error(err @ FindError::MissingImport(..)) if !ignore_if_missing => {
                 let (_, msg) = err.display();
                 self.errors.internal_error(TextRange::default(), msg);
             }
@@ -1293,6 +1301,30 @@ impl<'a> BindingsBuilder<'a> {
             }
             NameReadInfo::NotFound => NameLookupResult::NotFound,
         }
+    }
+
+    /// Build narrow entries for exhaustiveness checking by resolving each
+    /// narrowed name to its variable binding at the fork base. Using the
+    /// fork base preserves narrowing from enclosing scopes; a regular
+    /// lookup would fall back to the un-narrowed static binding.
+    pub fn build_narrow_entries(
+        &mut self,
+        negated_prev_ops: &NarrowOps,
+    ) -> Vec<(Idx<Key>, Box<NarrowOp>, TextRange)> {
+        let mut narrow_entries = Vec::new();
+        for (name, (op, range)) in negated_prev_ops.0.iter() {
+            let idx = if let Some(idx) = self.scopes.current_fork_base_idx(name) {
+                idx
+            } else if let NameLookupResult::Found { idx, .. } =
+                self.lookup_name(Hashed::new(name), &mut Usage::Narrowing(None))
+            {
+                idx
+            } else {
+                continue;
+            };
+            narrow_entries.push((idx, Box::new(op.clone()), *range));
+        }
+        narrow_entries
     }
 
     /// Defer creation of a BoundName binding until after AST traversal.
@@ -1574,6 +1606,14 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn type_params(&mut self, x: &mut TypeParams) -> SmallSet<Name> {
+        self.type_params_with_owner(x, None)
+    }
+
+    pub fn type_params_with_owner(
+        &mut self,
+        x: &mut TypeParams,
+        owner: Option<Name>,
+    ) -> SmallSet<Name> {
         let mut names = SmallSet::new();
         for x in x.type_params.iter_mut() {
             let name = x.name().clone();
@@ -1643,6 +1683,7 @@ impl<'a> BindingsBuilder<'a> {
                     default,
                     bound,
                     constraints,
+                    owner: owner.clone(),
                 })),
                 FlowStyle::Other,
             );
@@ -1688,17 +1729,22 @@ impl<'a> BindingsBuilder<'a> {
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
         is_variadic: bool,
+        ignore_annotation: bool,
     ) {
         let name = x.name();
         let allow_unused = name.id.as_str().starts_with('_')
             || matches!(name.id.as_str(), "self" | "cls")
             || is_variadic;
-        let annot = x.annotation().map(|x| {
-            self.insert_binding(
-                KeyAnnotation::Annotation(ShortIdentifier::new(name)),
-                BindingAnnotation::AnnotateExpr(target.clone(), x.clone(), class_key),
-            )
-        });
+        let annot = if ignore_annotation {
+            None
+        } else {
+            x.annotation().map(|x| {
+                self.insert_binding(
+                    KeyAnnotation::Annotation(ShortIdentifier::new(name)),
+                    BindingAnnotation::AnnotateExpr(target.clone(), x.clone(), class_key),
+                )
+            })
+        };
         let key = self.insert_binding(
             Key::Definition(ShortIdentifier::new(name)),
             Binding::FunctionParameter(Box::new(match annot {
@@ -1849,6 +1895,21 @@ impl<'a> BindingsBuilder<'a> {
             .entry(id.tvar_name())
             .or_insert_with(|| self.lookup_legacy_tparam(id, legacy_tparams.has_scoped_tparams));
         result.as_name_lookup_result()
+    }
+
+    /// Like `intercept_lookup`, but only resolves via an *existing* entry in the
+    /// legacy tparam collector. Does NOT add a new entry if one doesn't exist.
+    /// Used for `P.args`/`P.kwargs` so that `P` is resolved if already in scope
+    /// (e.g. from `Callable[P, ...]`) but not introduced as a new type parameter.
+    pub fn try_intercept_lookup(
+        &mut self,
+        legacy_tparams: &mut LegacyTParamCollector,
+        id: &LegacyTParamId,
+    ) -> Option<NameLookupResult> {
+        legacy_tparams
+            .legacy_tparams
+            .get(id.tvar_name().as_str())
+            .map(|result| result.as_name_lookup_result())
     }
 
     /// Look up a name that might refer to a legacy tparam. This is used by `intercept_lookup`

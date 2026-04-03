@@ -49,6 +49,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
+use crate::report::cinderx::CinderxSolutions;
 use crate::report::pysa::PysaSolutions;
 use crate::solver::solver::Solver;
 use crate::solver::solver::VarRecurser;
@@ -226,6 +227,8 @@ pub struct Solutions {
     index: Option<Arc<Mutex<Index>>>,
     /// Per-module pysa data, populated when pysa reporting is enabled.
     pysa_solutions: Option<Arc<PysaSolutions>>,
+    /// Per-module cinderx data, populated when cinderx reporting is enabled.
+    cinderx_solutions: Option<Arc<CinderxSolutions>>,
 }
 
 impl Display for Solutions {
@@ -300,6 +303,11 @@ impl Solutions {
     /// Access per-module pysa data, if pysa reporting was enabled.
     pub fn pysa_solutions(&self) -> Option<&Arc<PysaSolutions>> {
         self.pysa_solutions.as_ref()
+    }
+
+    /// Access per-module cinderx data, if cinderx reporting was enabled.
+    pub fn cinderx_solutions(&self) -> Option<&Arc<CinderxSolutions>> {
+        self.cinderx_solutions.as_ref()
     }
 
     pub fn get<K: Exported>(&self, key: &K) -> &Arc<<K as Keyed>::Answer>
@@ -697,6 +705,7 @@ impl Answers {
         compute_everything: bool,
         recursion_limit_config: Option<RecursionLimitConfig>,
         pysa_context: Option<&crate::report::pysa::context::ModuleAnswersContext>,
+        enable_cinderx_solutions: bool,
     ) -> Solutions {
         let mut res = SolutionsTable::default();
 
@@ -788,6 +797,8 @@ impl Answers {
         }
 
         let pysa_solutions = pysa_context.map(PysaSolutions::build);
+        let cinderx_solutions =
+            enable_cinderx_solutions.then(|| CinderxSolutions::build(bindings, &answers_solver));
 
         answers_solver.validate_final_thread_state();
 
@@ -797,6 +808,7 @@ impl Answers {
             metadata: bindings.metadata().dupe(),
             index: self.index.dupe(),
             pysa_solutions,
+            cinderx_solutions,
         }
     }
 
@@ -901,7 +913,7 @@ impl Answers {
         // Get the calculation cell from the answer table
         if let Some(calculation) = self.table.get::<K>().get(idx) {
             // No recursive placeholder can exist in the Calculation cell because
-            // placeholders are stored only in SCC-local NodeState::HasPlaceholder.
+            // placeholders are stored only in SCC-local SccNodeState::HasPlaceholder.
             let (_answer, did_write) = calculation.record_value(typed_answer);
             did_write
         } else {

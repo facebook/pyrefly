@@ -31,23 +31,23 @@ use crate::module::finder::suggest_stdlib_import;
 #[derive(Debug, Clone, Dupe, PartialEq, Eq)]
 pub enum FindError {
     /// This module could not be found, and we should emit an error
-    NotFound(ModuleName, Arc<Vec1<String>>),
+    MissingImport(ModuleName, Arc<Vec1<String>>),
     /// This import could not be found, but the user configured it to be ignored
     Ignored,
     /// We found stubs, but no source files were found. This means it's likely stubs
     /// are installed for a project, but the library is not actually importable
-    NoSource(ModuleName),
+    MissingSource(ModuleName),
     /// We have the source files, but do not have the stubs. In this case we should send
     /// a message to the user which will allow them to install the stubs for the package.
     /// The string will hold the name of the pip package that we will tell the user to install.
-    MissingStubs(ModuleName, Arc<String>),
+    UntypedImport(ModuleName, Arc<String>),
     /// This is the condition where we are using stubs but we do not have the source files
-    NoSourceForStubs(ModuleName),
+    MissingSourceForStubs(ModuleName),
 }
 
 impl FindError {
-    pub fn not_found(err: anyhow::Error, module: ModuleName) -> Self {
-        Self::NotFound(module, Arc::new(vec1![format!("{err:#}")]))
+    pub fn missing_import(err: anyhow::Error, module: ModuleName) -> Self {
+        Self::MissingImport(module, Arc::new(vec1![format!("{err:#}")]))
     }
 
     pub fn import_lookup_path(
@@ -60,6 +60,12 @@ impl FindError {
             ConfigSource::PythonToolMarker(p) | ConfigSource::Marker(p) => {
                 format!(
                     " (from default config for project root marked by `{}`)",
+                    p.display()
+                )
+            }
+            ConfigSource::FailedParse(p) => {
+                format!(
+                    " (from default config for `{}` which failed to parse)",
                     p.display()
                 )
             }
@@ -81,12 +87,12 @@ impl FindError {
             format!("Looked in these locations{config_suffix}:")
         }];
         explanation.extend(nonempty_paths);
-        FindError::NotFound(module, Arc::new(explanation))
+        FindError::MissingImport(module, Arc::new(explanation))
     }
 
     pub fn display(&self) -> (Option<Box<dyn Fn() -> ErrorContext + '_>>, Vec1<String>) {
         match self {
-            Self::NotFound(module, err) => {
+            Self::MissingImport(module, err) => {
                 let mut lines = (**err).clone();
                 // Compute suggestion lazily at display time, using global cache
                 if let Some(suggested) = suggest_stdlib_import(*module) {
@@ -98,20 +104,20 @@ impl FindError {
                 )
             }
             Self::Ignored => (None, vec1!["Ignored import".to_owned()]),
-            Self::NoSource(module) => (
+            Self::MissingSource(module) => (
                 None,
                 vec1![format!(
                     "Found stubs for `{module}`, but no source. This means it's likely not \
                     installed/unimportable."
                 )],
             ),
-            Self::NoSourceForStubs(module) => (
+            Self::MissingSourceForStubs(module) => (
                 None,
                 vec1![format!(
                     "Stubs for `{module}` are bundled with Pyrefly but the source files for the package are not found."
                 )],
             ),
-            Self::MissingStubs(source_package, stubs_package) => (
+            Self::UntypedImport(source_package, stubs_package) => (
                 Some(Box::new(|| ErrorContext::ImportNotTyped(*source_package))),
                 vec1![format!("Hint: install the `{stubs_package}` package")],
             ),
@@ -120,10 +126,10 @@ impl FindError {
 
     pub fn kind(&self) -> Option<ErrorKind> {
         match self {
-            Self::NotFound(..) => Some(ErrorKind::MissingImport),
-            Self::NoSource(..) => Some(ErrorKind::MissingSource),
-            Self::NoSourceForStubs(..) => Some(ErrorKind::MissingSourceForStubs),
-            Self::MissingStubs(..) => Some(ErrorKind::UntypedImport),
+            Self::MissingImport(..) => Some(ErrorKind::MissingImport),
+            Self::MissingSource(..) => Some(ErrorKind::MissingSource),
+            Self::MissingSourceForStubs(..) => Some(ErrorKind::MissingSourceForStubs),
+            Self::UntypedImport(..) => Some(ErrorKind::UntypedImport),
             Self::Ignored => None,
         }
     }

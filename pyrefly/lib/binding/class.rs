@@ -247,7 +247,10 @@ impl<'a> BindingsBuilder<'a> {
         let scoped_type_param_names = x
             .type_params
             .as_mut()
-            .map(|x| self.type_params(x))
+            .map(|tp| {
+                let owner = parent.owner_path(&self.module_info, x.name.id.as_str());
+                self.type_params_with_owner(tp, owner)
+            })
             .unwrap_or_default();
 
         let mut legacy = Some(LegacyTParamCollector::new(x.type_params.is_some()));
@@ -612,8 +615,8 @@ impl<'a> BindingsBuilder<'a> {
             // namedtuple('Point', [*Base._fields, 'z'])
             // Starred expressions can't be resolved statically, so mark
             // the namedtuple as having dynamic fields. We still extract
-            // any string literals we can see as known fields for
-            // autocomplete and type checking.
+            // any string literals or Final variable references we can see
+            // as known fields for autocomplete and type checking.
             [Expr::List(ExprList { elts, .. }) | Expr::Tuple(ExprTuple { elts, .. })]
                 if elts.iter().any(|elt| matches!(elt, Expr::Starred(_))) =>
             {
@@ -621,19 +624,30 @@ impl<'a> BindingsBuilder<'a> {
                 elts.iter()
                     .filter_map(|elt| match elt {
                         Expr::StringLiteral(s) => Some((s.value.to_string(), s.range(), None)),
+                        Expr::Name(n) => self
+                            .scopes
+                            .lookup_final_string_value(&n.id)
+                            .map(str::to_owned)
+                            .map(|value| (value, n.range(), None)),
                         _ => None,
                     })
                     .collect()
             }
-            // namedtuple('Point', ['x', 'y'])
+            // namedtuple('Point', ['x', 'y']) or namedtuple('Point', [X, Y]) with Final variables
             [Expr::List(ExprList { elts, .. })]
-                if matches!(elts.as_slice(), [Expr::StringLiteral(_), ..]) =>
+                if matches!(
+                    elts.as_slice(),
+                    [Expr::StringLiteral(_) | Expr::Name(_), ..]
+                ) =>
             {
                 self.extract_string_literals(elts)
             }
-            // namedtuple('Point', ('x', 'y'))
+            // namedtuple('Point', ('x', 'y')) or namedtuple('Point', (X, Y)) with Final variables
             [Expr::Tuple(ExprTuple { elts, .. })]
-                if matches!(elts.as_slice(), [Expr::StringLiteral(_), ..]) =>
+                if matches!(
+                    elts.as_slice(),
+                    [Expr::StringLiteral(_) | Expr::Name(_), ..]
+                ) =>
             {
                 self.extract_string_literals(elts)
             }
@@ -702,6 +716,22 @@ impl<'a> BindingsBuilder<'a> {
             .iter()
             .filter_map(|item| match item {
                 Expr::StringLiteral(x) => Some((x.value.to_string(), x.range(), None)),
+                Expr::Name(n) => {
+                    if let Some(value) = self
+                        .scopes
+                        .lookup_final_string_value(&n.id)
+                        .map(str::to_owned)
+                    {
+                        Some((value, n.range(), None))
+                    } else {
+                        self.error(
+                            item.range(),
+                            ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+                            "Expected a string literal".to_owned(),
+                        );
+                        None
+                    }
+                }
                 _ => {
                     self.error(
                         item.range(),
@@ -724,6 +754,22 @@ impl<'a> BindingsBuilder<'a> {
                 Expr::Tuple(ExprTuple { elts, .. }) => match elts.as_slice() {
                     [Expr::StringLiteral(k), v] => {
                         Some((k.value.to_string(), k.range(), Some(v.clone())))
+                    }
+                    [Expr::Name(n), v] => {
+                        if let Some(value) = self
+                            .scopes
+                            .lookup_final_string_value(&n.id)
+                            .map(str::to_owned)
+                        {
+                            Some((value, n.range(), Some(v.clone())))
+                        } else {
+                            self.error(
+                                n.range(),
+                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                "Expected first item to be a string literal".to_owned(),
+                            );
+                            None
+                        }
                     }
                     [k, _] => {
                         self.error(
@@ -982,7 +1028,7 @@ impl<'a> BindingsBuilder<'a> {
     ) {
         let class_name = Ast::expr_name_identifier(name.clone());
         let (mut class_object, class_indices) = self.class_object_and_indices(&class_name);
-        self.check_functional_definition_name(&name.id, arg_name);
+        self.check_functional_definition_name(&name.id, arg_name, ErrorKind::NameMismatch);
         self.ensure_expr(func, class_object.usage());
         self.ensure_expr(arg_name, class_object.usage());
         for arg in &mut *members {
@@ -1257,7 +1303,7 @@ impl<'a> BindingsBuilder<'a> {
         let (mut class_object, class_indices) = self.class_object_and_indices(&class_name);
         self.ensure_expr(func, class_object.usage());
         self.ensure_expr(new_type_name, class_object.usage());
-        self.check_functional_definition_name(&name.id, new_type_name);
+        self.check_functional_definition_name(&name.id, new_type_name, ErrorKind::InvalidArgument);
         self.ensure_type(base, &mut None);
         self.synthesize_class_def(
             class_name,
@@ -1287,7 +1333,7 @@ impl<'a> BindingsBuilder<'a> {
         let class_name = Ast::expr_name_identifier(name.clone());
         let (mut class_object, class_indices) = self.class_object_and_indices(&class_name);
         self.ensure_expr(func, class_object.usage());
-        self.check_functional_definition_name(&name.id, arg_name);
+        self.check_functional_definition_name(&name.id, arg_name, ErrorKind::NameMismatch);
         let mut base_class_keywords = Vec::new();
         for kw in keywords {
             self.ensure_expr(&mut kw.value, class_object.usage());
@@ -1373,19 +1419,24 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     // Check that the variable name in a functional class definition matches the first argument string
-    pub fn check_functional_definition_name(&mut self, name: &Name, arg: &Expr) {
+    pub fn check_functional_definition_name(
+        &mut self,
+        name: &Name,
+        arg: &Expr,
+        error_kind: ErrorKind,
+    ) {
         if let Expr::StringLiteral(x) = arg {
             if x.value.to_str() != name.as_str() {
                 self.error(
                     arg.range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorInfo::Kind(error_kind),
                     format!("Expected string literal \"{name}\""),
                 );
             }
         } else {
             self.error(
                 arg.range(),
-                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                ErrorInfo::Kind(error_kind),
                 format!("Expected string literal \"{name}\""),
             );
         }

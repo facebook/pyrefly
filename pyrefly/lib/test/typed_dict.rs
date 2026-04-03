@@ -97,6 +97,62 @@ class Coord(TypedDict, object):  # E: Typed dictionary definitions may only exte
 );
 
 testcase!(
+    test_typeddict_dataclass_rejected,
+    r#"
+from dataclasses import dataclass
+import dataclasses
+from typing import TypedDict
+
+class Good(TypedDict):
+    x: int
+
+@dataclass
+class Bad1(TypedDict):  # E: Cannot apply `@dataclass` to TypedDict `Bad1`
+    x: int
+
+@dataclasses.dataclass
+class Bad2(TypedDict):  # E: Cannot apply `@dataclass` to TypedDict `Bad2`
+    x: int
+
+@dataclass()
+class Bad3(TypedDict):  # E: Cannot apply `@dataclass` to TypedDict `Bad3`
+    x: int
+"#,
+);
+
+testcase!(
+    test_typeddict_dataclass_transform_not_rejected,
+    r#"
+from typing import TypedDict, dataclass_transform
+
+@dataclass_transform()
+def my_transform(cls):
+    return cls
+
+@my_transform
+class TD(TypedDict):
+    x: int
+"#,
+);
+
+testcase!(
+    test_typeddict_child_of_rejected_dataclass_base,
+    r#"
+from dataclasses import dataclass
+from typing import TypedDict
+
+@dataclass
+class Bad(TypedDict):  # E: Cannot apply `@dataclass` to TypedDict `Bad`
+    x: int
+
+class Child(Bad):
+    y: int
+
+c: Child = {"x": 1, "y": 2}
+"#,
+);
+
+testcase!(
     test_typed_dict_literal,
     r#"
 from typing import TypedDict, NotRequired

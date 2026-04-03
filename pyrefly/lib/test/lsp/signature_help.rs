@@ -955,12 +955,12 @@ Test(a="", )
 8 | Test()
          ^
 Signature Help Result: active=0
-- (cls: type[Test], a: str, b: int) -> Test, parameters=[a: str, b: int], active parameter = 0
+- (_cls: type[Test], a: str, b: int) -> Test, parameters=[a: str, b: int], active parameter = 0
 
 10 | Test(a="", )
                 ^
 Signature Help Result: active=0
-- (cls: type[Test], a: str, b: int) -> Test, parameters=[a: str, b: int], active parameter = 1
+- (_cls: type[Test], a: str, b: int) -> Test, parameters=[a: str, b: int], active parameter = 1
 "#
         .trim(),
         report.trim(),

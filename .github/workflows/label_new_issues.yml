@@ -34,6 +34,12 @@ jobs:
               labels.push('google');
             }
 
+            // Quansight
+            const quansightMembers = ['MarcoGorelli', 'jorenham'];
+            if (quansightMembers.includes(author)) {
+              labels.push('quansight');
+            }
+
             // False positive reports
             if (text.includes('false-positive') || text.includes('false positive')) {
               labels.push('typechecking');
@@ -54,7 +60,7 @@ jobs:
             }
 
             // Language server issues
-            if (text.includes('hover') || text.includes('editor') || text.includes('lspconfig') || text.includes('completion') || text.includes('highlight') || text.includes('semantic')) {
+            if (text.includes('inlay hint') || text.includes('hover') || text.includes('editor') || text.includes('lspconfig') || text.includes('completion') || text.includes('highlight') || text.includes('semantic')) {
               labels.push('language-server');
             }
 

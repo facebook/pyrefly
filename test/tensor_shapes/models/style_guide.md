@@ -1,24 +1,26 @@
 # Tensor Shape Annotation Style Guide
 
 A practical guide to adding tensor shape annotations to PyTorch models using
-pyrefly's type system. All patterns are drawn from
-[12 ported TorchBenchmark models](models/).
+pyrefly's type system. Patterns and methodology drawn from
+[21 ported TorchBenchmark models](models/).
 
 ---
 
 ## Table of Contents
 
 1. [Getting Started](#1-getting-started)
-2. [Generics: Batch and Sequence Dimensions](#2-generics-batch-and-sequence-dimensions)
-3. [Class-Level Type Parameters](#3-class-level-type-parameters)
-4. [Algebraic Expressions and Shape Transforms](#4-algebraic-expressions-and-shape-transforms)
-5. [Linear Pipeline](#5-linear-pipeline)
-6. [Homogeneous Layer Stacking](#6-homogeneous-layer-stacking-transformers)
-7. [Encoder-Decoder with Skip Connections](#7-encoder-decoder-with-skip-connections)
-8. [Recursive Chains with Exponential Shapes](#8-recursive-chains-with-exponential-shapes)
-9. [Config Classes](#9-config-classes)
-10. [Techniques Reference](#10-techniques-reference)
-11. [Smoke Tests](#11-smoke-tests)
+2. [How to Approach Typing a Model](#2-how-to-approach-typing-a-model)
+3. [What Should Work (and what to do when it doesn't)](#3-what-should-work)
+4. [What Won't Work (Yet)](#4-what-wont-work-yet)
+5. [Generics: Batch and Sequence Dimensions](#5-generics-batch-and-sequence-dimensions)
+6. [Class-Level Type Parameters](#6-class-level-type-parameters)
+7. [Linear Pipeline](#7-linear-pipeline)
+8. [Homogeneous Layer Stacking](#8-homogeneous-layer-stacking-transformers)
+9. [Encoder-Decoder with Skip Connections](#9-encoder-decoder-with-skip-connections)
+10. [Recursive Chains with Exponential Shapes](#10-recursive-chains-with-exponential-shapes)
+11. [Config Classes](#11-config-classes)
+12. [Techniques Reference](#12-techniques-reference)
+13. [Smoke Tests](#13-smoke-tests)
 
 ---
 
@@ -80,7 +82,238 @@ permanent regression guard.
 
 ---
 
-## 2. Generics: Batch and Sequence Dimensions
+## 2. How to Approach Typing a Model
+
+### Step 1: Identify the degrees of freedom
+
+Read the model and list the **independent** dimensions — batch size, sequence
+length, channel counts, spatial sizes, number of heads, etc. Each independent
+dimension gets exactly one type parameter. Two rules:
+
+- **If two dims are always equal, use one param.** For example, if the image
+  encoder's output channels always equal the mask decoder's transformer dim,
+  use a single `D` — not separate `OutC` and `PromptD`.
+- **If one dim is derived from another, express the relation.** Head dimension
+  is `D // NHead`, not an independent `HeadDim`. Mask spatial is `4 * ES`, not
+  an independent `MH`. Window count is `IS // WS`, not `NWindows`.
+
+```python
+# Bad: too many independent params, hides the relation
+class Attention[D, NHead, HeadDim](nn.Module): ...
+
+# Good: HeadDim is derived
+class Attention[D, NHead](nn.Module):
+    def __init__(self, dim: Dim[D], num_heads: Dim[NHead]) -> None:
+        self.head_dim = dim // num_heads  # Dim[D // NHead]
+```
+
+### Step 2: Type the constructor
+
+Constructor params that set dimensions become `Dim[...]`. This binds class
+type parameters. Sub-modules constructed with these Dims automatically get
+typed — Conv2d, Linear, LSTM, etc. stubs capture channel/feature dims.
+
+```python
+class PromptEncoder[D, ES, MIC](nn.Module):
+    def __init__(self, embed_dim: Dim[D], emb_size: Dim[ES],
+                 mask_in_chans: Dim[MIC]) -> None:
+        self.mask_conv1 = nn.Conv2d(1, mask_in_chans // 4, kernel_size=2, stride=2)
+        # Conv2d captures MIC//4 as output channels
+```
+
+### Step 3: Type the forward signature
+
+Use class params (fixed at construction) for architecture dims and method
+params (vary per call) for batch/sequence/spatial dims:
+
+```python
+def forward[B, N, M](
+    self,
+    points: tuple[Tensor[B, N, 2], Tensor[B, N]] | None,
+    boxes: Tensor[B, M, 4] | None,
+    masks: Tensor[B, 1, 4 * ES, 4 * ES] | None,
+) -> tuple[Tensor, Tensor[B, D, ES, ES]]:
+```
+
+Then verify intermediates with `assert_type` at key checkpoints — after
+reshapes, matmuls, conv chains, and branch joins.
+
+### Binding order matters
+
+When type vars appear in derived positions (`Tensor[B, QH * QW, KH * KW]`),
+put bare `Dim[X]` params BEFORE tensor params so the checker binds them first:
+
+```python
+# Good: dims-first, derived expressions in tensors
+def add_decomposed_rel_pos[B, QH, QW, KH, KW, HD](
+    q_h: Dim[QH], q_w: Dim[QW], k_h: Dim[KH], k_w: Dim[KW],
+    attn: Tensor[B, QH * QW, KH * KW],
+    q: Tensor[B, QH * QW, HD],
+    rel_pos_h: Tensor[RPH, HD],
+    rel_pos_w: Tensor[RPW, HD],
+) -> Tensor[B, QH * QW, KH * KW]: ...
+
+# Bad: checker can't infer QH from QH*QW in a tensor param
+def add_decomposed_rel_pos[B, QH, QW, ...](
+    attn: Tensor[B, QH * QW, KH * KW], ...
+) -> ...: ...
+```
+
+---
+
+## 3. What Should Work (and what to do when it doesn't)
+
+### Shape-preserving and shape-transforming ops are tracked
+
+The type system tracks shapes through nearly all standard PyTorch operations:
+
+- **Identity ops** (stubs with `Self` return): `.float()`, `.contiguous()`,
+  `.detach()`, `.clone()`, `.type_as()`, `.to()`
+- **Shape-preserving** (stubs with `Tensor[*S] → Tensor[*S]`): `F.relu`,
+  `F.gelu`, `F.dropout`, `F.softmax`, `nn.LayerNorm`, `nn.BatchNorm`,
+  `torch.sigmoid`, `torch.tanh`
+- **Parameterized transforms** (stubs capture constructor args): `nn.Linear`,
+  `nn.Conv2d`, `nn.Embedding`, `nn.LSTM`
+- **Computed shapes** (DSL functions): `reshape`/`view` (with `-1` inference),
+  `flatten`, `permute`, `transpose`, `cat`, `stack`, `expand`, `repeat`,
+  `matmul`, `torch.arange`, `torch.zeros`, `torch.outer`, `F.interpolate`
+- **Special handlers**: `nn.Sequential` chaining, `.shape` attribute,
+  `.size()`, tuple slicing, star unpacking
+
+**If an op appears to lose shapes, it is almost certainly a bug or a missing
+stub — not a fundamental limitation.** Check the DSL registry
+(`tensor_ops_registry.rs`) and fixture stubs before concluding anything is
+untracked.
+
+### When shapes are lost, trace upstream
+
+The op that appears to lose shapes is often not the problem. Trace back to
+find where shape info was actually lost:
+
+- **`int` where `Dim` is needed.** If a function takes `size: int` but the
+  caller passes a runtime value, shapes enter as unrefined. Fix: change to
+  `size: Dim[S]`. Example: `start_pos: int` → `start_pos: Dim[SP] | None`.
+
+- **`list[...]` where `tuple[...]` is needed.** List literals homogenize
+  element types. `torch.cat([a, b])` loses per-tensor shapes;
+  `torch.cat((a, b))` preserves them.
+
+- **Branch join widening.** Two branches produce different tensor types →
+  the checker widens at the join. Fix: restructure to compute independently
+  in each branch, or use Optional narrowing.
+
+  ```python
+  # Bad: branch join widens keys/values
+  if cached:
+      keys = cache[:b, :sp+t]   # Tensor[B, SP+T, ...]
+  else:
+      keys = xk                  # Tensor[B, T, ...]
+  # keys is now Tensor | Tensor[...] — widened
+
+  # Good: compute output in each branch independently
+  if cached:
+      keys = cache[:b, :sp+t]
+      output = matmul(softmax(xq @ keys.T), values)
+  else:
+      output = matmul(softmax(xq @ xk.T), xv)
+  # output is Tensor[B, NHead, T, HeadDim] in both branches
+  ```
+
+- **Inlined expressions lose shapes.** `f(g(x))` sometimes loses shapes
+  that `y = g(x); f(y)` preserves. If you see unexpected bare `Tensor`
+  from a composed call, break it into separate assignments.
+
+- **`super()` on generic base classes.** `super().method()` may not
+  propagate type params. If the base class is typed, the inherited method
+  should already have the right return type — avoid unnecessary overrides.
+
+### Genuinely unknowable shapes are rare
+
+Most things that look data-dependent aren't:
+
+- Boolean masks (`x != 0`) **preserve** shape — the mask has the same shape
+  as the input. Operations on it (`.float()`, `*`, `torch.sum`) are tracked.
+- Autoregressive loops have typed **elements** (`Tensor[B, 80]`) even if the
+  list length is unknown. `torch.stack(mel_outputs, dim=2)` tracks.
+- Window partition counts (`B * (H // WS) * (W // WS)`) are **computable**
+  from the spatial dims and window size.
+- `Embedding.weight` **is typed** (`Tensor[V, D]`). If shapes are lost
+  downstream, the blocker is elsewhere.
+
+Genuinely unknowable shapes (bare `Tensor` with comment):
+- Data-dependent token counts: conditional `torch.cat` accumulation where the
+  number of tokens depends on which prompts are provided.
+- Stop-token-controlled sequence length where the LENGTH itself is unknown
+  (but individual elements at each step are typed).
+
+### Annotation fallback vs `type: ignore`
+
+- **Annotation fallback**: the checker can't produce the type, but the RHS is
+  compatible (e.g., unrefined → typed). No error, no `type: ignore` needed.
+  ```python
+  dense: Tensor[B, D, ES, ES] = self.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(bs, -1, h, w)
+  ```
+
+- **`type: ignore`**: the checker produces a WRONG type (algebraic gap). Last
+  resort. Always include a comment explaining the specific gap.
+  ```python
+  return out  # type: ignore[bad-return]  # A1: 4*(S//4) ≠ S
+  ```
+
+- **Never use bare `Tensor` when you know the shape.** If you know it's
+  `Tensor[B, D, H, W]`, annotate it. Bare `Tensor` is only for genuinely
+  unknowable shapes.
+
+---
+
+## 4. What Won't Work (Yet)
+
+### A1: `N * (X // N) = X`
+
+Floor division loses the remainder, so `N * (X // N)` only equals `X` when
+`X` is divisible by `N`. The checker can't assume this. Affects:
+- BiLSTM output: `2 * (D // 2)` — use `type: ignore`
+- Multi-head reassembly: `NHead * (D // NHead)` — use `type: ignore`
+- Encoder-decoder round-trip: `4 * (S // 4)` — use `type: ignore`
+
+Note: `(a * b) // b → a` IS simplified (sound for all positive integers).
+Only the reverse direction is unsound.
+
+### Default values for Dim params
+
+`Literal[0]` is not assignable to `Dim[SP]`. Use `Optional` instead:
+
+```python
+# Won't work:
+def forward[SP](self, start_pos: Dim[SP] = 0): ...
+
+# Works:
+def forward[SP](self, start_pos: Dim[SP] | None = None): ...
+```
+
+### ModuleList erases type params
+
+When blocks with different type param values are stored in a list, the list
+type must use `Any` for varying params. After iterating, re-annotate:
+
+```python
+layers: list[ViTBlock[D, Any, Any, Any, Any]] = [...]
+for blk in self.blocks:
+    h = blk(h)
+# Re-annotate after loop — ModuleList iteration erases type params
+h_out: Tensor[B, PS, PS, D] = h  # type: ignore[bad-assignment]
+```
+
+### `setattr`/`getattr` with dynamic strings
+
+The checker can't resolve attribute names computed at runtime:
+```python
+model: nn.Sequential = getattr(self, "layer" + str(i))  # type: ignore[assignment]
+```
+
+---
+
+## 5. Generics: Batch and Sequence Dimensions
 
 ### Method-level type parameters
 
@@ -107,7 +340,7 @@ def forward[B, T](self, x: Tensor[B, T, 512]) -> Tensor[B, T, 512]:
 
 ---
 
-## 3. Class-Level Type Parameters
+## 6. Class-Level Type Parameters
 
 ### Connecting constructor args to forward signatures
 
@@ -134,7 +367,7 @@ signature resolves to `Tensor[B, 3, H, W] -> Tensor[B, 64, H, W]`.
 
 ---
 
-## 4. Algebraic Expressions and Shape Transforms
+## Algebraic Expressions and Shape Transforms
 
 ### Arithmetic in annotations
 
@@ -174,15 +407,19 @@ and parameters. The type checker tracks these automatically:
 - **PixelShuffle**: `nn.PixelShuffle(r)` maps `(B, C*r², H, W)` to
   `(B, C, H*r, W*r)`.
 - **Flatten**: `nn.Flatten(1)` collapses dims 1..end into a product.
-- **LSTM**: output shape depends on `hidden_size` and `num_directions`.
+- **LSTM**: output shape depends on `hidden_size` and `bidirectional`.
+  The DSL computes `nd = 2 if bidirectional else 1` and tracks output
+  as `Tensor[B, T, hidden_size * nd]`.
+- **Distributions**: `Normal`, `TransformedDistribution` are generic over
+  `*EventShape`. `rsample()` and `log_prob()` preserve event shape.
 
-When an operation's output shape can't be statically determined (e.g.,
-tensor-as-index, complex broadcasting), the result is an unrefined `Tensor`
-without shape parameters.
+When an operation's output shape can't be statically determined, the result
+is an unrefined `Tensor`. But this is rare — see
+[Section 3](#3-what-should-work) for how to diagnose and fix.
 
 ---
 
-## 5. Linear Pipeline
+## 7. Linear Pipeline
 
 Modules called in sequence with known shapes. The simplest architecture pattern.
 
@@ -236,7 +473,7 @@ checker catches it immediately.
 
 ---
 
-## 6. Homogeneous Layer Stacking (Transformers)
+## 8. Homogeneous Layer Stacking (Transformers)
 
 When every layer has the same type, use `nn.ModuleList[LayerType]` and iterate:
 
@@ -289,7 +526,7 @@ forward signature, and `nn.Sequential` chains them correctly.
 
 ---
 
-## 7. Encoder-Decoder with Skip Connections
+## 9. Encoder-Decoder with Skip Connections
 
 Encoder-decoder architectures (UNet, Demucs, Super SloMo) encode the input to
 a bottleneck and then decode back, with skip connections between corresponding
@@ -362,7 +599,7 @@ Keep these to an absolute minimum and document each one.
 
 ---
 
-## 8. Recursive Chains with Exponential Shapes
+## 10. Recursive Chains with Exponential Shapes
 
 When each stage doubles or halves a dimension, the result after `I` stages
 involves `2**I`. Use `@overload` to separate the base case from the recursive
@@ -423,7 +660,7 @@ def forward[B](self, input: Tensor[B, 100, 1, 1]) -> Tensor[B, 3, 64, 64]:
 
 ---
 
-## 9. Config Classes
+## 11. Config Classes
 
 ### `@dataclass` with type parameters
 
@@ -474,7 +711,7 @@ self.project = nn.ConvTranspose2d(DCGAN.nz, DCGAN.ngf * 8, 4, 1, 0)
 
 ---
 
-## 10. Techniques Reference
+## 12. Techniques Reference
 
 ### Variable renaming for shape changes
 
@@ -557,32 +794,21 @@ self.up_stages = nn.ModuleList(stages)
 stage: GenUpStage[C] = self.up_stages[idx]
 ```
 
-### Shapeless fallback
+### Tracing shape loss
 
-Some operations return unrefined `Tensor` (without shape parameters). Known
-cases:
+When a result appears unrefined, don't annotate it as bare `Tensor` and move
+on. Instead, trace upstream to find where shapes were actually lost. See
+[Section 3](#3-what-should-work) for the full diagnostic approach. Common
+fixes:
 
-- **Symbolic slice on concrete buffer**: `self.pe[:, :length]` where `pe` is a
-  precomputed buffer with concrete shape and `length` is symbolic
-  (speech_transformer `PositionalEncoding`)
-- **Tensor-as-index**: `t[ind]` where `ind` is a tensor used as an index
-  (super_slomo coefficient interpolation)
-- **Complex broadcasting**: operations combining tensors with shapes that
-  require runtime broadcasting resolution (demucs `upsample`)
-
-When you encounter a shapeless result, annotate the return type as `Tensor`
-and add a comment:
-
-```python
-def forward[B, T](self, input: Tensor[B, T, DModel]) -> Tensor:
-    """Returns shapeless Tensor: symbolic slice on concrete buffer."""
-    length = input.size(1)
-    return self.pe[:, :length]
-```
+- Change `int` to `Dim[X]` so shapes enter the function typed
+- Use `tuple(...)` instead of `list[...]` for `torch.cat` arguments
+- Break inlined expressions into separate assignments
+- Fix the stub if an op returns bare `Tensor` when it shouldn't
 
 ---
 
-## 11. Smoke Tests
+## 13. Smoke Tests
 
 Every model file ends with `test_*` functions that exercise the model at
 concrete dimensions:
@@ -632,9 +858,17 @@ def test_gan_pipeline():
 
 | Pattern | Models | Key concept |
 |---------|--------|-------------|
-| Linear Pipeline | [learning_to_paint](models/learning_to_paint.py), [soft_actor_critic](models/soft_actor_critic.py) | Sequential layers, `assert_type` checkpoints |
-| Homogeneous Stacking | [nanogpt](models/nanogpt.py), [gptfast](models/gptfast.py), [speech_transformer](models/speech_transformer.py) | `ModuleList` iteration, shape-preserving loops |
-| Encoder-Decoder Skip | [unet](models/unet.py), [super_slomo](models/super_slomo.py), [demucs](models/demucs.py) | Recursive `encode`-`decode`, `list[Stage[Any]]` narrowing |
+| Linear Pipeline | [learning_to_paint](models/learning_to_paint.py), [soft_actor_critic](models/soft_actor_critic.py), [deeprecommender](models/deeprecommender.py) | Sequential layers, `assert_type` checkpoints |
+| Homogeneous Stacking | [nanogpt](models/nanogpt.py), [gptfast](models/gptfast.py), [speech_transformer](models/speech_transformer.py), [llama](models/llama.py) | `ModuleList` iteration, shape-preserving loops |
+| Encoder-Decoder Skip | [unet](models/unet.py), [super_slomo](models/super_slomo.py), [demucs](models/demucs.py), [stargan](models/stargan.py) | Recursive `encode`-`decode`, generic spatial dim `S` |
 | Recursive Exponential | [dcgan](models/dcgan.py), [resnet](models/resnet.py), [densenet](models/densenet.py) | `@overload` base/recursive, `2**I` expressions |
-| Config Classes | [nanogpt](models/nanogpt.py), [gptfast](models/gptfast.py), [dcgan](models/dcgan.py) | `@dataclass` type params, `Final` constants |
+| Config Classes | [nanogpt](models/nanogpt.py), [gptfast](models/gptfast.py), [dcgan](models/dcgan.py), [llama](models/llama.py) | `@dataclass` type params, `Final` constants |
 | ShapePreservingActivation | [resnet](models/resnet.py) | Union of activation types as callable |
+| Multi-Head Attention | [llama](models/llama.py), [sam](models/sam.py) | Reshape+transpose multi-head, `D // NHead`, RoPE |
+| KV Cache | [llama](models/llama.py) | Optional `start_pos`, typed cache, branch-per-path |
+| Windowed Attention | [sam](models/sam.py) | Window partition/unpartition with `Dim[WS]`, generic `H, W` on attention |
+| Typed Distributions | [drq](models/drq.py) | `Distribution[*EventShape]`, `SquashedNormal` |
+| Variadic Batch | [tacotron2](models/tacotron2.py) | `forward[*Bs]` for any-batch-shape support |
+| Autoregressive Loop | [tacotron2](models/tacotron2.py) | `list[Tensor[B, 80]]` + `torch.stack`, typed elements |
+| Dims-First Params | [sam](models/sam.py) | Bind bare `Dim[X]` before derived `Tensor[..., X*Y, ...]` |
+| Conv Chain Formulas | [sam](models/sam.py), [background_matting](models/background_matting.py), [stargan](models/stargan.py) | `4*ES → 2*ES → ES`, `(S-16)//16+1` through Conv2d/ConvTranspose2d |

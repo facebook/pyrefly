@@ -353,7 +353,6 @@ impl CallArgPreEval<'_> {
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        callee_range: Option<TextRange>,
     ) -> Option<Type> {
         let tcc = &|| {
             TypeCheckContext::of_kind(if vararg {
@@ -362,7 +361,6 @@ impl CallArgPreEval<'_> {
                 TypeCheckKind::CallArgument(param_name.cloned(), callable_name.cloned())
             })
             .with_context(context.map(|ctx| ctx()))
-            .with_callee_annotation(callee_range)
         };
         match self {
             Self::Type(ty, done) => {
@@ -576,7 +574,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         // If Some, records parameter-name → argument-type bindings (for meta-shape inference).
         bound_args: &mut Option<HashMap<String, Type>>,
-        callee_range: Option<TextRange>,
     ) -> HashMap<TextRange, Type> {
         fn record(bound: &mut Option<HashMap<String, Type>>, name: &Name, ty: Type) {
             if let Some(map) = bound.as_mut() {
@@ -624,7 +621,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Returns `Err(q)` when the Var resolved to a quantified ParamSpec `q`
         // (forwarding case), meaning the caller should validate that the
         // remaining args are `*P.args` / `**P.kwargs` and stop matching.
-        let var_to_rparams = |var| -> Result<Vec<&Param>, Quantified> {
+        let var_to_rparams = |var| -> Result<Vec<&Param>, Box<Quantified>> {
             let ps = match self.solver().force_var(var) {
                 Type::ParamSpecValue(ps) => ps,
                 Type::Any(_) | Type::Ellipsis => ParamList::everything(),
@@ -637,7 +634,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // one generic helper forwarding `*args: P.args, **kwargs: P.kwargs`
                 // to another). There are no concrete parameters to contribute;
                 // the caller must validate the forwarding pattern.
-                Type::Quantified(q) if q.is_param_spec() => return Err(*q),
+                Type::Quantified(q) if q.is_param_spec() => return Err(q),
                 t => {
                     error(
                         call_errors,
@@ -719,7 +716,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             arg_errors,
                             call_errors,
                             context,
-                            callee_range,
                         );
                         if let Some(name) = name
                             && let Some(ty) = arg_ty
@@ -755,7 +751,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             arg_errors,
                             call_errors,
                             context,
-                            callee_range,
                         );
                         if bound_args.is_some() {
                             if let Some(name) = name {
@@ -867,9 +862,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
             };
+            // The args side (unpacked_args_ty) is always a tuple built from call
+            // arguments, e.g., tuple[*Cs] or tuple[int, str]. The param side
+            // (unpacked_param_ty) is the raw Ts from stripping * off the type
+            // annotation *Ts. Wrap it in a tuple so both sides have the same
+            // structure: tuple[*Cs] ⊆ tuple[*Ts] or tuple[int, str] ⊆ tuple[*Ts].
+            let unpacked_param_tuple =
+                self.heap
+                    .mk_unpacked_tuple(Vec::new(), unpacked_param_ty.clone(), Vec::new());
             self.check_type(
                 &unpacked_args_ty,
-                unpacked_param_ty,
+                &unpacked_param_tuple,
                 arguments_range,
                 arg_errors,
                 &|| {
@@ -879,7 +882,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         callable_name.cloned(),
                     ))
                     .with_context(context.map(|ctx| ctx()))
-                    .with_callee_annotation(callee_range)
                 },
             );
         }
@@ -1007,7 +1009,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         callable_name.cloned(),
                                     ))
                                     .with_context(context.map(|ctx| ctx()))
-                                    .with_callee_annotation(callee_range)
                                 });
                             }
                         }
@@ -1033,7 +1034,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                                     ),
                                                 )
                                                 .with_context(context.map(|ctx| ctx()))
-                                                .with_callee_annotation(callee_range)
                                             },
                                         );
                                     };
@@ -1097,7 +1097,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             )
                         })
                         .with_context(context.map(|ctx| ctx()))
-                        .with_callee_annotation(callee_range)
                     };
                     let arg_ty = match kw.value {
                         TypeOrExpr::Expr(x) => self.expr_with_separate_check_errors(
@@ -1175,7 +1174,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             callable_name.cloned(),
                         ))
                         .with_context(context.map(|ctx| ctx()))
-                        .with_callee_annotation(callee_range)
                     });
                 }
             }
@@ -1234,7 +1232,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         mut ctor_targs: Option<&mut TArgs>,
-        callee_range: Option<TextRange>,
     ) -> (
         Type,
         Vec<TypeVarSpecializationError>,
@@ -1321,7 +1318,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 call_errors,
                 context,
                 &mut bound_args,
-                callee_range,
             ),
             Params::Ellipsis | Params::Materialization => {
                 // Deal with Callable[..., R]
@@ -1346,7 +1342,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         call_errors,
                         context,
                         &mut bound_args,
-                        callee_range,
                     ),
                     // This can happen with a signature like `(f: Callable[P, None], *args: P.args, **kwargs: P.kwargs)`.
                     // Before we match an argument to `f`, we don't know what `P` is, so we don't have an answer for the Var yet.
@@ -1363,7 +1358,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         call_errors,
                         context,
                         &mut bound_args,
-                        callee_range,
                     ),
                     Type::Quantified(q) => {
                         if let Some((args, keywords)) = self.paramspec_forwarding(
@@ -1389,7 +1383,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 call_errors,
                                 context,
                                 &mut bound_args,
-                                callee_range,
                             )
                         } else {
                             HashMap::new()

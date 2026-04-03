@@ -21,6 +21,7 @@ use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::types::BoundMethod;
+use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::TParamsSource;
 use pyrefly_types::types::Union;
@@ -439,6 +440,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorators: &[Idx<KeyDecorator>],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
         module_style: ModuleStyle,
+        outer_funcs: Option<Name>,
         errors: &ErrorCollector,
     ) -> Arc<UndecoratedFunction> {
         let defining_cls = class_key.and_then(|k| self.get_idx(*k).0.dupe());
@@ -542,6 +544,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             defining_cls.clone(),
             &def.name.id,
             Some(def_index),
+            outer_funcs,
         );
         let metadata = FuncMetadata { kind, flags };
 
@@ -646,6 +649,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
+        // When self/cls has an explicit TypeVar annotation, using Self anywhere in the signature
+        // (return type or other parameters) is invalid because the TypeVar and Self create
+        // conflicting type parameterization.
+        // For classmethods, the annotation is `type[TFoo]`, so we also unwrap `Type::Type(...)`.
+        if has_implicit_self_or_cls_param
+            && !def.metadata.flags.is_staticmethod
+            && let Some(first_param) = def.params.first()
+            && {
+                let ty = first_param.as_type();
+                ty.is_explicit_type_variable()
+                    || matches!(ty, Type::Type(inner) if inner.is_explicit_type_variable())
+            }
+        {
+            let signature_contains_self = contains_self_type(&ret)
+                || def
+                    .params
+                    .iter()
+                    .skip(1)
+                    .any(|p| contains_self_type(p.as_type()));
+            if signature_contains_self {
+                self.error(
+                    errors,
+                    stmt.name.range,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    format!(
+                        "`Self` cannot be used when `{}` has an explicit TypeVar annotation",
+                        first_param.name().map_or("self", |n| n.as_str())
+                    ),
+                );
+            }
+        }
+
         let callable = if let Some(q) = &def.paramspec {
             Callable::concatenate(
                 def.params
@@ -664,7 +699,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         if let Some(cls) = &def.defining_cls {
             if stmt.name.id == dunder::INIT {
-                self.validate_init_self_annotation(cls.name(), &callable, def.id_range(), errors);
+                self.validate_init_self_annotation(cls, &callable, def.id_range(), errors);
             } else if is_dunder_new {
                 self.validate_new_cls_annotation(cls, &callable, def.id_range(), errors);
             }
@@ -1937,12 +1972,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Bind a bound method by stripping its first (self/cls) parameter and optionally
+    /// instantiating type variables.
     pub fn bind_boundmethod(
         &self,
         m: &BoundMethod,
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> Option<Type> {
-        self.bind_function(&m.func.clone().as_type(), &m.obj, false, is_subset)
+        self.bind_bound_method_type(&m.func, &m.obj, false, is_subset)
     }
 
     pub fn bind_dunder_new(&self, t: &Type, cls: ClassType) -> Option<Type> {
@@ -1968,22 +2005,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)
     }
 
-    /// If this is an unbound callable (i.e., a callable that is not BoundMethod), strip the first parameter.
-    /// If it is generic, we use the bound object to instantiate type variables in the first argument.
-    ///
-    /// If `skip_instantiation` is true, skip type variable instantiation (used for converting
-    /// constructors to callables, where type variables should be inferred at the call site).
-    fn bind_function(
+    /// Strip the first parameter from a BoundMethodType and optionally instantiate
+    /// type variables. This is the shared implementation for `bind_boundmethod` and
+    /// `bind_function` (for the Function/Forall<Function>/Overload arms they share).
+    fn bind_bound_method_type(
         &self,
-        t: &Type,
+        func: &BoundMethodType,
         obj: &Type,
         skip_instantiation: bool,
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> Option<Type> {
         let mut owner = Owner::new();
-        match t {
-            Type::Forall(forall) => match &forall.body {
-                Forallable::Callable(c) => c.split_first_param(&mut owner).map(|(param, c)| {
+        match func {
+            BoundMethodType::Function(func) => {
+                func.signature.split_first_param(&mut owner).map(|(_, c)| {
+                    self.heap.mk_function(Function {
+                        signature: c,
+                        metadata: func.metadata.clone(),
+                    })
+                })
+            }
+            BoundMethodType::Forall(forall) => forall
+                .body
+                .signature
+                .split_first_param(&mut owner)
+                .map(|(param, c)| {
                     let c = if skip_instantiation {
                         c
                     } else {
@@ -1991,43 +2037,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     };
                     self.heap.mk_forall(Forall {
                         tparams: forall.tparams.clone(),
-                        body: Forallable::Callable(c),
+                        body: Forallable::Function(Function {
+                            signature: c,
+                            metadata: forall.body.metadata.clone(),
+                        }),
                     })
                 }),
-                Forallable::Function(f) => {
-                    f.signature.split_first_param(&mut owner).map(|(param, c)| {
-                        let c = if skip_instantiation {
-                            c
-                        } else {
-                            self.instantiate_callable_self(
-                                &forall.tparams,
-                                obj,
-                                param,
-                                c,
-                                is_subset,
-                            )
-                        };
-                        self.heap.mk_forall(Forall {
-                            tparams: forall.tparams.clone(),
-                            body: Forallable::Function(Function {
-                                signature: c,
-                                metadata: f.metadata.clone(),
-                            }),
-                        })
-                    })
-                }
-                Forallable::TypeAlias(_) => None,
-            },
-            Type::Callable(callable) => callable
-                .split_first_param(&mut owner)
-                .map(|(_, c)| self.heap.mk_callable_from(c)),
-            Type::Function(func) => func.signature.split_first_param(&mut owner).map(|(_, c)| {
-                self.heap.mk_function(Function {
-                    signature: c,
-                    metadata: func.metadata.clone(),
-                })
-            }),
-            Type::Overload(overload) => overload
+            BoundMethodType::Overload(overload) => overload
                 .signatures
                 .try_mapped_ref(|x| match x {
                     OverloadType::Function(f) => f
@@ -2073,6 +2089,63 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         metadata: overload.metadata.clone(),
                     })
                 }),
+        }
+    }
+
+    /// If this is an unbound callable (i.e., a callable that is not BoundMethod), strip the first parameter.
+    /// If it is generic, we use the bound object to instantiate type variables in the first argument.
+    ///
+    /// If `skip_instantiation` is true, skip type variable instantiation (used for converting
+    /// constructors to callables, where type variables should be inferred at the call site).
+    fn bind_function(
+        &self,
+        t: &Type,
+        obj: &Type,
+        skip_instantiation: bool,
+        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
+    ) -> Option<Type> {
+        let mut owner = Owner::new();
+        match t {
+            // Callable variants have no BoundMethodType equivalent, handle inline.
+            Type::Forall(forall) => match &forall.body {
+                Forallable::Callable(c) => c.split_first_param(&mut owner).map(|(param, c)| {
+                    let c = if skip_instantiation {
+                        c
+                    } else {
+                        self.instantiate_callable_self(&forall.tparams, obj, param, c, is_subset)
+                    };
+                    self.heap.mk_forall(Forall {
+                        tparams: forall.tparams.clone(),
+                        body: Forallable::Callable(c),
+                    })
+                }),
+                Forallable::Function(f) => self.bind_bound_method_type(
+                    &BoundMethodType::Forall(Forall {
+                        tparams: forall.tparams.clone(),
+                        body: f.clone(),
+                    }),
+                    obj,
+                    skip_instantiation,
+                    is_subset,
+                ),
+                Forallable::TypeAlias(_) => None,
+            },
+            Type::Callable(callable) => callable
+                .split_first_param(&mut owner)
+                .map(|(_, c)| self.heap.mk_callable_from(c)),
+            // Function/Overload variants delegate to the shared implementation.
+            Type::Function(func) => self.bind_bound_method_type(
+                &BoundMethodType::Function((**func).clone()),
+                obj,
+                skip_instantiation,
+                is_subset,
+            ),
+            Type::Overload(overload) => self.bind_bound_method_type(
+                &BoundMethodType::Overload(overload.clone()),
+                obj,
+                skip_instantiation,
+                is_subset,
+            ),
             _ => None,
         }
     }
@@ -2095,28 +2168,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Ensure that self annotation does not contain class-scoped type variables.
+    /// Validate the self annotation on `__init__`.
     /// Per spec: https://typing.python.org/en/latest/spec/constructors.html#init-method
-    /// "Class-scoped type variables should not be used in the self annotation"
+    /// - The self type must be the defining class or a superclass of it.
+    /// - Class-scoped type variables should not be used in the self annotation.
     fn validate_init_self_annotation(
         &self,
-        cls_name: &Name,
+        cls: &Class,
         callable: &Callable,
         range: TextRange,
         errors: &ErrorCollector,
     ) {
         if let Params::List(param_list) = &callable.params
-            && let Some(Param::Pos(_, self_ty, _)) = param_list.items().first()
+            && let Some(Param::PosOnly(_, self_ty, _) | Param::Pos(_, self_ty, _)) =
+                param_list.items().first()
             && let Type::ClassType(cls_ty) = self_ty
-            && cls_ty.name() == cls_name
         {
+            let cls_name = cls.name();
+            // The self type must be the defining class itself or a superclass of it.
+            if !self.type_order().has_superclass(cls, cls_ty.class_object()) {
+                errors.add(
+                    range,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    vec1![format!(
+                        "`__init__` method self type `{}` is not a superclass of class `{cls_name}`",
+                        self.for_display(self_ty.clone()),
+                    )],
+                );
+                return;
+            }
             let tparams_names = cls_ty.tparams().iter().collect::<SmallSet<_>>();
             let mut class_scoped_tvars = SmallSet::new();
             for (_, ty) in cls_ty.targs().iter_paired() {
                 ty.collect_quantifieds(&mut class_scoped_tvars);
             }
             class_scoped_tvars.retain(|q| tparams_names.contains(q));
-            if !class_scoped_tvars.is_empty() {
+            // FIXME: We're supressing invalid type variables errors for all
+            // interfaces here, because they are used in a few places in
+            // typeshed stdlib (with pyright-ignore lines).
+            if !class_scoped_tvars.is_empty() && !errors.module().path().is_interface() {
                 let targs = class_scoped_tvars
                     .iter()
                     .map(|q| format!("`{}`", q.name()))
@@ -2144,7 +2234,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         if let Params::List(param_list) = &callable.params
-            && let Some(Param::Pos(_, cls_ty, _)) = param_list.items().first()
+            && let Some(Param::PosOnly(_, cls_ty, _) | Param::Pos(_, cls_ty, _)) =
+                param_list.items().first()
         {
             let cls_name = cls.name();
             match cls_ty {

@@ -1204,7 +1204,7 @@ Test()
      ^
 ```python
 (method) __init__: def __init__(
-    cls: type[Test],
+    _cls: type[Test],
     a: str,
     b: int
 ) -> Test: ...
@@ -1405,7 +1405,7 @@ f(x=1.0)
 }
 
 /// When `check_unannotated_defs = false`, hover should still work inside
-/// unannotated function bodies so IDE features remain functional.
+/// unannotated function bodies because they are analyzed for IDE features.
 #[test]
 fn hover_works_in_unannotated_function_with_skip_check() {
     let code = r#"
@@ -1416,15 +1416,22 @@ def unannotated():
 "#;
     let mut test_env = TestEnv::new_skip_check_no_infer();
     test_env.add("main", code);
-    let (state, handle_fn) = test_env
-        .with_default_require_level(Require::Exports)
-        .to_state();
+    let (state, handle_fn) = test_env.to_state();
     let handle = handle_fn("main");
     let cursors = extract_cursors_for_test(code);
     assert_eq!(cursors.len(), 1);
     let result = get_hover(&state.transaction(), &handle, cursors[0], true);
-    assert!(
-        result.is_none(),
-        "Expected no hover result for variable inside unannotated function body when check is skipped"
-    );
+    match result {
+        Some(Hover {
+            contents: HoverContents::Markup(markup),
+            ..
+        }) => {
+            assert!(
+                markup.value.contains("x"),
+                "Expected hover to show variable `x`, got: {}",
+                markup.value
+            );
+        }
+        _ => panic!("Expected hover result for variable inside unannotated function body"),
+    }
 }

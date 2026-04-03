@@ -13,6 +13,7 @@ use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
@@ -34,11 +35,11 @@ use crate::error::error::Error;
 use crate::error::expectation::Expectation;
 use crate::state::load::Load;
 
-/// Extracts `(start_line, end_line)` ranges for all multi-line string
-/// literals from the AST, including f-strings, t-strings, regular strings,
-/// and byte strings. Single-line literals (where start == end) are excluded.
-/// The returned list is sorted by start_line.
-pub fn sorted_multi_line_fstring_ranges(
+/// Extracts `(start_line, end_line)` ranges for all multi-line strings from
+/// the AST, including plain strings, byte strings, f-strings, and t-strings.
+/// Single-line strings (where start == end) are excluded. The returned list
+/// is sorted by start_line.
+pub fn sorted_multi_line_string_ranges(
     ast: &ModModule,
     module: &Module,
 ) -> Vec<(LineNumber, LineNumber)> {
@@ -64,6 +65,63 @@ pub fn sorted_multi_line_fstring_ranges(
     ranges
 }
 
+/// Finds contiguous backslash continuation blocks in the source lines.
+/// A block starts at the first line ending with `\` and ends at the first
+/// subsequent line that does NOT end with `\` (inclusive — that line is the
+/// last line of the continued expression). Returns sorted, non-overlapping
+/// `(start, end)` ranges using 1-indexed `LineNumber`.
+///
+/// Comments are stripped before checking for trailing backslashes, so
+/// `x = 1  # comment \` is not treated as a continuation. Lines inside
+/// multiline strings are also excluded, since `\` at end of line inside a
+/// triple-quoted string is string content, not a line continuation.
+pub fn sorted_backslash_continuation_ranges(
+    lines: &[&str],
+    multiline_string_ranges: &[(LineNumber, LineNumber)],
+) -> Vec<(LineNumber, LineNumber)> {
+    /// Returns true if the code portion of `line` (ignoring comments) ends
+    /// with a backslash continuation character.
+    fn is_continuation(line: &str) -> bool {
+        let code = match find_comment_start_in_line(line) {
+            Some(pos) => &line[..pos],
+            None => line,
+        };
+        code.trim_end().ends_with('\\')
+    }
+
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let line_num = LineNumber::from_zero_indexed(i as u32);
+        if find_containing_range(multiline_string_ranges, line_num).is_some() {
+            i += 1;
+        } else if is_continuation(lines[i]) {
+            let start = i;
+            while i < lines.len()
+                && is_continuation(lines[i])
+                && find_containing_range(
+                    multiline_string_ranges,
+                    LineNumber::from_zero_indexed(i as u32),
+                )
+                .is_none()
+            {
+                i += 1;
+            }
+            // Include the first line that doesn't end with \ (the tail of
+            // the continued expression), if it exists.
+            let end = if i < lines.len() { i } else { i - 1 };
+            ranges.push((
+                LineNumber::from_zero_indexed(start as u32),
+                LineNumber::from_zero_indexed(end as u32),
+            ));
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    ranges
+}
+
 /// Binary search over sorted f-string ranges to find the range containing `line`.
 pub fn find_containing_range(
     ranges: &[(LineNumber, LineNumber)],
@@ -81,27 +139,38 @@ pub fn find_containing_range(
     }
 }
 
+/// Per-module multi-line ranges and ignore-all directives, computed after parsing.
+#[derive(Debug)]
+pub struct ModuleRanges {
+    /// Multi-line string and backslash-continuation ranges.
+    pub multi_line: Vec<(LineNumber, LineNumber)>,
+    /// Top-level ignore-all directives (e.g. `# pyrefly: ignore-errors`).
+    pub ignore_all: SmallMap<Tool, LineNumber>,
+}
+
 /// The errors from a collection of modules.
 #[derive(Debug)]
 pub struct Errors {
     // Sorted by module name and path (so deterministic display order)
-    loads: Vec<(Arc<Load>, ArcId<ConfigFile>, Vec<(LineNumber, LineNumber)>)>,
+    loads: Vec<(Arc<Load>, ArcId<ConfigFile>, ModuleRanges)>,
 }
 
 impl Errors {
-    pub fn new(
-        mut loads: Vec<(Arc<Load>, ArcId<ConfigFile>, Vec<(LineNumber, LineNumber)>)>,
-    ) -> Self {
+    pub fn new(mut loads: Vec<(Arc<Load>, ArcId<ConfigFile>, ModuleRanges)>) -> Self {
         loads.sort_by_key(|x| (x.0.module_info.name(), x.0.module_info.path().dupe()));
         Self { loads }
     }
 
     pub fn collect_errors(&self) -> CollectedErrors {
         let mut errors = CollectedErrors::default();
-        for (load, config, fstring_ranges) in &self.loads {
+        for (load, config, ranges) in &self.loads {
             let error_config = config.get_error_config(load.module_info.path().as_path());
-            load.errors
-                .collect_into(&error_config, fstring_ranges, &mut errors);
+            load.errors.collect_into(
+                &error_config,
+                &ranges.multi_line,
+                &ranges.ignore_all,
+                &mut errors,
+            );
         }
         errors
     }
@@ -158,7 +227,7 @@ impl Errors {
         let fstring_ranges_by_module: SmallMap<&ModulePath, &[(LineNumber, LineNumber)]> = self
             .loads
             .iter()
-            .map(|(load, _, ranges)| (load.module_info.path(), ranges.as_slice()))
+            .map(|(load, _, ranges)| (load.module_info.path(), ranges.multi_line.as_slice()))
             .collect();
 
         let enabled_ignores_by_module: SmallMap<&ModulePath, SmallSet<Tool>> = self
@@ -353,11 +422,15 @@ impl Errors {
     }
 
     pub fn check_against_expectations(&self) -> anyhow::Result<()> {
-        for (load, config, fstring_ranges) in &self.loads {
+        for (load, config, ranges) in &self.loads {
             let error_config = config.get_error_config(load.module_info.path().as_path());
             let mut result = CollectedErrors::default();
-            load.errors
-                .collect_into(&error_config, fstring_ranges, &mut result);
+            load.errors.collect_into(
+                &error_config,
+                &ranges.multi_line,
+                &ranges.ignore_all,
+                &mut result,
+            );
             let mut output_errors = result.ordinary;
             output_errors.extend(result.directives);
             output_errors.sort_by_key(|e| (e.range().start(), e.range().end()));
@@ -532,5 +605,53 @@ def g() -> str:
         let collected = errors.collect_errors();
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 2);
+    }
+
+    #[test]
+    fn test_backslash_continuation_ranges_ignores_comment_backslash() {
+        use pyrefly_util::lined_buffer::LineNumber;
+
+        use super::sorted_backslash_continuation_ranges;
+
+        let no_strings = vec![];
+
+        // A trailing backslash inside a comment should NOT trigger continuation.
+        let lines = vec!["x = 1  # comment \\", "y = 2"];
+        let ranges = sorted_backslash_continuation_ranges(&lines, &no_strings);
+        assert!(
+            ranges.is_empty(),
+            "comment backslash should not be a continuation"
+        );
+
+        // A real continuation should still be detected.
+        let lines = vec!["x = 1 + \\", "    2"];
+        let ranges = sorted_backslash_continuation_ranges(&lines, &no_strings);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].0, LineNumber::from_zero_indexed(0));
+        assert_eq!(ranges[0].1, LineNumber::from_zero_indexed(1));
+    }
+
+    #[test]
+    fn test_backslash_continuation_ranges_ignores_multiline_strings() {
+        use pyrefly_util::lined_buffer::LineNumber;
+
+        use super::sorted_backslash_continuation_ranges;
+
+        // A backslash at end of line inside a triple-quoted string should
+        // NOT be detected as a continuation.
+        let lines = vec![
+            "x = \"\"\"\\", // line 0: start of triple-quoted string with \
+            "hello\\",      // line 1: inside string with \
+            "\"\"\"",       // line 2: end of string
+        ];
+        let string_ranges = vec![(
+            LineNumber::from_zero_indexed(0),
+            LineNumber::from_zero_indexed(2),
+        )];
+        let ranges = sorted_backslash_continuation_ranges(&lines, &string_ranges);
+        assert!(
+            ranges.is_empty(),
+            "backslash inside multiline string should not be a continuation"
+        );
     }
 }

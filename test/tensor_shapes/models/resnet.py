@@ -1,7 +1,10 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
+# Portions (c) Meta Platforms, Inc. and affiliates.
 #
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
+# This source code is adapted from pytorch/benchmark (TorchBenchmark),
+# which is licensed under the BSD 3-Clause License:
+# https://github.com/pytorch/benchmark/blob/main/LICENSE
+#
+# This adaptation adds tensor shape type annotations for pyrefly.
 
 """
 Phlippe ResNet from TorchBenchmark with shape annotations.

@@ -7,6 +7,7 @@
 
 use std::io::Write;
 use std::sync::Arc;
+use std::time::Instant;
 
 use clap::Parser;
 use pyrefly_util::telemetry::Telemetry;
@@ -71,6 +72,7 @@ pub fn run_tsp(
             Arc::new(NoExternalProvider),
             wrapper,
             thread_count,
+            Instant::now(),
         );
 
         // Reuse the existing lsp_loop but with TSP initialization

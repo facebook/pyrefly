@@ -1,9 +1,9 @@
 {
   "total": 139,
-  "pass": 124,
-  "fail": 15,
-  "pass_rate": 0.89,
-  "differences": 62,
+  "pass": 126,
+  "fail": 13,
+  "pass_rate": 0.91,
+  "differences": 34,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -61,6 +61,7 @@
     "generics_defaults_referential.py",
     "generics_defaults_specialization.py",
     "generics_paramspec_basic.py",
+    "generics_paramspec_components.py",
     "generics_paramspec_semantics.py",
     "generics_paramspec_specialization.py",
     "generics_self_advanced.py",
@@ -106,6 +107,7 @@
     "protocols_subtyping.py",
     "protocols_variance.py",
     "qualifiers_annotated.py",
+    "qualifiers_final_annotation.py",
     "qualifiers_final_decorator.py",
     "specialtypes_any.py",
     "specialtypes_never.py",
@@ -138,14 +140,12 @@
     "dataclasses_descriptors.py": 6,
     "exceptions_context_managers.py": 2,
     "generics_basic.py": 1,
-    "generics_paramspec_components.py": 1,
     "generics_scoping.py": 4,
     "generics_self_basic.py": 2,
-    "generics_self_usage.py": 2,
+    "generics_self_usage.py": 1,
     "generics_typevartuple_basic.py": 1,
     "protocols_modules.py": 1,
-    "qualifiers_final_annotation.py": 3,
-    "typeforms_typeform.py": 27
+    "typeforms_typeform.py": 4
   },
   "comment": "@generated"
 }

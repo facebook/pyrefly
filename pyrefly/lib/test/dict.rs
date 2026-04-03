@@ -80,3 +80,17 @@ def f(k: str | None):
     assert_type(v, int | None)
     "#,
 );
+
+testcase!(
+    test_dict_get_return,
+    r#"
+from typing import Any
+def f(outcomes: list[Any]) -> dict[str, int]:
+    ret = {noun: int(count) for (count, noun) in outcomes}
+    to_plural = {
+        "warning": "warnings",
+        "error": "errors",
+    }
+    return {to_plural.get(k, k): v for k, v in ret.items()}
+"#,
+);

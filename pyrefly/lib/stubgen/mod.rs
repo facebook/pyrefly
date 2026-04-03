@@ -17,6 +17,7 @@ mod tests {
     use pyrefly_util::fs_anyhow;
     use pyrefly_util::globs::FilteredGlobs;
     use pyrefly_util::globs::Globs;
+    use pyrefly_util::globs::HiddenDirFilter;
     use pyrefly_util::includes::Includes;
 
     use super::emit::emit_stub;
@@ -44,7 +45,12 @@ mod tests {
         let mut t = TestEnv::new();
         t.add(&path.display().to_string(), input);
         let includes = Globs::new(vec![format!("{}/**/*", tdir.path().display())]).unwrap();
-        let f_globs = Box::new(FilteredGlobs::new(includes, Globs::empty(), None));
+        let f_globs = Box::new(FilteredGlobs::new(
+            includes,
+            Globs::empty(),
+            None,
+            HiddenDirFilter::Disabled,
+        ));
         let config_finder = t.config_finder();
 
         let expanded = config_finder.checkpoint(f_globs.files()).unwrap();

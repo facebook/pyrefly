@@ -674,21 +674,33 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 l_after.reverse();
                 u_after.reverse();
 
-                self.is_subset_eq(
-                    &self
-                        .solver
-                        .heap
-                        .mk_unpacked_tuple(l_before, l_middle.clone(), l_after),
-                    u_middle,
-                )?;
-                self.is_subset_eq(
-                    l_middle,
-                    &self
-                        .solver
-                        .heap
-                        .mk_unpacked_tuple(u_before, u_middle.clone(), u_after),
-                )?;
-                Ok(())
+                let has_l_extras = !l_before.is_empty() || !l_after.is_empty();
+                let has_u_extras = !u_before.is_empty() || !u_after.is_empty();
+
+                match (has_l_extras, has_u_extras) {
+                    // No extras: just compare middles directly.
+                    (false, false) => self.is_subset_eq(l_middle, u_middle),
+                    // Got has extras: fold into got side, bind want middle.
+                    // tuple[A, *Bs, C] <: tuple[*Qs] → tuple[A, *Bs, C] <: Qs
+                    (true, false) => self.is_subset_eq(
+                        &self
+                            .solver
+                            .heap
+                            .mk_unpacked_tuple(l_before, l_middle.clone(), l_after),
+                        u_middle,
+                    ),
+                    // Want has extras: fold into want side, bind got middle.
+                    // tuple[*Bs] <: tuple[P, *Qs, R] → Bs <: tuple[P, *Qs, R]
+                    (false, true) => self.is_subset_eq(
+                        l_middle,
+                        &self
+                            .solver
+                            .heap
+                            .mk_unpacked_tuple(u_before, u_middle.clone(), u_after),
+                    ),
+                    // Both have extras: cross-structural, can't reason about it.
+                    (true, true) => Err(SubsetError::Other),
+                }
             }
             // Resolve Vars inside Unbounded tuples and re-dispatch.
             (Tuple::Unbounded(box Type::Var(v)), Tuple::Concrete(_)) => {
@@ -1214,7 +1226,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (_, Type::Any(_)) => {
                 for var in got.collect_maybe_quantified_vars() {
                     // Variables in `got` now have `Any` as an upper bound.
-                    self.solver.add_upper_bound(var, want.clone());
+                    self.solver
+                        .add_upper_bound(var, want.clone(), &mut |got, want| {
+                            self.is_subset_eq(got, want).is_ok()
+                        });
                 }
                 Ok(())
             }
@@ -1677,6 +1692,34 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             ),
             // Annotated[T, ...] is not a class object; it cannot be assigned to type[T].
             (Type::Annotated(_, _), Type::Type(_)) => Err(SubsetError::Other),
+            // TypeForm covariance: TypeForm[S] <: TypeForm[T] when S <: T
+            (Type::TypeForm(l), Type::TypeForm(u)) => self.is_subset_eq(l, u),
+            // type[T] <: TypeForm[T] — class objects are valid type forms.
+            // Unpack is not a valid standalone type expression (PEP 747).
+            (Type::Type(l), Type::TypeForm(_)) if l.is_unpack() => Err(SubsetError::Other),
+            (Type::Type(l), Type::TypeForm(u)) => self.is_subset_eq(l, u),
+            // The class representation of Any is compatible with any TypeForm.
+            (Type::ClassDef(got), Type::TypeForm(_)) if got.has_toplevel_qname("typing", "Any") => {
+                Ok(())
+            }
+            // ClassDef <: TypeForm[T] — bare class names are valid type forms.
+            (Type::ClassDef(got), Type::TypeForm(want)) => {
+                self.is_subset_eq(&self.type_order.promote_silently(got), want)
+            }
+            // Annotated[T, meta] <: TypeForm[T]
+            (Type::Annotated(inner, _), Type::TypeForm(u)) => self.is_subset_eq(inner, u),
+            // None <: TypeForm[T] when None <: T — None is a valid type form (represents NoneType)
+            (Type::None, Type::TypeForm(u)) => self.is_subset_eq(&Type::None, u),
+            // TypeForm[T] is not a subtype of type[U]
+            (Type::TypeForm(_), Type::Type(_)) => Err(SubsetError::Other),
+            // TypeForm falls back to object for other subtype checks
+            (Type::TypeForm(_), _) => self.is_subset_eq(
+                &self
+                    .solver
+                    .heap
+                    .mk_class_type(self.type_order.stdlib().object().clone()),
+                want,
+            ),
             // Although the object created by a NewType call behaves like a class for type-checking
             // purposes, it isn't one at runtime, so don't allow it to match `type`.
             (Type::ClassDef(got), Type::Type(_)) if self.type_order.is_new_type(got) => {
@@ -1852,6 +1895,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 SubsetError::TypeCannotAcceptSpecialForms(SpecialForm::Callable),
             ),
             (Type::Type(l), Type::Type(u)) => self.is_subset_eq(l, u),
+            // type[A | B] <: X if type[A] <: X and type[B] <: X.
+            (Type::Type(box Type::Union(box Union { members, .. })), _) => {
+                all(members.iter(), |m| {
+                    self.is_subset_eq(&Type::type_form(m.clone()), want)
+                })
+            }
             (Type::Type(_), _) => self.is_subset_eq(
                 &self
                     .solver

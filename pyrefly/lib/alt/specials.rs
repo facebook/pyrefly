@@ -559,6 +559,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     arguments.len()
                 ),
             ),
+            SpecialForm::TypeForm if arguments.len() == 1 => {
+                let inner = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
+                self.heap.mk_type_form(self.heap.mk_typeform(inner))
+            }
+            SpecialForm::TypeForm => self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                format!(
+                    "`TypeForm` requires exactly one argument but got {}",
+                    arguments.len()
+                ),
+            ),
             SpecialForm::Annotated if arguments.len() > 1 => {
                 let inner = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
                 let metadata: Vec<Type> = arguments[1..]

@@ -524,38 +524,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             // If there are multiple overloads, use steps 4-6 here to select one:
             // https://typing.python.org/en/latest/spec/overload.html#overload-call-evaluation.
+            let spec_compliant = self.solver().spec_compliant_overloads;
             if matched_overloads.len() > 1 {
-                // Step 4:
-                // * (spec-compliant): if any arguments supply an unknown number of args and at least one overload
-                //   has a corresponding variadic parameter, eliminate overloads without this parameter, and
-                // * (non-spec-compliant): if a fixed number of positional or keyword arguments is supplied and at least one
-                //   overload does not have a corresponding variadic parameter, eliminate overloads with this parameter.
+                // Step 4: if any arguments supply an unknown number of args and at least one
+                // overload has a corresponding variadic parameter, eliminate overloads without
+                // this parameter.
                 let nargs_unknown = args.iter().any(|arg| match arg {
                     CallArg::Arg(_) => false,
                     CallArg::Star(val, _) => {
                         !matches!(val.infer(self, errors), Type::Tuple(Tuple::Concrete(_)))
                     }
                 });
-                let varargs_compatible = |o: &CalledOverload| {
-                    matches!(
-                        &o.func.1.signature.params, Params::List(params)
-                        if params.items().iter().any(|p| matches!(p, Param::VarArg(..))))
-                        == nargs_unknown
-                };
-                if matched_overloads.iter().any(varargs_compatible) {
-                    matched_overloads.retain(varargs_compatible);
+                if nargs_unknown {
+                    let has_varargs = |o: &CalledOverload| {
+                        matches!(
+                            &o.func.1.signature.params, Params::List(params)
+                            if params.items().iter().any(|p| matches!(p, Param::VarArg(..))))
+                    };
+                    if matched_overloads.iter().any(has_varargs) {
+                        matched_overloads.retain(has_varargs);
+                    }
                 }
                 let nkeywords_unknown = keywords.iter().any(|kw| {
                     kw.arg.is_none() && !matches!(kw.value.infer(self, errors), Type::TypedDict(_))
                 });
-                let kwargs_compatible = |o: &CalledOverload| {
-                    matches!(
+                if nkeywords_unknown {
+                    let has_kwargs = |o: &CalledOverload| {
+                        matches!(
                             &o.func.1.signature.params, Params::List(params)
                             if params.items().iter().any(|p| matches!(p, Param::Kwargs(..))))
-                        == nkeywords_unknown
-                };
-                if matched_overloads.iter().any(kwargs_compatible) {
-                    matched_overloads.retain(kwargs_compatible);
+                    };
+                    if matched_overloads.iter().any(has_kwargs) {
+                        matched_overloads.retain(has_kwargs);
+                    }
                 }
             }
             if matched_overloads.len() > 1 {
@@ -569,7 +570,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // ambiguity in overload selection. This matches pyright, mypy, and ty.
                 let owner = Owner::new();
                 let mut changed = false;
-                let has_multiple_param_types = |arg_range| {
+                let should_materialize = |arg_range| {
+                    if spec_compliant {
+                        return true;
+                    }
                     let mut param_types = matched_overloads
                         .iter()
                         .filter_map(|o| o.expected_types.get(&arg_range));
@@ -585,7 +589,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     false
                 };
                 let materialized_args = args.map(|arg| {
-                    let (materialized_arg, arg_changed) = if has_multiple_param_types(arg.range()) {
+                    let (materialized_arg, arg_changed) = if should_materialize(arg.range()) {
                         arg.materialize(self, errors, &owner)
                     } else {
                         (arg.clone(), false)
@@ -594,7 +598,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     materialized_arg
                 });
                 let materialized_keywords = keywords.map(|kw| {
-                    let (materialized_kw, kw_changed) = if has_multiple_param_types(kw.range()) {
+                    let (materialized_kw, kw_changed) = if should_materialize(kw.range()) {
                         kw.materialize(self, errors, &owner)
                     } else {
                         (kw.clone(), false)
@@ -629,41 +633,100 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let _ = matched_overloads.split_off(split_point);
                 }
             }
-            // Step 5, part 2: are all remaining return types equivalent to one another?
-            // If not, the call is ambiguous.
-            let mut matched_overloads = matched_overloads.into_iter();
-            let first_overload = matched_overloads.next().unwrap();
-            if matched_overloads.any(|o| !self.is_consistent(&first_overload.res, &o.res)) {
-                return (
+            let selected_overload = if spec_compliant {
+                self.disambiguate_overloads_spec_compliant(&matched_overloads)
+            } else {
+                self.disambiguate_overloads(&matched_overloads)
+            };
+            if let Some(idx) = selected_overload {
+                let overload = matched_overloads
+                    .into_iter()
+                    .nth(idx)
+                    .expect("Could not find selected overload");
+                // Now that we've selected an overload, use the hint to contextually type the arguments.
+                let contextual_overload = self.call_overload(
+                    &overload.func,
+                    metadata,
+                    self_obj,
+                    args,
+                    keywords,
+                    arguments_range,
+                    &self.error_collector(),
+                    hint,
+                    ctor_targs,
+                );
+                (
+                    if contextual_overload.call_errors.is_empty() {
+                        contextual_overload
+                    } else {
+                        overload
+                    },
+                    true,
+                )
+            } else {
+                // Ambiguous call, return Any. Arbitrarily use the first overload as the matched one.
+                let first_overload = matched_overloads
+                    .into_iter()
+                    .next()
+                    .expect("Expected at least one overload");
+                (
                     CalledOverload {
                         res: self.heap.mk_any_implicit(),
                         ..first_overload
                     },
                     true,
-                );
+                )
             }
-            // Step 6: if there are still multiple matches, pick the first one.
-            // Now that we've selected an overload, use the hint to contextually type the arguments.
-            let contextual_overload = self.call_overload(
-                &first_overload.func,
-                metadata,
-                self_obj,
-                args,
-                keywords,
-                arguments_range,
-                &self.error_collector(),
-                hint,
-                ctor_targs,
-            );
-            (
-                if contextual_overload.call_errors.is_empty() {
-                    contextual_overload
-                } else {
-                    first_overload
-                },
-                true,
-            )
         }
+    }
+
+    fn disambiguate_overloads_spec_compliant(
+        &self,
+        matched_overloads: &[CalledOverload],
+    ) -> Option<usize> {
+        // Step 5, part 2: are all remaining return types equivalent to one another?
+        // If not, the call is ambiguous.
+        let mut matched_overloads = matched_overloads.iter();
+        let first_overload = matched_overloads
+            .next()
+            .expect("Expected at least one overload");
+        if matched_overloads.any(|o| !self.is_equivalent(&first_overload.res, &o.res)) {
+            return None;
+        }
+        // Step 6: if there are still multiple matches, pick the first one.
+        Some(0)
+    }
+
+    fn disambiguate_overloads(&self, matched_overloads: &[CalledOverload]) -> Option<usize> {
+        // When a call to an overloaded function may match multiple overloads, the spec says to
+        // return Any when the return types are not all equivalent.
+        // However, neither mypy nor pyright fully follows this part of the spec, and many
+        // third-party libraries have come to rely on mypy and pyright's behavior. So we do the
+        // following for ecosystem compatibility:
+        //
+        // Step 6 (non-spec-compliant): does there exist a return type such that all
+        // materializations of every other return type are assignable to it? If so, use this
+        // return type. Else, return Any.
+        //
+        // We check materializations rather than assignability so that we end up with the most
+        // "general" return type. E.g., if the candidates are `A[None]` and `A[Any]`, we want
+        // to select `A[Any]`.
+        //
+        // First, find a candidate return type.
+        let mut candidate = 0;
+        for (i, o) in matched_overloads.iter().enumerate().skip(1) {
+            if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
+                candidate = i;
+            }
+        }
+        // We've already checked every return type after the candidate.
+        // Check every return type before the candidate.
+        for o in matched_overloads.iter().take(candidate) {
+            if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
+                return None;
+            }
+        }
+        Some(candidate)
     }
 
     fn call_overload(
@@ -702,8 +765,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None,
             hint,
             overload_ctor_targs.as_mut(),
-            // Overload errors get a "No matching overloads" message, so callee annotation is not useful here.
-            None,
         );
         if let Ok(errors) = Vec1::try_from_vec(specialization_errors) {
             self.add_specialization_errors(errors, arguments_range, &call_errors, None);

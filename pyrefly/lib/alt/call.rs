@@ -12,6 +12,7 @@ use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tensor_ops_registry::TensorOpsRegistry;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
@@ -1143,7 +1144,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 context,
                 hint,
                 ctor_targs,
-                callee_range,
             ),
             CallTarget::Callable(TargetWithTParams(tparams, callable)) => self.call_infer_inner(
                 callable,
@@ -1158,7 +1158,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 context,
                 hint,
                 ctor_targs,
-                callee_range,
             ),
             CallTarget::Function(TargetWithTParams(
                 tparams,
@@ -1179,7 +1178,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 context,
                 hint,
                 ctor_targs,
-                callee_range,
             ),
             CallTarget::FunctionOverload(overloads, metadata) => {
                 self.call_overloads(
@@ -1277,7 +1275,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
-        callee_range: Option<TextRange>,
     ) -> Type {
         // First try the call without the hint to see if it succeeds.
         let mut ctor_targs_no_hint = ctor_targs.as_ref().map(|x| (**x).clone());
@@ -1295,7 +1292,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             context,
             None,
             ctor_targs_no_hint.as_mut(),
-            callee_range,
         );
         // If the call succeeds, attempt contextual typing with the hint.
         let (chosen_ctor_targs, chosen_call_errors, chosen_res) =
@@ -1315,7 +1311,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     context,
                     hint,
                     ctor_targs_with_hint.as_mut(),
-                    callee_range,
                 );
                 if call_errors_with_hint.is_empty() {
                     (ctor_targs_with_hint, call_errors_with_hint, res_with_hint)
@@ -1416,6 +1411,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_class_def(classtype.class_object().dupe()),
                 self.heap.mk_class_type(classtype),
             ),
+            DescriptorBase::SelfInstance(classtype) => (
+                self.heap
+                    .mk_type_form(self.heap.mk_self_type(classtype.clone())),
+                self.heap.mk_self_type(classtype),
+            ),
             DescriptorBase::ClassDef(class_base) => {
                 (class_base.to_type(self.heap), self.heap.mk_none())
             }
@@ -1435,16 +1435,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn call_descriptor_setter(
         &self,
         setter_method: Type,
-        class_type: ClassType,
+        base: DescriptorBase,
         got: CallArg,
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Type {
-        // When a descriptor is set on an instance, it gets the instance `class_type` and the value `got` as arguments.
+        // When a descriptor is set on an instance, it gets the instance and the value `got` as arguments.
         // Descriptor setters cannot be called on a class (an attempt to assign will overwrite the
         // descriptor itself rather than call the setter).
-        let instance = self.heap.mk_class_type(class_type);
+        let instance = match base {
+            DescriptorBase::Instance(ct) => self.heap.mk_class_type(ct),
+            DescriptorBase::SelfInstance(ct) => self.heap.mk_self_type(ct),
+            DescriptorBase::ClassDef(_) => {
+                unreachable!("descriptor setter is never called on a class")
+            }
+        };
         let args = [CallArg::ty(&instance, range), got];
         let call_target = self.as_call_target_or_error(
             setter_method,
@@ -1662,6 +1668,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         x.func.range(),
                         x.arguments.range,
                         hint,
+                        errors,
+                    )
+                }
+                None if matches!(
+                    ty,
+                    Type::Type(box Type::SpecialForm(SpecialForm::TypeForm))
+                ) =>
+                {
+                    self.call_typeform(
+                        &x.arguments.args,
+                        &x.arguments.keywords,
+                        x.arguments.range,
                         errors,
                     )
                 }

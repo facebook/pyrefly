@@ -239,15 +239,16 @@ fn convert_literal(lit: &pyrefly_types::literal::Literal) -> TspType {
             })
         }
         other => {
-            let literal_value = match other {
-                Lit::Int(i) => Some(LiteralValue::Int(i.as_i64().unwrap_or(0) as i32)),
-                Lit::Bool(b) => Some(LiteralValue::Bool(*b)),
-                Lit::Str(s) => Some(LiteralValue::String(s.to_string())),
-                Lit::Bytes(_) | Lit::Enum(_) => None,
+            let (literal_value, class_name) = match other {
+                Lit::Int(i) => (
+                    Some(LiteralValue::Int(i.as_i64().unwrap_or(0) as i32)),
+                    "int",
+                ),
+                Lit::Bool(b) => (Some(LiteralValue::Bool(*b)), "bool"),
+                Lit::Str(s) => (Some(LiteralValue::String(s.to_string())), "str"),
+                Lit::Bytes(_) | Lit::Enum(_) => (None, ""),
             };
             if let Some(lv) = literal_value {
-                // Use a RegularDeclaration with no name so the client falls
-                // back to the display string (e.g. "Literal[1]").
                 let dummy_node = Node {
                     range: TspRange {
                         start: TspPosition {
@@ -264,11 +265,11 @@ fn convert_literal(lit: &pyrefly_types::literal::Literal) -> TspType {
                 TspType::Class(TspClassType {
                     declaration: Declaration::Regular(RegularDeclaration {
                         kind: DeclarationKind::Regular,
-                        category: DeclarationCategory::Variable,
-                        name: None,
+                        category: DeclarationCategory::Class,
+                        name: Some(class_name.to_owned()),
                         node: dummy_node,
                     }),
-                    flags: TypeFlags::INSTANCE,
+                    flags: TypeFlags::INSTANCE.with_literal(),
                     id: next_id(),
                     kind: TypeKind::Class,
                     literal_value: Some(lv),

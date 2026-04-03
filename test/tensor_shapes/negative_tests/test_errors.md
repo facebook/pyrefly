@@ -372,9 +372,7 @@ ERROR Argument `Dim[((A * B) // 2)]` is not assignable to parameter `x` with typ
   --> *test_symint_unification.py:40:17 (glob)
    |
 40 |     half_symint(expr)
-   |     ----------- ^^^^
-   |     |
-   |     function defined here
+   |                 ^^^^
    |
   Type variable cannot be inferred from a nested position
  INFO revealed type: Dim[N] [reveal-type]

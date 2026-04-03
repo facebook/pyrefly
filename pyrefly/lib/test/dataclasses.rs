@@ -24,6 +24,30 @@ assert_type(Data, type[Data])
 );
 
 testcase!(
+    test_enum_dataclass_rejected,
+    r#"
+from dataclasses import dataclass
+import dataclasses
+from enum import Enum
+
+class Good(Enum):
+    RED = 1
+
+@dataclass
+class Bad1(Enum):  # E: Cannot apply `@dataclass` to Enum `Bad1`
+    RED = 1
+
+@dataclasses.dataclass
+class Bad2(Enum):  # E: Cannot apply `@dataclass` to Enum `Bad2`
+    RED = 1
+
+@dataclass()
+class Bad3(Enum):  # E: Cannot apply `@dataclass` to Enum `Bad3`
+    RED = 1
+    "#,
+);
+
+testcase!(
     test_kw_only_sentinel_deep_inheritance,
     r#"
 from dataclasses import dataclass, KW_ONLY
@@ -1802,37 +1826,6 @@ dataclass(Coord)
 "#,
 );
 
-testcase!(
-    bug = "Should reject @dataclass applied to TypedDict subclass",
-    test_dataclass_on_typed_dict,
-    r#"
-from dataclasses import dataclass
-from typing import TypedDict
-
-class Config(TypedDict):
-    name: str
-
-@dataclass
-class BadConfig(TypedDict):
-    name: str
-"#,
-);
-
-// https://github.com/facebook/pyrefly/issues/2922
-testcase!(
-    bug = "Should reject @dataclass applied to Enum subclass",
-    test_dataclass_on_enum,
-    r#"
-from dataclasses import dataclass
-from enum import Enum
-
-class Color(Enum):
-    RED = 1
-
-dataclass(Color)
-"#,
-);
-
 // https://github.com/facebook/pyrefly/issues/2921
 testcase!(
     bug = "Should reject @dataclass applied to Protocol subclass",
@@ -1845,6 +1838,27 @@ class Printable(Protocol):
     def display(self) -> str: ...
 
 dataclass(Printable)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2921
+testcase!(
+    test_dataclass_decorator_on_protocol,
+    r#"
+from dataclasses import dataclass
+from typing import Protocol
+
+@dataclass
+class MyProto(Protocol):  # E: `@dataclass` cannot be applied to Protocol
+    x: int
+    def display(self) -> str: ...
+
+@dataclass
+class DC:
+    x: int
+
+class DC2(Protocol, DC):  # E: If `Protocol` is included as a base class, all other bases must be protocols
+    y: int
 "#,
 );
 

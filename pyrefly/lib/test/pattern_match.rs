@@ -813,7 +813,6 @@ def test_multi_match2(o1: object, o2: object) -> None:
 );
 
 testcase!(
-    bug = "OR patterns in match cases not recognized for exhaustiveness with attribute subject",
     test_exhaustive_enum_or_pattern_no_missing_return,
     r#"
 from enum import StrEnum
@@ -829,7 +828,7 @@ class Param:
     kind: ParamKind
     name: str
 
-    def key(self, index: int) -> int | str:  # E: missing an explicit `return`
+    def key(self, index: int) -> int | str:
         match self.kind:
             case ParamKind.POSITIONAL_ONLY:
                 return index
@@ -843,7 +842,6 @@ class Param:
 );
 
 testcase!(
-    bug = "alias capture leaks into other case branches without being flagged as uninitialized",
     test_match_alias_capture_uninitialized_in_other_branch,
     r#"
 def f(items: list[object]) -> None:
@@ -852,7 +850,69 @@ def f(items: list[object]) -> None:
             case str() as inner:
                 print(inner)
             case _:
-                print(inner)
+                print(inner)  # E: `inner` is uninitialized
+"#,
+);
+
+testcase!(
+    test_match_alias_does_not_leak,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+
+y: Color
+
+def describe(color: Color) -> str: # E: missing an explicit `return`
+    match color: # E: Missing cases: Color.GREEN
+        case Color.RED as y:
+            return "red"
+"#,
+);
+
+testcase!(
+    test_exhaustive_match_nested_facet_subject,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+
+class Inner:
+    color: Color
+
+class Outer:
+    inner: Inner
+
+def describe(o: Outer) -> str:
+    match o.inner.color:
+        case Color.RED:
+            return "red"
+        case Color.GREEN:
+            return "green"
+"#,
+);
+
+testcase!(
+    test_match_alias_no_leak_when_no_narrowing_subject,
+    r#"
+from enum import Enum
+from typing import reveal_type
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+
+def make_color() -> Color: ...
+
+def f(y: Color) -> None:
+    match make_color():
+        case Color.RED as y:
+            return
+    reveal_type(y)  # E: revealed type: Color
 "#,
 );
 
@@ -873,4 +933,62 @@ def test_multi_match_mapping2(o1: dict[str, Any], o2: object) -> None:
         case {"b": 1}, _: pass
         case {"c": 1}, _: pass
 "#,
+);
+
+testcase!(
+    test_match_tuple_subject_narrowing,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class A: ...
+@dataclass
+class B: ...
+
+def test(x: A | B, y: A | B):
+    match x, y:
+        case A(), B():
+            assert_type(x, A)
+            assert_type(y, B)
+    "#,
+);
+
+testcase!(
+    test_match_tuple_subject_narrowing_with_literal,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class A: ...
+@dataclass
+class B: ...
+
+def test(x: A | B, y: A | B):
+    match x, 1, y:
+        case A(), 1, B():
+            assert_type(x, A)
+            assert_type(y, B)
+    "#,
+);
+
+testcase!(
+    test_match_tuple_subject_narrowing_with_star,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class A: ...
+@dataclass
+class B: ...
+
+def test(w: A | B, x: A | B, y: A | B, z: A | B):
+    match w, x, y, z:
+        case A(), *rest, B():
+            assert_type(w, A)
+            assert_type(rest, list[A | B])
+            assert_type(z, B)
+    "#,
 );

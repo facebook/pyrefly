@@ -1698,6 +1698,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ => self.get_class_attribute(class, attr_name),
                 };
                 match attr {
+                    Some(
+                        no_access @ ClassAttribute::NoAccess(
+                            NoAccessReason::ClassUseOfInstanceAttribute(_),
+                        ),
+                    ) => {
+                        // Instance-only attributes from `__slots__` produce slot descriptors.
+                        // The order of precedence is: data descriptors > slot descriptors > non-descriptor attributes
+                        // All attributes on `type` like `__name__` are considered data descriptors, despite not being annotated as such.
+                        let metadata = self.get_metadata_for_class(class.class_object());
+                        let metaclass = metadata.metaclass(self.stdlib);
+                        let metaclass_attr =
+                            self.get_metaclass_attribute(class, metaclass, attr_name);
+                        match metaclass_attr {
+                            Some(meta_attr)
+                                if meta_attr.is_data_descriptor()
+                                    || metaclass.class_object().is_builtin("type") =>
+                            {
+                                acc.found_class_attribute(meta_attr, base)
+                            }
+                            _ => acc.found_class_attribute(no_access, base),
+                        }
+                    }
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None => {
                         // Classes are instances of their metaclass, which defaults to `builtins.type`.
@@ -2481,6 +2503,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
             | Type::Type(_)
+            | Type::TypeForm(_)
             | Type::Unpack(_)
             | Type::Concatenate(_, _)
             | Type::ParamSpecValue(_)

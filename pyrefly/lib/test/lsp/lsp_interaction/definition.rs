@@ -443,7 +443,7 @@ fn goto_type_def_on_custom_class_goes_to_class_definition() {
     // Expect to go to the Foo class definition (line 6, columns 6-9)
     interaction
         .client
-        .type_definition("custom_class_type_test.py", 8, 6)
+        .type_definition("custom_class_type_test.py", 9, 0)
         .expect_definition_response_from_root("custom_class_type_test.py", 6, 6, 6, 9)
         .unwrap();
 }

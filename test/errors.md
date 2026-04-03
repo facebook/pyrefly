@@ -79,9 +79,7 @@ ERROR Argument `float` is not assignable * (glob)
  --> */bad_call.py:2:3 (glob)
   |
 2 | f(0.0)
-  | - ^^^
-  | |
-  | function defined here
+  |   ^^^
   |
 [1]
 ```
@@ -95,9 +93,7 @@ ERROR Argument `Literal[0]` is not assignable * (glob)
  --> */bad_call.py:3:3 (glob)
   |
 3 | f(λ)
-  | - ^
-  | |
-  | function defined here
+  |   ^
   |
 [1]
 ```
@@ -111,7 +107,7 @@ $ mkdir $TMPDIR/compiled && touch $TMPDIR/compiled/a.pyc && \
 > $PYREFLY check $TMPDIR/compiled_import.py
 *ERROR `reveal_type` must be imported from `typing` for runtime usage* (glob)
 * (glob+)
-*INFO revealed type: tuple[Any, Module[compiled.b], Module[c], Any]* (glob)
+*INFO revealed type: tuple[Unknown, Module[compiled.b], Module[c], Unknown]* (glob)
 * (glob+)
 [1]
 ```

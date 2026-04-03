@@ -700,11 +700,12 @@ mod tests {
             Arc::new(String::new()),
         );
         let metadata = FuncMetadata {
-            kind: FunctionKind::Def(Box::new(FuncId {
+            kind: FunctionKind::Def(Arc::new(FuncId {
                 module,
                 cls: None,
                 name: Name::new(func_name),
                 def_index: None,
+                outer_funcs: None,
             })),
             flags: FuncFlags::default(),
         };

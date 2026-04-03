@@ -1,7 +1,10 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
+# Portions (c) Meta Platforms, Inc. and affiliates.
 #
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
+# This source code is adapted from pytorch/benchmark (TorchBenchmark),
+# which is licensed under the BSD 3-Clause License:
+# https://github.com/pytorch/benchmark/blob/main/LICENSE
+#
+# This adaptation adds tensor shape type annotations for pyrefly.
 
 """
 Demucs music source separation model from TorchBenchmark with shape annotations.
@@ -133,13 +136,12 @@ class BLSTM[Ch](nn.Module):
     Output: Tensor[B, Ch, T]
 
     Internally: permute → BiLSTM → Linear(2*Ch, Ch) → permute back.
-    Uses num_directions=2 (temporary workaround for bidirectional=True
-    not flowing through inject_module_attrs as literal bool).
+    Uses bidirectional=True: output is 2*dim, projected back to dim via Linear.
     """
 
     def __init__(self, dim: Dim[Ch]) -> None:
         super().__init__()
-        self.lstm = nn.LSTM(dim, dim, num_directions=2, batch_first=True)
+        self.lstm = nn.LSTM(dim, dim, bidirectional=True, batch_first=True)
         self.linear = nn.Linear(2 * dim, dim)
 
     def forward[B, T](self, x: Tensor[B, Ch, T]) -> Tensor[B, Ch, T]:

@@ -17,8 +17,10 @@
 use std::sync::LazyLock;
 
 use dupe::Dupe;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::uniques::Unique;
 use pyrefly_util::uniques::UniqueFactory;
+use ruff_python_ast::name::Name;
 
 use crate::callable::Callable;
 use crate::callable::Function;
@@ -144,7 +146,7 @@ impl TypeHeap {
     }
 
     /// Create a `Type::Union` with a display name.
-    pub fn mk_union_with_name(&self, members: Vec<Type>, display_name: Box<str>) -> Type {
+    pub fn mk_union_with_name(&self, members: Vec<Type>, display_name: (ModuleName, Name)) -> Type {
         Type::Union(Box::new(Union {
             members,
             display_name: Some(display_name),
@@ -169,6 +171,11 @@ impl TypeHeap {
     /// Create a `Type::Type` wrapping an inner type.
     pub fn mk_type(&self, inner: Type) -> Type {
         Type::Type(Box::new(inner))
+    }
+
+    /// Create a `Type::TypeForm` wrapping an inner type (PEP 747).
+    pub fn mk_typeform(&self, inner: Type) -> Type {
+        Type::TypeForm(Box::new(inner))
     }
 
     /// Create a `Type::Quantified` from a Quantified.

@@ -207,6 +207,16 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     strict_callable_subtyping: Option<bool>,
+    /// Whether to use spec-compliant overload evaluation semantics.
+    /// When false (the default), Pyrefly attempts to resolve ambiguous calls precisely.
+    /// When true, overload evaluation follows the typing spec exactly, falling back to `Any` more frequently.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    spec_compliant_overloads: Option<bool>,
 }
 
 impl ConfigOverrideArgs {
@@ -397,6 +407,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.strict_callable_subtyping {
             config.root.strict_callable_subtyping = Some(*x);
+        }
+        if let Some(x) = &self.spec_compliant_overloads {
+            config.root.spec_compliant_overloads = Some(*x);
         }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
             for error_kind in &self.error {

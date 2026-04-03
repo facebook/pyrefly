@@ -10,10 +10,12 @@ use std::mem;
 
 use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_python::ignore::Tool;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
 use crate::config::error::ErrorConfig;
@@ -210,14 +212,25 @@ impl ErrorCollector {
         self.errors.lock().len()
     }
 
-    /// Checks whether an error is suppressed, considering both the error's own
-    /// line and, if it falls inside a multi-line f/t-string, the f-string's
-    /// start and end lines.
+    /// Checks whether an error is suppressed, considering ignore-all directives,
+    /// per-line suppressions, and (for errors inside multi-line f/t-strings)
+    /// suppressions on the f-string's start or end lines.
     fn is_error_suppressed(
         err: &Error,
         fstring_ranges: &[(LineNumber, LineNumber)],
+        ignore_all: &SmallMap<Tool, LineNumber>,
         error_config: &ErrorConfig,
     ) -> bool {
+        // Check whole-file ignore-all directives first.
+        // UnusedIgnore errors cannot be suppressed to prevent infinite loops.
+        if err.error_kind() != ErrorKind::UnusedIgnore
+            && error_config
+                .enabled_ignores
+                .iter()
+                .any(|tool| ignore_all.contains_key(tool))
+        {
+            return true;
+        }
         if err.is_ignored(&error_config.enabled_ignores) {
             return true;
         }
@@ -242,6 +255,7 @@ impl ErrorCollector {
         &self,
         error_config: &ErrorConfig,
         fstring_ranges: &[(LineNumber, LineNumber)],
+        ignore_all: &SmallMap<Tool, LineNumber>,
         result: &mut CollectedErrors,
     ) {
         let mut errors = self.errors.lock();
@@ -257,7 +271,7 @@ impl ErrorCollector {
                     } else {
                         result.directives.push(err.with_severity(severity));
                     }
-                } else if Self::is_error_suppressed(err, fstring_ranges, error_config) {
+                } else if Self::is_error_suppressed(err, fstring_ranges, ignore_all, error_config) {
                     result.suppressed.push(err.clone());
                 } else {
                     match error_config.display_config.severity(err.error_kind()) {
@@ -273,7 +287,7 @@ impl ErrorCollector {
 
     pub fn collect(&self, error_config: &ErrorConfig) -> CollectedErrors {
         let mut result = CollectedErrors::default();
-        self.collect_into(error_config, &[], &mut result);
+        self.collect_into(error_config, &[], &SmallMap::new(), &mut result);
         result
     }
 }

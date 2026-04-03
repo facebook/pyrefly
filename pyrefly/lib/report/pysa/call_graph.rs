@@ -308,28 +308,28 @@ impl<Function: FunctionTrait> Target<Function> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Hash, PartialOrd, Ord)]
 pub struct PysaCallTarget<Function: FunctionTrait> {
-    pub(crate) target: Target<Function>,
+    pub target: Target<Function>,
     // `TrueWithClassReceiver` or `TrueWithObjectReceiver` if the call has an implicit receiver,
     // such as calling an instance or a class method.
     // For instance, `x.foo(0)` should be treated as `C.foo(x, 0)`. As another example, `C.foo(0)`
     // should be treated as `C.foo(C, 0)`.
     #[serde(skip_serializing_if = "ImplicitReceiver::is_false")]
-    pub(crate) implicit_receiver: ImplicitReceiver,
+    pub implicit_receiver: ImplicitReceiver,
     // True if this is an implicit call to the `__call__` method.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    pub(crate) implicit_dunder_call: bool,
+    pub implicit_dunder_call: bool,
     // The class of the receiver object at this call site, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) receiver_class: Option<ClassRef>,
+    pub receiver_class: Option<ClassRef>,
     // True if calling a class method.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    pub(crate) is_class_method: bool,
+    pub is_class_method: bool,
     // True if calling a static method.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    pub(crate) is_static_method: bool,
+    pub is_static_method: bool,
     // The return type of the call expression.
     #[serde(skip_serializing_if = "ScalarTypeProperties::is_none")]
-    pub(crate) return_type: ScalarTypeProperties,
+    pub return_type: ScalarTypeProperties,
 }
 
 impl<Function: FunctionTrait> PysaCallTarget<Function> {
@@ -551,10 +551,10 @@ impl MaybeResolved<Vec1<PysaCallTarget<FunctionRef>>> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HigherOrderParameter<Function: FunctionTrait> {
-    pub(crate) index: u32,
-    pub(crate) call_targets: Vec<PysaCallTarget<Function>>,
+    pub index: u32,
+    pub call_targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Unresolved::is_resolved")]
-    pub(crate) unresolved: Unresolved,
+    pub unresolved: Unresolved,
 }
 
 impl<Function: FunctionTrait> HigherOrderParameter<Function> {
@@ -592,15 +592,15 @@ impl<Function: FunctionTrait> HigherOrderParameter<Function> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CallCallees<Function: FunctionTrait> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) call_targets: Vec<PysaCallTarget<Function>>,
+    pub call_targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) init_targets: Vec<PysaCallTarget<Function>>,
+    pub init_targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) new_targets: Vec<PysaCallTarget<Function>>,
+    pub new_targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub(crate) higher_order_parameters: HashMap<u32, HigherOrderParameter<Function>>,
+    pub higher_order_parameters: HashMap<u32, HigherOrderParameter<Function>>,
     #[serde(skip_serializing_if = "Unresolved::is_resolved")]
-    pub(crate) unresolved: Unresolved,
+    pub unresolved: Unresolved,
 }
 
 impl<Function: FunctionTrait> CallCallees<Function> {
@@ -737,17 +737,17 @@ impl<Function: FunctionTrait> CallCallees<Function> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AttributeAccessCallees<Function: FunctionTrait> {
     /// When the attribute access is called, the callees it may resolve to
-    pub(crate) if_called: CallCallees<Function>,
+    pub if_called: CallCallees<Function>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) property_setters: Vec<PysaCallTarget<Function>>,
+    pub property_setters: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) property_getters: Vec<PysaCallTarget<Function>>,
+    pub property_getters: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) global_targets: Vec<GlobalVariableRef>,
+    pub global_targets: Vec<GlobalVariableRef>,
     /// True if that there is at least one case (i.e., execution flow) where this is a regular
     /// attribute access. For instance, if the object has type `Union[A, B]` where only `A` defines a property.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    pub(crate) is_attribute: bool,
+    pub is_attribute: bool,
 }
 
 impl<Function: FunctionTrait> AttributeAccessCallees<Function> {
@@ -812,10 +812,10 @@ impl<Function: FunctionTrait> AttributeAccessCallees<Function> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct IdentifierCallees<Function: FunctionTrait> {
     /// When the attribute access is called, the callees it may resolve to
-    pub(crate) if_called: CallCallees<Function>,
+    pub if_called: CallCallees<Function>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) global_targets: Vec<GlobalVariableRef>,
-    pub(crate) captured_variables: Vec<CapturedVariableRef<Function>>,
+    pub global_targets: Vec<GlobalVariableRef>,
+    pub captured_variables: Vec<CapturedVariableRef<Function>>,
 }
 
 impl<Function: FunctionTrait> IdentifierCallees<Function> {
@@ -867,7 +867,7 @@ impl<Function: FunctionTrait> IdentifierCallees<Function> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DefineCallees<Function: FunctionTrait> {
-    pub(crate) define_targets: Vec<PysaCallTarget<Function>>,
+    pub define_targets: Vec<PysaCallTarget<Function>>,
 }
 
 impl<Function: FunctionTrait> DefineCallees<Function> {
@@ -905,7 +905,7 @@ impl<Function: FunctionTrait> DefineCallees<Function> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FormatStringArtificialCallees<Function: FunctionTrait> {
-    pub(crate) targets: Vec<PysaCallTarget<Function>>,
+    pub targets: Vec<PysaCallTarget<Function>>,
 }
 
 impl<Function: FunctionTrait> FormatStringArtificialCallees<Function> {
@@ -944,9 +944,9 @@ impl<Function: FunctionTrait> FormatStringArtificialCallees<Function> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FormatStringStringifyCallees<Function: FunctionTrait> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) targets: Vec<PysaCallTarget<Function>>,
+    pub targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Unresolved::is_resolved")]
-    pub(crate) unresolved: Unresolved,
+    pub unresolved: Unresolved,
 }
 
 impl<Function: FunctionTrait> FormatStringStringifyCallees<Function> {
@@ -992,9 +992,9 @@ pub enum ReturnShimArgumentMapping {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReturnShimCallees<Function: FunctionTrait> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) targets: Vec<PysaCallTarget<Function>>,
+    pub targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) arguments: Vec<ReturnShimArgumentMapping>,
+    pub arguments: Vec<ReturnShimArgumentMapping>,
 }
 
 impl<Function: FunctionTrait> ReturnShimCallees<Function> {
@@ -1150,6 +1150,10 @@ impl<ExpressionId: ExpressionIdTrait, Function: FunctionTrait> CallGraph<Express
     #[cfg(test)]
     pub fn into_iter(self) -> impl Iterator<Item = (ExpressionId, ExpressionCallees<Function>)> {
         self.0.into_iter()
+    }
+
+    pub fn as_map(&self) -> &HashMap<ExpressionId, ExpressionCallees<Function>> {
+        &self.0
     }
 
     fn dedup_and_sort(&mut self) {
@@ -1726,12 +1730,9 @@ impl<'a> CallGraphVisitor<'a> {
         // `fromstring = XML` in `xml.etree.ElementTree`) where the type carries the
         // original definition's index.
         let (module, def_index) = match &function.metadata.kind {
-            FunctionKind::Def(box pyrefly_types::callable::FuncId {
-                module,
-                cls: None, // Only handle module-level functions, not methods.
-                def_index: Some(def_index),
-                ..
-            }) => (module, *def_index),
+            FunctionKind::Def(func_id) if func_id.cls.is_none() && func_id.def_index.is_some() => {
+                (&func_id.module, func_id.def_index.unwrap())
+            }
             _ => return None,
         };
 

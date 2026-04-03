@@ -115,8 +115,12 @@ pub struct TestEnv {
     missing_override_decorator_error: bool,
     not_required_key_access_error: bool,
     strict_callable_subtyping: bool,
+    spec_compliant_overloads: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
+    /// The `Require` level passed to `run()` in `to_state()`. Controls whether
+    /// IDE features (indexing, hover) are enabled. Defaults to `Require::Everything`.
+    run_require: Require,
 }
 
 impl TestEnv {
@@ -141,8 +145,10 @@ impl TestEnv {
             missing_override_decorator_error: false,
             not_required_key_access_error: false,
             strict_callable_subtyping: false,
+            spec_compliant_overloads: false,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
+            run_require: Require::Everything,
         }
     }
 
@@ -164,7 +170,10 @@ impl TestEnv {
         res
     }
 
-    /// State 1: skip unannotated bodies, no return inference.
+    /// State 1: `check_unannotated_defs=false`, no return inference.
+    /// In batch/CLI mode (`Require::Errors`), unannotated bodies are skipped.
+    /// In IDE mode (`Require::Indexing` or higher), unannotated bodies are
+    /// still analyzed for hover/goto-def, but return types remain `Any`.
     pub fn new_skip_check_no_infer() -> Self {
         let mut res = Self::new();
         res.check_unannotated_defs = false;
@@ -172,7 +181,10 @@ impl TestEnv {
         res
     }
 
-    /// State 2: skip unannotated bodies, but infer returns for annotated functions.
+    /// State 2: `check_unannotated_defs=false`, infer returns for annotated functions.
+    /// In batch/CLI mode (`Require::Errors`), unannotated bodies are skipped.
+    /// In IDE mode (`Require::Indexing` or higher), unannotated bodies are
+    /// still analyzed for hover/goto-def, but return types remain `Any`.
     pub fn new_skip_check_infer_return_types() -> Self {
         let mut res = Self::new();
         res.check_unannotated_defs = false;
@@ -271,8 +283,18 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_spec_compliant_overloads(mut self) -> Self {
+        self.spec_compliant_overloads = true;
+        self
+    }
+
     pub fn with_default_require_level(mut self, level: Require) -> Self {
         self.default_require_level = level;
+        self
+    }
+
+    pub fn with_run_require(mut self, require: Require) -> Self {
+        self.run_require = require;
         self
     }
 
@@ -356,6 +378,7 @@ impl TestEnv {
         config.root.infer_return_types = Some(self.infer_return_types);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
+        config.root.spec_compliant_overloads = Some(self.spec_compliant_overloads);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };
@@ -420,9 +443,7 @@ impl TestEnv {
             Some(Box::new(subscriber.dupe())),
         );
         transaction.as_mut().set_memory(self.get_memory());
-        transaction
-            .as_mut()
-            .run(&handles, Require::Everything, None);
+        transaction.as_mut().run(&handles, self.run_require, None);
         state.commit_transaction(transaction, None);
         subscriber.finish();
         let project_root = PathBuf::new();

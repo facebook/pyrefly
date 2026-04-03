@@ -124,7 +124,7 @@ assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 10);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 15);
+assert_words!(BindingUndecoratedFunction, 18);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -1766,6 +1766,9 @@ pub struct BindingUndecoratedFunction {
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
     pub decorators: Box<[Idx<KeyDecorator>]>,
     pub module_style: ModuleStyle,
+    /// Dot-separated path of enclosing function names (e.g. `"f1"` for `f2` defined inside `f1`,
+    /// or `"f1.g1"` for two levels deep). `None` for top-level or class-method functions.
+    pub outer_funcs: Option<Name>,
 }
 
 impl DisplayWith<Bindings> for BindingUndecoratedFunction {
@@ -1888,9 +1891,13 @@ pub enum SuperStyle {
 
 #[derive(Clone, Debug, Copy, Dupe, PartialEq, Eq)]
 pub enum AnnotationStyle {
-    /// Annotated assignment, x: MyType = my_value
+    /// Annotated assignment: `x: MyType = my_value`
     Direct,
-    /// Forwarded annotation, x: MyType; x = my_value
+    /// First assignment after a bare annotation: `x: MyType` then `x = value`.
+    /// Annotation takes precedence (the variable had no prior value).
+    ForwardedInitial,
+    /// Reassignment of an already-initialized annotated variable.
+    /// Expression type takes precedence; annotation is an upper-bound hint.
     Forwarded,
 }
 
@@ -1902,6 +1909,7 @@ pub struct TypeParameter {
     pub bound: Option<Expr>,
     pub default: Option<Expr>,
     pub constraints: Option<(Vec<Expr>, TextRange)>,
+    pub owner: Option<Name>,
 }
 
 /// Represents an `Idx<K>` for some `K: Keyed` other than `Key`

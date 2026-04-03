@@ -159,6 +159,12 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict_callable_subtyping: Option<bool>,
 
+    /// Whether to use spec-compliant overload evaluation semantics.
+    /// When false (the default), Pyrefly attempts to resolve ambiguous calls precisely.
+    /// When true, overload evaluation follows the typing spec exactly, falling back to `Any` more frequently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_compliant_overloads: Option<bool>,
+
     /// Any unknown config items
     #[serde(default, flatten)]
     pub(crate) extras: ExtraConfigs,
@@ -264,5 +270,9 @@ impl ConfigBase {
 
     pub fn get_strict_callable_subtyping(base: &Self) -> Option<bool> {
         base.strict_callable_subtyping
+    }
+
+    pub fn get_spec_compliant_overloads(base: &Self) -> Option<bool> {
+        base.spec_compliant_overloads
     }
 }

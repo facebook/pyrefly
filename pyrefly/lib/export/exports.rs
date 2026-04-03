@@ -338,7 +338,7 @@ impl Exports {
             for (name, definition) in self.definitions.definitions.iter_hashed() {
                 let deprecation = self.definitions.deprecated.get_hashed(name).cloned();
                 let special_export = self.definitions.special_exports.get_hashed(name).copied();
-                let is_final = self.definitions.final_names.contains_hashed(name);
+                let is_final = self.definitions.final_names.contains_key_hashed(name);
                 let export = match &definition.style {
                     DefinitionStyle::Annotated(symbol_kind, ..)
                     | DefinitionStyle::Unannotated(symbol_kind) => {
@@ -462,7 +462,7 @@ mod tests {
         fn module_exists(&self, module: ModuleName) -> FindingOrError<()> {
             match self.get(&module) {
                 Some(_) => FindingOrError::new_finding(()),
-                None => FindingOrError::Error(FindError::not_found(anyhow!("Error"), module)),
+                None => FindingOrError::Error(FindError::missing_import(anyhow!("Error"), module)),
             }
         }
 

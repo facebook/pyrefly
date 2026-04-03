@@ -35,6 +35,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
+use crate::alt::expr::MAX_TUPLE_LENGTH;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::KeyAnnotation;
 use crate::config::error_kind::ErrorKind;
@@ -315,6 +316,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn try_tuple_repeat(&self, lhs: &Type, rhs: &Type) -> Option<Type> {
+        let (elements, repeats) = match (lhs, rhs) {
+            (
+                Type::Tuple(Tuple::Concrete(elts)),
+                Type::Literal(box Literal {
+                    value: Lit::Int(n), ..
+                }),
+            ) => (elts, n.as_i64()?),
+            (
+                Type::Literal(box Literal {
+                    value: Lit::Int(n), ..
+                }),
+                Type::Tuple(Tuple::Concrete(elts)),
+            ) => (elts, n.as_i64()?),
+            _ => return None,
+        };
+        if repeats <= 0 {
+            return Some(self.heap.mk_concrete_tuple(Vec::new()));
+        }
+        if repeats == 1 {
+            return Some(self.heap.mk_concrete_tuple(elements.clone()));
+        }
+        let repeats = usize::try_from(repeats).ok()?;
+        let total_len = elements.len().checked_mul(repeats)?;
+        if total_len > MAX_TUPLE_LENGTH {
+            return None;
+        }
+        let mut repeated = Vec::with_capacity(total_len);
+        for _ in 0..repeats {
+            repeated.extend(elements.iter().cloned());
+        }
+        Some(self.heap.mk_concrete_tuple(repeated))
+    }
+
     pub fn binop_infer(
         &self,
         x: &ExprBinOp,
@@ -405,6 +440,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Type::Tuple(r) = rhs
                 {
                     self.tuple_concat(l, r)
+                } else if x.op == Operator::Mult
+                    && let Some(result) = self.try_tuple_repeat(lhs, rhs)
+                {
+                    result
                 } else if matches!(
                     x.op,
                     Operator::Add
@@ -544,6 +583,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(ann) = ann.map(|k| self.get_idx(k)) {
             self.check_final_reassignment(&ann, x.range(), errors);
             if let Some(ann_ty) = ann.ty(self.heap, self.stdlib) {
+                if result.is_any() {
+                    // Any provides no useful narrowing information, so preserve
+                    // the declared type rather than letting Any leak through.
+                    return ann_ty;
+                }
                 return self.check_and_return_type(result, &ann_ty, x.range(), errors, tcc);
             }
         }

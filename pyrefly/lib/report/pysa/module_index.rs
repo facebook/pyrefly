@@ -99,7 +99,7 @@ fn decorator_matches_graphql_ref(ty: &Type, graphql_ref: &GraphQLDecoratorRef) -
     };
     match func_metadata {
         Some(pyrefly_types::callable::FuncMetadata {
-            kind: FunctionKind::Def(box func_id),
+            kind: FunctionKind::Def(func_id),
             ..
         }) => graphql_ref.matches_decorator_id(func_id.module.name(), &func_id.name),
         _ => false,

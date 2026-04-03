@@ -584,6 +584,23 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
             }
         }
 
+        // Sum numerator, non-literal denominator: try un-distributing the sum.
+        // The distributive law in canonicalize_product expands B*(2*A-1) into
+        // -B + 2*A*B. When this sum is divided by (2*A-1), we need to factor
+        // the common factor B back out to recover B*(2*A-1) and cancel.
+        (Type::Size(SizeExpr::Add(_, _)), _) => {
+            if let Some(result) = try_factor_sum_and_cancel(&canonical_num, &canonical_den) {
+                result
+            } else {
+                let (new_num, new_den) = try_cancel_common_factors(canonical_num, canonical_den);
+                if matches!(new_den, Type::Size(SizeExpr::Literal(1))) {
+                    new_num
+                } else {
+                    Type::Size(SizeExpr::FloorDiv(Box::new(new_num), Box::new(new_den)))
+                }
+            }
+        }
+
         // Try cancellation
         _ => {
             let (new_num, new_den) = try_cancel_common_factors(canonical_num, canonical_den);
@@ -686,6 +703,88 @@ fn try_cancel_common_factors(num: Type, den: Type) -> (Type, Type) {
     let new_den = rebuild_product(den_factors);
 
     (new_num, new_den)
+}
+
+/// Try to factor a common factor out of a sum numerator and cancel with the denominator.
+///
+/// When canonicalize_product distributes B*(2*A-1) into -B + 2*A*B, this function
+/// reverses the expansion inside division context:
+///   (-B + 2*A*B) // (-1 + 2*A)
+///   → terms: [-1*B, 2*A*B], common non-literal factor: B
+///   → B * (-1 + 2*A) // (-1 + 2*A) → B
+///
+/// Only simplifies when ALL sum terms share the common factor (exact divisibility).
+fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
+    let mut terms = Vec::new();
+    collect_terms(num.clone(), &mut terms);
+
+    if terms.len() < 2 {
+        return None;
+    }
+
+    // For each term, extract literal coefficient and non-literal factors.
+    let term_factorizations: Vec<(i64, Vec<Type>)> = terms
+        .iter()
+        .map(|term| {
+            let mut factors = Vec::new();
+            collect_factors(term.clone(), &mut factors);
+            separate_literal_factors(factors)
+        })
+        .collect();
+
+    // Find common non-literal factors across ALL terms (set intersection).
+    let mut common_factors: Vec<Type> = term_factorizations[0].1.clone();
+    for (_, non_lit_factors) in &term_factorizations[1..] {
+        let mut remaining = non_lit_factors.clone();
+        common_factors.retain(|cf| {
+            if let Some(pos) = remaining.iter().position(|f| f == cf) {
+                remaining.remove(pos);
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    if common_factors.is_empty() {
+        return None;
+    }
+
+    // Factor out common factors from each term, rebuilding quotient terms.
+    let quotient_terms: Vec<Type> = term_factorizations
+        .iter()
+        .map(|(coeff, non_lit_factors)| {
+            let mut remaining = non_lit_factors.clone();
+            for cf in &common_factors {
+                if let Some(pos) = remaining.iter().position(|f| f == cf) {
+                    remaining.remove(pos);
+                }
+            }
+            let mut all_factors = Vec::new();
+            if *coeff != 1 {
+                all_factors.push(Type::Size(SizeExpr::Literal(*coeff)));
+            }
+            all_factors.extend(remaining);
+            rebuild_product(all_factors)
+        })
+        .collect();
+
+    // Canonicalize the quotient sum so it can be compared structurally with the denominator.
+    let quotient_sum = rebuild_sum(quotient_terms);
+    let canonical_quotient = canonicalize_inner(quotient_sum);
+
+    // Numerator = common_factors * canonical_quotient (as a product).
+    // Try cancelling this product with the denominator.
+    let mut all_num_factors = common_factors;
+    all_num_factors.push(canonical_quotient);
+    let factored_num = rebuild_product(all_num_factors);
+
+    let (new_num, new_den) = try_cancel_common_factors(factored_num, den.clone());
+    if matches!(new_den, Type::Size(SizeExpr::Literal(1))) {
+        Some(new_num)
+    } else {
+        None
+    }
 }
 
 /// Decompose `value` as `base^k * remainder` where k is maximized.

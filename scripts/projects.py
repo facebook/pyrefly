@@ -484,7 +484,6 @@ def get_mypy_primer_projects() -> list[Project]:
             pyrefly_cmd="{pyrefly} src tests",
             expected_mypy_success=True,
             cost={"mypy": 40},
-            skip_determinism_check=True,
         ),
         Project(
             location="https://github.com/Legrandin/pycryptodome",

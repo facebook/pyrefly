@@ -186,6 +186,23 @@ impl ClassAttribute {
             _ => false,
         }
     }
+
+    /// Returns true if this attribute represents a data descriptor
+    /// (has both `__get__` and `__set__`), including properties with setters.
+    pub fn is_data_descriptor(&self) -> bool {
+        match self {
+            ClassAttribute::Property(_, Some(_), _)
+            | ClassAttribute::Descriptor(
+                Descriptor {
+                    getter: true,
+                    setter: true,
+                    ..
+                },
+                _,
+            ) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
@@ -207,6 +224,9 @@ pub struct Descriptor {
 #[derive(Clone, Debug)]
 pub enum DescriptorBase {
     Instance(ClassType),
+    /// Descriptor accessed on a `Self` instance. The `ClassType` is the bounding class,
+    /// but the `obj` and `objtype` arguments to `__get__`/`__set__` should use `SelfType`.
+    SelfInstance(ClassType),
     ClassDef(ClassBase),
 }
 
@@ -1245,8 +1265,11 @@ impl<'a> Instance<'a> {
             // There's no situation in which you can stick a usable descriptor in a TypedDict.
             // TODO(rechen): a descriptor in a TypedDict should be an error at class creation time.
             InstanceKind::TypedDict => None,
+            InstanceKind::SelfType => Some(DescriptorBase::SelfInstance(ClassType::new(
+                self.class.dupe(),
+                self.targs.clone(),
+            ))),
             InstanceKind::ClassType
-            | InstanceKind::SelfType
             | InstanceKind::Protocol(..)
             | InstanceKind::Metaclass(..)
             | InstanceKind::TypeVar(..)
@@ -1740,8 +1763,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let original_value_ty = value_ty.clone();
         // Skip literal promotion for NNModule types: their fields are captured
         // constructor args that must preserve literal types for shape inference.
-        let ty = if matches!(value_ty, Type::NNModule(_)) {
-            value_ty
+        let (ty, unpromoted_ty) = if matches!(value_ty, Type::NNModule(_)) {
+            (value_ty, None)
         } else {
             let mut has_implicit_literal = value_ty.is_implicit_literal();
             if !has_implicit_literal && matches!(initialization, ClassFieldInitialization::Method) {
@@ -1749,6 +1772,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     has_implicit_literal |= current_type_node.is_implicit_literal();
                 });
             }
+            // Save any unpromoted literal types, we need them for enums
             if annotation
                 .as_ref()
                 .and_then(|ann| ann.ty.as_ref())
@@ -1756,11 +1780,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && matches!(read_only_reason, None | Some(ReadOnlyReason::NamedTuple))
                 && has_implicit_literal
             {
-                value_ty.promote_implicit_literals(self.stdlib)
+                let pre = value_ty.clone();
+                (value_ty.promote_implicit_literals(self.stdlib), Some(pre))
             } else {
-                value_ty
+                (value_ty, None)
             }
         };
+
+        // ClassVar[Final] is invalid except in dataclasses, where it's the recommended
+        // way to declare a final class variable. Final[ClassVar] is already caught in expr_annotation.
+        if metadata.dataclass_metadata().is_none()
+            && let Some(annot) = direct_annotation.as_ref()
+            && annot.qualifiers.first() == Some(&Qualifier::ClassVar)
+            && annot.is_final()
+        {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                "`Final` may not be nested inside `ClassVar`".to_owned(),
+            );
+        }
 
         // Identify whether this is a descriptor
         let mut descriptor = None;
@@ -1828,6 +1868,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             direct_annotation.as_ref(),
             &original_value_ty,
             &ty,
+            unpromoted_ty.as_ref(),
             field_definition,
             descriptor.is_some(),
             range,
@@ -2070,6 +2111,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         direct_annotation: Option<&Annotation>,
         value_ty: &Type,
         ty: &Type,
+        unpromoted_ty: Option<&Type>,
         field_definition: &ClassFieldDefinition,
         is_descriptor: bool,
         range: TextRange,
@@ -2079,8 +2121,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             class,
             name,
             direct_annotation,
-            value_ty,
-            ty,
+            unpromoted_ty.unwrap_or(ty),
             field_definition,
             is_descriptor,
             range,
@@ -2672,11 +2713,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         cls: None,
                         name: field_name.clone(),
                         def_index: None,
+                        outer_funcs: None,
                     };
                     ty = self.heap.mk_function(Function {
                         signature: callable,
                         metadata: FuncMetadata {
-                            kind: FunctionKind::Def(Box::new(func_id)),
+                            kind: FunctionKind::Def(Arc::new(func_id)),
                             flags: FuncFlags::default(),
                         },
                     })
@@ -2974,11 +3016,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         field_name: &Name,
         class_metadata: &Arc<ClassMetadata>,
+        is_explicit_override: bool,
     ) -> bool {
-        // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate in override checks
-        if field_name == &dunder::NEW
-            || field_name == &dunder::INIT
-            || field_name == &dunder::INIT_SUBCLASS
+        // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate
+        // in override checks unless the user explicitly opts in with `@override`.
+        if !is_explicit_override
+            && (field_name == &dunder::NEW
+                || field_name == &dunder::INIT
+                || field_name == &dunder::INIT_SUBCLASS)
         {
             return false;
         }
@@ -3040,12 +3085,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases: &ClassBases,
         errors: &ErrorCollector,
     ) {
-        let is_override = class_field.is_override();
-        if matches!(class_field.1, IsInherited::No) && !is_override {
+        let is_explicit_override = class_field.is_override();
+        if matches!(class_field.1, IsInherited::No) && !is_explicit_override {
             return;
         }
         let metadata = self.get_metadata_for_class(cls);
-        if !self.should_check_field_for_override_consistency(field_name, &metadata) {
+        if !self.should_check_field_for_override_consistency(
+            field_name,
+            &metadata,
+            is_explicit_override,
+        ) {
             return;
         }
 
@@ -3316,7 +3365,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors.add(range, ErrorInfo::Kind(kind), msg);
             }
         }
-        if is_override && !parent_attr_found && !parent_has_any {
+        if is_explicit_override && !parent_attr_found && !parent_has_any {
             self.error(
                     errors,
                     range,
@@ -3331,7 +3380,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Check for missing @override decorator when overriding a parent attribute.
         // This error is emitted when a method overrides a parent but doesn't have @override.
         // Since this error has Severity::Ignore by default, it won't be shown unless enabled.
-        if !is_override
+        if !is_explicit_override
             && parent_attr_found
             && !parent_has_any
             && class_field.can_have_override_decorator()
@@ -3375,6 +3424,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if !self.should_check_field_for_override_consistency(
                     parent_field_name,
                     &current_class_metadata,
+                    false,
                 ) {
                     continue;
                 }
@@ -3655,7 +3705,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    fn get_class_member_with_defining_class(
+    pub(crate) fn get_class_member_with_defining_class(
         &self,
         cls: &Class,
         name: &Name,
@@ -3950,11 +4000,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         field: &Name,
         ancestor: (&str, &str),
     ) -> bool {
-        let member = self.get_class_member_with_defining_class(cls, field);
-        match member {
-            Some(member) => member.is_defined_on(ancestor.0, ancestor.1),
-            None => false,
-        }
+        self.field_defining_class_matches(cls, field, |c| {
+            c.has_toplevel_qname(ancestor.0, ancestor.1)
+        })
+    }
+
+    /// Check whether the defining class of `field` on `cls` satisfies `predicate`.
+    /// Returns false if the field does not exist.
+    pub fn field_defining_class_matches(
+        &self,
+        cls: &Class,
+        field: &Name,
+        predicate: impl FnOnce(&Class) -> bool,
+    ) -> bool {
+        self.get_class_member_with_defining_class(cls, field)
+            .is_some_and(|member| predicate(&member.defining_class))
     }
 
     /// Get the class's `__new__` method.
@@ -4211,16 +4271,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             ClassAttribute::Descriptor(x, base) => {
                 match base {
-                    DescriptorBase::Instance(class_type)
+                    DescriptorBase::Instance(_) | DescriptorBase::SelfInstance(_)
                         if let Some(setter) =
                             self.resolve_descriptor_setter(attr_name, &x, errors) =>
                     {
                         let got = CallArg::arg(got);
-                        self.call_descriptor_setter(
-                            setter, class_type, got, range, errors, context,
-                        );
+                        self.call_descriptor_setter(setter, base, got, range, errors, context);
                     }
-                    DescriptorBase::Instance(class_type) => {
+                    DescriptorBase::Instance(class_type)
+                    | DescriptorBase::SelfInstance(class_type) => {
                         let e = NoAccessReason::SettingReadOnlyDescriptor(
                             class_type.class_object().dupe(),
                         );

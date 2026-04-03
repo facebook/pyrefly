@@ -48,6 +48,7 @@ pub enum SpecialForm {
     Tuple,
     Type,
     TypeAlias,
+    TypeForm,
     TypeGuard,
     TypeIs,
     TypedDict,
@@ -150,6 +151,10 @@ mod tests {
         assert_eq!(
             SpecialForm::from_str("Self").unwrap(),
             SpecialForm::SelfType
+        );
+        assert_eq!(
+            SpecialForm::from_str("TypeForm").unwrap(),
+            SpecialForm::TypeForm
         );
         assert!(SpecialForm::from_str("NotASpecial").is_err());
     }

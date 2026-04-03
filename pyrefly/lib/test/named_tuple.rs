@@ -61,6 +61,27 @@ assert_type(Point6(1, 2).x, int)
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2874
+testcase!(
+    test_named_tuple_functional_name_mismatch,
+    r#"
+from collections import namedtuple
+from typing import Any, NamedTuple, assert_type
+
+repo_details = namedtuple(
+    "RepoDetails",  # E: Expected string literal "repo_details"
+    ("source_dir", "local_dest", "file", "age"),
+)
+typing_repo_details = NamedTuple(
+    "TypingRepoDetails",  # E: Expected string literal "typing_repo_details"
+    [("source_dir", str), ("local_dest", str), ("file", str), ("age", int)],
+)
+
+assert_type(repo_details("", "", "", 1).source_dir, Any)
+assert_type(typing_repo_details("", "", "", 1).age, int)
+    "#,
+);
+
 testcase!(
     test_named_tuple_functional_defaults_and_constructor,
     r#"
@@ -879,5 +900,81 @@ class Record(NamedTuple):
     @classmethod
     def _make(cls, iterable: object) -> "Record":
         return cls("", 0)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2980
+testcase!(
+    test_named_tuple_cls_field_name,
+    r#"
+from typing import NamedTuple, assert_type, Any
+from collections import namedtuple
+
+# Class syntax
+class WithCls(NamedTuple):
+    cls: int
+    value: str
+
+w = WithCls(cls=1, value="hello")
+assert_type(w.cls, int)
+
+# Functional typing.NamedTuple syntax
+WithCls2 = NamedTuple("WithCls2", [("cls", int), ("value", str)])
+w2 = WithCls2(cls=2, value="world")
+assert_type(w2.cls, int)
+
+# Functional collections.namedtuple syntax
+WithCls3 = namedtuple("WithCls3", ["cls", "value"])
+w3 = WithCls3(cls=3, value="test")
+assert_type(w3.cls, Any)
+"#,
+);
+
+testcase!(
+    test_named_tuple_final_field_names,
+    r#"
+from typing import NamedTuple, Final
+
+X: Final = "x"
+Y: Final = "y"
+N = NamedTuple("N", [(X, int), (Y, int)])
+
+N(x=3, y=4)
+N(a=1)  # E: Unexpected keyword argument `a` in function `N.__new__`  # E: Missing argument `x`  # E: Missing argument `y`
+N(x="", y="")  # E: Argument `Literal['']` is not assignable to parameter `x` with type `int`  # E: Argument `Literal['']` is not assignable to parameter `y` with type `int`
+"#,
+);
+
+testcase!(
+    test_named_tuple_final_field_names_with_starred,
+    r#"
+import collections
+from typing import Final, assert_type, Any
+
+X: Final = "extra"
+BaseFieldInfo = collections.namedtuple("BaseFieldInfo", ["name", "type_code"])
+ExtendedFieldInfo = collections.namedtuple(
+    "ExtendedFieldInfo",
+    [*BaseFieldInfo._fields, X],
+)
+
+info = ExtendedFieldInfo("col1", 1, "extra_val")
+# X resolves to "extra" as a known field
+assert_type(info.extra, Any)
+# Dynamic fields from the starred expression
+assert_type(info.anything, Any)
+"#,
+);
+
+testcase!(
+    test_named_tuple_final_field_name_shadowed,
+    r#"
+from collections import namedtuple
+from typing import Final
+
+X: Final = "x"
+
+def f(X: int) -> None:
+    N = namedtuple("N", [X])  # E: Expected a string literal
 "#,
 );

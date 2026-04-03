@@ -285,7 +285,10 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
 
 /// Test opening a file while a recheck for another file is happening.
 /// Start with only b open, then open file d while a recheck for b is happening.
+// TODO: Flaky on GitHub CI — disabled until stabilized.
+// https://github.com/facebook/pyrefly/actions/runs/23870936742/job/69602458839
 #[test]
+#[ignore]
 fn test_open_file_during_recheck() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");

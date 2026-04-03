@@ -219,7 +219,7 @@ impl Display for ConditionRedundantReason {
     }
 }
 
-static MAX_TUPLE_LENGTH: usize = 256;
+pub(crate) const MAX_TUPLE_LENGTH: usize = 256;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn synthesized_functional_class_type(&self, call: &ExprCall) -> Option<Type> {
@@ -2429,6 +2429,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // None type (e.g. from a variable typed as None)
             if matches!(&idx_ty, Type::None) {
                 return Some(IndexOp::NewAxis);
+            }
+            if let Type::Tensor(ref idx_tensor) = idx_ty {
+                if let TensorShape::Concrete(dims) = &idx_tensor.shape {
+                    return Some(IndexOp::TensorIndex(dims.clone()));
+                }
+                return None; // shapeless index tensor → bail
             }
             if let Type::Tuple(ref tuple) = idx_ty {
                 return match tuple {

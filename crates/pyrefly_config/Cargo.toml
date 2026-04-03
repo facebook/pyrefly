@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_config"
-version = "0.58.0"
+version = "0.59.1"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -10,7 +10,7 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0.102"
-clap = { version = "4.5.42", features = ["derive", "env", "string", "unicode", "wrap_help"] }
+clap = { version = "4.6.0", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 configparser = { version = "3.1.0", features = ["indexmap"] }
 convert_case = "0.11"
 derivative = "2.2"
@@ -26,7 +26,7 @@ regex-syntax = "0.7.5"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 serde_jsonrc = "0.1"
-serde_with = { version = "3.17.0", features = ["hex", "json"] }
+serde_with = { version = "3.18.0", features = ["hex", "json"] }
 starlark_map = "0.13.0"
 thiserror = "2.0.18"
 toml = { version = "0.9.12", features = ["preserve_order"] }

@@ -976,3 +976,71 @@ items = [1, 2, 3, 4]
 bad = items[::0]
 "#,
 );
+
+testcase!(
+    test_annotated_var_preserves_type_after_any_assign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: int
+x = f()
+assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_reassigned_var_does_not_preserve_annotation_over_any,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: str = "hello"
+x = f()
+assert_type(x, Any)
+"#,
+);
+
+testcase!(
+    test_annotated_var_augassign_any,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: int = 0
+x += f()
+assert_type(x, int)
+"#,
+);
+
+testcase!(
+    bug = "Context manager should preserve declared type over Any (github #2227)",
+    test_annotated_var_context_manager_any,
+    r#"
+from typing import Any, assert_type
+
+class CM:
+    def __enter__(self) -> Any: ...
+    def __exit__(self, *args: Any) -> None: ...
+
+x: int
+with CM() as x:
+    assert_type(x, int)  # E: assert_type(Any, int) failed
+"#,
+);
+
+testcase!(
+    test_annotated_var_for_loop_any,
+    r#"
+from typing import Any, assert_type
+
+xs: list[Any] = []
+
+y: int
+for y in xs:
+    assert_type(y, int)
+"#,
+);

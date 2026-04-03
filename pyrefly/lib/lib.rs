@@ -42,6 +42,10 @@ pub mod module;
 pub mod playground;
 pub mod query;
 mod report;
+// Re-export the generated Cap'n Proto module at crate root, because the generated
+// code references types via `crate::pysa_report_capnp::...`.
+#[allow(clippy::all)]
+pub(crate) use report::pysa::pysa_report_capnp;
 mod solver;
 #[doc(hidden)]
 pub mod state;

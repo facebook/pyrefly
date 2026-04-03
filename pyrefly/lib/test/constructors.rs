@@ -30,7 +30,6 @@ def test(f: type[A | B]) -> A | B:
 );
 
 testcase!(
-    bug = "There should be no errors",
     test_generic_class,
     r#"
 from typing import assert_type
@@ -38,7 +37,7 @@ class Box[T]:
     def __init__(self, x: T): pass
 
     def wrap(self) -> Box[Box[T]]:
-        return Box(self)  # E: Argument `Box[Box[Box[T]]]` is not assignable to parameter `self`  # E: `Self@Box` is not assignable to parameter `x`
+        return Box(self)
 
 def f() -> int:
     return 1
@@ -92,7 +91,6 @@ class A[T]:
 );
 
 testcase!(
-    bug = "Spurious 'Box[Box[Box[T]]] is not assignable...' errors",
     test_generic_init_in_generic_class,
     r#"
 from typing import assert_type
@@ -101,9 +99,9 @@ class Box[T]:
         pass
     def wrap(self, x: bool) -> Box[Box[T]]:
         if x:
-            return Box(self, self)  # E: `Box[Box[Box[T]]]` is not assignable to parameter `self`
+            return Box(self, self)
         else:
-            return Box(self, 42)  # E: `Box[Box[Box[T]]]` is not assignable to parameter `self`
+            return Box(self, 42)
 b = Box[int]("hello", "world")
 assert_type(b, Box[int])
 assert_type(b.wrap(True), Box[Box[int]])
@@ -653,6 +651,55 @@ class C[T]:
 
 assert_type(C(True), C[A])
 assert_type(C(False), C[B])
+    "#,
+);
+
+testcase!(
+    test_init_bad_receiver_annotation,
+    r#"
+from typing import Literal, assert_type, overload
+
+class A: ...
+class B: ...
+class D:
+    def __init__(self: A): pass  # E: `__init__` method self type `A` is not a superclass of class `D`
+class E(A):
+    def __init__(self: A): pass
+
+class C[T]:
+    @overload
+    def __init__(self: A, x: Literal[True]) -> None: ...  # E: `__init__` method self type `A` is not a superclass of class `C`  # E: Implementation signature `(self: Self@C, x: Unknown) -> None` does not accept all arguments that overload signature `(self: A, x: Literal[True]) -> None` accepts
+    @overload
+    def __init__(self: B, x: Literal[False]) -> None: ...  # E: `__init__` method self type `B` is not a superclass of class `C`  # E: Implementation signature `(self: Self@C, x: Unknown) -> None` does not accept all arguments that overload signature `(self: B, x: Literal[False]) -> None` accepts
+    def __init__(self, x):
+        pass
+
+    "#,
+);
+
+testcase!(
+    test_init_transitive_superclass_annotation,
+    r#"
+class A: ...
+class B(A): ...
+class C(B):
+    def __init__(self: A): pass
+
+class D(B):
+    def __init__(self: B): pass
+    "#,
+);
+
+testcase!(
+    test_init_non_classtype_self_annotation,
+    r#"
+from typing import Self, Any
+
+class E:
+    def __init__(self: Self): pass
+
+class F:
+    def __init__(self: Any): pass
     "#,
 );
 

@@ -34,7 +34,8 @@ use tracing::info;
 
 use crate::error::error::Error;
 use crate::state::errors::find_containing_range;
-use crate::state::errors::sorted_multi_line_fstring_ranges;
+use crate::state::errors::sorted_backslash_continuation_ranges;
+use crate::state::errors::sorted_multi_line_string_ranges;
 
 /// Regex to match pyrefly/type/pyre ignore comments with optional error codes and trailing text.
 /// Consumes all non-`#` characters after the ignore pattern, so trailing comment text is
@@ -276,16 +277,21 @@ fn add_suppressions(
             ModulePath::filesystem(path.clone()),
             Arc::from(file.clone()),
         );
-        let fstring_ranges = sorted_multi_line_fstring_ranges(&ast, &module);
+        let multiline_string_ranges = sorted_multi_line_string_ranges(&ast, &module);
 
-        // Remap error lines inside multi-line string literals to the
-        // string's start line so the suppression comment is placed
-        // above the string, not inside it.
+        let lines: Vec<&str> = file.lines().collect();
+        let backslash_ranges =
+            sorted_backslash_continuation_ranges(&lines, &multiline_string_ranges);
+
+        // Remap error lines inside multi-line strings or backslash
+        // continuations to the block's start line so the suppression comment
+        // is placed above the block, not inside it.
         let remapped_errors: Vec<SerializedError> = errors
             .iter()
             .map(|e| {
                 let error_line = LineNumber::from_zero_indexed(e.line as u32);
-                let new_line = find_containing_range(&fstring_ranges, error_line)
+                let new_line = find_containing_range(&multiline_string_ranges, error_line)
+                    .or_else(|| find_containing_range(&backslash_ranges, error_line))
                     .map_or(error_line, |(start, _)| start);
                 SerializedError {
                     path: e.path.clone(),
@@ -298,7 +304,7 @@ fn add_suppressions(
         // Collect start lines of multi-line string literals so we can avoid
         // placing same-line comments on them (which would end up inside
         // the string literal instead of being a Python comment).
-        let fstring_start_lines: HashSet<usize> = fstring_ranges
+        let fstring_start_lines: HashSet<usize> = multiline_string_ranges
             .iter()
             .map(|(start, _)| start.to_zero_indexed() as usize)
             .collect();
@@ -306,7 +312,6 @@ fn add_suppressions(
         let mut deduped_errors = dedup_errors(&remapped_errors);
 
         // Pre-scan to find existing suppressions and merge with new error codes
-        let lines: Vec<&str> = file.lines().collect();
 
         // Build a map of lines that have existing suppressions
         let mut existing_suppressions: SmallMap<usize, Vec<String>> = SmallMap::new();
@@ -359,6 +364,11 @@ fn add_suppressions(
                     buf.push_str(line_ending);
                 } else if comment_location == CommentLocation::SameLine
                     && !fstring_start_lines.contains(&idx)
+                    && find_containing_range(
+                        &backslash_ranges,
+                        LineNumber::from_zero_indexed(idx as u32),
+                    )
+                    .is_none()
                 {
                     // Append suppression comment to the end of the line
                     buf.push_str(line);
@@ -1923,6 +1933,42 @@ world"""
 # pyrefly: ignore [bad-assignment]
 x: int = """hello
 world"""
+"#,
+        );
+    }
+
+    #[test]
+    fn test_add_suppressions_same_line_backslash_continuation() {
+        // When a line ends with backslash continuation, SameLine should fall
+        // back to above-line placement to avoid breaking the continuation.
+        assert_suppress_errors_same_line(
+            r#"
+x: str = 1 + \
+    "a"
+"#,
+            r#"
+# pyrefly: ignore [bad-assignment, unsupported-operation]
+x: str = 1 + \
+    "a"
+"#,
+        );
+    }
+
+    #[test]
+    fn test_add_suppressions_same_line_backslash_continuation_middle_line() {
+        // When the error is on a middle line of a backslash continuation that
+        // also ends with \, the comment goes above the entire continuation block.
+        assert_suppress_errors_same_line(
+            r#"
+x: int = \
+    "a" + \
+    2
+"#,
+            r#"
+# pyrefly: ignore [unsupported-operation]
+x: int = \
+    "a" + \
+    2
 "#,
         );
     }

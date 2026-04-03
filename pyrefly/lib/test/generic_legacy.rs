@@ -54,22 +54,20 @@ assert_type(foo(1), int)
 );
 
 testcase!(
-    bug = "We allow annotated legacy type vars as *values*, but they don't work downstream.",
     test_annotated_legacy_type_var,
     r#"
 from typing import TypeVar, ParamSpec, TypeVarTuple
-T_bad_ann: int = TypeVar("T_bad_ann")  # E: `TypeVar` is not assignable to `int`
-P_bad_ann: int = ParamSpec("P_bad_ann")  # E: `ParamSpec` is not assignable to `int`
-Ts_bad_ann: int = TypeVarTuple("Ts_bad_ann")  # E: `TypeVarTuple` is not assignable to `int`
+T_bad_ann: int = TypeVar("T_bad_ann")  # E: not assignable to variable `T_bad_ann` with type `int`
+P_bad_ann: int = ParamSpec("P_bad_ann")  # E: not assignable to variable `P_bad_ann` with type `int`
+Ts_bad_ann: int = TypeVarTuple("Ts_bad_ann")  # E: not assignable to variable `Ts_bad_ann` with type `int`
 
-# All of these are legal assignments, but we won't understand them downstream
+# Annotated legacy type vars work as type annotations
 T: TypeVar = TypeVar("T")
 P: ParamSpec = ParamSpec("P")
 Ts: TypeVarTuple = TypeVarTuple("Ts")
 
-# For example, see this:
-def f(x: T) -> T:  # E: Expected a type form, got instance of `TypeVar  # E: Expected a type form, got instance of `TypeVar`
-    pass
+def f(x: T) -> T:
+    return x
 "#,
 );
 
@@ -576,7 +574,6 @@ reveal_type(TypeForm)  # E: revealed type: type[type[T]]
 );
 
 testcase!(
-    bug = "TODO(https://github.com/facebook/pyrefly/issues/105): collect upper bounds on typevars",
     test_generics_legacy_unqualified,
     r#"
 from typing import TypeVar, Generic
@@ -585,12 +582,11 @@ class C(Generic[T]): ...
 def append(x: C[T], y: T):
     pass
 v: C[int] = C()
-append(v, "test")  # should error
+append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
 "#,
 );
 
 testcase!(
-    bug = "TODO(https://github.com/facebook/pyrefly/issues/105): collect upper bounds on typevars",
     test_generics_legacy_qualified,
     r#"
 import typing
@@ -599,7 +595,7 @@ class C(typing.Generic[T]): ...
 def append(x: C[T], y: T):
     pass
 v: C[int] = C()
-append(v, "test")  # should error
+append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
 "#,
 );
 

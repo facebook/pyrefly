@@ -44,6 +44,7 @@ class Module:
     ) -> None: ...
     def register_parameter(self, name: str, param: Parameter | None) -> None: ...
     def apply(self, fn: Callable[[Module], None]) -> Self: ...
+    def to(self, *args: Any, **kwargs: Any) -> Self: ...
     def modules(self) -> Iterator[Module]: ...
     def parameters(self, recurse: bool = True) -> Iterator[Tensor]: ...
     def named_parameters(
@@ -817,9 +818,52 @@ class LSTM(Module):
         batch_first: bool = False,
         dropout: float = 0.0,
         bidirectional: bool = False,
-        num_directions: int = 1,
     ) -> None: ...
+    def flatten_parameters(self) -> None:
+        """Reset parameter data pointer for CUDA contiguous memory. No-op on CPU."""
+        ...
     def forward(self, input: Tensor) -> tuple[Tensor, Tensor, Tensor]: ...
+
+class LSTMCell(Module):
+    """Long Short-Term Memory cell.
+
+    Input:  Tensor[B, InputSize]
+    Output: (Tensor[B, HiddenSize], Tensor[B, HiddenSize])
+
+    Shape inference via DSL + NNModule init capture.
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        bias: bool = True,
+        device: Any = None,
+        dtype: Any = None,
+    ) -> None: ...
+    def forward(
+        self, input: Tensor, hx: tuple[Tensor, Tensor] | None = None
+    ) -> tuple[Tensor, Tensor]: ...
+
+class GRUCell(Module):
+    """Gated Recurrent Unit cell.
+
+    Input:  Tensor[B, InputSize]
+    Output: Tensor[B, HiddenSize]
+
+    Shape-preserving when InputSize == HiddenSize; otherwise returns
+    unrefined Tensor (no DSL registration).
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        bias: bool = True,
+        device: Any = None,
+        dtype: Any = None,
+    ) -> None: ...
+    def forward(self, input: Tensor, hx: Tensor | None = None) -> Tensor: ...
 
 class Upsample(Module):
     """Upsamples input. Shape inference via DSL + NNModule init capture.
@@ -970,6 +1014,59 @@ class Unflatten(Module):
     def __init__(self, dim: int | str, unflattened_size: tuple[int, ...]) -> None: ...
     def forward(self, input: Tensor) -> Tensor: ...
 
+class ReflectionPad2d(Module):
+    """Pads input using reflection of the input boundary.
+
+    Shape inference via DSL + NNModule init capture.
+    """
+
+    def __init__(self, padding: int) -> None: ...
+    def forward(self, input: Tensor) -> Tensor: ...
+
+class ReplicationPad2d(Module):
+    """Pads input using replication of the input boundary.
+
+    Shape inference via DSL + NNModule init capture.
+    """
+
+    def __init__(self, padding: int) -> None: ...
+    def forward(self, input: Tensor) -> Tensor: ...
+
+# Embedding variants
+class EmbeddingBag[NUM_EMB, EMB_DIM](Module):
+    """Computes sums or means of 'bags' of embeddings.
+
+    Unlike Embedding, EmbeddingBag aggregates over variable-length groups
+    of indices using offsets. Output batch dimension comes from offsets.
+    """
+
+    weight: Tensor[NUM_EMB, EMB_DIM]
+
+    def __init__(
+        self,
+        num_embeddings: _Dim[NUM_EMB],
+        embedding_dim: _Dim[EMB_DIM],
+        max_norm: float | None = None,
+        norm_type: float = 2.0,
+        scale_grad_by_freq: bool = False,
+        mode: str = "mean",
+        sparse: bool = False,
+        _weight: Tensor | None = None,
+        include_last_offset: bool = False,
+        padding_idx: int | None = None,
+        device: Any = None,
+        dtype: Any = None,
+    ) -> None: ...
+
+    # EmbeddingBag forward: batch dim B comes from offsets (default, include_last_offset=False).
+    # Embedding dim EMB_DIM is always preserved from init.
+    def forward[B](
+        self,
+        input: Tensor,
+        offsets: Tensor[B] | None = None,
+        per_sample_weights: Tensor | None = None,
+    ) -> Tensor[B, EMB_DIM]: ...
+
 __all__ = [
     "functional",
     "init",
@@ -1050,7 +1147,15 @@ __all__ = [
     "HuberLoss",
     "KLDivLoss",
     "CTCLoss",
+    # RNN cells
+    "LSTM",
+    "LSTMCell",
+    "GRUCell",
     # Misc modules
     "Flatten",
     "Unflatten",
+    "ReflectionPad2d",
+    "ReplicationPad2d",
+    "EmbeddingBag",
+    "Upsample",
 ]

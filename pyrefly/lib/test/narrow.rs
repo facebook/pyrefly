@@ -1920,6 +1920,32 @@ def test_type_objects_mixed_with_literals(x: type[int] | type[float] | None, y: 
 );
 
 testcase!(
+    test_narrow_in_with_metaclass,
+    r#"
+class FruitMeta(type):
+    ...
+
+class Fruit(metaclass=FruitMeta):
+    ...
+
+class Banana(Fruit):
+    ...
+
+class Grape(Fruit):
+    ...
+
+def foo(_a: FruitMeta) -> None:
+    return None
+
+def main(a: type[Fruit]) -> None:
+    if a in (Banana,):
+        foo(a)
+    if a in (Grape, Banana):
+        foo(a)
+"#,
+);
+
+testcase!(
     test_narrow_in_with_starred,
     r#"
 from typing import Literal, assert_type

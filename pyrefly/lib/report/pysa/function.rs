@@ -72,7 +72,7 @@ pub enum FunctionId {
 }
 
 impl FunctionId {
-    fn serialize_to_string(&self) -> String {
+    pub fn serialize_to_string(&self) -> String {
         match self {
             FunctionId::Function { location } => format!("F:{}", location.as_key()),
             FunctionId::ModuleTopLevel => "MTL".to_owned(),
@@ -305,6 +305,10 @@ impl<GenericFunctionDefinition> ModuleFunctionDefinitions<GenericFunctionDefinit
 
     pub fn get(&self, function_id: &FunctionId) -> Option<&GenericFunctionDefinition> {
         self.0.get(function_id)
+    }
+
+    pub fn as_map(&self) -> &HashMap<FunctionId, GenericFunctionDefinition> {
+        &self.0
     }
 
     #[cfg(test)]

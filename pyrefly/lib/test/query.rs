@@ -89,7 +89,7 @@ fn test_simple_int_annotation() {
       "start_col": 3,
       "start_line": 1
     },
-    "type": "type[builtins.int]"
+    "type": "builtins.type[builtins.int]"
   },
   {
     "location": {
@@ -153,7 +153,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 7,
       "start_line": 3
     },
-    "type": "type[builtins.int | None]"
+    "type": "builtins.type[builtins.int | None]"
   },
   {
     "location": {
@@ -162,7 +162,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 7,
       "start_line": 3
     },
-    "type": "type[builtins.int]"
+    "type": "builtins.type[builtins.int]"
   },
   {
     "location": {
@@ -180,7 +180,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 12,
       "start_line": 4
     },
-    "type": "type[builtins.list[main.Foo]]"
+    "type": "builtins.type[builtins.list[main.Foo]]"
   },
   {
     "location": {
@@ -189,7 +189,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 12,
       "start_line": 4
     },
-    "type": "type[builtins.list]"
+    "type": "builtins.type[builtins.list]"
   },
   {
     "location": {
@@ -198,7 +198,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 17,
       "start_line": 4
     },
-    "type": "type[main.Foo]"
+    "type": "builtins.type[main.Foo]"
   },
   {
     "location": {
@@ -207,7 +207,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 26,
       "start_line": 4
     },
-    "type": "type[builtins.int]"
+    "type": "builtins.type[builtins.int]"
   },
   {
     "location": {
@@ -252,7 +252,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 9,
       "start_line": 6
     },
-    "type": "type[builtins.set]"
+    "type": "builtins.type[builtins.set]"
   },
   {
     "location": {

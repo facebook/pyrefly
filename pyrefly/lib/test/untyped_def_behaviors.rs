@@ -6,6 +6,7 @@
  */
 
 use crate::config::base::UntypedDefBehavior;
+use crate::state::require::Require;
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -90,28 +91,28 @@ from typing import assert_type, Any, Callable, Coroutine, Generator, AsyncGenera
 x: int = ...  # E:
 
 def f():
-    oops: int = "oops"
+    oops: int = "oops"  # E:
     return x
 assert_type(f, Callable[[], Any])
 
 async def async_f():
-    oops: int = "oops"
+    oops: int = "oops"  # E:
     return x
-assert_type(async_f, Callable[[], Any])
+assert_type(async_f, Callable[[], Coroutine[Any, Any, Any]])
 
 def gen():
-    oops: int = "oops"
+    oops: int = "oops"  # E:
     yield x
 assert_type(gen, Callable[[], Any])
 
 def gen_w_return():
-    oops: int = "oops"
+    oops: int = "oops"  # E:
     yield x
     return x
 assert_type(gen_w_return, Callable[[], Any])
 
 async def async_gen():
-    oops: int = "oops"
+    oops: int = "oops"  # E:
     yield x
 assert_type(async_gen, Callable[[], Any])
 "#,
@@ -183,8 +184,8 @@ class C:
     def f(self):
         self.y: str = "y"  # E: Attribute `y` is implicitly defined by assignment in method `f`
 c = C()
-assert_type(c.x, Any)
-assert_type(c.y, Any)
+assert_type(c.x, int)
+assert_type(c.y, str)
 assert_type(c.f(), Any)
 "#,
 );
@@ -195,7 +196,7 @@ testcase!(
     r#"
 from typing import assert_type
 def unannotated():
-    x: int = "x"
+    x: int = "x"  # E:
 def annotated_return() -> None:
     x: int = "x"  # E:
 def annotated_param(_: str):
@@ -239,15 +240,15 @@ testcase!(
     r#"
 from typing import assert_type
 def u0():
-    x: int = "x"
+    x: int = "x"  # E:
 def u1(y, *args, **kwargs):
-    x: int = "x"
+    x: int = "x"  # E:
 class C:
     def __init__(self):
-        x: int = "x"
+        x: int = "x"  # E:
         pass
     def __init__(self, y, *args, **kwargs):
-        x: int = "x"
+        x: int = "x"  # E:
         pass
 "#,
 );
@@ -261,9 +262,9 @@ testcase!(
     r#"
 from typing import assert_type, Any, Callable
 
-# Unannotated: body is not checked, return type is Any
+# Unannotated: body is analyzed for IDE features, return type is Any
 def unchecked(x, y):
-    z: str = 0  # no error
+    z: str = 0  # E:
     return x + y
 assert_type(unchecked(0, 0), Any)
 
@@ -292,17 +293,17 @@ testcase!(
     r#"
 from typing import assert_type, Any, Callable, Coroutine
 
-# Unannotated async: return type is Any (no Coroutine wrapping without inference)
+# Unannotated async: body analyzed for IDE, return type is Coroutine[Any, Any, Any]
 async def async_f():
     return 42
-assert_type(async_f, Callable[[], Any])
+assert_type(async_f, Callable[[], Coroutine[Any, Any, Any]])
 
-# Unannotated generator: return type is Any (no inference)
+# Unannotated generator: body analyzed for IDE, return type is Any
 def gen():
     yield 42
 assert_type(gen, Callable[[], Any])
 
-# Unannotated async generator: return type is Any (no inference)
+# Unannotated async generator: body analyzed for IDE, return type is Any
 async def async_gen():
     yield 42
 assert_type(async_gen, Callable[[], Any])
@@ -327,9 +328,9 @@ testcase!(
     r#"
 from typing import assert_type, Any
 
-# check-unannotated-defs=false -> totally unchecked
+# check-unannotated-defs=false -> body analyzed for IDE, return type is Any
 def unchecked(x, y):
-    z: str = 0 # no error
+    z: str = 0  # E:
     return x + y
 # infer-return-types=annotated -> inferred for annotated functions
 def inferred_return(x: int, y: int):
@@ -347,12 +348,12 @@ testcase!(
     r#"
 from typing import assert_type, Any, Callable, Coroutine, Generator, AsyncGenerator
 
-# Unannotated async: return type is Any (no inference, no Coroutine wrapping)
+# Unannotated async: body analyzed for IDE, return type is Coroutine[Any, Any, Any]
 async def unannotated_async():
     return 42
-assert_type(unannotated_async, Callable[[], Any])
+assert_type(unannotated_async, Callable[[], Coroutine[Any, Any, Any]])
 
-# Unannotated generator: return type is Any (no inference)
+# Unannotated generator: body analyzed for IDE, return type is Any
 def unannotated_gen():
     yield 42
 assert_type(unannotated_gen, Callable[[], Any])
@@ -490,3 +491,39 @@ def f(x: int) -> int:
 assert_type(f(0), Any)
 "#,
 );
+
+/// Verifies that `analyze_unannotated_for_ide` is gated on `Require` level:
+/// - `Require::Errors` (batch/CLI): unannotated bodies are skipped, no body errors.
+/// - `Require::Everything` (IDE): unannotated bodies are analyzed, body errors reported.
+#[test]
+fn test_skip_check_batch_vs_ide_mode() {
+    use crate::state::errors::Errors;
+
+    let code = r#"
+def unannotated():
+    x: int = "oops"
+    return 42
+"#;
+
+    // Batch mode (Require::Errors): body is NOT analyzed, no error on "oops"
+    let mut batch_env = TestEnv::new_skip_check_no_infer().with_run_require(Require::Errors);
+    batch_env.add("main", code);
+    let (batch_state, batch_handle) = batch_env.to_state();
+    let batch_errors: Errors = batch_state
+        .transaction()
+        .get_errors([&batch_handle("main")]);
+    assert!(
+        batch_errors.collect_errors().ordinary.is_empty(),
+        "Expected no errors in batch mode (Require::Errors)"
+    );
+
+    // IDE mode (Require::Everything): body IS analyzed, error on "oops"
+    let mut ide_env = TestEnv::new_skip_check_no_infer();
+    ide_env.add("main", code);
+    let (ide_state, ide_handle) = ide_env.to_state();
+    let ide_errors: Errors = ide_state.transaction().get_errors([&ide_handle("main")]);
+    assert!(
+        !ide_errors.collect_errors().ordinary.is_empty(),
+        "Expected errors in IDE mode (Require::Everything)"
+    );
+}

@@ -676,7 +676,7 @@ assert_type(good, list[int])
 bad = [1]
 while condition():
     if condition():
-        bad = [f(bad)]  # E: Argument `list[int | str] | list[int] | list[str]` is not assignable to parameter `x` with type `list[int | str]` in function `f`
+        bad = [f(bad)]  # E: Argument `list[int] | list[str]` is not assignable to parameter `x` with type `list[int]` in function `f`
     else:
         bad = [""]
 "#,

@@ -242,6 +242,7 @@ impl ClassKind {
             ("builtins", "property") => Self::Property(name.clone()),
             ("abc", "abstractproperty") => Self::Property(name.clone()),
             ("functools", "cached_property") => Self::CachedProperty(name.clone()),
+            ("cached_property", "threaded_cached_property") => Self::CachedProperty(name.clone()),
             ("cached_property", "cached_property") => Self::CachedProperty(name.clone()),
             ("cinder", "cached_property") => Self::CachedProperty(name.clone()),
             ("cinder", "async_cached_property") => Self::CachedProperty(name.clone()),

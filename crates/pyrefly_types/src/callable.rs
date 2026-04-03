@@ -12,6 +12,7 @@ use std::fmt;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::sync::Arc;
 
 use dupe::Dupe;
 use parse_display::Display;
@@ -382,11 +383,12 @@ pub struct FuncMetadata {
 impl FuncMetadata {
     pub fn def(module: Module, cls: Class, func: Name, def_index: Option<FuncDefIndex>) -> Self {
         Self {
-            kind: FunctionKind::Def(Box::new(FuncId {
+            kind: FunctionKind::Def(Arc::new(FuncId {
                 module,
                 cls: Some(cls),
                 name: func,
                 def_index,
+                outer_funcs: None,
             })),
             flags: FuncFlags::default(),
         }
@@ -484,6 +486,9 @@ pub struct FuncId {
     pub cls: Option<Class>,
     pub name: Name,
     pub def_index: Option<FuncDefIndex>,
+    /// Dot-separated path of enclosing function names (e.g. `"f1"` for a function nested inside `f1`).
+    /// `None` for top-level and class-method functions.
+    pub outer_funcs: Option<Name>,
 }
 
 impl PartialEq for FuncId {
@@ -520,7 +525,18 @@ impl Visit<Type> for FuncId {
     fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
 
+/// FuncId contains no Type fields, so visiting through Arc is a no-op.
+impl VisitMut<Type> for Arc<FuncId> {
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+impl Visit<Type> for Arc<FuncId> {
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
 impl FuncId {
+    /// Identity tuple for equality and hashing. `outer_funcs` is intentionally
+    /// excluded because it is display-only metadata (the dotted path of enclosing
+    /// function names) and does not affect the logical identity of a function.
     fn key_eq(
         &self,
     ) -> (
@@ -602,7 +618,7 @@ pub enum FunctionKind {
     RevealType,
     Final,
     RuntimeCheckable,
-    Def(Box<FuncId>),
+    Def(Arc<FuncId>),
     AbstractMethod,
     /// Instance of a protocol with a `__call__` method. The function has the `__call__` signature.
     CallbackProtocol(Box<ClassType>),
@@ -718,6 +734,21 @@ impl Callable {
         Self {
             params: Params::ParamSpec(args, param_spec),
             ret,
+        }
+    }
+
+    /// Return a new Callable with the first parameter removed (the `self` param for bound methods).
+    /// Returns a clone if the params are not a list or the list is empty.
+    pub fn strip_self_param(&self) -> Self {
+        match &self.params {
+            Params::List(params) => {
+                if let Some((_, rest)) = params.split_first() {
+                    Callable::list(rest, self.ret.clone())
+                } else {
+                    self.clone()
+                }
+            }
+            _ => self.clone(),
         }
     }
 
@@ -948,6 +979,7 @@ impl FunctionKind {
         cls: Option<Class>,
         func: &Name,
         def_index: Option<FuncDefIndex>,
+        outer_funcs: Option<Name>,
     ) -> Self {
         match (module.name().as_str(), cls.as_ref(), func.as_str()) {
             ("builtins", None, "isinstance") => Self::IsInstance,
@@ -971,11 +1003,12 @@ impl FunctionKind {
             ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
             ("numba.core.decorators", None, "jit") => Self::NumbaJit,
             ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
-            _ => Self::Def(Box::new(FuncId {
+            _ => Self::Def(Arc::new(FuncId {
                 module,
                 cls,
                 name: func.clone(),
                 def_index,
+                outer_funcs,
             })),
         }
     }
@@ -1055,6 +1088,13 @@ impl FunctionKind {
             Self::TotalOrdering => None,
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
+        }
+    }
+
+    pub fn outer_funcs(&self) -> Option<&Name> {
+        match self {
+            Self::Def(func_id) => func_id.outer_funcs.as_ref(),
+            _ => None,
         }
     }
 

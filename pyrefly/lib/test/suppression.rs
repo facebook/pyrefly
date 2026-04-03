@@ -273,3 +273,44 @@ result: {1 + "a"}  # E: is not supported
 """
 "#,
 );
+
+testcase!(
+    test_pyrefly_suppression_backslash_continuation_above,
+    r#"
+# pyrefly: ignore
+x: str = 1 + \
+    "a"
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_backslash_continuation_middle_line,
+    r#"
+# pyrefly: ignore
+x: int = \
+    "a" + \
+    2
+"#,
+);
+
+testcase!(
+    test_pyrefly_top_level_ignore_after_docstring,
+    r#"
+"""Module docstring."""
+# pyrefly: ignore-errors
+3 + "3"
+3 + "3"
+"#,
+);
+
+testcase!(
+    test_pyrefly_top_level_ignore_after_multiline_docstring,
+    r#"
+"""
+Module docstring.
+"""
+# pyrefly: ignore-errors
+3 + "3"
+3 + "3"
+"#,
+);

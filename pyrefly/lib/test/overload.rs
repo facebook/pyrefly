@@ -1575,7 +1575,7 @@ def ndim(shape: tuple[int, ...]) -> int:
     return len(shape)
 
 def demo_gradual(s: tuple[Any, ...]):
-    assert_type(ndim(s), Any)
+    assert_type(ndim(s), int)
 
 def demo_one(s: tuple[int]):
     assert_type(ndim(s), Literal[1])
@@ -1604,8 +1604,7 @@ def f(x: None):
 );
 
 testcase!(
-    bug = "op(A[Any], A[Any]) should be treated as ambiguous",
-    test_ambiguous,
+    test_resolve_ambiguous_precise,
     r#"
 from typing import Any, overload, assert_type
 
@@ -1626,7 +1625,34 @@ def test(x: A[None], y: A[Any]) -> None:
     assert_type(op(x, x), A[None])
     assert_type(op(x, y), A[None])
     assert_type(op(y, x), A[None])
-    assert_type(op(y, y), Any)  # E: assert_type(A[None], Any)
+    assert_type(op(y, y), A[Any])
+    "#,
+);
+
+testcase!(
+    test_resolve_ambiguous_spec_compliant,
+    TestEnv::new().enable_spec_compliant_overloads(),
+    r#"
+from typing import Any, overload, assert_type
+
+class A[T]:  # covariant
+    def get(self) -> T: ...
+
+@overload
+def op(l: A[None], r: A[None]) -> A[None]: ...
+@overload
+def op(l: A[None], r: A[Any]) -> A[None]: ...
+@overload
+def op(l: A[Any], r: A[None]) -> A[None]: ...
+@overload
+def op(l: A[Any], r: A[Any]) -> A[Any]: ...
+def op(l, r) -> A[None | Any]: ...
+
+def test(x: A[None], y: A[Any]) -> None:
+    assert_type(op(x, x), A[None])
+    assert_type(op(x, y), A[None])
+    assert_type(op(y, x), A[None])
+    assert_type(op(y, y), Any)
     "#,
 );
 
@@ -1650,11 +1676,10 @@ def foo(func: None | Callable[..., R] = None) -> None | Callable[..., R]:
     "#,
 );
 
-// The spec only says to eliminate overloads without variadic parameters if an indeterminate number
-// of parameters is supplied, but mypy, pyright, and ty appear to do the opposite as well:
-// if a fixed number of parameters is supplied, overloads with variadic parameters are eliminated.
+// Even though argument `x` has an unknown type, `f1(x)` and `f2(x)` are not considered ambiguous
+// because parameter `x` has the same type in all candidate overloads.
 testcase!(
-    test_eliminate_variadic,
+    test_eliminate_non_ambiguous,
     r#"
 from typing import assert_type, overload
 
@@ -1673,6 +1698,50 @@ def f2(x, **kwargs) -> str | int: ...
 def g(x):
     assert_type(f1(x), str)
     assert_type(f2(x), str)
+    "#,
+);
+
+// In spec-compliant mode, because argument `x` has unknown type in `f1(x)` and `f2(x)`, the calls
+// are considered ambiguous and both overloads match, so we fall back to `Any` for the return type.
+// See test_eliminate_non_ambiguous for the non-spec-compliant behavior.
+testcase!(
+    test_eliminate_non_ambiguous_spec_compliant,
+    TestEnv::new().enable_spec_compliant_overloads(),
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f1(x: str) -> str: ...
+@overload
+def f1(x: str, *args) -> int: ...
+def f1(x, *args) -> str | int: ...
+
+@overload
+def f2(x: str) -> str: ...
+@overload
+def f2(x: str, **kwargs) -> int: ...
+def f2(x, **kwargs) -> str | int: ...
+
+def g(x):
+    assert_type(f1(x), Any)
+    assert_type(f2(x), Any)
+    "#,
+);
+
+testcase!(
+    test_do_not_eliminate_variadic,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f(x: str) -> str: ...
+@overload
+def f(x: str | bytes, *args: int) -> int: ...
+def f(x: str | bytes, *args: int) -> str | int:
+    return 0
+
+def g(x):
+    assert_type(f(x), Any)
     "#,
 );
 
@@ -1712,6 +1781,29 @@ def f(x, y) -> int | str: ...
 
 def g(x: Any):
     assert_type(f(x, 'y'), int)
+    "#,
+);
+
+// In non-spec-compliant mode (see test_match_overload_using_literal_arg), step 5 skips
+// materializing arguments whose parameter type is the same across all candidate overloads, so `x`
+// would not be materialized, and the first overload would win. In spec-compliant mode, `x` is
+// materialized, and the call is ambiguous.
+testcase!(
+    test_match_overload_using_literal_arg_spec_compliant,
+    TestEnv::new().enable_spec_compliant_overloads(),
+    r#"
+from typing import Any, assert_type, Literal, overload
+
+@overload
+def f(x: int, y: Literal['y']) -> int: ...
+@overload
+def f(x: int, y: Literal['n']) -> str: ...
+@overload
+def f(x: int, y: str) -> int | str: ...
+def f(x, y) -> int | str: ...
+
+def g(x: Any):
+    assert_type(f(x, 'y'), Any)
     "#,
 );
 

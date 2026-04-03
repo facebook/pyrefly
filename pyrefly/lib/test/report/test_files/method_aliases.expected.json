@@ -1,0 +1,41 @@
+{
+  "name": "test",
+  "names": [
+    "test.Simple.__and__",
+    "test.Simple"
+  ],
+  "line_count": 15,
+  "symbol_reports": [
+    {
+      "kind": "function",
+      "name": "test.Simple.__and__",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 11,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Simple",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 10,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 2,
+  "n_typed": 2,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0
+}

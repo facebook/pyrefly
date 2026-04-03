@@ -31,7 +31,9 @@ class Optimizer:
     """Base class for all optimizers."""
 
     def __init__(
-        self, params: Iterator[Tensor] | list[dict[str, Any]], defaults: dict[str, Any]
+        self,
+        params: Iterator[Tensor] | list[Tensor] | list[dict[str, Any]],
+        defaults: dict[str, Any],
     ) -> None: ...
     def zero_grad(self, set_to_none: bool = True) -> None:
         """Zero out gradients."""
@@ -55,7 +57,7 @@ class SGD(Optimizer):
 
     def __init__(
         self,
-        params: Iterator[Tensor] | list[dict[str, Any]],
+        params: Iterator[Tensor] | list[Tensor] | list[dict[str, Any]],
         lr: float = 0.001,
         momentum: float = 0,
         dampening: float = 0,
@@ -72,7 +74,7 @@ class Adam(Optimizer):
 
     def __init__(
         self,
-        params: Iterator[Tensor] | list[dict[str, Any]],
+        params: Iterator[Tensor] | list[Tensor] | list[dict[str, Any]],
         lr: float = 0.001,
         betas: tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
@@ -91,7 +93,7 @@ class AdamW(Optimizer):
 
     def __init__(
         self,
-        params: Iterator[Tensor] | list[dict[str, Any]],
+        params: Iterator[Tensor] | list[Tensor] | list[dict[str, Any]],
         lr: float = 0.001,
         betas: tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
@@ -110,7 +112,7 @@ class RMSprop(Optimizer):
 
     def __init__(
         self,
-        params: Iterator[Tensor] | list[dict[str, Any]],
+        params: Iterator[Tensor] | list[Tensor] | list[dict[str, Any]],
         lr: float = 0.01,
         alpha: float = 0.99,
         eps: float = 1e-8,
@@ -128,7 +130,7 @@ class Adagrad(Optimizer):
 
     def __init__(
         self,
-        params: Iterator[Tensor] | list[dict[str, Any]],
+        params: Iterator[Tensor] | list[Tensor] | list[dict[str, Any]],
         lr: float = 0.01,
         lr_decay: float = 0,
         weight_decay: float = 0,
@@ -145,7 +147,7 @@ class Adadelta(Optimizer):
 
     def __init__(
         self,
-        params: Iterator[Tensor] | list[dict[str, Any]],
+        params: Iterator[Tensor] | list[Tensor] | list[dict[str, Any]],
         lr: float = 1.0,
         rho: float = 0.9,
         eps: float = 1e-6,
@@ -161,7 +163,7 @@ class Adamax(Optimizer):
 
     def __init__(
         self,
-        params: Iterator[Tensor] | list[dict[str, Any]],
+        params: Iterator[Tensor] | list[Tensor] | list[dict[str, Any]],
         lr: float = 0.002,
         betas: tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
@@ -177,7 +179,7 @@ class ASGD(Optimizer):
 
     def __init__(
         self,
-        params: Iterator[Tensor] | list[dict[str, Any]],
+        params: Iterator[Tensor] | list[Tensor] | list[dict[str, Any]],
         lr: float = 0.01,
         lambd: float = 0.0001,
         alpha: float = 0.75,
@@ -194,7 +196,7 @@ class LBFGS(Optimizer):
 
     def __init__(
         self,
-        params: Iterator[Tensor] | list[dict[str, Any]],
+        params: Iterator[Tensor] | list[Tensor] | list[dict[str, Any]],
         lr: float = 1,
         max_iter: int = 20,
         max_eval: int | None = None,

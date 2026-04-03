@@ -591,10 +591,18 @@ def check_project(
         _remove_pyrefly_section(pyproject_toml)
 
     if _has_pyright_config(repo_dir):
+        # Migrate from pyright config for apples-to-apples comparison
         logging.info("  Found pyright config, migrating")
+        run(
+            f"{pyrefly_bin} init --non-interactive --migrate-from pyright",
+            debug,
+            cwd=repo_dir,
+            shell=True,
+        )
     else:
+        # No pyright config; default init (uses mypy config if present)
         logging.info("  No pyright config, using default init")
-    run(f"{pyrefly_bin} init", debug, cwd=repo_dir, shell=True)
+        run(f"{pyrefly_bin} init --non-interactive", debug, cwd=repo_dir, shell=True)
 
     # When full_errors is requested, run pyrefly in JSON mode
     output_format = " --output-format json" if full_errors else ""

@@ -1375,6 +1375,108 @@ def f() -> bool:
     "#,
 );
 
+// When the `if` branch raises, the elif condition must execute before
+// reaching code after the if/elif block, so the walrus is always assigned.
+testcase!(
+    test_walrus_in_elif_with_raise,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if not foo():
+        raise AssertionError()
+    elif (_bar := bar()) > 1:
+        raise AssertionError()
+    print(_bar)
+    "#,
+);
+
+// The walrus assignment should propagate to the base flow so the
+// merge does not falsely report "may be uninitialized".
+testcase!(
+    test_walrus_in_elif_targeting_declared_local,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    x: int
+    if not foo():
+        raise AssertionError()
+    elif (x := bar()) > 1:
+        raise AssertionError()
+    print(x)
+    "#,
+);
+
+testcase!(
+    test_walrus_multiple_elif,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if not foo():
+        raise AssertionError()
+    elif (x := bar()) > 1:
+        raise AssertionError()
+    elif (y := bar()) > 2:
+        raise AssertionError()
+    print(x)
+    print(y)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_elif_with_else,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if not foo():
+        raise AssertionError()
+    elif (x := bar()) > 1:
+        pass
+    else:
+        pass
+    print(x)
+    "#,
+);
+
+// the walrus may not execute, so x should be possibly-uninitialized.
+testcase!(
+    bug = "Should report x as possibly uninitialized since the if branch does not terminate",
+    test_walrus_in_elif_preceding_if_no_terminate,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if foo():
+        pass
+    elif (x := bar()) > 1:
+        pass
+    print(x)  # should be an error: x may be uninitialized
+    "#,
+);
+
 testcase!(
     test_walrus_in_if_no_else,
     r#"

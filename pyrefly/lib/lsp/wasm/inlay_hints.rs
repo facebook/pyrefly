@@ -79,7 +79,7 @@ pub fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<
     if let Params::List(params_list) = callable.params {
         if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
             params_list.items().first()
-            && (name.as_str() == "self" || name.as_str() == "cls")
+            && (name.as_str() == "self" || name.as_str() == "cls" || name.as_str() == "_cls")
         {
             let mut params = params_list.into_items();
             params.remove(0);
@@ -342,6 +342,7 @@ impl<'a> Transaction<'a> {
                                 && !param_match.is_vararg_repeat
                                 && param_match.name.as_str() != "self"
                                 && param_match.name.as_str() != "cls"
+                                && param_match.name.as_str() != "_cls"
                             {
                                 param_hints.push((
                                     arg.range().start(),
@@ -398,7 +399,10 @@ impl<'a> Transaction<'a> {
         param_with_default: ParameterWithDefault,
         handle: &Handle,
     ) -> Option<ParameterAnnotation> {
-        if param_with_default.name() == "self" || param_with_default.name() == "cls" {
+        if param_with_default.name() == "self"
+            || param_with_default.name() == "cls"
+            || param_with_default.name() == "_cls"
+        {
             return None;
         }
         let ty = match param_with_default.default() {

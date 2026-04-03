@@ -1,7 +1,10 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
+# Portions (c) Meta Platforms, Inc. and affiliates.
 #
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
+# This source code is adapted from pytorch/benchmark (TorchBenchmark),
+# which is licensed under the BSD 3-Clause License:
+# https://github.com/pytorch/benchmark/blob/main/LICENSE
+#
+# This adaptation adds tensor shape type annotations for pyrefly.
 
 """
 Full definition of a GPT Language Model, all of it in this single file.
@@ -290,7 +293,11 @@ class GPT[VocabSize, BlockSize, NEmbedding, NHead, NLayer](nn.Module):
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
-    def get_num_params(self, non_embedding=True):
+    # TODO(rechen): the type of `n_params` used to be inferred as `Unknown`.
+    # After D95667476, it is the more precise
+    # `Literal[0] | Dim[(-1 * (BlockSize * NEmbedding))] | Unknown`, which leads to follow-on
+    # errors like "`/` is not supported between `Dim[((-1 * BlockSize) * NEmbedding)]` and `float`"
+    def get_num_params(self, non_embedding=True) -> Any:
         """
         Return the number of parameters in the model.
         For non-embedding count (default), the position embeddings get subtracted.

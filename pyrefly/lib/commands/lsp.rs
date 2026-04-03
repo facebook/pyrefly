@@ -7,6 +7,7 @@
 
 use std::io::Write;
 use std::sync::Arc;
+use std::time::Instant;
 
 use clap::Parser;
 use clap::ValueEnum;
@@ -83,6 +84,7 @@ pub fn run_lsp(
     wrapper: Option<ConfigConfigurerWrapper>,
     thread_count: ThreadCount,
 ) -> anyhow::Result<()> {
+    let lsp_start_time = Instant::now();
     if let Some(initialize_info) =
         initialize_connection(&connection, &mut reader, args.indexing_mode, server_info)?
     {
@@ -99,6 +101,7 @@ pub fn run_lsp(
             external_references,
             wrapper,
             thread_count,
+            lsp_start_time,
         )?;
     }
     Ok(())

@@ -109,7 +109,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         has_dynamic_fields: bool,
     ) -> ClassSynthesizedField {
         let mut params = vec![Param::Pos(
-            Name::new_static("cls"),
+            Name::new_static("_cls"),
             self.heap
                 .mk_type_form(self.heap.mk_self_type(self.as_class_type_unchecked(cls))),
             Required::Required,

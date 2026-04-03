@@ -415,6 +415,7 @@ mod test {
     use pretty_assertions::assert_str_eq;
     use pyrefly_util::globs::FilteredGlobs;
     use pyrefly_util::globs::Globs;
+    use pyrefly_util::globs::HiddenDirFilter;
     use tempfile;
 
     use super::*;
@@ -430,7 +431,12 @@ mod test {
         t.add(&path.display().to_string(), input);
         let includes =
             Globs::new(vec![format!("{}/**/*", tdir.path().display()).to_owned()]).unwrap();
-        let f_globs = Box::new(FilteredGlobs::new(includes, Globs::empty(), None));
+        let f_globs = Box::new(FilteredGlobs::new(
+            includes,
+            Globs::empty(),
+            None,
+            HiddenDirFilter::Disabled,
+        ));
         let config_finder = t.config_finder();
         let result = InferArgs::run_inner(f_globs, config_finder, flags, TEST_THREAD_COUNT);
         assert!(

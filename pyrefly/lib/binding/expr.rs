@@ -761,6 +761,26 @@ impl<'a> BindingsBuilder<'a> {
                     }
                 }
             }
+            // TypeForm(expr) — treat the argument as a type expression (forward reference support)
+            Expr::Call(ExprCall {
+                node_index: _,
+                range: _,
+                func,
+                arguments,
+            }) if self.as_special_export(func) == Some(SpecialExport::TypeForm)
+                && !arguments.is_empty() =>
+            {
+                self.ensure_expr(func, usage);
+                if let Some(arg) = arguments.args.first_mut() {
+                    self.ensure_type(arg, &mut None)
+                }
+                for arg in arguments.args.iter_mut().skip(1) {
+                    self.ensure_expr(arg, usage);
+                }
+                for kw in arguments.keywords.iter_mut() {
+                    self.ensure_expr(&mut kw.value, usage);
+                }
+            }
             Expr::Call(ExprCall {
                 node_index: _,
                 range,
@@ -1089,6 +1109,30 @@ impl<'a> BindingsBuilder<'a> {
                     usage,
                     tparams_builder,
                 );
+            }
+            Expr::Attribute(ExprAttribute { value, attr, .. })
+                if let Expr::Name(name_expr) = &**value
+                    && (attr.id == "args" || attr.id == "kwargs") =>
+            {
+                // P.args / P.kwargs: resolve P through the legacy tparam collector if P
+                // is already there (e.g. from `Callable[P, ...]`), but do NOT add P as
+                // a new legacy type parameter. This prevents P from being incorrectly
+                // introduced as a tparam when it is only referenced via P.args/P.kwargs
+                // without being bound by a Callable parameter.
+                let name = Ast::expr_name_identifier(name_expr.clone());
+                let id = LegacyTParamId::Name(name.clone());
+                let resolved = tparams_builder
+                    .as_mut()
+                    .and_then(|tb| self.try_intercept_lookup(tb, &id));
+                if resolved.is_some() {
+                    // P is already a legacy tparam (from Callable[P, ...]),
+                    // process normally so it resolves to QuantifiedValue.
+                    self.ensure_name(&name, usage, tparams_builder);
+                } else {
+                    // P is not yet in the collector. Process without tparam
+                    // interception so P resolves to its original binding.
+                    self.ensure_name(&name, usage, &mut None);
+                }
             }
             Expr::BinOp(ExprBinOp {
                 left,

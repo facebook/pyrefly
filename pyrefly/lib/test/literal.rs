@@ -456,3 +456,53 @@ for i, j in enumerate(c):
     test(j) # E: Argument `str` is not assignable to parameter `x` with type `Literal['a', 'b']` in function `test`
     "#,
 );
+
+testcase!(
+    bug = "cross-barrier reads should promote Literal[100] to int (pyright does)",
+    test_promote_module_level_literal_in_function,
+    r#"
+from typing import Literal, assert_type
+
+timeout = 100
+MY_CONST = 42
+
+def foo():
+    assert_type(timeout, int)  # E: assert_type(Literal[100], int) failed
+    assert_type(MY_CONST, Literal[42])
+    "#,
+);
+
+testcase!(
+    bug = "branchy Literal[1] | Literal[2] should promote to int (pyright does)",
+    test_promote_branchy_literal_in_function,
+    r#"
+from typing import Literal, assert_type
+
+def cond() -> bool: ...
+if cond():
+    x = 1
+else:
+    x = 2
+
+def foo():
+    assert_type(x, int)  # E: assert_type(Literal[1, 2], int) failed
+    "#,
+);
+
+testcase!(
+    bug = "cross-barrier reads should promote enum literals to base type (pyright does)",
+    test_promote_module_level_enum_literal_in_function,
+    r#"
+from typing import Literal, assert_type
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+
+x = Color.RED
+
+def foo():
+    assert_type(x, Color)  # E: assert_type(Literal[Color.RED], Color) failed
+    "#,
+);

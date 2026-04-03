@@ -82,6 +82,7 @@ pub enum TelemetryEventKind {
     FindFromDefinition,
     ExternalReferences,
     ExternalWorkspaceSymbols,
+    LspStartup,
 }
 
 pub struct TelemetryEvent {
@@ -182,6 +183,7 @@ pub struct TelemetrySourceDbRebuildInstanceStats {
     pub parse_time: Option<Duration>,
     pub process_time: Option<Duration>,
     pub raw_size: Option<usize>,
+    pub exit_reason: Option<String>,
 }
 
 #[derive(Default)]

@@ -418,7 +418,7 @@ fn resolve_third_party_stub(
         && stub_result.is_none()
     {
         if let Some(pip_package) = recommended_stubs_package(module) {
-            return Some(bundled.clone().with_error(FindError::MissingStubs(
+            return Some(bundled.clone().with_error(FindError::UntypedImport(
                 module,
                 pip_package.to_string().into(),
             )));
@@ -432,7 +432,7 @@ fn resolve_third_party_stub(
     // If we do have a bundled stub and we also do not find a
     // higher priority stub from the site packages, then we should use the
     // bundled stub. However, if we also don't find the actual
-    // package (normal_result), we should attach a NoSource error.
+    // package (normal_result), we should attach a MissingSource error.
     if let Some(bundled) = bundled_stub
         && stub_result.is_none()
     {
@@ -443,7 +443,7 @@ fn resolve_third_party_stub(
                 return None;
             } else {
                 // Keep existing behavior for non-real config files
-                return Some(bundled.with_error(FindError::NoSourceForStubs(module)));
+                return Some(bundled.with_error(FindError::MissingSourceForStubs(module)));
             }
         } else {
             // We have both typeshed third party stubs and the actual package
@@ -468,7 +468,7 @@ fn combine_normal_and_stub_results(
         (None, Some(stub_result)) => Some(
             stub_result
                 .module_path()
-                .with_error(FindError::NoSource(module)),
+                .with_error(FindError::MissingSource(module)),
         ),
         (Some(_), Some(stub_result)) => Some(stub_result.module_path()),
         (Some(FindResult::NamespacePackage(namespaces)), _) => {
@@ -480,7 +480,7 @@ fn combine_normal_and_stub_results(
                 Some(
                     normal_result
                         .module_path()
-                        .with_error(FindError::MissingStubs(
+                        .with_error(FindError::UntypedImport(
                             module,
                             missing_stub_result.as_str().to_owned().into(),
                         )),
@@ -683,7 +683,11 @@ fn find_third_party_stub(
 ) -> Option<FindingOrError<ModulePath>> {
     let third_party_typeshed_stub = if matches!(style_filter, Some(ModuleStyle::Interface) | None) {
         typeshed_third_party().map_or_else(
-            |err| Some(FindingOrError::Error(FindError::not_found(err, module))),
+            |err| {
+                Some(FindingOrError::Error(FindError::missing_import(
+                    err, module,
+                )))
+            },
             |ts| ts.find(module).map(FindingOrError::new_finding),
         )
     } else {
@@ -696,7 +700,11 @@ fn find_third_party_stub(
 
     if matches!(style_filter, Some(ModuleStyle::Interface) | None) {
         get_bundled_third_party().map_or_else(
-            |err| Some(FindingOrError::Error(FindError::not_found(err, module))),
+            |err| {
+                Some(FindingOrError::Error(FindError::missing_import(
+                    err, module,
+                )))
+            },
             |ts| ts.find(module).map(FindingOrError::new_finding),
         )
     } else {
@@ -781,7 +789,11 @@ pub fn find_import_internal(
         path
     } else if matches!(style_filter, Some(ModuleStyle::Interface) | None)
         && let Some(path) = typeshed().map_or_else(
-            |err| Some(FindingOrError::Error(FindError::not_found(err, module))),
+            |err| {
+                Some(FindingOrError::Error(FindError::missing_import(
+                    err, module,
+                )))
+            },
             |ts| ts.find(module).map(FindingOrError::new_finding),
         )
     {
@@ -894,7 +906,19 @@ pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<Modu
 fn recommended_stubs_package(module: ModuleName) -> Option<ModuleName> {
     match module.first_component().as_str() {
         "django" => Some(ModuleName::from_str("django-stubs")),
-        _ => None,
+        _ => {
+            // If the module has stubs in typeshed, recommend types-<package>
+            if let Ok(ts) = typeshed_third_party()
+                && ts.find(module).is_some()
+            {
+                Some(ModuleName::from_str(&format!(
+                    "types-{}",
+                    module.first_component()
+                )))
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -1646,7 +1670,7 @@ mod tests {
             .unwrap(),
             FindingOrError::Finding(Finding {
                 finding: ModulePath::filesystem(root.join("foo-stubs/bar/__init__.py")),
-                error: Some(FindError::NoSource(ModuleName::from_str("foo.bar"))),
+                error: Some(FindError::MissingSource(ModuleName::from_str("foo.bar"))),
             })
         );
         assert!(matches!(
@@ -1662,7 +1686,7 @@ mod tests {
             .unwrap(),
             FindingOrError::Finding(Finding {
                 finding: _,
-                error: Some(FindError::NoSource(_)),
+                error: Some(FindError::MissingSource(_)),
             })
         ));
     }
@@ -2345,7 +2369,10 @@ mod tests {
 
         let result = find_import_filtered(&config, ModuleName::from_str("requests"), None, None);
         assert!(
-            matches!(&result, FindingOrError::Error(FindError::NotFound(_, _))),
+            matches!(
+                &result,
+                FindingOrError::Error(FindError::MissingImport(_, _))
+            ),
             "Expected NotFound error for 'requests' with real config file but package not installed, but got: {:?}",
             result
         );
@@ -2399,12 +2426,12 @@ mod tests {
         // Should return NotFound error when using real config and typeshed third party stubs exist but package is not installed
         let error = result.error().expect("Expected error to be present");
         assert!(
-            matches!(error, FindError::NotFound(_, _)),
+            matches!(error, FindError::MissingImport(_, _)),
             "Expected NotFound error with real config, got: {:?}",
             error
         );
 
-        if let FindError::NotFound(module, _) = error {
+        if let FindError::MissingImport(module, _) = error {
             assert_eq!(module, ModuleName::from_str("requests"));
         }
     }
@@ -2435,6 +2462,47 @@ mod tests {
     }
 
     #[test]
+    fn test_typeshed_third_party_with_real_config_recommends_types_package() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        // Set up site package directory with 'requests' installed but no stubs
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "site_packages",
+                vec![TestPath::dir(
+                    "requests",
+                    vec![TestPath::file("__init__.py")],
+                )],
+            )],
+        );
+
+        let mut config = get_config(ConfigSource::File("".into()));
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.configure();
+
+        let result = find_import_filtered(&config, ModuleName::from_str("requests"), None, None);
+
+        if let FindingOrError::Finding(finding) = &result {
+            let error = finding
+                .error
+                .as_ref()
+                .expect("Expected UntypedImport error");
+            let FindError::UntypedImport(module, stubs_package) = error else {
+                panic!("Expected UntypedImport error, got: {:?}", error);
+            };
+            assert_eq!(*module, ModuleName::from_str("requests"));
+            assert_eq!(stubs_package.as_str(), "types-requests");
+        } else {
+            panic!(
+                "Expected Finding with UntypedImport error, got: {:?}",
+                result
+            );
+        }
+    }
+
+    #[test]
     fn test_typeshed_third_party_no_with_no_package_returns_typeshed_source_error() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
@@ -2449,8 +2517,8 @@ mod tests {
         // 'requests' exists in typeshed third party stubs but not in our site_packages
         let result = find_import_filtered(&config, ModuleName::from_str("requests"), None, None);
 
-        let FindError::NoSourceForStubs(module) = result.error().unwrap() else {
-            panic!("Expected NoSourceForStubs error");
+        let FindError::MissingSourceForStubs(module) = result.error().unwrap() else {
+            panic!("Expected MissingSourceForStubs error");
         };
         assert_eq!(module, ModuleName::from_str("requests"));
     }
@@ -2484,7 +2552,7 @@ mod tests {
                 finding.finding.details(),
                 ModulePathDetails::BundledTypeshedThirdParty(_)
             ));
-            // Should not have a NoSource error since the package exists
+            // Should not have a MissingSource error since the package exists
             assert!(finding.error.is_none());
         } else {
             panic!("Expected to find typeshed stub, got: {:?}", result);

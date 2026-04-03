@@ -1826,8 +1826,20 @@ testcase!(
     r#"
 from typing import ClassVar, Final
 class C:
-    x: ClassVar[Final[int]] = 42
+    x: ClassVar[Final[int]] = 42  # E: `Final` may not be nested inside `ClassVar`
 C.x = 43  # E: This field is marked as Final
+    "#,
+);
+
+testcase!(
+    test_classvar_final_nesting,
+    r#"
+from typing import ClassVar, Final
+class C:
+    x: Final[ClassVar[int]] = 1  # E: `ClassVar` may not be nested inside `Final`
+    y: ClassVar[Final[int]] = 2  # E: `Final` may not be nested inside `ClassVar`
+    z: Final[int] = 3
+    w: ClassVar[int] = 4
     "#,
 );
 

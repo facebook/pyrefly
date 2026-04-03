@@ -58,9 +58,12 @@ pub struct Context<'a, Lookup> {
     pub infer_with_first_use: bool,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
+    pub spec_compliant_overloads: bool,
     pub recursion_limit_config: Option<RecursionLimitConfig>,
     /// Pysa context for building PysaSolutions during the Solutions step.
     pub pysa_context: Option<PysaContext<'a>>,
+    /// Build compact CinderX solutions during the Solutions step.
+    pub cinderx_enabled: bool,
 }
 
 #[derive(Debug, Default, Dupe, Clone)]
@@ -414,9 +417,11 @@ impl Step {
             ctx.infer_with_first_use,
             ctx.tensor_shapes,
             ctx.strict_callable_subtyping,
+            ctx.spec_compliant_overloads,
         );
         let enable_index = ctx.require.keep_index();
-        let enable_trace = ctx.require.keep_answers_trace() || ctx.pysa_context.is_some();
+        let enable_trace =
+            ctx.require.keep_answers_trace() || ctx.pysa_context.is_some() || ctx.cinderx_enabled;
         let bindings = Bindings::new(
             Arc::unwrap_or_clone(ast),
             load.module_info.dupe(),
@@ -428,6 +433,7 @@ impl Step {
             ctx.uniques,
             enable_trace,
             ctx.check_unannotated_defs,
+            ctx.require.keep_index(),
             ctx.infer_return_types,
         );
         let answers = Answers::new(&bindings, solver, enable_index, enable_trace);
@@ -463,9 +469,11 @@ impl Step {
             ctx.require.compute_errors()
                 || ctx.require.keep_answers_trace()
                 || ctx.require.keep_answers()
-                || ctx.pysa_context.is_some(),
+                || ctx.pysa_context.is_some()
+                || ctx.cinderx_enabled,
             ctx.recursion_limit_config,
             pysa_context.as_ref(),
+            ctx.cinderx_enabled,
         );
 
         Arc::new(solutions)

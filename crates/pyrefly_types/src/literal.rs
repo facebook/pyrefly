@@ -13,6 +13,7 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_util::assert_words;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprBytesLiteral;
 use ruff_python_ast::ExprFString;
@@ -57,13 +58,25 @@ pub enum Lit {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
+#[derive(Visit, TypeEq)]
 pub struct LitEnum {
     pub class: ClassType,
     pub member: Name,
     /// Raw type assigned to name in class def.
     /// We store the raw type so we can return it when the value or _value_ attribute is accessed.
+    /// NOTE: Intentionally excluded from VisitMut so that type transformations like
+    /// `promote_implicit_literals` don't mutate this metadata field, which must remain
+    /// stable for `.value` resolution.
     pub ty: Type,
+}
+
+/// Manual VisitMut that skips the `ty` field. The `ty` is semantic metadata for `.value`
+/// resolution and must not be mutated by recursive type transformations (e.g. literal promotion).
+/// We still recurse into `class` so that type arguments on generic enums are visited.
+impl VisitMut<Type> for LitEnum {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        self.class.visit_mut(f);
+    }
 }
 
 impl Display for Lit {
