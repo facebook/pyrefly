@@ -115,6 +115,15 @@ To allow `pyright: ignore` comments to be used by Pyrefly.
 This table shows the mapping between pyright's [type check diagnostics settings](https://microsoft.github.io/pyright/#/configuration?id=type-check-diagnostics-settings)
 and pyrefly's [error kinds](error-kinds.mdx).
 
+:::info
+When no configuration file is present, Pyrefly shows the following diagnostics as **warnings** in the IDE, matching pyright's default behavior:
+- `reportInvalidTypeForm` → [`invalid-annotation`](error-kinds.mdx#invalid-annotation)
+- `reportMissingImports` → [`missing-import`](error-kinds.mdx#missing-import)
+- `reportUndefinedVariable` → [`unknown-name`](error-kinds.mdx#unknown-name)
+
+This means users migrating from pyright will see familiar diagnostics even before creating a Pyrefly config file.
+:::
+
 | Pyright | Pyrefly |
 | ------- | ------- |
 | reportAbstractUsage | bad-instantiation |

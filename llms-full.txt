@@ -977,7 +977,7 @@ name with the `--config`/`-c` flag, but they will not be automatically found by
 Both absolute and config-relative paths are supported.
 
 :::info
-Want type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
+Want all type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
 :::
 
 ## Simple Configuration Example
@@ -3110,6 +3110,8 @@ Ideally you'll never see this one. If you do, please consider [filing a bug](htt
 
 There are several reasons why an annotation may be invalid. The most common case is misusing a typing special form, such as `typing.Final`, `typing.ClassVar`, `typing.ParamSpec`, and so on.
 
+Even when no configuration file is present, this diagnostic is shown as a warning in the IDE.
+
 ```python
 from typing import *
 
@@ -3401,6 +3403,8 @@ A module could not be found.
 
 The error message will include which paths were searched, such as the site package paths.
 You may be missing a dependency, or you may need to inform Pyrefly where the module lives. See [Configuration](configuration.mdx) for further information.
+
+Even when no configuration file is present, this diagnostic is shown as a warning in the IDE.
 
 ## missing-module-attribute
 
@@ -3865,6 +3869,8 @@ assert_type(1, int)  # error
 ## unknown-name
 
 `unknown-name` occurs when attempting to load a name from another scope, but the name cannot be found.
+
+Even when no configuration file is present, this diagnostic is shown as a warning in the IDE.
 
 ```python
 def where() -> None:
@@ -4964,6 +4970,15 @@ To allow `pyright: ignore` comments to be used by Pyrefly.
 
 This table shows the mapping between pyright's [type check diagnostics settings](https://microsoft.github.io/pyright/#/configuration?id=type-check-diagnostics-settings)
 and pyrefly's [error kinds](error-kinds.mdx).
+
+:::info
+When no configuration file is present, Pyrefly shows the following diagnostics as **warnings** in the IDE, matching pyright's default behavior:
+- `reportInvalidTypeForm` → [`invalid-annotation`](error-kinds.mdx#invalid-annotation)
+- `reportMissingImports` → [`missing-import`](error-kinds.mdx#missing-import)
+- `reportUndefinedVariable` → [`unknown-name`](error-kinds.mdx#unknown-name)
+
+This means users migrating from pyright will see familiar diagnostics even before creating a Pyrefly config file.
+:::
 
 | Pyright | Pyrefly |
 | ------- | ------- |

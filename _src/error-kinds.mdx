@@ -555,6 +555,8 @@ Ideally you'll never see this one. If you do, please consider [filing a bug](htt
 
 There are several reasons why an annotation may be invalid. The most common case is misusing a typing special form, such as `typing.Final`, `typing.ClassVar`, `typing.ParamSpec`, and so on.
 
+Even when no configuration file is present, this diagnostic is shown as a warning in the IDE.
+
 ```python
 from typing import *
 
@@ -846,6 +848,8 @@ A module could not be found.
 
 The error message will include which paths were searched, such as the site package paths.
 You may be missing a dependency, or you may need to inform Pyrefly where the module lives. See [Configuration](configuration.mdx) for further information.
+
+Even when no configuration file is present, this diagnostic is shown as a warning in the IDE.
 
 ## missing-module-attribute
 
@@ -1310,6 +1314,8 @@ assert_type(1, int)  # error
 ## unknown-name
 
 `unknown-name` occurs when attempting to load a name from another scope, but the name cannot be found.
+
+Even when no configuration file is present, this diagnostic is shown as a warning in the IDE.
 
 ```python
 def where() -> None:
