@@ -242,11 +242,10 @@ f(A[int])
 
 // https://github.com/facebook/pyrefly/issues/2919
 testcase!(
-    bug = "Should detect duplicate Protocol base class",
     test_duplicate_protocol_base,
     r#"
 from typing import Protocol
 
-class P(Protocol, Protocol): ...
+class P(Protocol, Protocol): ...  # E: Duplicate base class `Protocol`
 "#,
 );

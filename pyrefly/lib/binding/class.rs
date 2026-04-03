@@ -323,15 +323,26 @@ impl<'a> BindingsBuilder<'a> {
             base_class
         });
 
-        let has_protocol_base = bases.iter().any(|base| {
-            matches!(
-                base,
-                BaseClass::Generic(BaseClassGeneric {
-                    kind: BaseClassGenericKind::Protocol,
-                    ..
-                })
-            )
-        });
+        let mut has_protocol_base = false;
+        let mut seen_protocol = false;
+        for base in bases.iter() {
+            if let BaseClass::Generic(BaseClassGeneric {
+                kind: BaseClassGenericKind::Protocol,
+                range,
+                ..
+            }) = base
+            {
+                if seen_protocol {
+                    self.error(
+                        *range,
+                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                        "Duplicate base class `Protocol`".to_owned(),
+                    );
+                }
+                seen_protocol = true;
+                has_protocol_base = true;
+            }
+        }
 
         let mut keywords = Vec::new();
         if let Some(args) = &mut x.arguments {
