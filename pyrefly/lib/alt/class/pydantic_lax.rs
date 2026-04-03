@@ -161,6 +161,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         None
     }
 
+    fn get_regex_pattern_lax_conversion(
+        &self,
+        class_obj: &Class,
+        ty: &Type,
+        targs: &[Type],
+    ) -> Option<Type> {
+        if class_obj.has_toplevel_qname(ModuleName::from_str("re").as_str(), "Pattern")
+            || class_obj.has_toplevel_qname(ModuleName::typing().as_str(), "Pattern")
+        {
+            let pattern_input = targs
+                .first()
+                .cloned()
+                .unwrap_or_else(|| self.heap.mk_any_implicit());
+            return Some(self.union(ty.clone(), pattern_input));
+        }
+        None
+    }
+
     fn get_tuple_element_type(&self, tuple: &Tuple) -> Type {
         match tuple {
             Tuple::Unbounded(elem) => self.expand_type_for_lax_mode(elem),
@@ -207,6 +225,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return self
                         .heap
                         .mk_class_type(self.stdlib.mapping(key_ty, expanded_val));
+                }
+
+                if let Some(converted) = self.get_regex_pattern_lax_conversion(class_obj, ty, targs)
+                {
+                    return converted;
                 }
 
                 let expanded_targs = self.expand_types(targs);
