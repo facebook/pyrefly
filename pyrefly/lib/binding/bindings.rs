@@ -1766,7 +1766,7 @@ impl<'a> BindingsBuilder<'a> {
         // Skip binding for parameters with empty names (from malformed syntax).
         // The parser may create Identifier nodes with empty names for invalid syntax.
         // These should not be added to the binding table as it creates dangling indices.
-        if name.id.is_empty() {
+        if name.id.is_empty() || name.range.is_empty() {
             return;
         }
         let allow_unused = name.id.as_str().starts_with('_')
