@@ -1766,6 +1766,18 @@ fn test_panic_on_unicode() {
     // We manually ignore the missing expectations, because adding `# E:` would change the test.
 }
 
+#[test]
+fn test_crash_on_fuzzed_empty_parameter_name() {
+    // Regression test for https://github.com/facebook/pyrefly/issues/2984
+    let _ = testcase_for_macro(
+        TestEnv::new(),
+        "def f(\n    @\na:b:@or1:c=1\n",
+        file!(),
+        line!(),
+    );
+    // We intentionally ignore the returned Result: this test asserts no panic.
+}
+
 testcase!(
     test_crash_on_invalid_walrus,
     r#"

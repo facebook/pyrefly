@@ -130,14 +130,7 @@
           }
         }
       },
-      "problemMatcher": {
-        "base": "$rustc",
-        "background": {
-          "activeOnStart": true,
-          "beginsPattern": "^\\[Running\\]",
-          "endsPattern": "^\\[Finished running\\]"
-        }
-      }
+      "problemMatcher": ["$rustc"]
     },
     {
       "type": "npm",

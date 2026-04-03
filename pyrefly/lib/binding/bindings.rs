@@ -559,6 +559,7 @@ impl Bindings {
         assert_eq!(builder.scopes.loop_depth(), 0);
 
         builder.process_deferred_bound_names();
+        builder.repair_malformed_definition_promises();
 
         // Validate that all entries in __all__ are defined in the module.
         // Synthesize a binding so importers resolve to Any(Error) without
@@ -817,6 +818,36 @@ fn extract_new_defaults(stmt: &Stmt, name: &str) -> Option<Vec<Expr>> {
 }
 
 impl<'a> BindingsBuilder<'a> {
+    /// Parser recovery can synthesize empty identifiers; in rare malformed programs we may
+    /// create a Definition key promise and then skip producing a concrete binding for it.
+    ///
+    /// Fill only those empty-name definitions with `Any(Error)` so downstream solving remains
+    /// robust, but panic for any other missing binding because that violates invariants.
+    fn repair_malformed_definition_promises(&mut self) {
+        let mut missing = Vec::new();
+        for (idx, key) in self.table.types.0.items() {
+            if self.table.types.1.get(idx).is_none() {
+                missing.push((idx, key.clone()));
+            }
+        }
+
+        for (idx, key) in missing {
+            match key {
+                Key::Definition(short_identifier) if short_identifier.range().is_empty() => {
+                    self.insert_binding_idx(idx, Binding::Any(AnyStyle::Error));
+                }
+                _ => {
+                    panic!(
+                        "Internal error: key lacking binding before solve, module={}, path={}, key={}, key-debug={key:?}",
+                        self.module_info.name(),
+                        self.module_info.path(),
+                        self.module_info.display(&key),
+                    );
+                }
+            }
+        }
+    }
+
     /// Whether to infer empty container types and unsolved type variables based on first use.
     pub fn infer_with_first_use(&self) -> bool {
         self.solver.infer_with_first_use
@@ -1732,6 +1763,12 @@ impl<'a> BindingsBuilder<'a> {
         ignore_annotation: bool,
     ) {
         let name = x.name();
+        // Skip binding for parameters with empty names (from malformed syntax).
+        // The parser may create Identifier nodes with empty names for invalid syntax.
+        // These should not be added to the binding table as it creates dangling indices.
+        if name.id.is_empty() {
+            return;
+        }
         let allow_unused = name.id.as_str().starts_with('_')
             || matches!(name.id.as_str(), "self" | "cls")
             || is_variadic;
