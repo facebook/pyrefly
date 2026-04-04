@@ -239,9 +239,7 @@ mod tests {
     fn test_baseline_matches_absolute_path() {
         let cwd = std::env::current_dir().unwrap();
         let abs_path = cwd.join("src/foo.py");
-        // Baseline files will always store forward-slash paths
-        let path_str = abs_path.to_string_lossy().replace('\\', "/");
-        assert_baseline_path_matches(&path_str);
+        assert_baseline_path_matches(&abs_path.to_string_lossy());
     }
 
     #[test]
