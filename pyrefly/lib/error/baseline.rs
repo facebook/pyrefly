@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
+use pyrefly_util::absolutize::Absolutize;
 use pyrefly_util::fs_anyhow;
 
 use crate::error::error::Error;
@@ -16,6 +17,7 @@ use crate::error::legacy::LegacyError;
 use crate::error::legacy::LegacyErrors;
 
 /// If an error with an exactly matching path, error slug, and starting column exist in the baseline, we ignore it.
+/// Keys always use absolute paths internally so that comparison is decoupled from path format in baseline file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct BaselineKey {
     path: String,
@@ -25,8 +27,9 @@ struct BaselineKey {
 
 impl From<&LegacyError> for BaselineKey {
     fn from(baseline_error: &LegacyError) -> Self {
+        let path = Path::new(&baseline_error.path);
         Self {
-            path: baseline_error.path.clone(),
+            path: path.absolutize().to_string_lossy().into_owned(),
             name: baseline_error.name.clone(),
             column: baseline_error.column,
         }
@@ -34,12 +37,12 @@ impl From<&LegacyError> for BaselineKey {
 }
 
 impl BaselineKey {
-    fn from_error(error: &Error, relative_to: &Path) -> Self {
-        let error_path = error.path().as_path();
+    fn from_error(error: &Error) -> Self {
         Self {
-            path: error_path
-                .strip_prefix(relative_to)
-                .unwrap_or(error_path)
+            path: error
+                .path()
+                .as_path()
+                .absolutize()
                 .to_string_lossy()
                 .into_owned(),
             name: error.error_kind().to_name().to_owned(),
@@ -62,22 +65,17 @@ impl BaselineProcessor {
         Ok(Self { baseline_keys })
     }
 
-    pub fn matches_baseline(&self, error: &Error, relative_to: &Path) -> bool {
-        let key = BaselineKey::from_error(error, relative_to);
+    pub fn matches_baseline(&self, error: &Error) -> bool {
+        let key = BaselineKey::from_error(error);
         self.baseline_keys.contains(&key)
     }
 
     /// Baseline suppressions are processed last, after inline and config suppressions
-    pub fn process_errors(
-        &self,
-        shown_errors: &mut Vec<Error>,
-        baseline_errors: &mut Vec<Error>,
-        relative_to: &Path,
-    ) {
+    pub fn process_errors(&self, shown_errors: &mut Vec<Error>, baseline_errors: &mut Vec<Error>) {
         let mut remaining_errors = Vec::new();
 
         for error in shown_errors.drain(..) {
-            if self.matches_baseline(&error, relative_to) {
+            if self.matches_baseline(&error) {
                 baseline_errors.push(error);
             } else {
                 remaining_errors.push(error);
@@ -107,7 +105,7 @@ mod tests {
     fn test_baseline_key_generation() {
         let module = Module::new(
             ModuleName::from_str("test_module"),
-            ModulePath::filesystem(PathBuf::from("test/path.py")),
+            ModulePath::filesystem(PathBuf::from("/workspace/test/path.py")),
             Arc::new("test content".to_owned()),
         );
 
@@ -118,9 +116,9 @@ mod tests {
             ErrorKind::BadReturn,
         );
 
-        let key = BaselineKey::from_error(&error, Path::new("/root"));
+        let key = BaselineKey::from_error(&error);
 
-        assert_eq!(key.path, "test/path.py");
+        assert_eq!(key.path, "/workspace/test/path.py");
         assert_eq!(key.name, "bad-return");
         assert_eq!(key.column, 1);
     }
@@ -135,7 +133,7 @@ mod tests {
                     "column": 3,
                     "stop_line": 1,
                     "stop_column": 5,
-                    "path": "test.py",
+                    "path": "/workspace/test.py",
                     "code": -2,
                     "name": "bad-return",
                     "description": "Test error",
@@ -153,12 +151,12 @@ mod tests {
 
         let module = Module::new(
             ModuleName::from_str("test_module"),
-            ModulePath::filesystem(PathBuf::from("test.py")),
+            ModulePath::filesystem(PathBuf::from("/workspace/test.py")),
             Arc::new("test content 123456789".to_owned()),
         );
         let module2 = Module::new(
             ModuleName::from_str("test_module2"),
-            ModulePath::filesystem(PathBuf::from("test2.py")),
+            ModulePath::filesystem(PathBuf::from("/workspace/test2.py")),
             Arc::new("test content 123456789".to_owned()),
         );
 
@@ -169,7 +167,7 @@ mod tests {
             vec1!["Any error message".to_owned()],
             ErrorKind::BadReturn,
         );
-        assert!(processor.matches_baseline(&error1, Path::new("/")));
+        assert!(processor.matches_baseline(&error1));
 
         // This error should not match (different column)
         let error2 = Error::new(
@@ -178,7 +176,7 @@ mod tests {
             vec1!["Test error".to_owned()],
             ErrorKind::BadReturn,
         );
-        assert!(!processor.matches_baseline(&error2, Path::new("/")));
+        assert!(!processor.matches_baseline(&error2));
 
         // This error should not match (different error code)
         let error3 = Error::new(
@@ -187,7 +185,7 @@ mod tests {
             vec1!["Any error message".to_owned()],
             ErrorKind::AssertType,
         );
-        assert!(!processor.matches_baseline(&error3, Path::new("/")));
+        assert!(!processor.matches_baseline(&error3));
 
         // This error should not match (different module)
         let error4 = Error::new(
@@ -196,6 +194,6 @@ mod tests {
             vec1!["Any error message".to_owned()],
             ErrorKind::BadReturn,
         );
-        assert!(!processor.matches_baseline(&error4, Path::new("/")));
+        assert!(!processor.matches_baseline(&error4));
     }
 }

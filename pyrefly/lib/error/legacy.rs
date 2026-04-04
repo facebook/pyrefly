@@ -9,6 +9,7 @@ use std::path::Path;
 
 use pyrefly_config::error_kind::Severity;
 use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::relativize::Relativize;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -63,8 +64,7 @@ impl LegacyError {
             stop_column: error_range.end.column().get() as usize,
             cell: error_range.start.cell().map(|cell| cell.get() as usize),
             path: error_path
-                .strip_prefix(relative_to)
-                .unwrap_or(error_path)
+                .relativize_from(relative_to)
                 .to_string_lossy()
                 .into_owned(),
             // -2 is chosen because it's an unused error code in Pyre1
