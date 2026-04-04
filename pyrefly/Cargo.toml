@@ -22,7 +22,7 @@ path = "lib/test/lsp/lsp_interaction/mod.rs"
 [dependencies]
 anstream = "0.6.11"
 anyhow = "1.0.102"
-arc-swap = { version = "1.8.2", features = ["weak"] }
+arc-swap = { version = "1.9.0", features = ["weak"] }
 blake3 = { version = "=1.8.2", features = ["mmap", "rayon", "traits-preview"] }
 capnp = "0.25.2"
 clap = { version = "4.6.0", features = ["cargo", "derive", "env", "string", "unicode", "wrap_help"] }
