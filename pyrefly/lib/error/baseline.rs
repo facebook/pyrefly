@@ -128,25 +128,21 @@ mod tests {
 
     #[test]
     fn test_baseline_matching() {
-        let baseline_json = r#"
-        {
-            "errors": [
-                {
-                    "line": 1,
-                    "column": 3,
-                    "stop_line": 1,
-                    "stop_column": 5,
-                    "path": "/workspace/test.py",
-                    "code": -2,
-                    "name": "bad-return",
-                    "description": "Test error",
-                    "concise_description": "Test error"
-                }
-            ]
-        }
-        "#;
+        let baseline_json = serde_json::json!({
+            "errors": [{
+                "line": 1,
+                "column": 3,
+                "stop_line": 1,
+                "stop_column": 5,
+                "path": "/workspace/test.py",
+                "code": -2,
+                "name": "bad-return",
+                "description": "Test error",
+                "concise_description": "Test error"
+            }]
+        });
 
-        let baseline_file: LegacyErrors = serde_json::from_str(baseline_json).unwrap();
+        let baseline_file: LegacyErrors = serde_json::from_value(baseline_json).unwrap();
         let baseline_keys: HashSet<BaselineKey> =
             baseline_file.errors.iter().map(BaselineKey::from).collect();
 
@@ -205,18 +201,16 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let abs_path = cwd.join("src/foo.py");
 
-        let baseline_json = format!(
-            r#"{{
-                "errors": [{{
-                    "line": 1, "column": 5, "stop_line": 1, "stop_column": 10,
-                    "path": "{baseline_path}",
-                    "code": -2, "name": "bad-return",
-                    "description": "test", "concise_description": "test"
-                }}]
-            }}"#
-        );
+        let baseline_json = serde_json::json!({
+            "errors": [{
+                "line": 1, "column": 5, "stop_line": 1, "stop_column": 10,
+                "path": baseline_path,
+                "code": -2, "name": "bad-return",
+                "description": "test", "concise_description": "test"
+            }]
+        });
 
-        let baseline_file: LegacyErrors = serde_json::from_str(&baseline_json).unwrap();
+        let baseline_file: LegacyErrors = serde_json::from_value(baseline_json).unwrap();
         let baseline_keys: HashSet<BaselineKey> =
             baseline_file.errors.iter().map(BaselineKey::from).collect();
         let processor = BaselineProcessor { baseline_keys };
