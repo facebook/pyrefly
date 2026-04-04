@@ -66,7 +66,7 @@ impl LegacyError {
             path: error_path
                 .relativize_from(relative_to)
                 .to_string_lossy()
-                .into_owned(),
+                .replace('\\', "/"), // Normalize Windows backslashes so baseline files are consistent across platforms
             // -2 is chosen because it's an unused error code in Pyre1
             code: -2, // TODO: replace this dummy value
             name: error.error_kind().to_name().to_owned(),

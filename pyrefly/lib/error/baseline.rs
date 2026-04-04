@@ -25,28 +25,27 @@ struct BaselineKey {
     column: usize,
 }
 
-impl From<&LegacyError> for BaselineKey {
-    fn from(baseline_error: &LegacyError) -> Self {
-        let path = Path::new(&baseline_error.path);
+impl BaselineKey {
+    fn normalize_path(path: &Path) -> String {
+        path.absolutize().to_string_lossy().replace('\\', "/")
+    }
+
+    fn from_error(error: &Error) -> Self {
         Self {
-            path: path.absolutize().to_string_lossy().into_owned(),
-            name: baseline_error.name.clone(),
-            column: baseline_error.column,
+            path: Self::normalize_path(error.path().as_path()),
+            name: error.error_kind().to_name().to_owned(),
+            column: error.display_range().start.column().get() as usize,
         }
     }
 }
 
-impl BaselineKey {
-    fn from_error(error: &Error) -> Self {
+impl From<&LegacyError> for BaselineKey {
+    fn from(baseline_error: &LegacyError) -> Self {
+        let path = Path::new(&baseline_error.path);
         Self {
-            path: error
-                .path()
-                .as_path()
-                .absolutize()
-                .to_string_lossy()
-                .into_owned(),
-            name: error.error_kind().to_name().to_owned(),
-            column: error.display_range().start.column().get() as usize,
+            path: BaselineKey::normalize_path(path),
+            name: baseline_error.name.clone(),
+            column: baseline_error.column,
         }
     }
 }
@@ -118,7 +117,11 @@ mod tests {
 
         let key = BaselineKey::from_error(&error);
 
-        assert_eq!(key.path, "/workspace/test/path.py");
+        let expected_path = Path::new("/workspace/test/path.py")
+            .absolutize()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert_eq!(key.path, expected_path);
         assert_eq!(key.name, "bad-return");
         assert_eq!(key.column, 1);
     }
@@ -236,7 +239,9 @@ mod tests {
     fn test_baseline_matches_absolute_path() {
         let cwd = std::env::current_dir().unwrap();
         let abs_path = cwd.join("src/foo.py");
-        assert_baseline_path_matches(&abs_path.to_string_lossy());
+        // Baseline files will always store forward-slash paths
+        let path_str = abs_path.to_string_lossy().replace('\\', "/");
+        assert_baseline_path_matches(&path_str);
     }
 
     #[test]
