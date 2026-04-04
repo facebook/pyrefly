@@ -1008,15 +1008,16 @@ def to_foo() -> Foo[MySeries]:
 
 // https://github.com/facebook/pyrefly/issues/2925
 testcase!(
-    bug = "Should detect ambiguous protocol members with value assignments",
     test_protocol_ambiguous_member,
     r#"
 from typing import Protocol
 
 class Ambiguous(Protocol):
-    # Assigning a value in a Protocol body is ambiguous: is it declaring
-    # a member with a type, or providing a default value?
-    x = None
-    y = ...
+    x = None  # E: Protocol member `x` must have an explicit type annotation
+    y = ...  # E: Protocol member `y` must have an explicit type annotation
+
+class Ok(Protocol):
+    x: int
+    y: str = "default"
 "#,
 );

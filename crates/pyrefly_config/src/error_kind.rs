@@ -257,6 +257,8 @@ pub enum ErrorKind {
     UnannotatedAttribute,
     /// A function parameter is missing a type annotation.
     UnannotatedParameter,
+    /// A protocol member is assigned a value in the class body without an explicit type annotation.
+    UnannotatedProtocolMember,
     /// A function is missing a return type annotation.
     UnannotatedReturn,
     /// Attempting to use a name that may be unbound or uninitialized
