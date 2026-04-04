@@ -39,6 +39,23 @@ impl Visit<Expr> for ModModule {
 
 impl VisitMut for Expr {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Self)) {
+        fn recurse_interpolations_mut(
+            elements: &mut [InterpolatedStringElement],
+            f: &mut dyn FnMut(&mut Expr),
+        ) {
+            for element in elements {
+                match element {
+                    InterpolatedStringElement::Literal(_) => {}
+                    InterpolatedStringElement::Interpolation(interpolation) => {
+                        f(&mut interpolation.expression);
+                        if let Some(format_spec) = &mut interpolation.format_spec {
+                            recurse_interpolations_mut(&mut format_spec.elements, f);
+                        }
+                    }
+                }
+            }
+        }
+
         match self {
             Expr::BoolOp(x) => x.values.recurse_mut(f),
             Expr::Named(x) => {
@@ -112,26 +129,14 @@ impl VisitMut for Expr {
                     match x {
                         FStringPart::Literal(_) => {}
                         FStringPart::FString(x) => {
-                            for x in x.elements.iter_mut() {
-                                match x {
-                                    InterpolatedStringElement::Literal(_) => {}
-                                    InterpolatedStringElement::Interpolation(x) => {
-                                        f(&mut x.expression)
-                                    }
-                                }
-                            }
+                            recurse_interpolations_mut(&mut x.elements, f);
                         }
                     }
                 }
             }
             Expr::TString(x) => {
                 for x in x.value.iter_mut() {
-                    for x in x.elements.iter_mut() {
-                        match x {
-                            InterpolatedStringElement::Literal(_) => {}
-                            InterpolatedStringElement::Interpolation(x) => f(&mut x.expression),
-                        }
-                    }
+                    recurse_interpolations_mut(&mut x.elements, f);
                 }
             }
             Expr::StringLiteral(_)
@@ -211,11 +216,25 @@ impl Visit<Expr> for Stmt {
 
 impl Visit<Expr> for ExprFString {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Expr)) {
+        fn recurse_interpolations<'a>(
+            elements: &'a [InterpolatedStringElement],
+            f: &mut dyn FnMut(&'a Expr),
+        ) {
+            for element in elements {
+                match element {
+                    InterpolatedStringElement::Literal(_) => {}
+                    InterpolatedStringElement::Interpolation(interpolation) => {
+                        f(&interpolation.expression);
+                        if let Some(format_spec) = &interpolation.format_spec {
+                            recurse_interpolations(&format_spec.elements, f);
+                        }
+                    }
+                }
+            }
+        }
+
         self.value.iter().for_each(|x| match x {
-            FStringPart::FString(x) => x.elements.iter().for_each(|x| match x {
-                InterpolatedStringElement::Literal(_) => {}
-                InterpolatedStringElement::Interpolation(x) => f(&x.expression),
-            }),
+            FStringPart::FString(x) => recurse_interpolations(&x.elements, f),
             _ => {}
         });
     }
@@ -223,12 +242,26 @@ impl Visit<Expr> for ExprFString {
 
 impl Visit<Expr> for ExprTString {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Expr)) {
-        self.value.iter().for_each(|x| {
-            x.elements.iter().for_each(|x| match x {
-                InterpolatedStringElement::Literal(_) => {}
-                InterpolatedStringElement::Interpolation(x) => f(&x.expression),
-            })
-        });
+        fn recurse_interpolations<'a>(
+            elements: &'a [InterpolatedStringElement],
+            f: &mut dyn FnMut(&'a Expr),
+        ) {
+            for element in elements {
+                match element {
+                    InterpolatedStringElement::Literal(_) => {}
+                    InterpolatedStringElement::Interpolation(interpolation) => {
+                        f(&interpolation.expression);
+                        if let Some(format_spec) = &interpolation.format_spec {
+                            recurse_interpolations(&format_spec.elements, f);
+                        }
+                    }
+                }
+            }
+        }
+
+        self.value
+            .iter()
+            .for_each(|x| recurse_interpolations(&x.elements, f));
     }
 }
 
