@@ -10,6 +10,16 @@ use std::path::PathBuf;
 
 use path_absolutize::Absolutize as PathAbsolutize;
 
+pub trait Relativize {
+    fn relativize_from(&self, base: &Path) -> PathBuf;
+}
+
+impl Relativize for Path {
+    fn relativize_from(&self, base: &Path) -> PathBuf {
+        pathdiff::diff_paths(self, base).unwrap_or_else(|| self.to_path_buf())
+    }
+}
+
 pub trait Absolutize {
     fn absolutize(&self) -> PathBuf;
     fn absolutize_from(&self, base: &Path) -> PathBuf;
