@@ -226,6 +226,38 @@ Hover Result: `Literal[2]`
 }
 
 #[test]
+fn inherited_classvar_hover_prefers_resolved_field_type() {
+    let code = r#"
+from typing import ClassVar
+
+class A:
+    x: ClassVar[tuple[str, ...]] = ("A",)
+
+class B(A):
+    x = ("B",)
+#   ^
+
+reveal = B.x
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 |     x = ("B",)
+        ^
+Hover Result: `tuple[str, ...]`
+
+11 | reveal = B.x
+                ^
+Hover Result: `tuple[str, ...]`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn import_test() {
     let code = r#"
 import typing
