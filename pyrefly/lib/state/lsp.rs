@@ -68,6 +68,8 @@ use crate::alt::answers::Index;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
+use crate::alt::attr::ClassBase;
+use crate::alt::class::class_field::ClassAttribute;
 use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
@@ -686,6 +688,64 @@ impl<'a> Transaction<'a> {
         self.get_type_trace_for_surface(handle, range, true)
     }
 
+    fn class_attribute_type_at_definition(
+        &self,
+        handle: &Handle,
+        identifier: &Identifier,
+    ) -> Option<Type> {
+        let ast = self.get_ast(handle)?;
+        let mut enclosing_class = None;
+        for node in Ast::locate_node(&ast, identifier.range.start())
+            .into_iter()
+            .skip(1)
+        {
+            match node {
+                AnyNodeRef::StmtFunctionDef(_) | AnyNodeRef::ExprLambda(_) => return None,
+                AnyNodeRef::StmtClassDef(class_def) => {
+                    enclosing_class = Some(class_def.name.clone());
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let enclosing_class = enclosing_class?;
+        let class_key = Key::Definition(ShortIdentifier::new(&enclosing_class));
+        let bindings = self.get_bindings(handle)?;
+        if !bindings.is_valid_key(&class_key) {
+            return None;
+        }
+        let class_ty = self.get_type(handle, &class_key)?;
+        let attr_name = identifier.id.clone();
+        self.ad_hoc_solve(
+            handle,
+            "lsp_class_attribute_type_at_definition",
+            move |solver| {
+                let class_base = match class_ty {
+                    Type::ClassDef(ref cls) => {
+                        Some(ClassBase::ClassDef(solver.as_class_type_unchecked(cls)))
+                    }
+                    Type::Type(ref ty) => match ty.as_ref() {
+                        Type::ClassType(cls) => Some(ClassBase::ClassType(cls.clone())),
+                        _ => None,
+                    },
+                    _ => None,
+                }?;
+                let field = solver
+                    .get_field_from_current_class_only(class_base.class_object(), &attr_name)?;
+                if !field.has_explicit_annotation() {
+                    return None;
+                }
+                match solver.get_class_attribute(&class_base, &attr_name)? {
+                    ClassAttribute::ReadWrite(ty)
+                    | ClassAttribute::ReadOnly(ty, _)
+                    | ClassAttribute::Property(ty, _, _) => Some(ty),
+                    ClassAttribute::NoAccess(_) | ClassAttribute::Descriptor(..) => None,
+                }
+            },
+        )
+        .flatten()
+    }
+
     fn get_chosen_overload_trace_for_surface(
         &self,
         handle: &Handle,
@@ -1010,7 +1070,12 @@ impl<'a> Transaction<'a> {
                 if !bindings.is_valid_key(&key) {
                     return None;
                 }
-                let mut ty = self.get_type_for_surface(handle, &key, for_display)?;
+                let mut ty = if matches!(expr_context, ExprContext::Store) {
+                    self.class_attribute_type_at_definition(handle, &id)
+                        .or_else(|| self.get_type_for_surface(handle, &key, for_display))?
+                } else {
+                    self.get_type_for_surface(handle, &key, for_display)?
+                };
                 if coerce_callees {
                     let call_args_range = self.callee_at(handle, position).and_then(
                         |ExprCall {
