@@ -625,6 +625,11 @@ impl<'a> Transaction<'a> {
                     }
                     _ => None,
                 }?;
+                let field = solver
+                    .get_field_from_current_class_only(class_base.class_object(), &attr_name)?;
+                if !field.has_explicit_annotation() {
+                    return None;
+                }
                 match solver.get_class_attribute(&class_base, &attr_name)? {
                     ClassAttribute::ReadWrite(ty)
                     | ClassAttribute::ReadOnly(ty, _)
