@@ -1203,15 +1203,11 @@ Definition Result:
 
 25 | dict["foo"]
             ^
-Definition Result:
-3632 |     def __getitem__(self, key: _KT, /) -> _VT:
-               ^^^^^^^^^^^
+Definition Result: None
 
 27 | dict["bar"]
             ^
-Definition Result:
-3632 |     def __getitem__(self, key: _KT, /) -> _VT:
-               ^^^^^^^^^^^
+Definition Result: None
 "#
         .trim(),
         report.trim(),

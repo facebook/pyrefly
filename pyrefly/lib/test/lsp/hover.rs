@@ -697,7 +697,7 @@ c[0]
 6 | c[0]
        ^
 ```python
-(attribute) __getitem__: Literal[0]
+Literal[0]
 ```
 "#
         .trim(),

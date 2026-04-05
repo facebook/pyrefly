@@ -1596,6 +1596,9 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         covering_nodes: &[AnyNodeRef],
     ) -> Result<Option<(Type, Name)>, EmptyResponseReason> {
+        let module = self
+            .get_module_info(handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
         // Look up the type of an expression, distinguishing "no answers"
         // from "answers available but no type trace for this range."
         let type_at = |range: TextRange| -> Result<Type, EmptyResponseReason> {
@@ -1680,11 +1683,18 @@ impl<'a> Transaction<'a> {
                     }))
                 }
                 AnyNodeRef::ExprSubscript(subscript) => {
-                    if !Self::position_is_between(
-                        position,
+                    let between = TextRange::new(
                         subscript.value.range().end(),
                         subscript.slice.range().start(),
-                    ) {
+                    );
+                    let suffix = module.code_at(TextRange::new(
+                        subscript.value.range().end(),
+                        subscript.range().end(),
+                    ));
+                    if position >= subscript.slice.range().start()
+                        || !between.contains(position)
+                        || !suffix.chars().next().is_some_and(char::is_whitespace)
+                    {
                         return None;
                     }
                     let dunder_name = match subscript.ctx {
