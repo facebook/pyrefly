@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use dupe::Dupe;
 use lsp_types::Hover;
 use lsp_types::HoverContents;
 use lsp_types::MarkupContent;
@@ -315,6 +316,22 @@ fn identifier_text_at(
         .map(|id| id.identifier.id.to_string())
 }
 
+/// Hover should still work when the use site has no type trace, as in
+/// `Annotated[..., imported_symbol]` metadata. In that case, recover the type
+/// from the resolved definition instead of returning no hover at all.
+fn hover_type_from_definition(
+    transaction: &Transaction<'_>,
+    current_handle: &Handle,
+    definition: &FindDefinitionItemWithDocstring,
+) -> Option<Type> {
+    let definition_handle = Handle::new(
+        definition.module.name(),
+        definition.module.path().dupe(),
+        current_handle.sys_info().dupe(),
+    );
+    transaction.get_type_at(&definition_handle, definition.definition_range.start())
+}
+
 fn collect_typed_dict_fields_for_hover<'a>(
     solver: &AnswersSolver<TransactionHandle<'a>>,
     ty: &Type,
@@ -518,8 +535,28 @@ pub fn get_hover(
         });
     }
 
-    // Otherwise, fall through to the existing type hover logic
-    let mut type_ = transaction.get_type_at(handle, position)?;
+    let definition = transaction
+        .find_definition(
+            handle,
+            position,
+            FindPreference {
+                prefer_pyi: false,
+                ..Default::default()
+            },
+        )
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
+        .into_iter()
+        .next();
+
+    // Otherwise, fall through to the existing type hover logic. Some
+    // annotation metadata names do not get a type trace at the use site, so
+    // recover their hover type from the resolved definition.
+    let mut type_ = transaction.get_type_at(handle, position).or_else(|| {
+        definition
+            .as_ref()
+            .and_then(|definition| hover_type_from_definition(transaction, handle, definition))
+    })?;
 
     // Helper function to check if we're hovering over a callee and get its range
     let find_callee_range_at_position = || -> Option<TextRange> {
@@ -560,20 +597,7 @@ pub fn get_hover(
         module,
         docstring_range,
         display_name,
-    }) = transaction
-        .find_definition(
-            handle,
-            position,
-            FindPreference {
-                prefer_pyi: false,
-                ..Default::default()
-            },
-        )
-        .map(Vec1::into_vec)
-        .unwrap_or_default()
-        // TODO: handle more than 1 definition
-        .into_iter()
-        .next()
+    }) = definition
     {
         let kind = metadata.symbol_kind();
         let name = {

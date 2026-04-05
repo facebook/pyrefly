@@ -1702,13 +1702,32 @@ impl<'a> Transaction<'a> {
         name: &Name,
         preference: FindPreference,
     ) -> Result<Vec1<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
+        let base_type = self.attribute_base_type(handle, base_range)?;
+        self.find_attribute_definition_for_base_type(handle, preference, base_type, name)
+    }
+
+    /// Attribute lookup usually relies on a type trace for the base
+    /// expression, but annotation metadata like `Annotated[..., utils.Name]`
+    /// may skip tracing the imported module reference. In that case, recover
+    /// the base type from the exact identifier at `base_range`.
+    fn attribute_base_type(
+        &self,
+        handle: &Handle,
+        base_range: TextRange,
+    ) -> Result<Type, EmptyResponseReason> {
         let answers = self
             .get_answers(handle)
             .ok_or(EmptyResponseReason::AnswersNotFound)?;
-        let base_type = answers
-            .get_type_trace(base_range)
-            .ok_or(EmptyResponseReason::TypeTraceNotFound)?;
-        self.find_attribute_definition_for_base_type(handle, preference, base_type, name)
+        if let Some(base_type) = answers.get_type_trace(base_range) {
+            return Ok(base_type);
+        }
+        if let Some(identifier) = self.identifier_at(handle, base_range.start())
+            && identifier.identifier.range == base_range
+            && let Some(base_type) = self.get_type_at(handle, base_range.start())
+        {
+            return Ok(base_type);
+        }
+        Err(EmptyResponseReason::TypeTraceNotFound)
     }
 
     pub(crate) fn find_definition_for_imported_module(
