@@ -82,6 +82,25 @@ Definition Result: None
 }
 
 #[test]
+fn operator_does_not_include_binop_lhs_literal() {
+    let code = r#"
+x = 1 + 1
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | x = 1 + 1
+        ^
+Definition Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn no_crash_on_dead_branch_test() {
     let code = r#"
 from typing import TYPE_CHECKING
