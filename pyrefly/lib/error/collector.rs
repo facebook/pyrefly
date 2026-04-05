@@ -173,8 +173,8 @@ impl ErrorCollector {
         self.errors.lock().len()
     }
 
-    /// Checks whether an error is suppressed, considering both the error's own
-    /// line and, if it falls inside a multi-line f/t-string, the f-string's
+    /// Checks whether an error is suppressed, considering the whole display
+    /// range and, if it falls inside a multi-line f/t-string, the f-string's
     /// start and end lines.
     fn is_error_suppressed(
         err: &Error,
@@ -184,13 +184,28 @@ impl ErrorCollector {
         if err.is_ignored(&error_config.enabled_ignores) {
             return true;
         }
+        let ignore = err.module().ignore();
+        let kind = err.error_kind().to_name();
+        let enabled = &error_config.enabled_ignores;
+        let display = err.display_range();
+        let start_line = display.start.line_within_file();
+        let end_line = display.end.line_within_file();
+
+        // Inline suppressions are often placed on the final line of a
+        // multi-line expression. Treat suppressions on any covered line as
+        // suppressing the diagnostic range.
+        let mut line = start_line.increment();
+        while line <= end_line {
+            if ignore.is_ignored(line, kind, enabled) {
+                return true;
+            }
+            line = line.increment();
+        }
+
         // Check if the error is inside a multi-line f/t-string. If so, a
         // suppression that covers the f-string's start or end line should also apply.
-        let line = err.display_range().start.line_within_file();
+        let line = start_line;
         if let Some((fs_start, fs_end)) = find_containing_range(fstring_ranges, line) {
-            let ignore = err.module().ignore();
-            let kind = err.error_kind().to_name();
-            let enabled = &error_config.enabled_ignores;
             if fs_start != line && ignore.is_ignored(fs_start, kind, enabled) {
                 return true;
             }
@@ -412,5 +427,30 @@ mod tests {
                 .map(|x| x.msg()),
             vec!["Overload", "A specific error"]
         );
+    }
+
+    #[test]
+    fn test_multiline_error_suppressed_by_trailing_line_comment() {
+        let contents = "x = (\n    1\n)  # type: ignore\n";
+        let mi = ModuleInfo::new(
+            ModuleName::from_name(&Name::new_static("main")),
+            ModulePath::filesystem(PathBuf::from("main.py")),
+            Arc::new(contents.to_owned()),
+        );
+        let errors = ErrorCollector::new(mi.dupe(), ErrorStyle::Delayed);
+        // Span lines 1-3 so suppression on line 3 should apply.
+        add(
+            &errors,
+            TextRange::new(TextSize::new(0), TextSize::new(13)),
+            ErrorKind::BadArgumentType,
+            "x".to_owned(),
+        );
+        let collected = errors.collect(&ErrorConfig::new(
+            &ErrorDisplayConfig::default(),
+            false,
+            Tool::default_enabled(),
+        ));
+        assert!(collected.shown.is_empty());
+        assert_eq!(collected.suppressed.len(), 1);
     }
 }
