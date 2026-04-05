@@ -21,6 +21,7 @@ use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::module::Module;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FunctionKind;
@@ -436,6 +437,30 @@ fn parameter_definition_documentation(
     docs.get(key).cloned().map(|doc| (key.to_owned(), doc))
 }
 
+fn declared_function_hover_display(module: &Module, definition_range: TextRange) -> Option<String> {
+    let (ast, _, _) = Ast::parse(module.contents(), module.source_type());
+    let function_def = Ast::locate_node(&ast, definition_range.start())
+        .into_iter()
+        .find_map(|node| match node {
+            AnyNodeRef::StmtFunctionDef(function_def)
+                if function_def.name.range() == definition_range =>
+            {
+                Some(function_def)
+            }
+            _ => None,
+        })?;
+    let body_start = function_def
+        .body
+        .first()
+        .map(Ranged::range)
+        .map(|range| range.start())
+        .unwrap_or(function_def.range.end());
+    let header = module
+        .code_at(TextRange::new(function_def.range.start(), body_start))
+        .trim_end();
+    header.ends_with(':').then(|| format!("{header} ..."))
+}
+
 /// Check if the cursor position is on the `in` keyword within a for loop or comprehension.
 /// Returns Some(iterable_range) if found, None otherwise.
 fn in_keyword_in_iteration_at(
@@ -518,7 +543,7 @@ pub fn get_hover(
         });
     }
 
-    // Otherwise, fall through to the existing type hover logic
+    // Otherwise, fall through to the existing type hover logic.
     let mut type_ = transaction.get_type_at(handle, position)?;
 
     // Helper function to check if we're hovering over a callee and get its range
@@ -554,42 +579,49 @@ pub fn get_hover(
     }
 
     let fallback_name_from_type = fallback_hover_name_from_type(&type_);
-    let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
-        metadata,
-        definition_range: definition_location,
-        module,
-        docstring_range,
-        display_name,
-    }) = transaction
-        .find_definition(
-            handle,
-            position,
-            FindPreference {
-                prefer_pyi: false,
-                ..Default::default()
-            },
-        )
-        .map(Vec1::into_vec)
-        .unwrap_or_default()
-        // TODO: handle more than 1 definition
-        .into_iter()
-        .next()
-    {
-        let kind = metadata.symbol_kind();
-        let name = {
-            let snippet = module.code_at(definition_location);
-            if snippet.chars().any(|c| !c.is_whitespace()) {
-                Some(snippet.to_owned())
-            } else if let Some(name) = display_name.clone() {
-                Some(name)
-            } else {
-                fallback_name_from_type
-            }
+    let (kind, name, definition_range, docstring_range, module) =
+        if let Some(FindDefinitionItemWithDocstring {
+            metadata,
+            definition_range: definition_location,
+            module,
+            docstring_range,
+            display_name,
+        }) = transaction
+            .find_definition(
+                handle,
+                position,
+                FindPreference {
+                    prefer_pyi: false,
+                    ..Default::default()
+                },
+            )
+            .map(Vec1::into_vec)
+            .unwrap_or_default()
+            // TODO: handle more than 1 definition
+            .into_iter()
+            .next()
+        {
+            let kind = metadata.symbol_kind();
+            let name = {
+                let snippet = module.code_at(definition_location);
+                if snippet.chars().any(|c| !c.is_whitespace()) {
+                    Some(snippet.to_owned())
+                } else if let Some(name) = display_name.clone() {
+                    Some(name)
+                } else {
+                    fallback_name_from_type
+                }
+            };
+            (
+                kind,
+                name,
+                Some(definition_location),
+                docstring_range,
+                Some(module),
+            )
+        } else {
+            (None, fallback_name_from_type, None, None, None)
         };
-        (kind, name, docstring_range, Some(module))
-    } else {
-        (None, fallback_name_from_type, None, None)
-    };
 
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
@@ -598,39 +630,52 @@ pub fn get_hover(
         && !transaction
             .identifier_at(handle, position)
             .is_some_and(|id| matches!(id.context, IdentifierContext::ClassDef { .. }));
-    let type_display = transaction.ad_hoc_solve(handle, "hover_display", {
-        let mut cloned = type_.clone();
-        move |solver| {
-            if show_constructor {
-                let constructor = match cloned {
-                    Type::ClassDef(ref cls)
-                        if !solver.get_metadata_for_class(cls).is_typed_dict() =>
-                    {
-                        Some(solver.type_order().constructor_to_callable(
-                            &solver.promote_nontypeddict_silently_to_classtype(cls),
-                        ))
-                    }
-                    Type::Type(box Type::ClassType(ref cls)) => {
-                        Some(solver.type_order().constructor_to_callable(cls))
-                    }
-                    _ => None,
-                };
-                if let Some(mut constructor) = constructor {
-                    constructor.transform_toplevel_callable(|c| {
-                        expand_callable_kwargs_for_hover(&solver, c)
-                    });
-                    return constructor.as_lsp_string_with_fallback_name(
-                        name_for_display.as_deref(),
-                        LspDisplayMode::Hover,
-                    );
-                }
+    let type_display = if callee_range_opt.is_none() {
+        match (&type_, module.as_ref(), definition_range) {
+            (Type::Function(_), Some(module), Some(definition_range)) => {
+                declared_function_hover_display(module, definition_range)
             }
-            cloned.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(&solver, c));
-            cloned.as_lsp_string_with_fallback_name(
-                name_for_display.as_deref(),
-                LspDisplayMode::Hover,
-            )
+            _ => None,
         }
+    } else {
+        None
+    }
+    .or_else(|| {
+        transaction.ad_hoc_solve(handle, "hover_display", {
+            let mut cloned = type_.clone();
+            move |solver| {
+                if show_constructor {
+                    let constructor = match cloned {
+                        Type::ClassDef(ref cls)
+                            if !solver.get_metadata_for_class(cls).is_typed_dict() =>
+                        {
+                            Some(solver.type_order().constructor_to_callable(
+                                &solver.promote_nontypeddict_silently_to_classtype(cls),
+                            ))
+                        }
+                        Type::Type(box Type::ClassType(ref cls)) => {
+                            Some(solver.type_order().constructor_to_callable(cls))
+                        }
+                        _ => None,
+                    };
+                    if let Some(mut constructor) = constructor {
+                        constructor.transform_toplevel_callable(|c| {
+                            expand_callable_kwargs_for_hover(&solver, c)
+                        });
+                        return constructor.as_lsp_string_with_fallback_name(
+                            name_for_display.as_deref(),
+                            LspDisplayMode::Hover,
+                        );
+                    }
+                }
+                cloned
+                    .transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(&solver, c));
+                cloned.as_lsp_string_with_fallback_name(
+                    name_for_display.as_deref(),
+                    LspDisplayMode::Hover,
+                )
+            }
+        })
     });
 
     let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {
