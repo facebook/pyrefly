@@ -668,17 +668,25 @@ fn broadcast_dim(a_ty: &Type, b_ty: &Type, position: usize) -> Result<Type, Shap
 pub enum IndexOp {
     /// Integer index: removes the dimension
     Int,
-    /// Slice: replaces dimension with (stop - start).
+    /// Slice: replaces dimension with (stop - start) / step.
     /// `start` defaults to 0, `stop` defaults to the dimension size.
+    /// `step` defaults to 1 (no stride).
     Slice {
         start: Option<Type>,
         stop: Option<Type>,
+        /// Step/stride for the slice. `None` means step=1 (default).
+        /// Can be a literal `Size(Literal(n))`, a symbolic `Size(Var(...))`,
+        /// a `Dim[S]`, or a `Quantified` type variable.
+        step: Option<Type>,
     },
     /// Tensor index: replaces dimension with the index tensor's dims
     TensorIndex(Vec<Type>),
     /// Tuple/list fancy index: dimension becomes known size or unknown.
     /// `Some(n)` for concrete tuple of length n, `None` for list/unknown.
     Fancy(Option<i64>),
+    /// None/np.newaxis index: inserts a new dimension of size 1.
+    /// Does not consume a shape dimension.
+    NewAxis,
 }
 
 /// Apply a single integer index — removes first dimension.
@@ -705,10 +713,12 @@ pub fn index_shape_int(shape: &TensorShape) -> Result<TensorShape, ShapeError> {
 
 /// Apply a single slice to first dimension.
 /// E.g. `Tensor[10, 20][2:5]` -> `Tensor[3, 20]`
+/// With step: `Tensor[100][::2]` -> `Tensor[50]` (ceil_div(100, 2))
 pub fn index_shape_slice(
     shape: &TensorShape,
     start: Option<Type>,
     stop: Option<Type>,
+    step: Option<Type>,
 ) -> Result<TensorShape, ShapeError> {
     match shape {
         TensorShape::Concrete(dims) => {
@@ -720,7 +730,8 @@ pub fn index_shape_slice(
                 &dims[0],
             );
             let stop = adjust_negative(stop.unwrap_or_else(|| dims[0].clone()), &dims[0]);
-            let new_first_dim = sub_dim(stop, start);
+            let range_dim = sub_dim(stop, start);
+            let new_first_dim = apply_step(range_dim, step);
             let mut new_dims = vec![new_first_dim];
             new_dims.extend_from_slice(&dims[1..]);
             Ok(TensorShape::from_types(new_dims))
@@ -731,7 +742,8 @@ pub fn index_shape_slice(
                 &prefix[0],
             );
             let stop = adjust_negative(stop.unwrap_or_else(|| prefix[0].clone()), &prefix[0]);
-            let new_first_dim = sub_dim(stop, start);
+            let range_dim = sub_dim(stop, start);
+            let new_first_dim = apply_step(range_dim, step);
             let mut new_prefix = vec![new_first_dim];
             new_prefix.extend_from_slice(&prefix[1..]);
             Ok(TensorShape::Unpacked(Box::new((
@@ -774,6 +786,14 @@ pub fn index_shape_tensor(
     }
 }
 
+/// Count how many shape dimensions a sequence of ops consumes.
+/// `NewAxis` ops don't consume a dimension; all others consume one.
+fn ops_dims_consumed(ops: &[IndexOp]) -> usize {
+    ops.iter()
+        .filter(|op| !matches!(op, IndexOp::NewAxis))
+        .count()
+}
+
 /// Apply multi-axis indexing with optional ellipsis.
 /// `pre_ops` are applied left-to-right from dim 0.
 /// `post_ops` are applied from the end (only when `has_ellipsis` is true).
@@ -786,55 +806,50 @@ pub fn index_shape_multi(
 ) -> Result<TensorShape, ShapeError> {
     match shape {
         TensorShape::Concrete(shape_dims) => {
-            let non_ellipsis_count = pre_ops.len() + post_ops.len();
-            if non_ellipsis_count > shape_dims.len() {
+            let pre_consumed = ops_dims_consumed(pre_ops);
+            let post_consumed = ops_dims_consumed(post_ops);
+            let total_consumed = pre_consumed + post_consumed;
+            if total_consumed > shape_dims.len() {
                 return Err(ShapeError::TooManyIndices {
-                    got: non_ellipsis_count,
+                    got: total_consumed,
                     max: shape_dims.len(),
                 });
             }
-            let ellipsis_dims = if has_ellipsis {
-                shape_dims.len() - non_ellipsis_count
+
+            let (pre_result, _) = apply_ops_to_dims(pre_ops, &shape_dims[..pre_consumed])?;
+
+            let post_start = if has_ellipsis {
+                shape_dims.len() - post_consumed
             } else {
-                0
+                pre_consumed
             };
-
-            let pre_dims = &shape_dims[..pre_ops.len()];
-            let post_start = pre_ops.len() + ellipsis_dims;
-            let post_dims = &shape_dims[post_start..];
-            let ellipsis_preserved = &shape_dims[pre_ops.len()..post_start];
-
-            let pre_result = apply_ops_to_dims(pre_ops, pre_dims)?;
-            let post_result = apply_ops_to_dims(post_ops, post_dims)?;
+            let (post_result, _) = apply_ops_to_dims(post_ops, &shape_dims[post_start..])?;
 
             let mut new_dims = pre_result;
-            new_dims.extend_from_slice(ellipsis_preserved);
-            new_dims.extend(post_result);
-            // Add remaining unindexed dims (no ellipsis case)
-            if !has_ellipsis {
-                for dim in shape_dims.iter().skip(pre_ops.len()) {
-                    new_dims.push(dim.clone());
-                }
+            if has_ellipsis {
+                // Preserve ellipsis-covered dims
+                new_dims.extend_from_slice(&shape_dims[pre_consumed..post_start]);
+            } else {
+                // No ellipsis: append remaining unindexed dims
+                new_dims.extend_from_slice(&shape_dims[pre_consumed..]);
             }
+            new_dims.extend(post_result);
 
             Ok(TensorShape::from_types(new_dims))
         }
         TensorShape::Unpacked(box (prefix, middle, suffix)) => {
-            // Pre-ellipsis indices consume prefix left-to-right.
-            // Post-ellipsis indices consume suffix from the right.
-            // Ellipsis (or unindexed middle) covers remaining prefix + middle + remaining suffix.
-            if pre_ops.len() > prefix.len() || post_ops.len() > suffix.len() {
+            let pre_consumed = ops_dims_consumed(pre_ops);
+            let post_consumed = ops_dims_consumed(post_ops);
+            if pre_consumed > prefix.len() || post_consumed > suffix.len() {
                 return Ok(shapeless_shape());
             }
 
-            let pre_dims = &prefix[..pre_ops.len()];
-            let pre_result = apply_ops_to_dims(pre_ops, pre_dims)?;
+            let (pre_result, _) = apply_ops_to_dims(pre_ops, &prefix[..pre_consumed])?;
 
-            let post_suffix_start = suffix.len() - post_ops.len();
-            let post_dims = &suffix[post_suffix_start..];
-            let post_result = apply_ops_to_dims(post_ops, post_dims)?;
+            let post_suffix_start = suffix.len() - post_consumed;
+            let (post_result, _) = apply_ops_to_dims(post_ops, &suffix[post_suffix_start..])?;
 
-            let remaining_prefix = &prefix[pre_ops.len()..];
+            let remaining_prefix = &prefix[pre_consumed..];
             let remaining_suffix = &suffix[..post_suffix_start];
 
             let mut result_prefix = pre_result;
@@ -856,15 +871,23 @@ fn shapeless_shape() -> TensorShape {
     TensorShape::Unpacked(Box::new((vec![], Type::any_tuple(), vec![])))
 }
 
-/// Adjust a negative literal slice bound by adding dim size.
+/// Adjust a negative slice bound by adding dim size (Python negative index semantics).
 /// E.g. -1 on dim N becomes N + (-1) = N - 1.
+/// Also handles symbolic negation: -1 * X (from unary `-` on a Dim/Size expression)
+/// becomes dim_size + (-1 * X) = dim_size - X.
 fn adjust_negative(bound: Type, dim_size: &Type) -> Type {
-    if let Type::Size(SizeExpr::Literal(v)) = &bound
-        && *v < 0
-    {
-        return Type::Size(SizeExpr::Add(Box::new(dim_size.clone()), Box::new(bound)));
+    let is_negative = match &bound {
+        // Literal negative: -1, -2, etc.
+        Type::Size(SizeExpr::Literal(v)) => *v < 0,
+        // Symbolic negation: (-1 * X), (-2 * X), etc. from unary negation
+        Type::Size(SizeExpr::Mul(box Type::Size(SizeExpr::Literal(v)), _)) => *v < 0,
+        _ => false,
+    };
+    if is_negative {
+        Type::Size(SizeExpr::Add(Box::new(dim_size.clone()), Box::new(bound)))
+    } else {
+        bound
     }
-    bound
 }
 
 /// Compute stop - start, simplifying x - 0 to x.
@@ -875,12 +898,65 @@ fn sub_dim(stop: Type, start: Type) -> Type {
     }
 }
 
+/// Apply step (stride) to a range dimension: ceil_div(range, step).
+/// step=None or step=Literal(1) is identity. For literal range and step,
+/// computes the exact integer ceiling division. For symbolic steps (Dim, Size,
+/// Quantified), builds a symbolic ceil_div expression.
+fn apply_step(range_dim: Type, step: Option<Type>) -> Type {
+    let step = match step {
+        None => return range_dim,
+        Some(s) => s,
+    };
+    // Extract the inner type for Dim[S] → S
+    let step_inner = match &step {
+        Type::Dim(inner) => (**inner).clone(),
+        other => other.clone(),
+    };
+    match &step_inner {
+        // Literal step: exact arithmetic
+        Type::Size(SizeExpr::Literal(1)) => range_dim,
+        Type::Size(SizeExpr::Literal(s)) if *s > 1 => {
+            let s = *s;
+            if let Type::Size(SizeExpr::Literal(n)) = &range_dim {
+                Type::Size(SizeExpr::Literal((*n + s - 1) / s))
+            } else {
+                // Symbolic range, literal step: ceil_div(range, step)
+                let step_minus_1 = Type::Size(SizeExpr::Literal(s - 1));
+                let numerator =
+                    Type::Size(SizeExpr::Add(Box::new(range_dim), Box::new(step_minus_1)));
+                Type::Size(SizeExpr::FloorDiv(
+                    Box::new(numerator),
+                    Box::new(Type::Size(SizeExpr::Literal(s))),
+                ))
+            }
+        }
+        Type::Size(SizeExpr::Literal(s)) if *s <= 0 => {
+            // Negative or zero step: degenerate, return unknown
+            Type::any_implicit()
+        }
+        // Symbolic step (Size var, Quantified): build ceil_div(range, step) symbolically
+        _ => {
+            // ceil_div(range, step) = (range + step - 1) // step
+            let step_minus_1 = Type::Size(SizeExpr::Sub(
+                Box::new(step_inner.clone()),
+                Box::new(Type::Size(SizeExpr::Literal(1))),
+            ));
+            let numerator = Type::Size(SizeExpr::Add(Box::new(range_dim), Box::new(step_minus_1)));
+            Type::Size(SizeExpr::FloorDiv(
+                Box::new(numerator),
+                Box::new(step_inner),
+            ))
+        }
+    }
+}
+
 /// Apply a single `IndexOp` to a known dimension.
 /// Returns `Some(new_dim)` for ops that keep the dim, `None` for `Int` (dim removed).
+/// Must not be called with `NewAxis` — that is handled by `apply_ops_to_dims`.
 fn apply_index_op(op: &IndexOp, dim: &Type) -> Option<Type> {
     match op {
         IndexOp::Int => None,
-        IndexOp::Slice { start, stop } => {
+        IndexOp::Slice { start, stop, step } => {
             let start = adjust_negative(
                 start
                     .clone()
@@ -888,7 +964,8 @@ fn apply_index_op(op: &IndexOp, dim: &Type) -> Option<Type> {
                 dim,
             );
             let stop = adjust_negative(stop.clone().unwrap_or_else(|| dim.clone()), dim);
-            Some(sub_dim(stop, start))
+            let range_dim = sub_dim(stop, start);
+            Some(apply_step(range_dim, step.clone()))
         }
         IndexOp::TensorIndex(idx_dims) => {
             // Multi-axis tensor indexing: this case shouldn't appear in apply_index_op
@@ -903,17 +980,54 @@ fn apply_index_op(op: &IndexOp, dim: &Type) -> Option<Type> {
         }
         IndexOp::Fancy(Some(n)) => Some(Type::Size(SizeExpr::Literal(*n))),
         IndexOp::Fancy(None) => Some(Type::any_implicit()),
+        IndexOp::NewAxis => unreachable!("NewAxis handled by apply_ops_to_dims"),
     }
 }
 
-/// Apply a sequence of `IndexOp`s to a corresponding slice of dimensions.
-/// Returns the resulting dims (with int-indexed dims removed).
-fn apply_ops_to_dims(ops: &[IndexOp], dims: &[Type]) -> Result<Vec<Type>, ShapeError> {
+/// Apply a sequence of `IndexOp`s to a slice of dimensions.
+/// `NewAxis` ops insert a dim of size 1 without consuming a shape dimension.
+/// `TensorIndex` ops broadcast together: the first emits the index dims,
+/// subsequent ones with the same shape consume a dim without emitting.
+/// Other ops consume one shape dimension each.
+/// Returns (result_dims, number_of_shape_dims_consumed).
+fn apply_ops_to_dims(ops: &[IndexOp], dims: &[Type]) -> Result<(Vec<Type>, usize), ShapeError> {
     let mut new_dims = Vec::new();
-    for (op, dim) in ops.iter().zip(dims.iter()) {
-        if let Some(new_dim) = apply_index_op(op, dim) {
-            new_dims.push(new_dim);
+    let mut dim_idx = 0;
+    let mut tensor_index_emitted = false;
+    for op in ops {
+        match op {
+            IndexOp::NewAxis => {
+                new_dims.push(Type::Size(SizeExpr::Literal(1)));
+            }
+            IndexOp::TensorIndex(idx_dims) => {
+                if dim_idx >= dims.len() {
+                    return Err(ShapeError::TooManyIndices {
+                        got: dim_idx + 1,
+                        max: dims.len(),
+                    });
+                }
+                // First tensor index in a group emits the broadcast shape.
+                // Subsequent tensor indices consume a dim without emitting
+                // (they participate in the same broadcast group).
+                if !tensor_index_emitted {
+                    new_dims.extend(idx_dims.iter().cloned());
+                    tensor_index_emitted = true;
+                }
+                dim_idx += 1;
+            }
+            _ => {
+                if dim_idx >= dims.len() {
+                    return Err(ShapeError::TooManyIndices {
+                        got: dim_idx + 1,
+                        max: dims.len(),
+                    });
+                }
+                if let Some(new_dim) = apply_index_op(op, &dims[dim_idx]) {
+                    new_dims.push(new_dim);
+                }
+                dim_idx += 1;
+            }
         }
     }
-    Ok(new_dims)
+    Ok((new_dims, dim_idx))
 }

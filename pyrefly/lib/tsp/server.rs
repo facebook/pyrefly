@@ -16,10 +16,14 @@ use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
 use tracing::info;
+use tracing::warn;
 use tsp_types::GetTypeParams;
+use tsp_types::TSPNotificationMethods;
 use tsp_types::TSPRequests;
 
 use crate::commands::lsp::IndexingMode;
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::LspEvent;
@@ -93,10 +97,39 @@ impl<T: TspInterface> TspServer<T> {
 
         // Increment snapshot after the inner server has processed the event
         if should_increment_snapshot && let Ok(mut current) = self.current_snapshot.lock() {
+            let old_snapshot = *current;
             *current += 1;
+            let new_snapshot = *current;
+            drop(current); // Release the lock before sending the notification
+            self.send_snapshot_changed_notification(old_snapshot, new_snapshot);
         }
 
         Ok(result)
+    }
+
+    /// Send a `typeServer/snapshotChanged` notification to the client.
+    ///
+    /// Called whenever the snapshot counter increments, so the client knows
+    /// any previously-returned types are stale.
+    fn send_snapshot_changed_notification(&self, old_snapshot: i32, new_snapshot: i32) {
+        let method = serde_json::to_value(TSPNotificationMethods::TypeServerSnapshotChanged)
+            .expect("TSPNotificationMethods serialization is infallible");
+        let method_str = method
+            .as_str()
+            .expect("TSPNotificationMethods serializes to a string")
+            .to_owned();
+
+        if let Err(e) = self
+            .inner
+            .sender()
+            .send(Message::Notification(Notification {
+                method: method_str,
+                params: serde_json::json!({ "old": old_snapshot, "new": new_snapshot }),
+                activity_key: None,
+            }))
+        {
+            warn!("Failed to send snapshotChanged notification: {e}");
+        }
     }
 
     fn handle_tsp_request<'a>(
@@ -167,7 +200,7 @@ impl<T: TspInterface> TspServer<T> {
             GetTypeParams,
         ) -> Result<Option<tsp_types::Type>, lsp_server::ResponseError>,
     ) {
-        let params: GetTypeParams = match serde_json::from_value(raw_params) {
+        let params: GetTypeParams = match serde_json::from_value::<GetTypeParams>(raw_params) {
             Ok(p) => p,
             Err(e) => {
                 self.send_err(
@@ -178,8 +211,12 @@ impl<T: TspInterface> TspServer<T> {
             }
         };
         match handler(self, params) {
-            Ok(result) => self.send_ok(id, result),
-            Err(err) => self.send_err(id, err),
+            Ok(result) => {
+                self.send_ok(id, result);
+            }
+            Err(err) => {
+                self.send_err(id, err);
+            }
         }
     }
 }
@@ -190,7 +227,6 @@ pub fn tsp_loop(
     _initialization: InitializeInfo,
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
-    eprintln!("Reading TSP messages");
     let server = TspServer::new(lsp_server);
 
     std::thread::scope(|scope| {
@@ -203,13 +239,17 @@ pub fn tsp_loop(
 
         let mut ide_transaction_manager = TransactionManager::default();
         let mut canceled_requests = HashSet::new();
+        let mut next_task_id = 0_usize;
 
         while let Ok((subsequent_mutation, event, enqueued_at)) = server.inner.lsp_queue().recv() {
+            let task_id = next_task_id;
+            next_task_id += 1;
             let (mut event_telemetry, queue_duration) = TelemetryEvent::new_dequeued(
                 TelemetryEventKind::LspEvent(event.describe()),
                 enqueued_at,
                 server.inner.telemetry_state(),
                 QueueName::LspQueue,
+                task_id,
             );
             let event_description = event.describe();
 

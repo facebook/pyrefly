@@ -18,19 +18,19 @@ use tsp_types::*;
 fn test_type_kind_serialization() {
     let kind = TypeKind::Builtin;
     let json = serde_json::to_value(&kind).unwrap();
-    assert_eq!(json, serde_json::json!("BuiltIn"));
+    assert_eq!(json, serde_json::json!(0));
 
     let kind = TypeKind::Function;
     let json = serde_json::to_value(&kind).unwrap();
-    assert_eq!(json, serde_json::json!("Function"));
+    assert_eq!(json, serde_json::json!(2));
 }
 
 #[test]
 fn test_type_kind_deserialization() {
-    let kind: TypeKind = serde_json::from_str(r#""Class""#).unwrap();
+    let kind: TypeKind = serde_json::from_str("3").unwrap();
     assert_eq!(kind, TypeKind::Class);
 
-    let kind: TypeKind = serde_json::from_str(r#""Union""#).unwrap();
+    let kind: TypeKind = serde_json::from_str("4").unwrap();
     assert_eq!(kind, TypeKind::Union);
 }
 
@@ -47,7 +47,7 @@ fn test_declaration_kind_round_trip() {
 fn test_declaration_category_serialization() {
     let cat = DeclarationCategory::Function;
     let json = serde_json::to_value(&cat).unwrap();
-    assert_eq!(json, serde_json::json!("Function"));
+    assert_eq!(json, serde_json::json!(5));
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn regular_decl(
     uri: &str,
 ) -> RegularDeclaration {
     RegularDeclaration {
-        kind: "Regular".to_owned(),
+        kind: DeclarationKind::Regular,
         category,
         name: name.map(|s| s.to_owned()),
         node: node(uri, 0, 0, 0, 10),
@@ -213,7 +213,7 @@ fn test_resolve_import_params_serialization() {
 #[test]
 fn test_regular_declaration_has_base_kind() {
     let decl = regular_decl(DeclarationCategory::Function, Some("foo"), "file:///a.py");
-    assert_eq!(decl.kind, "Regular");
+    assert_eq!(decl.kind, DeclarationKind::Regular);
     assert_eq!(decl.category, DeclarationCategory::Function);
     assert_eq!(decl.name, Some("foo".to_owned()));
 }
@@ -222,8 +222,8 @@ fn test_regular_declaration_has_base_kind() {
 fn test_regular_declaration_serialization() {
     let decl = regular_decl(DeclarationCategory::Variable, Some("x"), "file:///a.py");
     let json = serde_json::to_value(&decl).unwrap();
-    assert_eq!(json["kind"], "Regular");
-    assert_eq!(json["category"], "Variable");
+    assert_eq!(json["kind"], 0);
+    assert_eq!(json["category"], 1);
     assert_eq!(json["name"], "x");
     assert!(json["node"].is_object());
 
@@ -234,13 +234,13 @@ fn test_regular_declaration_serialization() {
 #[test]
 fn test_synthesized_declaration_has_base_kind() {
     let decl = SynthesizedDeclaration {
-        kind: "Synthesized".to_owned(),
+        kind: DeclarationKind::Synthesized,
         uri: "file:///builtins.pyi".to_owned(),
     };
-    assert_eq!(decl.kind, "Synthesized");
+    assert_eq!(decl.kind, DeclarationKind::Synthesized);
 
     let json = serde_json::to_value(&decl).unwrap();
-    assert_eq!(json["kind"], "Synthesized");
+    assert_eq!(json["kind"], 1);
     assert_eq!(json["uri"], "file:///builtins.pyi");
 }
 
@@ -252,7 +252,7 @@ fn test_synthesized_declaration_has_base_kind() {
 fn test_builtin_type_has_base_fields() {
     let t = BuiltInType {
         id: 1,
-        kind: "BuiltIn".to_owned(),
+        kind: TypeKind::Builtin,
         flags: TypeFlags::INSTANCE,
         type_alias_info: None,
         name: "int".to_owned(),
@@ -261,7 +261,7 @@ fn test_builtin_type_has_base_fields() {
     };
     // TypeBase fields are present
     assert_eq!(t.id, 1);
-    assert_eq!(t.kind, "BuiltIn");
+    assert_eq!(t.kind, TypeKind::Builtin);
     assert_eq!(t.flags, TypeFlags::INSTANCE);
     assert!(t.type_alias_info.is_none());
     // Own fields
@@ -272,7 +272,7 @@ fn test_builtin_type_has_base_fields() {
 fn test_builtin_type_serialization_round_trip() {
     let t = BuiltInType {
         id: 42,
-        kind: "BuiltIn".to_owned(),
+        kind: TypeKind::Builtin,
         flags: TypeFlags::NONE,
         type_alias_info: None,
         name: "unknown".to_owned(),
@@ -281,7 +281,7 @@ fn test_builtin_type_serialization_round_trip() {
     };
     let json = serde_json::to_value(&t).unwrap();
     assert_eq!(json["id"], 42);
-    assert_eq!(json["kind"], "BuiltIn");
+    assert_eq!(json["kind"], 0);
     assert_eq!(json["flags"], 0);
     assert_eq!(json["name"], "unknown");
 
@@ -294,7 +294,7 @@ fn test_union_type_serialization() {
     // Build a union of two built-in types
     let int_type = Type::BuiltInType(BuiltInType {
         id: 1,
-        kind: "BuiltIn".to_owned(),
+        kind: TypeKind::Builtin,
         flags: TypeFlags::INSTANCE,
         type_alias_info: None,
         name: "int".to_owned(),
@@ -303,7 +303,7 @@ fn test_union_type_serialization() {
     });
     let str_type = Type::BuiltInType(BuiltInType {
         id: 2,
-        kind: "BuiltIn".to_owned(),
+        kind: TypeKind::Builtin,
         flags: TypeFlags::INSTANCE,
         type_alias_info: None,
         name: "str".to_owned(),
@@ -312,13 +312,13 @@ fn test_union_type_serialization() {
     });
     let union = UnionType {
         id: 3,
-        kind: "Union".to_owned(),
+        kind: TypeKind::Union,
         flags: TypeFlags::INSTANCE,
         type_alias_info: None,
         sub_types: vec![int_type, str_type],
     };
     let json = serde_json::to_value(&union).unwrap();
-    assert_eq!(json["kind"], "Union");
+    assert_eq!(json["kind"], 4);
     assert_eq!(json["subTypes"].as_array().unwrap().len(), 2);
 
     let back: UnionType = serde_json::from_value(json).unwrap();
@@ -329,7 +329,7 @@ fn test_union_type_serialization() {
 fn test_module_type_serialization() {
     let m = ModuleType {
         id: 10,
-        kind: "Module".to_owned(),
+        kind: TypeKind::Module,
         flags: TypeFlags::NONE,
         type_alias_info: None,
         module_name: "os.path".to_owned(),
@@ -337,7 +337,7 @@ fn test_module_type_serialization() {
     };
     let json = serde_json::to_value(&m).unwrap();
     assert_eq!(json["moduleName"], "os.path");
-    assert_eq!(json["kind"], "Module");
+    assert_eq!(json["kind"], 5);
 
     let back: ModuleType = serde_json::from_value(json).unwrap();
     assert_eq!(back, m);
@@ -347,7 +347,7 @@ fn test_module_type_serialization() {
 fn test_type_reference_type_serialization() {
     let r = TypeReferenceType {
         id: 99,
-        kind: "TypeReference".to_owned(),
+        kind: TypeKind::Typereference,
         flags: TypeFlags::NONE,
         type_alias_info: None,
         type_reference_id: 1,
@@ -459,7 +459,7 @@ fn test_literal_value_bool() {
 fn test_enum_literal_serialization() {
     let int_type = Type::BuiltInType(BuiltInType {
         id: 1,
-        kind: "BuiltIn".to_owned(),
+        kind: TypeKind::Builtin,
         flags: TypeFlags::INSTANCE,
         type_alias_info: None,
         name: "int".to_owned(),

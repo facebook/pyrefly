@@ -44,6 +44,7 @@ class Module:
     ) -> None: ...
     def register_parameter(self, name: str, param: Parameter | None) -> None: ...
     def apply(self, fn: Callable[[Module], None]) -> Self: ...
+    def to(self, *args: Any, **kwargs: Any) -> Self: ...
     def modules(self) -> Iterator[Module]: ...
     def parameters(self, recurse: bool = True) -> Iterator[Tensor]: ...
     def named_parameters(
@@ -163,13 +164,14 @@ class ModuleDict[T](Module):
     def values(self) -> Iterator[Module]: ...
 
 # Sequential container
-class Sequential(Module):
+class Sequential[*Ms](Module):
     """
     A sequential container. Modules will be added to it in the order they are passed.
+    When type arguments are known, calling the Sequential chains input through each
+    module's forward method, preserving shape information.
     """
-    def __init__(self, *args: Module) -> None: ...
+    def __init__(self, *args: *Ms) -> None: ...
     def forward(self, input: Tensor) -> Tensor: ...
-    def __call__(self, input: Tensor) -> Tensor: ...
 
 # ModuleList container
 class ModuleList[T](Module):
@@ -459,129 +461,199 @@ class Identity(Module):
 # Convolution Modules
 # ==============================================================================
 
-class Conv1d[InC, OutC](Module):
-    """1D convolution. Tracks input and output channel dimensions."""
+class Conv1d[InC, OutC, K, S = 1, P = 0, D = 1](Module):
+    """1D convolution. Tracks channel and spatial dimensions.
+
+    Type parameters S, P, D are bound from constructor arguments via _Dim[T].
+    PEP 696 defaults (S=1, P=0, D=1) apply when arguments are omitted.
+    """
+
+    weight: Tensor[OutC, InC, K]
 
     def __init__(
         self,
         in_channels: _Dim[InC],
         out_channels: _Dim[OutC],
-        kernel_size: int,
-        stride: int = 1,
-        padding: int = 0,
-        dilation: int = 1,
+        kernel_size: _Dim[K],
+        stride: _Dim[S] = 1,
+        padding: _Dim[P] = 0,
+        dilation: _Dim[D] = 1,
         groups: int = 1,
         bias: bool = True,
         padding_mode: str = "zeros",
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[B, L](
+        self, input: Tensor[B, InC, L]
+    ) -> Tensor[B, OutC, (L + 2 * P - D * (K - 1) - 1) // S + 1]: ...
 
-class Conv2d[InC, OutC](Module):
-    """2D convolution. Tracks input and output channel dimensions."""
+class Conv2d[InC, OutC, K, S = 1, P = 0, D = 1](Module):
+    """2D convolution. Tracks channel and spatial dimensions.
+
+    Type parameters S, P, D are bound from constructor arguments via _Dim[T].
+    PEP 696 defaults (S=1, P=0, D=1) apply when arguments are omitted.
+    """
+
+    weight: Tensor[OutC, InC, K, K]
 
     def __init__(
         self,
         in_channels: _Dim[InC],
         out_channels: _Dim[OutC],
-        kernel_size: int,
-        stride: int = 1,
-        padding: int = 0,
-        dilation: int = 1,
+        kernel_size: _Dim[K],
+        stride: _Dim[S] = 1,
+        padding: _Dim[P] = 0,
+        dilation: _Dim[D] = 1,
         groups: int = 1,
         bias: bool = True,
         padding_mode: str = "zeros",
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[B, H, W](
+        self, input: Tensor[B, InC, H, W]
+    ) -> Tensor[
+        B,
+        OutC,
+        (H + 2 * P - D * (K - 1) - 1) // S + 1,
+        (W + 2 * P - D * (K - 1) - 1) // S + 1,
+    ]: ...
 
-class Conv3d[InC, OutC](Module):
-    """3D convolution. Tracks input and output channel dimensions."""
+class Conv3d[InC, OutC, K, S = 1, P = 0, D = 1](Module):
+    """3D convolution. Tracks channel and spatial dimensions.
+
+    Type parameters S, P, D are bound from constructor arguments via _Dim[T].
+    PEP 696 defaults (S=1, P=0, D=1) apply when arguments are omitted.
+    """
+
+    weight: Tensor[OutC, InC, K, K, K]
 
     def __init__(
         self,
         in_channels: _Dim[InC],
         out_channels: _Dim[OutC],
-        kernel_size: int,
-        stride: int = 1,
-        padding: int = 0,
-        dilation: int = 1,
+        kernel_size: _Dim[K],
+        stride: _Dim[S] = 1,
+        padding: _Dim[P] = 0,
+        dilation: _Dim[D] = 1,
         groups: int = 1,
         bias: bool = True,
         padding_mode: str = "zeros",
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[B, D_, H, W](
+        self, input: Tensor[B, InC, D_, H, W]
+    ) -> Tensor[
+        B,
+        OutC,
+        (D_ + 2 * P - D * (K - 1) - 1) // S + 1,
+        (H + 2 * P - D * (K - 1) - 1) // S + 1,
+        (W + 2 * P - D * (K - 1) - 1) // S + 1,
+    ]: ...
 
-class ConvTranspose1d[InC, OutC](Module):
-    """1D transposed convolution. Tracks input and output channel dimensions."""
+class ConvTranspose1d[InC, OutC, K, S = 1, P = 0, OP = 0, D = 1](Module):
+    """1D transposed convolution. Tracks channel and spatial dimensions.
 
-    def __init__(
-        self,
-        in_channels: _Dim[InC],
-        out_channels: _Dim[OutC],
-        kernel_size: int,
-        stride: int = 1,
-        padding: int = 0,
-        output_padding: int = 0,
-        groups: int = 1,
-        bias: bool = True,
-        dilation: int = 1,
-        padding_mode: str = "zeros",
-        device: Any = None,
-        dtype: Any = None,
-    ) -> None: ...
-    def forward(self, input: Tensor) -> Tensor: ...
+    Type parameters S, P, OP, D are bound from constructor arguments via _Dim[T].
+    PEP 696 defaults apply when arguments are omitted.
+    """
 
-class ConvTranspose2d[InC, OutC](Module):
-    """2D transposed convolution. Tracks input and output channel dimensions."""
+    weight: Tensor[InC, OutC, K]
 
     def __init__(
         self,
         in_channels: _Dim[InC],
         out_channels: _Dim[OutC],
-        kernel_size: int,
-        stride: int = 1,
-        padding: int = 0,
-        output_padding: int = 0,
+        kernel_size: _Dim[K],
+        stride: _Dim[S] = 1,
+        padding: _Dim[P] = 0,
+        output_padding: _Dim[OP] = 0,
         groups: int = 1,
         bias: bool = True,
-        dilation: int = 1,
+        dilation: _Dim[D] = 1,
         padding_mode: str = "zeros",
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[B, L](
+        self, input: Tensor[B, InC, L]
+    ) -> Tensor[B, OutC, (L - 1) * S - 2 * P + D * (K - 1) + OP + 1]: ...
 
-class ConvTranspose3d[InC, OutC](Module):
-    """3D transposed convolution. Tracks input and output channel dimensions."""
+class ConvTranspose2d[InC, OutC, K, S = 1, P = 0, OP = 0, D = 1](Module):
+    """2D transposed convolution. Tracks channel and spatial dimensions.
+
+    Type parameters S, P, OP, D are bound from constructor arguments via _Dim[T].
+    PEP 696 defaults apply when arguments are omitted.
+    """
+
+    weight: Tensor[InC, OutC, K, K]
 
     def __init__(
         self,
         in_channels: _Dim[InC],
         out_channels: _Dim[OutC],
-        kernel_size: int,
-        stride: int = 1,
-        padding: int = 0,
-        output_padding: int = 0,
+        kernel_size: _Dim[K],
+        stride: _Dim[S] = 1,
+        padding: _Dim[P] = 0,
+        output_padding: _Dim[OP] = 0,
         groups: int = 1,
         bias: bool = True,
-        dilation: int = 1,
+        dilation: _Dim[D] = 1,
         padding_mode: str = "zeros",
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[B, H, W](
+        self, input: Tensor[B, InC, H, W]
+    ) -> Tensor[
+        B,
+        OutC,
+        (H - 1) * S - 2 * P + D * (K - 1) + OP + 1,
+        (W - 1) * S - 2 * P + D * (K - 1) + OP + 1,
+    ]: ...
+
+class ConvTranspose3d[InC, OutC, K, S = 1, P = 0, OP = 0, D = 1](Module):
+    """3D transposed convolution. Tracks channel and spatial dimensions.
+
+    Type parameters S, P, OP, D are bound from constructor arguments via _Dim[T].
+    PEP 696 defaults apply when arguments are omitted.
+    """
+
+    weight: Tensor[InC, OutC, K, K, K]
+
+    def __init__(
+        self,
+        in_channels: _Dim[InC],
+        out_channels: _Dim[OutC],
+        kernel_size: _Dim[K],
+        stride: _Dim[S] = 1,
+        padding: _Dim[P] = 0,
+        output_padding: _Dim[OP] = 0,
+        groups: int = 1,
+        bias: bool = True,
+        dilation: _Dim[D] = 1,
+        padding_mode: str = "zeros",
+        device: Any = None,
+        dtype: Any = None,
+    ) -> None: ...
+    def forward[B, D_, H, W](
+        self, input: Tensor[B, InC, D_, H, W]
+    ) -> Tensor[
+        B,
+        OutC,
+        (D_ - 1) * S - 2 * P + D * (K - 1) + OP + 1,
+        (H - 1) * S - 2 * P + D * (K - 1) + OP + 1,
+        (W - 1) * S - 2 * P + D * (K - 1) + OP + 1,
+    ]: ...
 
 # ==============================================================================
 # Pooling Modules
 # ==============================================================================
 
 class MaxPool1d(Module):
-    """1D max pooling"""
+    """1D max pooling. Shape inference via DSL + NNModule init capture."""
     def __init__(
         self,
         kernel_size: int,
@@ -594,7 +666,7 @@ class MaxPool1d(Module):
     def forward(self, input: Tensor) -> Tensor: ...
 
 class MaxPool2d(Module):
-    """2D max pooling"""
+    """2D max pooling. Shape inference via DSL + NNModule init capture."""
     def __init__(
         self,
         kernel_size: int,
@@ -607,7 +679,7 @@ class MaxPool2d(Module):
     def forward(self, input: Tensor) -> Tensor: ...
 
 class MaxPool3d(Module):
-    """3D max pooling"""
+    """3D max pooling. Shape inference via DSL + NNModule init capture."""
     def __init__(
         self,
         kernel_size: int,
@@ -620,7 +692,7 @@ class MaxPool3d(Module):
     def forward(self, input: Tensor) -> Tensor: ...
 
 class AvgPool1d(Module):
-    """1D average pooling"""
+    """1D average pooling. Shape inference via DSL + NNModule init capture."""
     def __init__(
         self,
         kernel_size: int,
@@ -632,7 +704,7 @@ class AvgPool1d(Module):
     def forward(self, input: Tensor) -> Tensor: ...
 
 class AvgPool2d(Module):
-    """2D average pooling"""
+    """2D average pooling. Shape inference via DSL + NNModule init capture."""
     def __init__(
         self,
         kernel_size: int,
@@ -645,7 +717,7 @@ class AvgPool2d(Module):
     def forward(self, input: Tensor) -> Tensor: ...
 
 class AvgPool3d(Module):
-    """3D average pooling"""
+    """3D average pooling. Shape inference via DSL + NNModule init capture."""
     def __init__(
         self,
         kernel_size: int,
@@ -696,6 +768,118 @@ class AdaptiveMaxPool3d[OD, OH, OW](Module):
     def forward[B, C](
         self, input: Tensor[B, C, Any, Any, Any]
     ) -> Tensor[B, C, OD, OH, OW]: ...
+
+# ==============================================================================
+# Upsampling / Rearrangement Modules
+# ==============================================================================
+
+class PixelShuffle(Module):
+    """Rearranges channels into spatial dimensions.
+
+    [B, C * r * r, H, W] → [B, C, H * r, W * r]
+
+    Shape inference via DSL + NNModule init capture.
+    """
+
+    def __init__(self, upscale_factor: int) -> None: ...
+    def forward(self, input: Tensor) -> Tensor: ...
+
+class GLU(Module):
+    """Gated Linear Unit: splits input along dim, applies sigmoid gating.
+
+    GLU(x) = x1 * sigmoid(x2) where x1, x2 = x.split(x.size(dim) // 2, dim)
+    Output is same as input except dimension `dim` is halved.
+
+    Shape inference via DSL + NNModule init capture.
+    """
+
+    def __init__(self, dim: int = 1) -> None: ...
+    def forward(self, input: Tensor) -> Tensor: ...
+
+class LSTM(Module):
+    """Long Short-Term Memory RNN.
+
+    Input:  Tensor[B, T, InputSize]  (batch_first=True assumed)
+    Output: (Tensor[B, T, HiddenSize * ND],
+             Tensor[NL * ND, B, HiddenSize],
+             Tensor[NL * ND, B, HiddenSize])
+
+    ND (num_directions) = 1 for unidirectional, 2 for bidirectional.
+
+    Shape inference via DSL + NNModule init capture.
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        num_layers: int = 1,
+        bias: bool = True,
+        batch_first: bool = False,
+        dropout: float = 0.0,
+        bidirectional: bool = False,
+    ) -> None: ...
+    def flatten_parameters(self) -> None:
+        """Reset parameter data pointer for CUDA contiguous memory. No-op on CPU."""
+        ...
+    def forward(self, input: Tensor) -> tuple[Tensor, Tensor, Tensor]: ...
+
+class LSTMCell(Module):
+    """Long Short-Term Memory cell.
+
+    Input:  Tensor[B, InputSize]
+    Output: (Tensor[B, HiddenSize], Tensor[B, HiddenSize])
+
+    Shape inference via DSL + NNModule init capture.
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        bias: bool = True,
+        device: Any = None,
+        dtype: Any = None,
+    ) -> None: ...
+    def forward(
+        self, input: Tensor, hx: tuple[Tensor, Tensor] | None = None
+    ) -> tuple[Tensor, Tensor]: ...
+
+class GRUCell(Module):
+    """Gated Recurrent Unit cell.
+
+    Input:  Tensor[B, InputSize]
+    Output: Tensor[B, HiddenSize]
+
+    Shape-preserving when InputSize == HiddenSize; otherwise returns
+    unrefined Tensor (no DSL registration).
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        bias: bool = True,
+        device: Any = None,
+        dtype: Any = None,
+    ) -> None: ...
+    def forward(self, input: Tensor, hx: Tensor | None = None) -> Tensor: ...
+
+class Upsample(Module):
+    """Upsamples input. Shape inference via DSL + NNModule init capture.
+
+    Supports size (target spatial dims) or scale_factor (int multiplier).
+    Float scale_factor not yet supported in DSL.
+    """
+
+    def __init__(
+        self,
+        size: int | None = None,
+        scale_factor: int | None = None,
+        mode: str = "nearest",
+        align_corners: bool | None = None,
+    ) -> None: ...
+    def forward(self, input: Tensor) -> Tensor: ...
 
 # ==============================================================================
 # Loss Modules
@@ -817,7 +1001,11 @@ class CTCLoss(Module):
 # ==============================================================================
 
 class Flatten(Module):
-    """Flattens a contiguous range of dims."""
+    """Flattens a contiguous range of dims.
+
+    Shape inference via DSL + NNModule init capture.
+    """
+
     def __init__(self, start_dim: int = 1, end_dim: int = -1) -> None: ...
     def forward(self, input: Tensor) -> Tensor: ...
 
@@ -825,6 +1013,59 @@ class Unflatten(Module):
     """Unflattens a dimension"""
     def __init__(self, dim: int | str, unflattened_size: tuple[int, ...]) -> None: ...
     def forward(self, input: Tensor) -> Tensor: ...
+
+class ReflectionPad2d(Module):
+    """Pads input using reflection of the input boundary.
+
+    Shape inference via DSL + NNModule init capture.
+    """
+
+    def __init__(self, padding: int) -> None: ...
+    def forward(self, input: Tensor) -> Tensor: ...
+
+class ReplicationPad2d(Module):
+    """Pads input using replication of the input boundary.
+
+    Shape inference via DSL + NNModule init capture.
+    """
+
+    def __init__(self, padding: int) -> None: ...
+    def forward(self, input: Tensor) -> Tensor: ...
+
+# Embedding variants
+class EmbeddingBag[NUM_EMB, EMB_DIM](Module):
+    """Computes sums or means of 'bags' of embeddings.
+
+    Unlike Embedding, EmbeddingBag aggregates over variable-length groups
+    of indices using offsets. Output batch dimension comes from offsets.
+    """
+
+    weight: Tensor[NUM_EMB, EMB_DIM]
+
+    def __init__(
+        self,
+        num_embeddings: _Dim[NUM_EMB],
+        embedding_dim: _Dim[EMB_DIM],
+        max_norm: float | None = None,
+        norm_type: float = 2.0,
+        scale_grad_by_freq: bool = False,
+        mode: str = "mean",
+        sparse: bool = False,
+        _weight: Tensor | None = None,
+        include_last_offset: bool = False,
+        padding_idx: int | None = None,
+        device: Any = None,
+        dtype: Any = None,
+    ) -> None: ...
+
+    # EmbeddingBag forward: batch dim B comes from offsets (default, include_last_offset=False).
+    # Embedding dim EMB_DIM is always preserved from init.
+    def forward[B](
+        self,
+        input: Tensor,
+        offsets: Tensor[B] | None = None,
+        per_sample_weights: Tensor | None = None,
+    ) -> Tensor[B, EMB_DIM]: ...
 
 __all__ = [
     "functional",
@@ -906,7 +1147,15 @@ __all__ = [
     "HuberLoss",
     "KLDivLoss",
     "CTCLoss",
+    # RNN cells
+    "LSTM",
+    "LSTMCell",
+    "GRUCell",
     # Misc modules
     "Flatten",
     "Unflatten",
+    "ReflectionPad2d",
+    "ReplicationPad2d",
+    "EmbeddingBag",
+    "Upsample",
 ]

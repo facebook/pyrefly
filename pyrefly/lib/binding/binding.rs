@@ -46,7 +46,6 @@ use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
 use crate::alt::class::class_field::ClassField;
@@ -71,6 +70,7 @@ use crate::binding::django::DjangoFieldInfo;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowingSubject;
 use crate::binding::pydantic::PydanticConfigDict;
+use crate::binding::scope::is_constant_name;
 use crate::binding::table::TableKeyed;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
@@ -78,7 +78,6 @@ use crate::types::annotation::Annotation;
 use crate::types::callable::FuncDefIndex;
 use crate::types::class::Class;
 use crate::types::class::ClassDefIndex;
-use crate::types::class::ClassFieldProperties;
 use crate::types::equality::TypeEq;
 use crate::types::globals::ImplicitGlobal;
 use crate::types::quantified::QuantifiedKind;
@@ -113,7 +112,7 @@ assert_words!(Binding, 6);
 assert_words!(BindingExpect, 16);
 assert_words!(BindingTypeAlias, 7);
 assert_words!(BindingAnnotation, 15);
-assert_words!(BindingClass, 15);
+assert_words!(BindingClass, 11);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 9);
@@ -126,7 +125,7 @@ assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 10);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 15);
+assert_words!(BindingUndecoratedFunction, 18);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -1768,6 +1767,9 @@ pub struct BindingUndecoratedFunction {
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
     pub decorators: Box<[Idx<KeyDecorator>]>,
     pub module_style: ModuleStyle,
+    /// Dot-separated path of enclosing function names (e.g. `"f1"` for `f2` defined inside `f1`,
+    /// or `"f1.g1"` for two levels deep). `None` for top-level or class-method functions.
+    pub outer_funcs: Option<Name>,
 }
 
 impl DisplayWith<Bindings> for BindingUndecoratedFunction {
@@ -1781,16 +1783,6 @@ pub struct ClassBinding {
     pub def: ClassDefData,
     pub def_index: ClassDefIndex,
     pub parent: NestingContext,
-    /// The fields are all the names declared on the class that we were able to detect
-    /// from an AST traversal, which includes:
-    /// - any name defined in the class body (e.g. by assignment or a def statement)
-    /// - attributes annotated in the class body (but not necessarily defined)
-    /// - anything assigned to something we think is a `self` or `cls` argument
-    ///
-    /// The last case may include names that are actually declared in a parent class,
-    /// because at binding time we cannot know that so we have to treat assignment
-    /// as potentially defining a field that would not otherwise exist.
-    pub fields: SmallMap<Name, ClassFieldProperties>,
     /// Were we able to determine, using only syntactic analysis at bindings time,
     /// that there can be no legacy tparams? If no, we need a `BindingTParams`, if yes
     /// we can directly compute the `TParams` from the class def.
@@ -1900,9 +1892,13 @@ pub enum SuperStyle {
 
 #[derive(Clone, Debug, Copy, Dupe, PartialEq, Eq)]
 pub enum AnnotationStyle {
-    /// Annotated assignment, x: MyType = my_value
+    /// Annotated assignment: `x: MyType = my_value`
     Direct,
-    /// Forwarded annotation, x: MyType; x = my_value
+    /// First assignment after a bare annotation: `x: MyType` then `x = value`.
+    /// Annotation takes precedence (the variable had no prior value).
+    ForwardedInitial,
+    /// Reassignment of an already-initialized annotated variable.
+    /// Expression type takes precedence; annotation is an upper-bound hint.
     Forwarded,
 }
 
@@ -1914,6 +1910,7 @@ pub struct TypeParameter {
     pub bound: Option<Expr>,
     pub default: Option<Expr>,
     pub constraints: Option<(Vec<Expr>, TextRange)>,
+    pub owner: Option<Name>,
 }
 
 /// Represents an `Idx<K>` for some `K: Keyed` other than `Key`
@@ -2001,15 +1998,14 @@ pub struct AssignToAttribute {
 }
 
 /// Data for an exhaustiveness check binding.
+///
+/// Contains multiple narrow entries `(Idx<Key>, Box<NarrowOp>, TextRange)`. At solve time,
+/// if ANY entry narrows to `Never`, the construct is exhaustive. This enables multi-subject
+/// and isinstance-based exhaustiveness without complex subject-extraction logic.
 #[derive(Clone, Debug)]
 pub struct ExhaustiveBinding {
     pub kind: ExhaustivenessKind,
-    pub subject_idx: Idx<Key>,
-    pub subject_range: TextRange,
-    /// Narrowing information needed to check exhaustiveness. None if we couldn't
-    /// determine the narrowing subject (e.g., complex expressions) or couldn't
-    /// accumulate narrow ops for it.
-    pub exhaustiveness_info: Option<(NarrowingSubject, (Box<NarrowOp>, TextRange))>,
+    pub narrow_entries: Vec<(Idx<Key>, Box<NarrowOp>, TextRange)>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -2094,6 +2090,8 @@ pub enum Binding {
     ClassDef(Idx<KeyClass>, Box<[Idx<KeyDecorator>]>),
     /// A forward reference to another binding.
     Forward(Idx<Key>),
+    /// Like Forward, but widens implicit literals.
+    PromoteForward(Idx<Key>),
     /// A forward reference produced during first-use resolution of a partial type.
     /// Behaves identically to `Forward` but marks that this indirection came from
     /// the partial-type / first-use machinery.
@@ -2166,9 +2164,7 @@ pub enum Binding {
     /// We'll find out which when we solve the class
     ClassBodyUnknownName(Box<(Idx<KeyClass>, Identifier, Option<Name>)>),
     /// A match statement or if/elif chain that may be type-exhaustive.
-    /// Resolves to Never if exhaustive, None otherwise.
-    /// When `exhaustiveness_info` is None, we couldn't determine narrowing info,
-    /// so we conservatively assume the statement is not exhaustive.
+    /// Resolves to Never if ANY narrow entry narrows to Never, None otherwise.
     Exhaustive(Box<ExhaustiveBinding>),
 }
 
@@ -2266,6 +2262,7 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::ClassDef(x, _) => write!(f, "ClassDef({})", ctx.display(*x)),
             Self::Forward(k) => write!(f, "Forward({})", ctx.display(*k)),
+            Self::PromoteForward(k) => write!(f, "PromoteForward({})", ctx.display(*k)),
             Self::ForwardToFirstUse(k) => {
                 write!(f, "ForwardToFirstUse({})", ctx.display(*k))
             }
@@ -2442,13 +2439,20 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, ")")
             }
             Self::Exhaustive(x) => {
-                write!(
-                    f,
-                    "Exhaustive({:?}, {}, {})",
-                    x.kind,
-                    ctx.display(x.subject_idx),
-                    ctx.module().display(&x.subject_range)
-                )
+                write!(f, "Exhaustive({:?}, [", x.kind)?;
+                for (i, (idx, op, range)) in x.narrow_entries.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(
+                        f,
+                        "({}, {}, {})",
+                        ctx.display(*idx),
+                        m.display(op),
+                        m.display(range)
+                    )?;
+                }
+                write!(f, "])")
             }
         }
     }
@@ -2513,6 +2517,7 @@ impl Binding {
             | Binding::None
             | Binding::Any(_)
             | Binding::Forward(_)
+            | Binding::PromoteForward(_)
             | Binding::ForwardToFirstUse(_)
             | Binding::Phi(_, _)
             | Binding::LoopPhi(_, _)
@@ -2538,14 +2543,23 @@ impl Binding {
 #[derive(Clone, Debug)]
 pub enum BindingExport {
     Forward(Idx<Key>),
+    PromoteForward(Idx<Key>),
     AnnotatedForward(Idx<KeyAnnotation>, Idx<Key>),
 }
 
 impl BindingExport {
+    pub fn forward_maybe_promote(idx: Idx<Key>, name: &Name) -> Self {
+        if is_constant_name(name) {
+            Self::Forward(idx)
+        } else {
+            Self::PromoteForward(idx)
+        }
+    }
+
     /// The forwarded key index that this export points to.
     pub fn key_idx(&self) -> Idx<Key> {
         match self {
-            Self::Forward(idx) | Self::AnnotatedForward(_, idx) => *idx,
+            Self::Forward(idx) | Self::PromoteForward(idx) | Self::AnnotatedForward(_, idx) => *idx,
         }
     }
 }
@@ -2554,6 +2568,9 @@ impl DisplayWith<Bindings> for BindingExport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         match self {
             Self::Forward(idx) => write!(f, "BindingExport::Forward({})", ctx.display(*idx)),
+            Self::PromoteForward(idx) => {
+                write!(f, "BindingExport::PromoteForward({})", ctx.display(*idx))
+            }
             Self::AnnotatedForward(ann, idx) => {
                 write!(
                     f,
@@ -2692,19 +2709,14 @@ impl DisplayWith<Bindings> for BindingAnnotation {
 #[derive(Clone, Debug)]
 pub enum BindingClass {
     ClassDef(ClassBinding),
-    FunctionalClassDef(
-        ClassDefIndex,
-        Identifier,
-        NestingContext,
-        SmallMap<Name, ClassFieldProperties>,
-    ),
+    FunctionalClassDef(ClassDefIndex, Identifier, NestingContext),
 }
 
 impl DisplayWith<Bindings> for BindingClass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &Bindings) -> fmt::Result {
         match self {
             Self::ClassDef(c) => write!(f, "ClassDef({})", c.def.name),
-            Self::FunctionalClassDef(_, id, _, _) => write!(f, "FunctionalClassDef({id})"),
+            Self::FunctionalClassDef(_, id, _) => write!(f, "FunctionalClassDef({id})"),
         }
     }
 }

@@ -65,6 +65,15 @@ pub(crate) enum Val {
     Shape(TensorShape),
     /// Homogeneous list. Elements are all the same variant (Int, Dim, Shape, …).
     List(Vec<Val>),
+    /// Variadic shape: prefix dims + variadic middle + suffix dims.
+    /// Used when the tensor shape is `Unpacked` (e.g., `Tensor[*Bs, Features]`).
+    /// Slicing and concatenation work on this variant; operations that require
+    /// a concrete length (like `len()` or `enumerate()`) produce a soft error.
+    Unpacked {
+        prefix: Vec<Val>,
+        middle: Type,
+        suffix: Vec<Val>,
+    },
     /// Python None (for optional parameters).
     None,
 }
@@ -141,6 +150,7 @@ impl Val {
             Val::Dim(_) => "Dim",
             Val::Shape(_) => "Shape",
             Val::List(_) => "List",
+            Val::Unpacked { .. } => "Unpacked",
             Val::None => "None",
         }
     }
@@ -162,14 +172,24 @@ pub(crate) mod extract {
     use crate::tuple::Tuple;
     use crate::types::Type;
 
-    /// Extract a concrete TensorShape from a Type.
-    /// Returns None for non-tensors, shapeless tensors, and variadic (Unpacked) shapes.
-    /// Use this when the caller needs to iterate over individual dimensions.
+    /// Extract a TensorShape from a Type.
+    /// Returns None for non-tensors and shapeless tensors.
+    /// Allows both Concrete and Unpacked shapes through so DSL ops that
+    /// support variadic shapes (e.g., slicing) can operate on them.
     pub fn concrete_tensor_shape(ty: &Type) -> Option<TensorShape> {
         match ty {
             Type::Tensor(tensor) => match &tensor.shape {
                 TensorShape::Concrete(_) => Some(tensor.shape.clone()),
-                TensorShape::Unpacked(_) => None,
+                TensorShape::Unpacked(_) => {
+                    // Allow unpacked shapes through — the DSL evaluator handles
+                    // them via Val::Unpacked. Shapeless tensors (Unpacked with
+                    // any_tuple middle and empty prefix/suffix) still return None.
+                    if tensor.is_shapeless() {
+                        None
+                    } else {
+                        Some(tensor.shape.clone())
+                    }
+                }
             },
             Type::ClassType(cls) if cls.has_qname("torch", "Tensor") => {
                 // Extract shape from ClassType targs
@@ -346,6 +366,15 @@ pub trait MetaShapeFunction: Debug + Send + Sync {
         bound_args: &HashMap<String, Type>,
         ret_type: &Type,
     ) -> Option<Result<Type, ShapeError>>;
+
+    /// Return the names of all parameters in this DSL function.
+    ///
+    /// Used by the caller to auto-inject module field values: if a DSL parameter
+    /// name is not in `bound_args` but matches a field on `self`, the caller
+    /// resolves `self.<param_name>` and injects it before evaluation.
+    fn param_names(&self) -> Vec<&str> {
+        vec![]
+    }
 }
 
 // ============================================================================
@@ -2066,6 +2095,14 @@ fn eval_dsl_expr(
             cond,
         } => {
             let iter_val = eval_dsl_expr(iter, env, fns, op_name)?;
+            // Iterating over a variadic shape is not supported — soft error.
+            if matches!(iter_val, Val::Unpacked { .. }) {
+                return Err(ShapeError::Unsupported {
+                    message: format!(
+                        "{op_name}: cannot iterate over variadic shape in list comprehension"
+                    ),
+                });
+            }
             let items = iter_val.as_list();
             let mut result = Vec::new();
             let mut inner_env = env.clone();
@@ -2096,6 +2133,11 @@ fn eval_dsl_expr(
 
         DslExpr::Index { base, index } => {
             let base_val = eval_dsl_expr(base, env, fns, op_name)?;
+            if matches!(base_val, Val::Unpacked { .. }) {
+                return Err(ShapeError::Unsupported {
+                    message: format!("{op_name}: cannot index variadic shape"),
+                });
+            }
             let items = base_val.as_list();
             let mut idx = eval_dsl_expr(index, env, fns, op_name)?.as_int();
             let len = items.len() as i64;
@@ -2114,28 +2156,53 @@ fn eval_dsl_expr(
 
         DslExpr::Slice { base, lower, upper } => {
             let base_val = eval_dsl_expr(base, env, fns, op_name)?;
-            let items = base_val.as_list();
-            let len = items.len() as i64;
-            let lo = match lower {
-                Some(e) => {
-                    let v = eval_dsl_expr(e, env, fns, op_name)?.as_int();
-                    if v < 0 { (v + len).max(0) } else { v.min(len) }
+            match base_val {
+                Val::Unpacked {
+                    ref prefix,
+                    ref middle,
+                    ref suffix,
+                } => {
+                    // Evaluate bounds — at most one of lower/upper is present for
+                    // the slice patterns used in the DSL (e.g., dims[:-1], dims[1:]).
+                    let lo_val = match lower {
+                        Some(e) => Some(eval_dsl_expr(e, env, fns, op_name)?.as_int()),
+                        None => None,
+                    };
+                    let hi_val = match upper {
+                        Some(e) => Some(eval_dsl_expr(e, env, fns, op_name)?.as_int()),
+                        None => None,
+                    };
+                    eval_unpacked_slice(prefix, middle, suffix, lo_val, hi_val, op_name)
                 }
-                None => 0,
-            };
-            let hi = match upper {
-                Some(e) => {
-                    let v = eval_dsl_expr(e, env, fns, op_name)?.as_int();
-                    if v < 0 { (v + len).max(0) } else { v.min(len) }
+                Val::List(_) => {
+                    let items = base_val.as_list();
+                    let len = items.len() as i64;
+                    let lo = match lower {
+                        Some(e) => {
+                            let v = eval_dsl_expr(e, env, fns, op_name)?.as_int();
+                            if v < 0 { (v + len).max(0) } else { v.min(len) }
+                        }
+                        None => 0,
+                    };
+                    let hi = match upper {
+                        Some(e) => {
+                            let v = eval_dsl_expr(e, env, fns, op_name)?.as_int();
+                            if v < 0 { (v + len).max(0) } else { v.min(len) }
+                        }
+                        None => len,
+                    };
+                    let lo = lo as usize;
+                    let hi = hi as usize;
+                    if lo >= hi {
+                        Ok(Val::List(vec![]))
+                    } else {
+                        Ok(Val::List(items[lo..hi].to_vec()))
+                    }
                 }
-                None => len,
-            };
-            let lo = lo as usize;
-            let hi = hi as usize;
-            if lo >= hi {
-                Ok(Val::List(vec![]))
-            } else {
-                Ok(Val::List(items[lo..hi].to_vec()))
+                _ => panic!(
+                    "DSL bug: {op_name}: cannot slice {}",
+                    base_val.variant_name()
+                ),
             }
         }
 
@@ -2200,6 +2267,7 @@ fn eval_dsl_expr(
                 (DslTypeCon::Bool, Val::Bool(_)) => true,
                 (DslTypeCon::SymInt, Val::Dim(_)) => true,
                 (DslTypeCon::List, Val::List(_)) => true,
+                (DslTypeCon::List, Val::Unpacked { .. }) => true,
                 (DslTypeCon::Tensor, Val::Shape(_)) => true,
                 _ => false,
             };
@@ -2209,6 +2277,11 @@ fn eval_dsl_expr(
         DslExpr::In { left, right } => {
             let needle = eval_dsl_expr(left, env, fns, op_name)?;
             let haystack = eval_dsl_expr(right, env, fns, op_name)?;
+            if matches!(haystack, Val::Unpacked { .. }) {
+                return Err(ShapeError::Unsupported {
+                    message: format!("{op_name}: 'in' not supported on variadic shape"),
+                });
+            }
             let items = haystack.as_list();
             let found = items.iter().any(|item| val_eq(&needle, item));
             Ok(Val::Bool(found))
@@ -2217,17 +2290,43 @@ fn eval_dsl_expr(
         DslExpr::Shape(inner) => {
             let val = eval_dsl_expr(inner, env, fns, op_name)?;
             let shape = val.as_shape();
-            // Use dim_val to convert concrete Size(Literal(n)) to Val::Int(n)
-            // so comparisons against literal ints (e.g., `d != 1` in squeeze)
-            // work naturally.
-            let dims: Vec<Val> = shape.dims().iter().map(|d| dim_val(d.clone())).collect();
-            Ok(Val::List(dims))
+            match shape {
+                TensorShape::Concrete(dims) => {
+                    // Use dim_val to convert concrete Size(Literal(n)) to Val::Int(n)
+                    // so comparisons against literal ints (e.g., `d != 1` in squeeze)
+                    // work naturally.
+                    let vals: Vec<Val> = dims.iter().map(|d| dim_val(d.clone())).collect();
+                    Ok(Val::List(vals))
+                }
+                TensorShape::Unpacked(box (prefix, middle, suffix)) => Ok(Val::Unpacked {
+                    prefix: prefix.iter().map(|d| dim_val(d.clone())).collect(),
+                    middle: middle.clone(),
+                    suffix: suffix.iter().map(|d| dim_val(d.clone())).collect(),
+                }),
+            }
         }
 
         DslExpr::TensorNew(shape_expr) => {
             let val = eval_dsl_expr(shape_expr, env, fns, op_name)?;
-            let dims = val.as_size_list();
-            Ok(Val::Shape(TensorShape::from_types(dims)))
+            match val {
+                Val::Unpacked {
+                    prefix,
+                    middle,
+                    suffix,
+                } => {
+                    let prefix_types = prefix.iter().map(|v| v.as_size()).collect();
+                    let suffix_types = suffix.iter().map(|v| v.as_size()).collect();
+                    Ok(Val::Shape(TensorShape::unpacked(
+                        prefix_types,
+                        middle,
+                        suffix_types,
+                    )))
+                }
+                _ => {
+                    let dims = val.as_size_list();
+                    Ok(Val::Shape(TensorShape::from_types(dims)))
+                }
+            }
         }
 
         DslExpr::IfExpr { body, test, orelse } => {
@@ -2258,6 +2357,99 @@ fn dim_val(ty: Type) -> Val {
     }
 }
 
+/// Evaluate a slice operation on a `Val::Unpacked { prefix, middle, suffix }`.
+///
+/// Supports the slice patterns used in the DSL for variadic shapes:
+/// - `dims[:n]` (positive n): takes from prefix if n <= prefix.len()
+/// - `dims[n:]` (positive n): drops from prefix if n <= prefix.len()
+/// - `dims[:-n]` (negative upper): drops from suffix if n <= suffix.len()
+/// - `dims[-n:]` (negative lower): takes from suffix if n <= suffix.len()
+///
+/// Returns `Err(Unsupported)` if the slice crosses the variadic middle.
+fn eval_unpacked_slice(
+    prefix: &[Val],
+    middle: &Type,
+    suffix: &[Val],
+    lo_val: Option<i64>,
+    hi_val: Option<i64>,
+    op_name: &str,
+) -> Result<Val, ShapeError> {
+    match (lo_val, hi_val) {
+        // dims[:n] where n >= 0 — take first n from prefix
+        (None, Some(n)) if n >= 0 => {
+            let n = n as usize;
+            if n <= prefix.len() {
+                Ok(Val::List(prefix[..n].to_vec()))
+            } else {
+                Err(ShapeError::Unsupported {
+                    message: format!(
+                        "{op_name}: slice [:{}] crosses variadic middle (prefix len {})",
+                        n,
+                        prefix.len()
+                    ),
+                })
+            }
+        }
+        // dims[:-n] where n > 0 — drop last n from suffix
+        (None, Some(n)) if n < 0 => {
+            let drop = (-n) as usize;
+            if drop <= suffix.len() {
+                let new_suffix = suffix[..suffix.len() - drop].to_vec();
+                Ok(Val::Unpacked {
+                    prefix: prefix.to_vec(),
+                    middle: middle.clone(),
+                    suffix: new_suffix,
+                })
+            } else {
+                Err(ShapeError::Unsupported {
+                    message: format!(
+                        "{op_name}: slice [:-{}] crosses variadic middle (suffix len {})",
+                        drop,
+                        suffix.len()
+                    ),
+                })
+            }
+        }
+        // dims[n:] where n >= 0 — drop first n from prefix
+        (Some(n), None) if n >= 0 => {
+            let n = n as usize;
+            if n <= prefix.len() {
+                Ok(Val::Unpacked {
+                    prefix: prefix[n..].to_vec(),
+                    middle: middle.clone(),
+                    suffix: suffix.to_vec(),
+                })
+            } else {
+                Err(ShapeError::Unsupported {
+                    message: format!(
+                        "{op_name}: slice [{}:] crosses variadic middle (prefix len {})",
+                        n,
+                        prefix.len()
+                    ),
+                })
+            }
+        }
+        // dims[-n:] where n > 0 — take last n from suffix
+        (Some(n), None) if n < 0 => {
+            let take = (-n) as usize;
+            if take <= suffix.len() {
+                Ok(Val::List(suffix[suffix.len() - take..].to_vec()))
+            } else {
+                Err(ShapeError::Unsupported {
+                    message: format!(
+                        "{op_name}: slice [-{}:] crosses variadic middle (suffix len {})",
+                        take,
+                        suffix.len()
+                    ),
+                })
+            }
+        }
+        _ => Err(ShapeError::Unsupported {
+            message: format!("{op_name}: unsupported slice pattern on variadic shape"),
+        }),
+    }
+}
+
 /// Evaluate a binary operation, dispatching on runtime Val variants.
 ///
 /// Arithmetic: both Int → concrete i64; either Dim → symbolic SizeExpr; + on Lists → concat.
@@ -2273,6 +2465,40 @@ fn eval_binop(lval: &Val, op: DslOp, rval: &Val, op_name: &str) -> Result<Val, S
                 let mut result = a.clone();
                 result.extend(b.iter().cloned());
                 Ok(Val::List(result))
+            }
+            // Unpacked + List → append list elements to suffix
+            (
+                Val::Unpacked {
+                    prefix,
+                    middle,
+                    suffix,
+                },
+                Val::List(b),
+            ) => {
+                let mut new_suffix = suffix.clone();
+                new_suffix.extend(b.iter().cloned());
+                Ok(Val::Unpacked {
+                    prefix: prefix.clone(),
+                    middle: middle.clone(),
+                    suffix: new_suffix,
+                })
+            }
+            // List + Unpacked → prepend list elements to prefix
+            (
+                Val::List(a),
+                Val::Unpacked {
+                    prefix,
+                    middle,
+                    suffix,
+                },
+            ) => {
+                let mut new_prefix = a.clone();
+                new_prefix.extend(prefix.iter().cloned());
+                Ok(Val::Unpacked {
+                    prefix: new_prefix,
+                    middle: middle.clone(),
+                    suffix: suffix.clone(),
+                })
             }
             _ => {
                 let a = lval.as_size();
@@ -2411,6 +2637,7 @@ fn eval_call(
                             .join(", ")
                     ),
                     Val::None => "None".to_owned(),
+                    Val::Unpacked { .. } => "Unpacked".to_owned(),
                 };
                 Ok(Val::Str(s))
             }
@@ -2484,17 +2711,29 @@ fn eval_call(
             }
             DslBuiltin::Enumerate => {
                 assert_eq!(args.len(), 1, "DSL bug: {op_name}: enumerate takes 1 arg");
-                let items = args[0].as_list();
-                Ok(Val::List(
-                    items
-                        .iter()
-                        .enumerate()
-                        .map(|(i, v)| Val::List(vec![Val::Int(i as i64), v.clone()]))
-                        .collect(),
-                ))
+                match &args[0] {
+                    Val::Unpacked { .. } => Err(ShapeError::Unsupported {
+                        message: format!("{op_name}: enumerate() not supported on variadic shape"),
+                    }),
+                    _ => {
+                        let items = args[0].as_list();
+                        Ok(Val::List(
+                            items
+                                .iter()
+                                .enumerate()
+                                .map(|(i, v)| Val::List(vec![Val::Int(i as i64), v.clone()]))
+                                .collect(),
+                        ))
+                    }
+                }
             }
             DslBuiltin::Zip => {
                 assert!(args.len() >= 2, "DSL bug: {op_name}: zip takes 2+ args");
+                if args.iter().any(|a| matches!(a, Val::Unpacked { .. })) {
+                    return Err(ShapeError::Unsupported {
+                        message: format!("{op_name}: zip() not supported on variadic shape"),
+                    });
+                }
                 let lists: Vec<Vec<Val>> = args.iter().map(|a| a.as_list().to_vec()).collect();
                 let min_len = lists.iter().map(|l| l.len()).min().unwrap_or(0);
                 Ok(Val::List(
@@ -2505,8 +2744,16 @@ fn eval_call(
             }
             DslBuiltin::Len => {
                 assert_eq!(args.len(), 1, "DSL bug: {op_name}: len takes 1 arg");
-                let items = args[0].as_list();
-                Ok(Val::Int(items.len() as i64))
+                match &args[0] {
+                    Val::List(items) => Ok(Val::Int(items.len() as i64)),
+                    Val::Unpacked { .. } => Err(ShapeError::Unsupported {
+                        message: format!("{op_name}: len() not supported on variadic shape"),
+                    }),
+                    _ => panic!(
+                        "DSL bug: {op_name}: len() expected List or Unpacked, got {}",
+                        args[0].variant_name()
+                    ),
+                }
             }
             DslBuiltin::Range => {
                 assert_eq!(args.len(), 1, "DSL bug: {op_name}: range takes 1 arg");
@@ -2804,6 +3051,10 @@ impl MetaShapeFunction for DslMetaShapeFunction {
         &self.fn_def.name
     }
 
+    fn param_names(&self) -> Vec<&str> {
+        self.fn_def.params.iter().map(|p| p.name.as_str()).collect()
+    }
+
     fn evaluate(
         &self,
         bound_args: &HashMap<String, Type>,
@@ -2840,6 +3091,9 @@ impl MetaShapeFunction for DslMetaShapeFunction {
                     &self.fn_def.name,
                 )))
             }
+            // Unsupported errors on variadic shapes → fixture fallback (None),
+            // not a user-visible error.
+            Err(ShapeError::Unsupported { .. }) => None,
             Err(e) => Some(Err(e)),
         }
     }

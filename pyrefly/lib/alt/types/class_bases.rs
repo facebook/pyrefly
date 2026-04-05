@@ -205,9 +205,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn is_type_alias_with_pydantic_strict_metadata(&self, ty: &Type) -> bool {
-        matches!(ty, Type::TypeAlias(ta) if self.get_type_alias(ta).annotated_metadata()
-            .iter()
-            .any(|metadata| self.is_pydantic_strict_metadata(metadata)))
+        if let Type::TypeAlias(ta) = ty {
+            let alias = self.get_type_alias(ta);
+            if let Type::Annotated(_, metadata) = alias.as_type() {
+                return metadata
+                    .iter()
+                    .any(|metadata| self.is_pydantic_strict_metadata(metadata));
+            }
+        }
+        false
     }
 
     /// Get the untyped form (in other words, the instance type, after applying

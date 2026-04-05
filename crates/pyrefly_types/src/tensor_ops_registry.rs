@@ -50,6 +50,13 @@ fn dsl_fn(
 /// are shared via `Arc` across all shape function instances.
 pub struct TensorOpsRegistry {
     functions: HashMap<String, Box<dyn MetaShapeFunction>>,
+    /// Maps qualified class names (e.g., "torch.nn.MaxPool2d") to the list of
+    /// __init__ parameter names to capture. When a class has an init capture
+    /// registered, `construct_class` builds a `Type::NNModule` instead of a
+    /// `Type::ClassType`, storing the captured arg values in the NNModule's
+    /// field map. This allows forward DSL functions to access constructor
+    /// parameters directly from the type.
+    init_captures: HashMap<String, Vec<String>>,
 }
 
 impl TensorOpsRegistry {
@@ -70,6 +77,7 @@ impl TensorOpsRegistry {
         );
         let mut registry = Self {
             functions: HashMap::new(),
+            init_captures: HashMap::new(),
         };
 
         // Shape manipulation
@@ -149,6 +157,22 @@ impl TensorOpsRegistry {
         registry.register(
             "torch.Tensor.kthvalue",
             dsl_fn(&fn_lookup, "tuple_reduce_ir"),
+        );
+
+        // Repeat interleave
+        registry.register(
+            "torch.Tensor.repeat_interleave",
+            dsl_fn(&fn_lookup, "repeat_interleave_ir"),
+        );
+        registry.register(
+            "torch.repeat_interleave",
+            dsl_fn(&fn_lookup, "repeat_interleave_ir"),
+        );
+
+        // Cosine similarity (reduces one dim)
+        registry.register(
+            "torch.nn.functional.cosine_similarity",
+            dsl_fn(&fn_lookup, "cosine_similarity_ir"),
         );
 
         // Indexing/slicing
@@ -382,6 +406,93 @@ impl TensorOpsRegistry {
         registry.register("torch.Tensor.tolist", dsl_fn(&fn_lookup, "tolist_ir"));
         registry.register("torch.numel", dsl_fn(&fn_lookup, "numel_ir"));
 
+        // nn.Module forward methods with init capture.
+        // register_init_forward registers both the forward DSL function and the
+        // list of __init__ params to capture in the NNModule type.
+        let maxpool_captures = &["kernel_size", "stride", "padding", "dilation"];
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.MaxPool1d",
+            "nn_maxpool_forward_ir",
+            maxpool_captures,
+        );
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.MaxPool2d",
+            "nn_maxpool_forward_ir",
+            maxpool_captures,
+        );
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.MaxPool3d",
+            "nn_maxpool_forward_ir",
+            maxpool_captures,
+        );
+
+        let avgpool_captures = &["kernel_size", "stride", "padding"];
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.AvgPool1d",
+            "nn_avgpool_forward_ir",
+            avgpool_captures,
+        );
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.AvgPool2d",
+            "nn_avgpool_forward_ir",
+            avgpool_captures,
+        );
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.AvgPool3d",
+            "nn_avgpool_forward_ir",
+            avgpool_captures,
+        );
+
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.Flatten",
+            "nn_flatten_forward_ir",
+            &["start_dim", "end_dim"],
+        );
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.PixelShuffle",
+            "nn_pixel_shuffle_forward_ir",
+            &["upscale_factor"],
+        );
+        registry.register_init_forward(&fn_lookup, "torch.nn.GLU", "nn_glu_forward_ir", &["dim"]);
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.LSTM",
+            "nn_lstm_forward_ir",
+            &["input_size", "hidden_size", "num_layers", "bidirectional"],
+        );
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.Upsample",
+            "nn_upsample_forward_ir",
+            &["size", "scale_factor"],
+        );
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.LSTMCell",
+            "nn_lstmcell_forward_ir",
+            &["input_size", "hidden_size"],
+        );
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.ReflectionPad2d",
+            "nn_reflectionpad2d_forward_ir",
+            &["padding"],
+        );
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.ReplicationPad2d",
+            "nn_reflectionpad2d_forward_ir",
+            &["padding"],
+        );
+
         // Random sampling
         registry.register("torch.multinomial", dsl_fn(&fn_lookup, "multinomial_ir"));
         registry.register(
@@ -413,6 +524,35 @@ impl TensorOpsRegistry {
     /// Get a meta-shape function by name.
     pub fn get(&self, name: &str) -> Option<&dyn MetaShapeFunction> {
         self.functions.get(name).map(|b| b.as_ref())
+    }
+
+    /// Register an nn.Module: both the forward DSL function and the list of
+    /// __init__ parameter names to capture in the NNModule type.
+    ///
+    /// `class_name` is the qualified class name (e.g., `"torch.nn.MaxPool2d"`).
+    /// This registers the forward function under `"{class_name}.forward"` and
+    /// the init captures under `"{class_name}"`.
+    pub(crate) fn register_init_forward(
+        &mut self,
+        fn_lookup: &Arc<HashMap<String, Arc<DslFnDef>>>,
+        class_name: &str,
+        dsl_fn_name: &str,
+        capture_params: &[&str],
+    ) {
+        self.functions.insert(
+            format!("{class_name}.forward"),
+            dsl_fn(fn_lookup, dsl_fn_name),
+        );
+        self.init_captures.insert(
+            class_name.to_owned(),
+            capture_params.iter().map(|s| (*s).to_owned()).collect(),
+        );
+    }
+
+    /// Look up init capture config for a qualified class name.
+    /// Returns the list of __init__ parameter names to capture.
+    pub fn get_init_capture(&self, class_name: &str) -> Option<&[String]> {
+        self.init_captures.get(class_name).map(|v| v.as_slice())
     }
 }
 
@@ -608,7 +748,22 @@ def index_select_ir(self: Tensor, dim: int, index: Tensor) -> Tensor:
     return Tensor(shape=replace_dim(self.shape, normalize_dim(len(self.shape), dim), index.shape[0]))
 
 def reduce_ir(self: Tensor, dim: int | list[int] | None = None, keepdim: bool = False) -> Tensor:
-    return Tensor(shape=reduce_shape(self.shape, dim, keepdim))
+    if dim == None:
+        return Tensor(shape=reduce_shape(self.shape, dim, keepdim))
+    if isinstance(dim, list):
+        return Tensor(shape=reduce_shape(self.shape, dim, keepdim))
+    return Tensor(shape=reduce_single(self.shape, dim, keepdim))
+
+def reduce_single(dims: list[int | symint], dim: int, keepdim: bool) -> list[int | symint]:
+    before = dims[:dim]
+    if dim == -1:
+        if keepdim:
+            return before + [1]
+        return before
+    after = dims[dim + 1:]
+    if keepdim:
+        return before + [1] + after
+    return before + after
 
 def min_max_median_ir(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
     if dim == None:
@@ -627,6 +782,16 @@ def tuple_reduce_ir(self: Tensor, dim: int = -1, keepdim: bool = False) -> [Tens
 def topk_ir(self: Tensor, k: int | symint, dim: int = -1) -> [Tensor, Tensor]:
     s = replace_dim(self.shape, normalize_dim(len(self.shape), dim), k)
     return [Tensor(shape=s), Tensor(shape=s)]
+
+def repeat_interleave_ir(self: Tensor, repeats: int | symint, dim: int | None = None) -> Tensor:
+    if dim == None:
+        return Tensor(shape=[torch_shapes.prod(self.shape) * repeats])
+    d = normalize_dim(len(self.shape), dim)
+    return Tensor(shape=replace_dim(self.shape, d, self.shape[d] * repeats))
+
+def cosine_similarity_ir(x1: Tensor, x2: Tensor, dim: int = 1) -> Tensor:
+    s = broadcast(x1.shape, x2.shape)
+    return Tensor(shape=reduce_single(s, normalize_dim(len(s), dim), False))
 
 def randn_ir(size: list[int | symint]) -> Tensor:
     return Tensor(shape=size)
@@ -764,7 +929,7 @@ def adaptive_pool_ir(self: Tensor, output_size: int | symint | list[int | symint
     out_sizes = broadcast_int(output_size, len(self.shape) - 2)
     return Tensor(shape=[self.shape[0], self.shape[1]] + out_sizes)
 
-def interpolate_ir(self: Tensor, size: int | list[int] | None = None, scale_factor: int | symint | None = None) -> Tensor:
+def interpolate_ir(self: Tensor, size: int | symint | list[int | symint] | None = None, scale_factor: int | symint | None = None) -> Tensor:
     if size != None:
         return Tensor(shape=[self.shape[0], self.shape[1]] + broadcast_int(size, len(self.shape) - 2))
     if scale_factor != None:
@@ -821,4 +986,40 @@ def where_ir(condition: Tensor, x: Tensor, y: Tensor) -> Tensor:
 
 def take_along_dim_ir(self: Tensor, indices: Tensor) -> Tensor:
     return Tensor(shape=indices.shape)
+
+def nn_flatten_forward_ir(input: Tensor, start_dim: symint = 1, end_dim: symint = -1) -> Tensor:
+    return flatten_ir(input, start_dim, end_dim)
+
+def nn_maxpool_forward_ir(input: Tensor, kernel_size: symint = 1, stride: symint | None = None, padding: symint = 0, dilation: symint = 1) -> Tensor:
+    return pool_ir(input, kernel_size, stride, padding, dilation)
+
+def nn_avgpool_forward_ir(input: Tensor, kernel_size: symint = 1, stride: symint | None = None, padding: symint = 0) -> Tensor:
+    return pool_ir(input, kernel_size, stride, padding, 1)
+
+def nn_upsample_forward_ir(input: Tensor, size: symint | None = None, scale_factor: symint | None = None) -> Tensor:
+    return interpolate_ir(input, size, scale_factor)
+
+def nn_pixel_shuffle_forward_ir(input: Tensor, upscale_factor: symint) -> Tensor:
+    r = upscale_factor
+    return Tensor(shape=[input.shape[0], input.shape[1] // (r * r)] + [d * r for d in input.shape[2:]])
+
+def nn_glu_forward_ir(input: Tensor, dim: symint = 1) -> Tensor:
+    rank = len(input.shape)
+    d = normalize_dim(rank, dim)
+    return Tensor(shape=replace_dim(input.shape, d, input.shape[d] // 2))
+
+def nn_lstm_forward_ir(input: Tensor, input_size: symint, hidden_size: symint, num_layers: symint = 1, bidirectional: bool = False) -> [Tensor, Tensor, Tensor]:
+    nd = 2 if bidirectional else 1
+    output = Tensor(shape=[input.shape[0], input.shape[1], hidden_size * nd])
+    h_n = Tensor(shape=[num_layers * nd, input.shape[0], hidden_size])
+    c_n = Tensor(shape=[num_layers * nd, input.shape[0], hidden_size])
+    return [output, h_n, c_n]
+
+def nn_lstmcell_forward_ir(input: Tensor, input_size: symint, hidden_size: symint) -> [Tensor, Tensor]:
+    h = Tensor(shape=[input.shape[0], hidden_size])
+    c = Tensor(shape=[input.shape[0], hidden_size])
+    return [h, c]
+
+def nn_reflectionpad2d_forward_ir(input: Tensor, padding: symint) -> Tensor:
+    return Tensor(shape=[input.shape[0], input.shape[1], input.shape[2] + 2 * padding, input.shape[3] + 2 * padding])
 "#;

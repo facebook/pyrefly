@@ -443,17 +443,21 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any
 
-# error
+# `async def` returning AsyncIterator on an abstract method is valid:
+# it declares a coroutine that returns an AsyncIterator when awaited.
 class A(ABC):
     @abstractmethod
-    async def foo(self) -> AsyncIterator[int]:  # E: Abstract methods for async generators should use `def`, not `async def`
+    async def foo(self) -> AsyncIterator[int]:
         pass
 
+# Overriding a coroutine-returning method with an async generator is
+# an inconsistent override: the calling conventions differ.
 class B(A):
-    async def foo(self) -> AsyncIterator[int]:
+    async def foo(self) -> AsyncIterator[int]:  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
         yield 1
 
-# ok
+# `def` returning AsyncIterator is the correct pattern for abstract
+# async generators, since async generators are not coroutines.
 class C(ABC):
     @abstractmethod
     def foo(self) -> AsyncIterator[int]:

@@ -199,6 +199,33 @@ Hover Result: `(self: My, other: object) -> bool`
 }
 
 #[test]
+fn tuple_element_hover_prefers_element_type() {
+    let code = r#"
+tup = (1, +2)
+#      ^  ^ ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | tup = (1, +2)
+           ^
+Hover Result: `Literal[1]`
+
+2 | tup = (1, +2)
+              ^
+Hover Result: `Literal[2]`
+
+2 | tup = (1, +2)
+                ^
+Hover Result: `Literal[2]`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn import_test() {
     let code = r#"
 import typing
@@ -443,10 +470,7 @@ Hover Result: `(a: int, b: bool) -> str`
 
 15 | overloaded_func(False)
        ^
-Hover Result: `Overload[
-  (a: str) -> bool
-  (a: int, b: bool) -> str
-]`
+Hover Result: `(a: str) -> bool`
 "#
         .trim(),
         report.trim(),
@@ -488,10 +512,7 @@ Hover Result: `(self: Foo, a: int, b: bool) -> str`
 
 17 | foo.overloaded_meth(False)
              ^
-Hover Result: `Overload[
-  (self: Foo, a: str) -> bool
-  (self: Foo, a: int, b: bool) -> str
-]`
+Hover Result: `(self: Foo, a: str) -> bool`
 "#
         .trim(),
         report.trim(),

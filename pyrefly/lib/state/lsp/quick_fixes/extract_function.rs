@@ -22,6 +22,7 @@ use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use super::extract_shared::MethodInfo;
 use super::extract_shared::first_parameter_name;
@@ -81,7 +82,10 @@ pub(crate) fn extract_function_code_actions(
             }
             continue;
         }
-        let defs = transaction.find_definition(handle, ident.position, FindPreference::default());
+        let defs = transaction
+            .find_definition(handle, ident.position, FindPreference::default())
+            .map(Vec1::into_vec)
+            .unwrap_or_default();
         let Some(def) = defs.first() else {
             continue;
         };

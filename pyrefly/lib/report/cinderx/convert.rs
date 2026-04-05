@@ -64,7 +64,7 @@ fn callable_to_structured(
         Params::Ellipsis | Params::Materialization => vec![],
         Params::ParamSpec(prefix, _) => prefix
             .iter()
-            .map(|(t, _)| type_to_structured(t, table, pending_class_traits))
+            .map(|p| type_to_structured(p.ty(), table, pending_class_traits))
             .collect(),
     };
     let ret_idx = type_to_structured(ret, table, pending_class_traits);
@@ -275,7 +275,7 @@ pub(crate) fn type_to_structured(
             let inner_idx = type_to_structured(inner, table, pending_class_traits);
             insert_wrapper_other_form("typing.TypeIs", inner_idx, table)
         }
-        Type::Annotated(inner) => {
+        Type::Annotated(inner, _) => {
             // Annotated is transparent for type purposes
             type_to_structured(inner, table, pending_class_traits)
         }
@@ -419,8 +419,10 @@ pub(crate) fn type_to_structured(
         | Type::Unpack(_)
         | Type::ParamSpec(_)
         | Type::TypeVarTuple(_)
+        | Type::TypeForm(_)
         | Type::ElementOfTypeVarTuple(_)
         | Type::Tensor(_)
+        | Type::NNModule(_)
         | Type::Size(_)
         | Type::Dim(_) => insert_simple_other_form("typing.Any", table),
     }

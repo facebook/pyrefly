@@ -247,6 +247,67 @@ def ellipsis_unpacked_exceeds_suffix[B, *Ts, C](
 
 
 # ============================================================================
+# None Indexing (NewAxis) - Inserts dim of size 1
+# ============================================================================
+
+
+def none_single(x: Tensor[10, 20]) -> None:
+    """None index inserts a dim of size 1 at that position"""
+    assert_type(x[None], Tensor[1, 10, 20])
+
+
+def none_multiple(x: Tensor[10]) -> None:
+    """Multiple None indices insert multiple dims of size 1"""
+    assert_type(x[None, None, None, :], Tensor[1, 1, 1, 10])
+
+
+def none_with_int(x: Tensor[5, 10, 15]) -> None:
+    """None + int: insert dim then remove a dim"""
+    assert_type(x[None, 0], Tensor[1, 10, 15])
+
+
+def none_with_slice(x: Tensor[10, 20]) -> None:
+    """None + slice: insert dim, slice first dim"""
+    assert_type(x[None, :5], Tensor[1, 5, 20])
+
+
+def none_with_ellipsis(x: Tensor[5, 10]) -> None:
+    """Ellipsis + None at end: preserves shape, adds trailing dim"""
+    assert_type(x[..., None], Tensor[5, 10, 1])
+
+
+def none_middle(x: Tensor[5, 10]) -> None:
+    """None between dims: insert dim between existing dims"""
+    assert_type(x[:, None, :], Tensor[5, 1, 10])
+
+
+# ============================================================================
+# Stride Slicing - dim = ceil_div(stop - start, step)
+# ============================================================================
+
+
+def stride_basic(x: Tensor[100, 20]) -> None:
+    """Stride of 2: ceil_div(100, 2) = 50"""
+    assert_type(x[::2], Tensor[50, 20])
+
+
+def stride_with_bounds(x: Tensor[100, 20]) -> None:
+    """Stride with start/stop: ceil_div(90 - 10, 3) = ceil_div(80, 3) = 27"""
+    assert_type(x[10:90:3], Tensor[27, 20])
+
+
+def stride_multi_dim(x: Tensor[4, 3, 100]) -> None:
+    """Stride on third dim via tuple indexing"""
+    assert_type(x[:, :, ::2], Tensor[4, 3, 50])
+
+
+def stride_symbolic[N, M](x: Tensor[N, M]) -> None:
+    """Stride on symbolic dim: ceil_div(N, 2) = (N + 1) // 2"""
+    y = x[::2]
+    assert_type(y, Tensor[(N + 1) // 2, M])
+
+
+# ============================================================================
 # Index Type Errors
 # ============================================================================
 

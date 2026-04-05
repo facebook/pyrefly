@@ -171,6 +171,11 @@ def main() -> None:
             print(f"    unnarrowed: [{unnarrowed_idx}] {format_type(unnarrowed)}")
             print(f"    mismatch: {mismatch}")
 
+        if loc.get("contextual_type") is not None:
+            ctx_idx = loc["contextual_type"]
+            ctx = inline_type(type_table, ctx_idx)
+            print(f"    contextual: [{ctx_idx}] {format_type(ctx)}")
+
 
 if __name__ == "__main__":
     main()

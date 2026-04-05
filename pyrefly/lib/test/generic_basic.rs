@@ -110,8 +110,7 @@ assert_type(C2[int], type[C2[int, *tuple[()]]])
 );
 
 testcase!(
-    bug = "T is pinned prematurely due to https://github.com/facebook/pyrefly/issues/105",
-    test_generics,
+    test_generics_invariant,
     r#"
 from typing import Literal
 class C[T]: ...
@@ -121,6 +120,39 @@ v: C[int] = C()
 append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
 "#,
 );
+
+testcase!(
+    test_generics_covariant,
+    r#"
+from typing import Literal
+class C[T]:
+    def f(self) -> T: ...
+def append[T](x: C[T], y: T):
+    pass
+v: C[int] = C()
+append(v, "test")
+"#,
+);
+
+testcase!(
+    test_call_hint_does_not_override_arg,
+    r#"
+from typing import Any, reveal_type
+
+class Map[K, V]:
+    def set(self, key: K, value: V) -> None: ...
+    def get[T](self, key: Any, default: T, /) -> V | T: ...
+
+d_any: Map[str, Any] = Map()
+
+reveal_type(d_any.get("key", None))  # E: revealed type: Any | None
+result: str = reveal_type(d_any.get("key", None))  # E: revealed type: Any | None  # E: `Any | None` is not assignable to `str`
+
+def get[V, T](x: Map[str, V], key: Any, default: T, /) -> V | T: ...
+result2: str = reveal_type(get(d_any, "key", None))  # E: revealed type: Any | None  # E: `Any | None` is not assignable to `str`
+"#,
+);
+
 testcase!(
     test_generic_default,
     r#"
@@ -310,7 +342,6 @@ class F(Generic[_b]):
 );
 
 testcase!(
-    bug = "Operator dispatch does not expand per constraint",
     test_constrained_typevar_subtype_resolves_to_constraint,
     r#"
 from typing import TypeVar, assert_type
@@ -318,7 +349,7 @@ from typing import TypeVar, assert_type
 AnyStr = TypeVar("AnyStr", str, bytes)
 
 def concat(x: AnyStr, y: AnyStr) -> AnyStr:
-    return x + y  # E: `+` is not supported  # E: `+` is not supported
+    return x + y
 
 class MyStr(str): ...
 
@@ -341,7 +372,7 @@ def f():
 
 def g():
     x: dict[int, int] = {}
-    x.update(a=1) # E: No matching overload
+    x.update(a=1) # E: `dict[int, int]` is not assignable to parameter `self` with type `SupportsGetItem[str, int]`
 "#,
 );
 
@@ -706,5 +737,40 @@ T = TypeVar("T")
 def f(x: TypeVar):
     pass
 f(T)
+    "#,
+);
+
+testcase!(
+    test_list_or_sequence_of_typevar,
+    r#"
+from typing import assert_type, Sequence
+
+def f[T](x: T, y: list[T]) -> T: ...
+def g[T](x: T, y: Sequence[T]) -> T: ...
+
+assert_type(f(0, [""]), int | str)  # E: Argument `list[str]` is not assignable to parameter `y` with type `list[int | str]`
+assert_type(g(0, [""]), int | str)
+    "#,
+);
+
+testcase!(
+    test_any_absorption,
+    r#"
+from typing import Any, assert_type
+
+def f[T](x: T, y: T) -> T: ...
+
+def g(x: Any):
+    # `list[Any]` absorbs `list[int]`
+    assert_type(f([x], [1]), list[Any])
+    "#,
+);
+
+testcase!(
+    test_lists_of_different_element_types,
+    r#"
+from typing import assert_type
+def f[T](x: T, y: T) -> T: ...
+assert_type(f([""], [0]), list[int] | list[str])
     "#,
 );

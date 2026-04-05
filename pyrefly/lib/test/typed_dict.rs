@@ -97,6 +97,62 @@ class Coord(TypedDict, object):  # E: Typed dictionary definitions may only exte
 );
 
 testcase!(
+    test_typeddict_dataclass_rejected,
+    r#"
+from dataclasses import dataclass
+import dataclasses
+from typing import TypedDict
+
+class Good(TypedDict):
+    x: int
+
+@dataclass
+class Bad1(TypedDict):  # E: Cannot apply `@dataclass` to TypedDict `Bad1`
+    x: int
+
+@dataclasses.dataclass
+class Bad2(TypedDict):  # E: Cannot apply `@dataclass` to TypedDict `Bad2`
+    x: int
+
+@dataclass()
+class Bad3(TypedDict):  # E: Cannot apply `@dataclass` to TypedDict `Bad3`
+    x: int
+"#,
+);
+
+testcase!(
+    test_typeddict_dataclass_transform_not_rejected,
+    r#"
+from typing import TypedDict, dataclass_transform
+
+@dataclass_transform()
+def my_transform(cls):
+    return cls
+
+@my_transform
+class TD(TypedDict):
+    x: int
+"#,
+);
+
+testcase!(
+    test_typeddict_child_of_rejected_dataclass_base,
+    r#"
+from dataclasses import dataclass
+from typing import TypedDict
+
+@dataclass
+class Bad(TypedDict):  # E: Cannot apply `@dataclass` to TypedDict `Bad`
+    x: int
+
+class Child(Bad):
+    y: int
+
+c: Child = {"x": 1, "y": 2}
+"#,
+);
+
+testcase!(
     test_typed_dict_literal,
     r#"
 from typing import TypedDict, NotRequired
@@ -386,7 +442,7 @@ v5 = td_o.pop("x", "fallback")
 assert_type(v5, int | str)
 
 v6 = td_m.pop("a") # E:
-assert_type(v6, Any)
+assert_type(v6, int)
 
 v7 = td_m.pop("x")
 assert_type(v7, int)
@@ -748,7 +804,7 @@ class A(TypedDict):
 class B(A):
     y: str
 B(x=0, y='1')  # OK
-B(x=0, y=1)  # E: No matching overload found for function `B.__init__`
+B(x=0, y=1)  # E: `Literal[1]` is not assignable to parameter `y` with type `str`
     "#,
 );
 
@@ -896,7 +952,7 @@ def f(c1: C, c2: C, c3: dict[str, int], d: D, e: E, f: F):
     c1.update([("x", 1), ("y", 2)])
     c1.update([("z", 3)]) # E: No matching overload found for function `C.update`
     c1.update(x=1, y=2)
-    c1.update(z=1) # E: No matching overload found for function `C.update`
+    c1.update(z=1) # E: Unexpected keyword argument `z`
     "#,
 );
 
@@ -945,9 +1001,9 @@ class C(TypedDict):
     x: int
 def f(c: C, s: str):
     assert_type(c.setdefault("x", 0), int)
-    c.setdefault("x", 0.0)  # E: No matching overload
+    c.setdefault("x", 0.0)  # E: `float` is not assignable to parameter `default` with type `int`
     c.setdefault("x")  # E: No matching overload
-    c.setdefault(s, 0)  # E: No matching overload
+    c.setdefault(s, 0)  # E: `str` is not assignable to parameter `key` with type `Literal['x']`
     "#,
 );
 
@@ -963,7 +1019,7 @@ class D(TypedDict):
 def f(c: C, d: D):
     c.setdefault("x", 0)  # E: `Literal['x']` is not assignable to parameter `k` with type `Never`
     d.setdefault("x", 0)
-    d.setdefault("y", "oops")  # E: No matching overload
+    d.setdefault("y", "oops")  # E: `Literal['y']` is not assignable to parameter `key` with type `Literal['x']`  # E: `Literal['oops']` is not assignable to parameter `default` with type `int`
     "#,
 );
 
@@ -986,7 +1042,7 @@ testcase!(
 from typing import TypedDict
 class C(TypedDict):
     x: int
-C(0)  # E: No matching overload found for function `C.__init__`
+C(0)  # E: `Literal[0]` is not assignable to parameter `__map` with type `C`
     "#,
 );
 
@@ -1258,7 +1314,7 @@ from typing import TypedDict
 class Movie(TypedDict, extra_items=int):
     name: str
 good_movie = Movie(name='Toy Story', year=1995)
-bad_movie = Movie(name='Toy Story', studio='Pixar')  # E: No matching overload found for function `Movie.__init__`
+bad_movie = Movie(name='Toy Story', studio='Pixar')  # E: `Literal['Pixar']` is not assignable to kwargs type `int`
     "#,
 );
 
@@ -2073,6 +2129,21 @@ x = { "foo": None }
 x["foo"] = 1
 # currently extra_items does not use the var, but we could
 assert_type(x["bar"], int | None)
+"#,
+);
+
+testcase!(
+    test_typed_dict_empty_container_no_implicit_any,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import TypedDict
+
+class ConfigDict(TypedDict):
+    env: dict[str, str]
+
+CONFIG: ConfigDict = {
+    'env': {},
+}
 "#,
 );
 

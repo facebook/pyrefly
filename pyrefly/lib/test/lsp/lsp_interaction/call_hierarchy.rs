@@ -160,7 +160,7 @@ fn test_prepare_call_hierarchy_on_call_site() {
     interaction.shutdown().unwrap();
 }
 
-/// todo(jvansch): Update this test once incoming call hierarchy is implemented
+/// Tests that incomingCalls returns all callers of a function across files
 #[test]
 fn test_incoming_call_hierarchy_basic() {
     let root = get_test_files_root();

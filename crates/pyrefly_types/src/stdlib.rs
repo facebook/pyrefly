@@ -33,6 +33,7 @@ const SPECIAL_FORM_NAMES: &[&str] = &[
     "LiteralString",
     "Never",
     "NoReturn",
+    "TypeForm",
     "TypeGuard",
     "TypeIs",
     "Unpack",

@@ -219,24 +219,48 @@ def test_identity():
 
 
 def test_conv1d():
+    # S, P, D bound from constructor args via _Dim[T]
     conv = nn.Conv1d(16, 32, kernel_size=3, padding=1)
     x: Tensor[4, 16, 100] = torch.randn(4, 16, 100)
     y = conv(x)
-    assert_type(y, Tensor)
+    # (100 + 2*1 - 1*(3-1) - 1) // 1 + 1 = 100
+    assert_type(y, Tensor[4, 32, 100])
+
+
+def test_conv2d_default_stride():
+    # S, P, D bound from defaults (S=1, P=0, D=1)
+    conv = nn.Conv2d(3, 64, kernel_size=3)
+    x: Tensor[4, 3, 32, 32] = torch.randn(4, 3, 32, 32)
+    y = conv(x)
+    # (32 + 0 - 1*(3-1) - 1) // 1 + 1 = 30
+    assert_type(y, Tensor[4, 64, 30, 30])
 
 
 def test_conv2d_padding():
+    # S, P, D bound from constructor args via _Dim[T]
     conv = nn.Conv2d(3, 64, kernel_size=3, padding=1)
     x: Tensor[4, 3, 32, 32] = torch.randn(4, 3, 32, 32)
     y = conv(x)
-    assert_type(y, Tensor)
+    # (32 + 2*1 - 1*(3-1) - 1) // 1 + 1 = 32
+    assert_type(y, Tensor[4, 64, 32, 32])
+
+
+def test_conv2d_stride():
+    # S, P, D bound from constructor args via _Dim[T]
+    conv = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+    x: Tensor[4, 64, 32, 32] = torch.randn(4, 64, 32, 32)
+    y = conv(x)
+    # (32 + 2*1 - 1*(3-1) - 1) // 2 + 1 = 16
+    assert_type(y, Tensor[4, 128, 16, 16])
 
 
 def test_conv_transpose2d():
+    # S, P, D bound from constructor args via _Dim[T]
     conv = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1)
     x: Tensor[4, 128, 16, 16] = torch.randn(4, 128, 16, 16)
     y = conv(x)
-    assert_type(y, Tensor)
+    # (16-1)*2 - 2*1 + 1*(4-1) + 0 + 1 = 32
+    assert_type(y, Tensor[4, 64, 32, 32])
 
 
 # ============================================================================
@@ -245,18 +269,43 @@ def test_conv_transpose2d():
 
 
 def test_maxpool2d():
+    """MaxPool2d(2, 2): 32x32 → 16x16"""
     pool = nn.MaxPool2d(2, 2)
     x: Tensor[4, 64, 32, 32] = torch.randn(4, 64, 32, 32)
     y = pool(x)
-    # Pool module forward returns unrefined Tensor (spatial dims not tracked at module level)
-    assert_type(y, Tensor)
+    assert_type(y, Tensor[4, 64, 16, 16])
+
+
+def test_maxpool2d_stride_default():
+    """MaxPool2d(2) without stride: stride defaults to kernel_size=2"""
+    pool = nn.MaxPool2d(2)
+    x: Tensor[4, 64, 32, 32] = torch.randn(4, 64, 32, 32)
+    y = pool(x)
+    assert_type(y, Tensor[4, 64, 16, 16])
+
+
+def test_maxpool2d_with_padding():
+    """MaxPool2d(3, 1, padding=1): preserves spatial dims"""
+    pool = nn.MaxPool2d(3, 1, padding=1)
+    x: Tensor[4, 64, 32, 32] = torch.randn(4, 64, 32, 32)
+    y = pool(x)
+    assert_type(y, Tensor[4, 64, 32, 32])
 
 
 def test_avgpool2d():
+    """AvgPool2d(2, 2): 32x32 → 16x16"""
     pool = nn.AvgPool2d(2, 2)
     x: Tensor[4, 64, 32, 32] = torch.randn(4, 64, 32, 32)
     y = pool(x)
-    assert_type(y, Tensor)
+    assert_type(y, Tensor[4, 64, 16, 16])
+
+
+def test_avgpool2d_stride_default():
+    """AvgPool2d(2) without stride: stride defaults to kernel_size=2"""
+    pool = nn.AvgPool2d(2)
+    x: Tensor[4, 64, 32, 32] = torch.randn(4, 64, 32, 32)
+    y = pool(x)
+    assert_type(y, Tensor[4, 64, 16, 16])
 
 
 def test_adaptive_avg_pool2d():
@@ -271,6 +320,66 @@ def test_adaptive_avg_pool1d():
     x: Tensor[4, 64, 100] = torch.randn(4, 64, 100)
     y = pool(x)
     assert_type(y, Tensor[4, 64, 5])
+
+
+def test_upsample_scale_factor():
+    """Upsample(scale_factor=2): 16x16 → 32x32"""
+    up = nn.Upsample(scale_factor=2)
+    x: Tensor[4, 64, 16, 16] = torch.randn(4, 64, 16, 16)
+    y = up(x)
+    assert_type(y, Tensor[4, 64, 32, 32])
+
+
+def test_upsample_size():
+    """Upsample(size=64): any spatial → 64x64"""
+    up = nn.Upsample(size=64)
+    x: Tensor[4, 64, 16, 16] = torch.randn(4, 64, 16, 16)
+    y = up(x)
+    assert_type(y, Tensor[4, 64, 64, 64])
+
+
+def test_pixel_shuffle():
+    """PixelShuffle(2): [B, C*4, H, W] → [B, C, H*2, W*2]"""
+    ps = nn.PixelShuffle(2)
+    x: Tensor[4, 32, 16, 16] = torch.randn(4, 32, 16, 16)
+    y = ps(x)
+    assert_type(y, Tensor[4, 8, 32, 32])
+
+
+def test_glu():
+    """GLU(dim=1): halves the channel dimension."""
+    glu = nn.GLU(dim=1)
+    x: Tensor[4, 64, 16] = torch.randn(4, 64, 16)
+    y = glu(x)
+    assert_type(y, Tensor[4, 32, 16])
+
+
+def test_glu_default_dim():
+    """GLU(): default dim=1, halves dim 1."""
+    glu = nn.GLU()
+    x: Tensor[4, 128] = torch.randn(4, 128)
+    y = glu(x)
+    assert_type(y, Tensor[4, 64])
+
+
+def test_lstm_unidirectional():
+    """LSTM: [B, T, 256] → [B, T, 512]."""
+    lstm = nn.LSTM(256, 512, batch_first=True)
+    x: Tensor[4, 10, 256] = torch.randn(4, 10, 256)
+    output, h_n, c_n = lstm(x)
+    assert_type(output, Tensor[4, 10, 512])
+    assert_type(h_n, Tensor[1, 4, 512])
+    assert_type(c_n, Tensor[1, 4, 512])
+
+
+def test_lstm_bidirectional():
+    """Bidirectional LSTM: [B, T, 256] → [B, T, 1024]."""
+    lstm = nn.LSTM(256, 512, bidirectional=True, batch_first=True)
+    x: Tensor[4, 10, 256] = torch.randn(4, 10, 256)
+    output, h_n, c_n = lstm(x)
+    assert_type(output, Tensor[4, 10, 1024])
+    assert_type(h_n, Tensor[2, 4, 512])
+    assert_type(c_n, Tensor[2, 4, 512])
 
 
 # ============================================================================
@@ -365,6 +474,29 @@ def test_cross():
 
 
 # ============================================================================
+# Sequential Module (shape-aware chaining)
+# ============================================================================
+
+
+def test_sequential_chain():
+    seq = nn.Sequential(
+        nn.Conv2d(3, 64, kernel_size=3, padding=1),
+        nn.BatchNorm2d(64),
+        nn.ReLU(),
+    )
+    x: Tensor[4, 3, 32, 32] = torch.randn(4, 3, 32, 32)
+    y = seq(x)
+    assert_type(y, Tensor[4, 64, 32, 32])
+
+
+def test_sequential_single_module():
+    seq = nn.Sequential(nn.Linear(256, 512))
+    x: Tensor[4, 256] = torch.randn(4, 256)
+    y = seq(x)
+    assert_type(y, Tensor[4, 512])
+
+
+# ============================================================================
 # Flatten / Unflatten
 # ============================================================================
 
@@ -373,18 +505,34 @@ def test_flatten_module():
     m = nn.Flatten()
     x: Tensor[4, 3, 32, 32] = torch.randn(4, 3, 32, 32)
     y = m(x)
-    assert_type(y, Tensor)
+    assert_type(y, Tensor[4, 3072])
+
+
+def test_flatten_module_custom_dims():
+    m = nn.Flatten(0, 1)
+    x: Tensor[4, 3, 32, 32] = torch.randn(4, 3, 32, 32)
+    y = m(x)
+    assert_type(y, Tensor[12, 32, 32])
+
+
+def test_flatten_in_sequential():
+    seq = nn.Sequential(
+        nn.AdaptiveAvgPool2d((1, 1)),
+        nn.Flatten(),
+    )
+    x: Tensor[4, 64, 8, 8] = torch.randn(4, 64, 8, 8)
+    y = seq(x)
+    assert_type(y, Tensor[4, 64])
 
 
 # ============================================================================
-# Module as Callable
+# nn.Module as Callable
 # ============================================================================
 
 
 def test_module_as_callable():
-    """nn.Module instances are subtypes of Callable matching their forward signature."""
-    relu = nn.ReLU()
-    # nn.Module subclasses: __call__ delegates to forward
-    f: Callable[[Tensor[4, 8]], Tensor[4, 8]] = relu
-    y = f(torch.randn(4, 8))
-    assert_type(y, Tensor[4, 8])
+    """nn.Module instance is a subtype of Callable matching its forward."""
+    m: Callable[[Tensor[4, 256]], Tensor[4, 512]] = nn.Linear(256, 512)
+    x: Tensor[4, 256] = torch.randn(4, 256)
+    y = m(x)
+    assert_type(y, Tensor[4, 512])

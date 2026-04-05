@@ -1000,7 +1000,7 @@ class TestTwoPassClassifyProject:
                 assert result.categories[0].verdict == ""
 
     def test_assign_verdict_improvement(self):
-        """assign_verdict_with_llm should assign 'improvement' for false-positive reasoning."""
+        """assign_verdict_with_llm should assign 'improvement' via majority vote."""
         verdict_response = {
             "verdict": "improvement",
             "categories": [{"category": "missing-attr", "verdict": "improvement"}],
@@ -1020,7 +1020,7 @@ class TestTwoPassClassifyProject:
                 assert updated_cats[0].reason == "false positives"
 
     def test_assign_verdict_regression(self):
-        """assign_verdict_with_llm should assign 'regression' for real-bug reasoning."""
+        """assign_verdict_with_llm should assign 'regression' via majority vote."""
         verdict_response = {"verdict": "regression"}
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
             with patch(
@@ -1034,7 +1034,7 @@ class TestTwoPassClassifyProject:
                 assert verdict == "regression"
 
     def test_two_pass_end_to_end(self):
-        """Full two-pass flow: classify_project calls pass 1 then pass 2."""
+        """Full multi-pass flow: classify_project calls pass 1, 1.5, then pass 2."""
         pass1_response = {
             "reason": "These missing-attribute errors are false positives",
             "pr_attribution": "Change in solver.rs",
@@ -1042,6 +1042,11 @@ class TestTwoPassClassifyProject:
             "runtime_behavior": "N/A",
             "mypy_pyright": "N/A",
             "removal_assessment": "False positives",
+        }
+        critique_response = {
+            "corrected": False,
+            "corrections": "",
+            "reason": "These missing-attribute errors are false positives",
         }
         pass2_response = {"verdict": "improvement"}
 
@@ -1051,25 +1056,40 @@ class TestTwoPassClassifyProject:
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
             ) as mock_api:
+                from .llm_client import _VERDICT_VOTES
+
                 mock_api.side_effect = [
                     # Pass 1: reasoning
                     {"content": [{"text": json.dumps(pass1_response)}]},
-                    # Pass 2: verdict
-                    {"content": [{"text": json.dumps(pass2_response)}]},
+                    # Pass 1.5: self-critique
+                    {"content": [{"text": json.dumps(critique_response)}]},
+                    # Pass 2: verdict (N votes)
+                ] + [
+                    {"content": [{"text": json.dumps(pass2_response)}]}
+                    for _ in range(_VERDICT_VOTES)
                 ]
                 result = classify_project(p, fetch_code=False, use_llm=True)
                 assert result.verdict == "improvement"
                 assert result.reason == "These missing-attribute errors are false positives"
                 assert result.pr_attribution == "Change in solver.rs"
                 assert result.method == "llm"
-                # Verify both passes were called
-                assert mock_api.call_count == 2
+                # Pass 1 + Pass 1.5 + Pass 2 (N votes)
+                assert mock_api.call_count == 2 + _VERDICT_VOTES
 
     def test_two_pass_with_categories(self):
-        """Two-pass flow with per-category verdicts."""
+        """Multi-pass flow with per-category verdicts."""
         pass1_response = {
             "reason": "Mixed results",
             "pr_attribution": "N/A",
+            "categories": [
+                {"category": "missing-attr", "reason": "false positives from inheritance"},
+                {"category": "bad-return", "reason": "real type errors caught"},
+            ],
+        }
+        critique_response = {
+            "corrected": False,
+            "corrections": "",
+            "reason": "Mixed results",
             "categories": [
                 {"category": "missing-attr", "reason": "false positives from inheritance"},
                 {"category": "bad-return", "reason": "real type errors caught"},
@@ -1094,9 +1114,14 @@ class TestTwoPassClassifyProject:
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
             ) as mock_api:
+                from .llm_client import _VERDICT_VOTES
+
                 mock_api.side_effect = [
                     {"content": [{"text": json.dumps(pass1_response)}]},
-                    {"content": [{"text": json.dumps(pass2_response)}]},
+                    {"content": [{"text": json.dumps(critique_response)}]},
+                ] + [
+                    {"content": [{"text": json.dumps(pass2_response)}]}
+                    for _ in range(_VERDICT_VOTES)
                 ]
                 result = classify_project(p, fetch_code=False, use_llm=True)
                 assert result.verdict == "regression"
@@ -1112,6 +1137,11 @@ class TestTwoPassClassifyProject:
             "reason": "After seeing source: false positives",
             "pr_attribution": "N/A",
         }
+        critique_response = {
+            "corrected": False,
+            "corrections": "",
+            "reason": "After seeing source: false positives",
+        }
         pass2_response = {"verdict": "improvement"}
 
         p = ProjectDiff(
@@ -1124,13 +1154,19 @@ class TestTwoPassClassifyProject:
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
             ) as mock_api:
+                from .llm_client import _VERDICT_VOTES
+
                 mock_api.side_effect = [
                     # Pass 1, attempt 1: needs files
                     {"content": [{"text": json.dumps(needs_files_response)}]},
                     # Pass 1, attempt 2 (with files): reasoning
                     {"content": [{"text": json.dumps(pass1_response)}]},
-                    # Pass 2: verdict
-                    {"content": [{"text": json.dumps(pass2_response)}]},
+                    # Pass 1.5: self-critique
+                    {"content": [{"text": json.dumps(critique_response)}]},
+                    # Pass 2: verdict (N votes)
+                ] + [
+                    {"content": [{"text": json.dumps(pass2_response)}]}
+                    for _ in range(_VERDICT_VOTES)
                 ]
                 with patch(
                     "primer_classifier.classifier.fetch_files_by_path",
@@ -1138,7 +1174,8 @@ class TestTwoPassClassifyProject:
                 ):
                     result = classify_project(p, fetch_code=True, use_llm=True)
                     assert result.verdict == "improvement"
-                    assert mock_api.call_count == 3
+                    # Pass 1 (2 attempts) + Pass 1.5 + Pass 2 (N votes)
+                    assert mock_api.call_count == 3 + _VERDICT_VOTES
 
 
 # ---------------------------------------------------------------------------
@@ -1228,6 +1265,11 @@ class TestClassifyAllWithSuggestFlag:
             "reason": "Variance check too broad",
             "pr_attribution": "Removed is_protocol() guard",
         }
+        critique_response = {
+            "corrected": False,
+            "corrections": "",
+            "reason": "Variance check too broad",
+        }
         pass2_response = {"verdict": "regression"}
         pass3_response = {
             "summary": "Restore protocol guard",
@@ -1248,9 +1290,15 @@ class TestClassifyAllWithSuggestFlag:
             with patch(
                 "primer_classifier.llm_client._call_anthropic_api",
             ) as mock_api:
+                from .llm_client import _VERDICT_VOTES
+
                 mock_api.side_effect = [
                     {"content": [{"text": json.dumps(pass1_response)}]},  # Pass 1
-                    {"content": [{"text": json.dumps(pass2_response)}]},  # Pass 2
+                    {"content": [{"text": json.dumps(critique_response)}]},  # Pass 1.5
+                ] + [
+                    {"content": [{"text": json.dumps(pass2_response)}]}  # Pass 2
+                    for _ in range(_VERDICT_VOTES)
+                ] + [
                     {"content": [{"text": json.dumps(pass3_response)}]},  # Pass 3
                 ]
                 result = classify_all(
@@ -1263,7 +1311,8 @@ class TestClassifyAllWithSuggestFlag:
                 assert result.suggestion is not None
                 assert len(result.suggestion.suggestions) == 1
                 assert result.suggestion.suggestions[0].description == "Add is_protocol() check"
-                assert mock_api.call_count == 3
+                # Pass 1 + Pass 1.5 + Pass 2 (N votes) + Pass 3
+                assert mock_api.call_count == 2 + _VERDICT_VOTES + 1
 
 
 class TestSuggestionInMarkdownOutput:

@@ -163,7 +163,18 @@ impl PythonVersion {
 
 /// The platform on which Python is running, e.g. "linux", "darwin", "win32".
 /// See <https://docs.python.org/3/library/sys.html#sys.platform> for examples.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Display
+)]
 pub struct PythonPlatform(String);
 
 impl FromStr for PythonPlatform {
@@ -225,10 +236,10 @@ static SYS_INFO_INTERNER: Interner<SysInfoInner, DefaultHasher> = Interner::new(
 /// Interned so that cloning is a trivial pointer copy (no atomic refcount).
 /// There are very few distinct SysInfo values (typically 1 per run), so the
 /// leaked memory from interning is negligible.
-#[derive(Clone, Dupe, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Dupe, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SysInfo(Intern<SysInfoInner>);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct SysInfoInner {
     version: PythonVersion,
     platform: PythonPlatform,

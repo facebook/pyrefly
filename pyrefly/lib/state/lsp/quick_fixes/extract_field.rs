@@ -18,6 +18,7 @@ use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use super::extract_shared::first_parameter_name;
 use super::extract_shared::function_has_decorator;
@@ -52,8 +53,10 @@ pub(crate) fn extract_field_code_actions(
         if ident.name == context.receiver_name {
             return None;
         }
-        let definitions =
-            transaction.find_definition(handle, ident.position, FindPreference::default());
+        let definitions = transaction
+            .find_definition(handle, ident.position, FindPreference::default())
+            .map(Vec1::into_vec)
+            .unwrap_or_default();
         if definitions.iter().any(|definition| {
             definition.module.path() == module_path
                 && context

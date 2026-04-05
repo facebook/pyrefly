@@ -8,7 +8,9 @@ ERROR `Literal['hello']` is not assignable to `int` [bad-assignment]
  --> snippet:1:10
   |
 1 | x: int = 'hello'
-  |          ^^^^^^^
+  |    ---   ^^^^^^^
+  |    |
+  |    declared type
   |
 [1]
 ```
@@ -60,7 +62,9 @@ ERROR `list[int]` is not assignable to `list[str]` [bad-assignment]
  --> snippet:1:41
   |
 1 | from typing import List; x: List[str] = [1, 2, 3]
-  |                                         ^^^^^^^^^
+  |                             ---------   ^^^^^^^^^
+  |                             |
+  |                             declared type
   |
 [1]
 ```
@@ -79,7 +83,9 @@ ERROR `int` is not assignable to `str` [bad-assignment]
  --> snippet:1:49
   |
 1 | def foo(x: str) -> int: return len(x); y: str = foo(42)
-  |                                                 ^^^^^^^
+  |                                           ---   ^^^^^^^
+  |                                           |
+  |                                           declared type
   |
 ERROR Argument `Literal[42]` is not assignable to parameter `x` with type `str` in function `foo` [bad-argument-type]
  --> snippet:1:53

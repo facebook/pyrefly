@@ -38,6 +38,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use crate::alt::answers_solver::AnswersSolver;
 use crate::error::error::Error;
@@ -368,6 +369,8 @@ fn parameter_documentation_for_callee(
                 ..Default::default()
             },
         )
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
         .into_iter()
         .find_map(|item| {
             item.docstring_range
@@ -376,6 +379,8 @@ fn parameter_documentation_for_callee(
         .or_else(|| {
             transaction
                 .find_definition(handle, position, FindPreference::default())
+                .map(Vec1::into_vec)
+                .unwrap_or_default()
                 .into_iter()
                 .find_map(|item| {
                     item.docstring_range
@@ -559,6 +564,8 @@ pub fn get_hover(
                 ..Default::default()
             },
         )
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
         // TODO: handle more than 1 definition
         .into_iter()
         .next()
@@ -582,9 +589,37 @@ pub fn get_hover(
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
     let name_for_display = name.clone();
+    let show_constructor = kind == Some(SymbolKind::Class)
+        && !transaction
+            .identifier_at(handle, position)
+            .is_some_and(|id| matches!(id.context, IdentifierContext::ClassDef { .. }));
     let type_display = transaction.ad_hoc_solve(handle, "hover_display", {
         let mut cloned = type_.clone();
         move |solver| {
+            if show_constructor {
+                let constructor = match cloned {
+                    Type::ClassDef(ref cls)
+                        if !solver.get_metadata_for_class(cls).is_typed_dict() =>
+                    {
+                        Some(solver.type_order().constructor_to_callable(
+                            &solver.promote_nontypeddict_silently_to_classtype(cls),
+                        ))
+                    }
+                    Type::Type(box Type::ClassType(ref cls)) => {
+                        Some(solver.type_order().constructor_to_callable(cls))
+                    }
+                    _ => None,
+                };
+                if let Some(mut constructor) = constructor {
+                    constructor.transform_toplevel_callable(|c| {
+                        expand_callable_kwargs_for_hover(&solver, c)
+                    });
+                    return constructor.as_lsp_string_with_fallback_name(
+                        name_for_display.as_deref(),
+                        LspDisplayMode::Hover,
+                    );
+                }
+            }
             cloned.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(&solver, c));
             cloned.as_lsp_string_with_fallback_name(
                 name_for_display.as_deref(),
@@ -610,6 +645,8 @@ pub fn get_hover(
             ..
         }) = transaction
             .find_definition(handle, position, FindPreference::default())
+            .map(Vec1::into_vec)
+            .unwrap_or_default()
             .into_iter()
             .next()
     {
@@ -663,11 +700,12 @@ mod tests {
             Arc::new(String::new()),
         );
         let metadata = FuncMetadata {
-            kind: FunctionKind::Def(Box::new(FuncId {
+            kind: FunctionKind::Def(Arc::new(FuncId {
                 module,
                 cls: None,
                 name: Name::new(func_name),
                 def_index: None,
+                outer_funcs: None,
             })),
             flags: FuncFlags::default(),
         };

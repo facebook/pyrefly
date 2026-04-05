@@ -935,6 +935,39 @@ Signature Help Result: active=0
 }
 
 #[test]
+fn namedtuple_constructor_signature_shows_namedtuple_fields() {
+    let code = r#"
+from typing import NamedTuple
+
+class Test(NamedTuple):
+    a: str
+    b: int
+
+Test()
+#    ^
+Test(a="", )
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | Test()
+         ^
+Signature Help Result: active=0
+- (_cls: type[Test], a: str, b: int) -> Test, parameters=[a: str, b: int], active parameter = 0
+
+10 | Test(a="", )
+                ^
+Signature Help Result: active=0
+- (_cls: type[Test], a: str, b: int) -> Test, parameters=[a: str, b: int], active parameter = 1
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn direct_init_call_shows_none() {
     let code = r#"
 class Person:
@@ -1046,7 +1079,7 @@ Signature Help Result: active=1
 
 11 | foo(1, )
             ^
-Signature Help Result: active=0
+Signature Help Result: active=1
 - (x: int, y: str) -> int, parameters=[x: int, y: str], active parameter = 1
 - (x: str) -> str, parameters=[x: str]
 "#

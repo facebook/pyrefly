@@ -493,6 +493,34 @@ impl NarrowOp {
         }
     }
 
+    /// Removes all `Placeholder` operations from this narrow op tree.
+    /// Used when all sub-patterns of a class pattern are irrefutable, meaning the
+    /// Placeholders (added by `and_all` for unmerged names) are spurious and would
+    /// incorrectly block negative narrowing.
+    pub fn strip_placeholders(&mut self) {
+        match self {
+            Self::Atomic(_, AtomicNarrowOp::Placeholder) => {
+                // Replace standalone Placeholder with nothing — caller handles this case
+            }
+            Self::And(ops) => {
+                ops.retain(|op| !matches!(op, Self::Atomic(_, AtomicNarrowOp::Placeholder)));
+                for op in ops.iter_mut() {
+                    op.strip_placeholders();
+                }
+                // If only one op remains, unwrap the And
+                if ops.len() == 1 {
+                    *self = ops.pop().unwrap();
+                }
+            }
+            Self::Or(ops) => {
+                for op in ops.iter_mut() {
+                    op.strip_placeholders();
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn or(&mut self, other: Self) {
         match self {
             Self::Or(ops) => ops.push(other),
@@ -540,6 +568,98 @@ impl NarrowOp {
             }
             Self::And(ops) => Self::And(ops.map(|op| op.for_subject(subject))),
             Self::Or(ops) => Self::Or(ops.map(|op| op.for_subject(subject))),
+        }
+    }
+
+    /// Rebase a narrowing operation onto an expression that is already the subject.
+    ///
+    /// For example, if we are matching on `self.a` and have a carry-over narrow for
+    /// `self.a != "A"`, the projected subject binding should apply `NotEq("A")`
+    /// directly, not try to look up `.a` again on the type of `self.a`.
+    ///
+    /// One reason we need this is to allow negation to work properly against a facet
+    /// chain, which is important when a pattern match subject is a facet chain
+    /// because we might need to actually bind the projection if one of the match
+    /// cases binds the name, as in
+    /// ```python
+    /// match self.a
+    ///    case "foo": pass
+    ///    case self_a:  # here, we need to get the projected negated narrow, just narrowing
+    ///        pass      # `self` with a facet is not sufficient to bind `self_a`
+    /// ```
+    ///
+    /// This projection is intentionally conservative: if part of the operation does not
+    /// directly constrain the subject expression, we drop it rather than risk producing
+    /// an unsound narrow.
+    /// - We keep all narrows of an `And` that *can* be projected onto the narrowing
+    ///   subject, while dropping any that cannot be.
+    /// - We produce no answer from an `Or` unless *all* of the components can be
+    ///   rebased (because if any part of an `Or` is not about a subject, then this
+    ///   means that at negation time we don't know anything about that subject).
+    pub fn rebase_onto_subject(&self, subject: &NarrowingSubject) -> Option<Self> {
+        fn rebase_facet_subject(
+            base: &FacetSubject,
+            extra: &FacetSubject,
+        ) -> Option<Option<FacetSubject>> {
+            let base_chain = base.chain.facets().as_slice();
+            let extra_chain = extra.chain.facets().as_slice();
+            if extra_chain.len() < base_chain.len()
+                || !extra_chain
+                    .iter()
+                    .zip(base_chain.iter())
+                    .all(|(extra, base)| extra == base)
+            {
+                return None;
+            }
+            let remainder = extra_chain
+                .iter()
+                .skip(base_chain.len())
+                .cloned()
+                .collect::<Vec<_>>();
+            if let Ok(chain) = Vec1::try_from_vec(remainder) {
+                Some(Some(FacetSubject {
+                    chain: UnresolvedFacetChain::new(chain),
+                    origin: extra.origin,
+                }))
+            } else {
+                Some(None)
+            }
+        }
+        match self {
+            Self::Atomic(prop, op) => match subject {
+                NarrowingSubject::Name(_) => Some(Self::Atomic(prop.clone(), op.clone())),
+                NarrowingSubject::Facets(_, base_facet) => match prop {
+                    None => None,
+                    Some(prop) => rebase_facet_subject(base_facet, prop)
+                        .map(|prop| Self::Atomic(prop, op.clone())),
+                },
+            },
+            Self::And(ops) => {
+                // Note that for `And`, we drop any operations not relevant to the subject
+                // but keep the remainder.
+                let projected = ops
+                    .iter()
+                    .filter_map(|op| op.rebase_onto_subject(subject))
+                    .collect::<Vec<_>>();
+                match projected.as_slice() {
+                    [] => None,
+                    [op] => Some(op.clone()),
+                    _ => Some(Self::And(projected)),
+                }
+            }
+            Self::Or(ops) => {
+                // Note that `projected` produces no result unless *all* of the ops can be
+                // rebased onto the subject.
+                let projected = ops
+                    .iter()
+                    .map(|op| op.rebase_onto_subject(subject))
+                    .collect::<Option<Vec<_>>>()?;
+                match projected.as_slice() {
+                    [] => None,
+                    [op] => Some(op.clone()),
+                    _ => Some(Self::Or(projected)),
+                }
+            }
         }
     }
 }

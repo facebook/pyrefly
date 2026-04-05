@@ -14,6 +14,7 @@ use lsp_types::Url;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::telemetry::SubTaskTelemetry;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::ModModule;
@@ -125,7 +126,6 @@ fn qualified_name_at_position(
 /// Derive a fully-qualified name string from a resolved definition, suitable
 /// for use with external reference providers (see [`ExternalProvider`]).
 /// Returns `None` if the name cannot be determined.
-#[allow(dead_code)]
 pub(crate) fn compute_qualified_name(
     transaction: &Transaction,
     handle: &Handle,
@@ -137,7 +137,23 @@ pub(crate) fn compute_qualified_name(
         return Some(module_name.to_string());
     }
 
+    // Imported names that resolved to modules (e.g., `from torch.nn import attention`
+    // where `attention` is a submodule) use VariableOrAttribute metadata with
+    // SymbolKind::Module. The definition's module name is already the target module,
+    // so return it directly — just like the DefinitionMetadata::Module case above.
+    if definition.metadata.symbol_kind() == Some(SymbolKind::Module) {
+        return Some(module_name.to_string());
+    }
+
     let display_name = definition.display_name.as_deref()?;
+
+    // Builtins are indexed without the "builtins." prefix in Glean
+    // (e.g., "Exception" not "builtins.Exception"), matching both
+    // the Python and Pyrefly Glean indexers.
+    if module_name == ModuleName::builtins() {
+        return Some(display_name.to_owned());
+    }
+
     let definition_handle = Handle::new(
         module_name,
         definition.module.path().dupe(),
@@ -171,6 +187,7 @@ mod tests {
 
     use super::*;
     use crate::state::state::State;
+    use crate::test::util::TEST_THREAD_COUNT;
     use crate::test::util::TestEnv;
 
     fn parse_and_qname(code: &str, module: &str, position: TextSize, name: &str) -> String {
@@ -221,7 +238,7 @@ mod tests {
         // transaction.get_ast() returns None for any handle, exercising
         // the re-parse fallback inside compute_qualified_name.
         let env = TestEnv::one("unrelated", "");
-        let state = State::new(env.config_finder());
+        let state = State::new(env.config_finder(), TEST_THREAD_COUNT);
         let transaction = state.transaction();
 
         let handle = Handle::new(module_name, module_path, env.sys_info());
@@ -235,5 +252,31 @@ mod tests {
 
         let result = compute_qualified_name(&transaction, &handle, &definition);
         assert_eq!(result, Some("defmod.foo".to_owned()));
+    }
+
+    /// Builtins should use bare names (e.g., "Exception" not
+    /// "builtins.Exception") to match the Glean indexer convention.
+    #[test]
+    fn test_compute_qualified_name_builtin_strips_prefix() {
+        let code = "class Exception(BaseException): pass";
+        let module_name = ModuleName::builtins();
+        let module_path = ModulePath::memory(PathBuf::from("builtins.pyi"));
+        let module = Module::new(module_name, module_path.dupe(), Arc::new(code.to_owned()));
+
+        let env = TestEnv::one("unrelated", "");
+        let state = State::new(env.config_finder(), TEST_THREAD_COUNT);
+        let transaction = state.transaction();
+
+        let handle = Handle::new(module_name, module_path, env.sys_info());
+        let definition = FindDefinitionItemWithDocstring {
+            metadata: DefinitionMetadata::Variable(None),
+            definition_range: TextRange::new(TextSize::new(6), TextSize::new(15)),
+            module,
+            docstring_range: None,
+            display_name: Some("Exception".to_owned()),
+        };
+
+        let result = compute_qualified_name(&transaction, &handle, &definition);
+        assert_eq!(result, Some("Exception".to_owned()));
     }
 }

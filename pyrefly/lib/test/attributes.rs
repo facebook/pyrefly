@@ -320,7 +320,6 @@ def foo(x: Callable[[int], str], c: C, c2: C2, c3: C3):
 );
 
 testcase!(
-    bug = "classmethod bound object w/o targs is default-instantiated, solves T to Any",
     test_bound_classmethod_explicit_targs,
     r#"
 from typing import assert_type
@@ -333,7 +332,7 @@ class A[T]:
         return cls(x)
 
 assert_type(A[int].m(0), A[int])
-assert_type(A.m(0), A[int]) # TODO # E: assert_type(A[Unknown], A[int]) failed
+assert_type(A.m(0), A[int])
 
 def test_typevar_bounds[T: A[int]](x: type[T]):
     assert_type(x.m(0), A[int])
@@ -1144,6 +1143,23 @@ def test(o: D):
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2812
+testcase!(
+    test_bound_overload_assigned_to_attribute,
+    r#"
+from typing import assert_type
+
+class ThemeStack:
+    def __init__(self) -> None:
+        self._entries: list[dict[str, str]] = [{}]
+        self.get = self._entries[-1].get
+
+def test(stack: ThemeStack) -> None:
+    assert_type(stack.get("theme"), str | None)
+    assert_type(stack.get("theme", "fallback"), str)
+"#,
+);
+
 testcase!(
     test_attr_unknown,
     r#"
@@ -1810,8 +1826,20 @@ testcase!(
     r#"
 from typing import ClassVar, Final
 class C:
-    x: ClassVar[Final[int]] = 42
+    x: ClassVar[Final[int]] = 42  # E: `Final` may not be nested inside `ClassVar`
 C.x = 43  # E: This field is marked as Final
+    "#,
+);
+
+testcase!(
+    test_classvar_final_nesting,
+    r#"
+from typing import ClassVar, Final
+class C:
+    x: Final[ClassVar[int]] = 1  # E: `ClassVar` may not be nested inside `Final`
+    y: ClassVar[Final[int]] = 2  # E: `Final` may not be nested inside `ClassVar`
+    z: Final[int] = 3
+    w: ClassVar[int] = 4
     "#,
 );
 

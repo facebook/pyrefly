@@ -37,6 +37,8 @@ use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::Cancelled;
+use pyrefly_util::telemetry::DefinitionContext;
+use pyrefly_util::telemetry::EmptyResponseReason;
 use pyrefly_util::thread_pool::ThreadPool;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Alias;
@@ -59,6 +61,8 @@ use ruff_text_size::TextSize;
 use serde::Deserialize;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
+use vec1::Vec1;
+use vec1::vec1;
 
 use crate::ModuleInfo;
 use crate::alt::answers::Index;
@@ -136,7 +140,6 @@ pub struct InlayHintConfig {
 }
 
 /// PEP 610 direct_url.json structure for detecting editable installs.
-#[allow(dead_code)]
 #[derive(Deserialize)]
 struct DirectUrl {
     url: String,
@@ -144,7 +147,6 @@ struct DirectUrl {
     dir_info: DirInfo,
 }
 
-#[allow(dead_code)]
 #[derive(Deserialize, Default)]
 struct DirInfo {
     #[serde(default)]
@@ -153,7 +155,6 @@ struct DirInfo {
 
 /// Cache for editable source paths, keyed by sorted site-packages paths.
 /// This avoids re-scanning site-packages on every check.
-#[allow(dead_code)]
 static EDITABLE_PATHS_CACHE: LazyLock<Mutex<SmallMap<Vec<PathBuf>, Vec<PathBuf>>>> =
     LazyLock::new(|| Mutex::new(SmallMap::new()));
 
@@ -207,6 +208,12 @@ pub struct FindPreference {
     /// controls whether to prioritize finding pyi or py files. if false, we will search all search paths until a .py file is found before
     /// falling back to a .pyi.
     pub prefer_pyi: bool,
+    /// When true (the default), if the cursor is on a name/attribute in call
+    /// position, resolve through `__init__`/`__new__`/`__call__` dunders
+    /// instead of returning the class or variable definition. Set to false
+    /// when callers need the raw definition (e.g., call-graph queries that
+    /// unwrap decorators like `@lru_cache`).
+    pub resolve_call_dunders: bool,
 }
 
 impl Default for FindPreference {
@@ -214,6 +221,7 @@ impl Default for FindPreference {
         Self {
             import_behavior: ImportBehavior::JumpThroughEverything,
             prefer_pyi: true,
+            resolve_call_dunders: true,
         }
     }
 }
@@ -341,7 +349,6 @@ pub(crate) struct IdentifierWithContext {
 
 #[derive(PartialEq, Eq)]
 pub enum AnnotationKind {
-    #[allow(dead_code)]
     Parameter,
     Return,
     Variable,
@@ -622,6 +629,23 @@ impl<'a> Transaction<'a> {
     }
 
     fn type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        self.type_from_expression_at_impl(handle, position, false)
+    }
+
+    /// Like `type_from_expression_at`, but prefers the result type (`get_type_trace`)
+    /// over the callee/method type (`get_chosen_overload_trace`). This is used by the
+    /// provide-type endpoint where operator expressions should return the result
+    /// (e.g. `Literal[False]` for `+pos`) rather than the dunder method signature.
+    fn result_type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        self.type_from_expression_at_impl(handle, position, true)
+    }
+
+    fn type_from_expression_at_impl(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        prefer_result_type: bool,
+    ) -> Option<Type> {
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
         for node in covering_nodes {
@@ -629,11 +653,20 @@ impl<'a> Transaction<'a> {
                 continue;
             }
             let range = node.range();
-            if let Some(callable) = self.get_chosen_overload_trace(handle, range) {
-                return Some(callable);
-            }
-            if let Some(ty) = self.get_type_trace(handle, range) {
-                return Some(ty);
+            if prefer_result_type {
+                if let Some(ty) = self.get_type_trace(handle, range) {
+                    return Some(ty);
+                }
+                if let Some(callable) = self.get_chosen_overload_trace(handle, range) {
+                    return Some(callable);
+                }
+            } else {
+                if let Some(callable) = self.get_chosen_overload_trace(handle, range) {
+                    return Some(callable);
+                }
+                if let Some(ty) = self.get_type_trace(handle, range) {
+                    return Some(ty);
+                }
             }
         }
         None
@@ -1025,6 +1058,17 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Like `get_type_at`, but for non-identifier expressions (operators, etc.)
+    /// prefers the result type over the dunder method signature. Used by the
+    /// provide-type endpoint where `+pos` should return `Literal[False]` rather
+    /// than the `__pos__` method signature.
+    pub fn get_result_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        match self.identifier_at(handle, position) {
+            None => self.result_type_from_expression_at(handle, position),
+            _ => self.get_type_at(handle, position),
+        }
+    }
+
     /// If `ty` represents a callable instance (e.g., a class with `__call__`), return the
     /// bound `__call__` signature. Otherwise, return the type unchanged.
     ///
@@ -1256,8 +1300,9 @@ impl<'a> Transaction<'a> {
             AttrDefinition::Submodule { module_name } => {
                 // For submodule access (e.g., `b` in `a.b` when `import a.b.c`),
                 // resolve by finding the submodule's __init__.py
-                let def =
-                    self.find_definition_for_imported_module(handle, module_name, preference)?;
+                let def = self
+                    .find_definition_for_imported_module(handle, module_name, preference)
+                    .unwrap_or(None)?;
                 Some((
                     TextRangeWithModule::new(def.module, def.definition_range),
                     def.docstring_range,
@@ -1335,10 +1380,12 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         identifier: &Identifier,
         symbol_kind: SymbolKind,
-    ) -> Option<FindDefinitionItem> {
-        Some(FindDefinitionItem {
+    ) -> Result<FindDefinitionItem, EmptyResponseReason> {
+        Ok(FindDefinitionItem {
             metadata: DefinitionMetadata::Variable(Some(symbol_kind)),
-            module: self.get_module_info(handle)?,
+            module: self
+                .get_module_info(handle)
+                .ok_or(EmptyResponseReason::ModuleInfoNotFound)?,
             definition_range: identifier.range,
         })
     }
@@ -1348,11 +1395,14 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         key: &Key,
         preference: FindPreference,
-    ) -> Option<(Handle, Export)> {
-        if !self.get_bindings(handle)?.is_valid_key(key) {
-            return None;
+    ) -> Result<Option<(Handle, Export)>, EmptyResponseReason> {
+        let bindings = self
+            .get_bindings(handle)
+            .ok_or(EmptyResponseReason::BindingsNotFound)?;
+        if !bindings.is_valid_key(key) {
+            return Ok(None);
         }
-        self.key_to_export(handle, key, preference)
+        Ok(self.key_to_export(handle, key, preference))
     }
 
     fn find_definition_for_name_def(
@@ -1360,9 +1410,9 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         name: &Identifier,
         preference: FindPreference,
-    ) -> Option<FindDefinitionItemWithDocstring> {
+    ) -> Result<Option<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
         let def_key = Key::Definition(ShortIdentifier::new(name));
-        let (
+        let Some((
             handle,
             Export {
                 location,
@@ -1370,15 +1420,20 @@ impl<'a> Transaction<'a> {
                 docstring_range,
                 ..
             },
-        ) = self.find_export_for_key(handle, &def_key, preference)?;
-        let module_info = self.get_module_info(&handle)?;
-        Some(FindDefinitionItemWithDocstring {
+        )) = self.find_export_for_key(handle, &def_key, preference)?
+        else {
+            return Ok(None);
+        };
+        let module_info = self
+            .get_module_info(&handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+        Ok(Some(FindDefinitionItemWithDocstring {
             metadata: DefinitionMetadata::VariableOrAttribute(symbol_kind),
             definition_range: location,
             module: module_info,
             docstring_range,
             display_name: Some(name.id.to_string()),
-        })
+        }))
     }
 
     pub fn find_definition_for_name_use(
@@ -1386,9 +1441,9 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         name: &Identifier,
         preference: FindPreference,
-    ) -> Option<FindDefinitionItemWithDocstring> {
+    ) -> Result<Option<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
         let use_key = Key::BoundName(ShortIdentifier::new(name));
-        let (
+        let Some((
             handle,
             Export {
                 location,
@@ -1396,16 +1451,69 @@ impl<'a> Transaction<'a> {
                 docstring_range,
                 ..
             },
-        ) = self.find_export_for_key(handle, &use_key, preference)?;
-        Some(FindDefinitionItemWithDocstring {
+        )) = self.find_export_for_key(handle, &use_key, preference)?
+        else {
+            return Ok(None);
+        };
+        let module_info = self
+            .get_module_info(&handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+        Ok(Some(FindDefinitionItemWithDocstring {
             metadata: DefinitionMetadata::Variable(symbol_kind),
             definition_range: location,
-            module: self.get_module_info(&handle)?,
+            module: module_info,
             docstring_range,
             display_name: Some(name.id.to_string()),
-        })
+        }))
     }
 
+    /// When a name or attribute in a call position resolves to a class, find
+    /// `__init__` and `__new__` definitions. When it resolves to a class
+    /// instance, find `__call__`. Returns all found definitions, or empty if
+    /// neither case applies. Does not match functions/callables — those should
+    /// use the normal go-to-definition path.
+    fn find_call_target_definitions(
+        &self,
+        handle: &Handle,
+        preference: FindPreference,
+        ty: Type,
+    ) -> Vec<FindDefinitionItemWithDocstring> {
+        match &ty {
+            Type::ClassDef(_) => {
+                let mut defs = self
+                    .find_attribute_definition_for_base_type(
+                        handle,
+                        preference,
+                        ty.clone(),
+                        &dunder::INIT,
+                    )
+                    .map(Vec1::into_vec)
+                    .unwrap_or_default();
+                defs.extend(
+                    self.find_attribute_definition_for_base_type(
+                        handle,
+                        preference,
+                        ty,
+                        &dunder::NEW,
+                    )
+                    .map(Vec1::into_vec)
+                    .unwrap_or_default(),
+                );
+                defs
+            }
+            Type::ClassType(_) => self
+                .find_attribute_definition_for_base_type(handle, preference, ty, &dunder::CALL)
+                .map(Vec1::into_vec)
+                .unwrap_or_default(),
+            _ => vec![],
+        }
+    }
+
+    // TODO: If completions contain an AttrInfo matching `name` but
+    // `resolve_attribute_definition` returns None, that indicates a bug
+    // (the solver produced a completion it can't resolve). This should
+    // propagate an error rather than silently skipping. Currently it's
+    // swallowed by `find_map`.
     pub(crate) fn find_definition_for_base_type(
         &self,
         handle: &Handle,
@@ -1430,87 +1538,117 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    /// Look up the definition of an attribute `name` on `base_type`.
+    /// Returns `Err(DefinitionNotFound)` if the attribute doesn't exist
+    /// on any branch of a union type. The returned `Vec1` is guaranteed
+    /// non-empty.
     fn find_attribute_definition_for_base_type(
         &self,
         handle: &Handle,
         preference: FindPreference,
         base_type: Type,
         name: &Name,
-    ) -> Vec<FindDefinitionItemWithDocstring> {
-        self.ad_hoc_solve(handle, "attribute_definition", |solver| {
-            let completions = |ty| solver.completions(ty, Some(name), false);
+    ) -> Result<Vec1<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
+        let defs = self
+            .ad_hoc_solve(handle, "attribute_definition", |solver| {
+                let completions = |ty| solver.completions(ty, Some(name), false);
 
-            match base_type {
-                Type::Union(box Union { members: tys, .. }) | Type::Intersect(box (tys, _)) => tys
-                    .into_iter()
-                    .filter_map(|ty_| {
-                        self.find_definition_for_base_type(
-                            handle,
-                            preference,
-                            completions(ty_),
-                            name,
-                        )
-                    })
-                    .collect(),
-                ty => self
-                    .find_definition_for_base_type(handle, preference, completions(ty), name)
-                    .map_or(vec![], |item| vec![item]),
-            }
+                match base_type {
+                    Type::Union(box Union { members: tys, .. }) | Type::Intersect(box (tys, _)) => {
+                        tys.into_iter()
+                            .filter_map(|ty_| {
+                                self.find_definition_for_base_type(
+                                    handle,
+                                    preference,
+                                    completions(ty_),
+                                    name,
+                                )
+                            })
+                            .collect()
+                    }
+                    ty => self
+                        .find_definition_for_base_type(handle, preference, completions(ty), name)
+                        .map_or(vec![], |item| vec![item]),
+                }
+            })
+            .unwrap_or_default();
+        Vec1::try_from_vec(defs).map_err(|_| EmptyResponseReason::DefinitionNotFound {
+            name: name.to_string(),
+            context: DefinitionContext::Attribute,
         })
-        .unwrap_or_default()
     }
 
-    fn find_definition_for_operator(
+    /// Try to find the dunder method associated with an operator at the cursor.
+    ///
+    /// Returns:
+    /// - `Ok(None)` — no operator node found in `covering_nodes`
+    /// - `Ok(Some((base_type, dunder_name)))` — operator with a navigable dunder
+    /// - `Err(NotAnIdentifier)` — operator without a dunder (`not`, `is`, `is not`)
+    /// - `Err(AnswersNotFound)` — operator found but answers unavailable
+    /// - `Err(TypeTraceNotFound)` — operator found but base expression has no type trace
+    fn find_operator_dunder(
         &self,
         handle: &Handle,
         covering_nodes: &[AnyNodeRef],
-        preference: FindPreference,
-    ) -> Vec<FindDefinitionItemWithDocstring> {
-        let Some((base_type, dunder_method_name)) =
-            covering_nodes.iter().find_map(|node| match node {
+    ) -> Result<Option<(Type, Name)>, EmptyResponseReason> {
+        // Look up the type of an expression, distinguishing "no answers"
+        // from "answers available but no type trace for this range."
+        let type_at = |range: TextRange| -> Result<Type, EmptyResponseReason> {
+            let answers = self
+                .get_answers(handle)
+                .ok_or(EmptyResponseReason::AnswersNotFound)?;
+            answers
+                .get_type_trace(range)
+                .ok_or(EmptyResponseReason::TypeTraceNotFound)
+        };
+
+        covering_nodes
+            .iter()
+            .find_map(|node| match node {
                 AnyNodeRef::ExprCompare(compare) => {
                     for op in &compare.ops {
                         // Handle membership test operators (in/not in) - uses __contains__ on the right operand
-                        if matches!(op, CmpOp::In | CmpOp::NotIn)
-                            && let Some(answers) = self.get_answers(handle)
-                            && let Some(right_type) =
-                                answers.get_type_trace(compare.comparators.first()?.range())
-                        {
-                            return Some((right_type, dunder::CONTAINS));
+                        if matches!(op, CmpOp::In | CmpOp::NotIn) {
+                            let result = type_at(compare.comparators.first()?.range())
+                                .map(|right_type| (right_type, dunder::CONTAINS));
+                            return Some(result);
+                        }
+                        // is / is not — no dunder
+                        if matches!(op, CmpOp::Is) {
+                            return Some(Err(EmptyResponseReason::NotAnIdentifier {
+                                found: "operator:is".to_owned(),
+                            }));
+                        }
+                        if matches!(op, CmpOp::IsNot) {
+                            return Some(Err(EmptyResponseReason::NotAnIdentifier {
+                                found: "operator:is_not".to_owned(),
+                            }));
                         }
                         // Handle rich comparison operators
-                        if let Some(dunder_name) = dunder::rich_comparison_dunder(*op)
-                            && let Some(answers) = self.get_answers(handle)
-                            && let Some(left_type) = answers.get_type_trace(compare.left.range())
-                        {
-                            return Some((left_type, dunder_name));
+                        if let Some(dunder_name) = dunder::rich_comparison_dunder(*op) {
+                            let result = type_at(compare.left.range())
+                                .map(|left_type| (left_type, dunder_name));
+                            return Some(result);
                         }
                     }
                     None
                 }
                 AnyNodeRef::ExprBinOp(binop) => {
                     let dunder_name = Name::new_static(binop.op.dunder());
-                    if let Some(answers) = self.get_answers(handle)
-                        && let Some(left_type) = answers.get_type_trace(binop.left.range())
-                    {
-                        return Some((left_type, dunder_name));
-                    }
-                    None
+                    Some(type_at(binop.left.range()).map(|left_type| (left_type, dunder_name)))
                 }
                 AnyNodeRef::ExprUnaryOp(unaryop) => {
                     let dunder_name = match unaryop.op {
-                        UnaryOp::Invert => Some(dunder::INVERT),
-                        UnaryOp::Not => None,
-                        UnaryOp::UAdd => Some(dunder::POS),
-                        UnaryOp::USub => Some(dunder::NEG),
+                        UnaryOp::Invert => Ok(dunder::INVERT),
+                        UnaryOp::UAdd => Ok(dunder::POS),
+                        UnaryOp::USub => Ok(dunder::NEG),
+                        UnaryOp::Not => Err(EmptyResponseReason::NotAnIdentifier {
+                            found: "operator:not".to_owned(),
+                        }),
                     };
-                    if let Some(dunder_name) = dunder_name
-                        && let Some(answers) = self.get_answers(handle)
-                        && let Some(operand_type) = answers.get_type_trace(unaryop.operand.range())
-                    {
-                        return Some((operand_type, dunder_name));
-                    }
-                    None
+                    Some(dunder_name.and_then(|name| {
+                        type_at(unaryop.operand.range()).map(|operand_type| (operand_type, name))
+                    }))
                 }
                 AnyNodeRef::ExprSubscript(subscript) => {
                     let dunder_name = match subscript.ctx {
@@ -1518,46 +1656,43 @@ impl<'a> Transaction<'a> {
                         ExprContext::Store => Some(dunder::SETITEM),
                         ExprContext::Del => Some(dunder::DELITEM),
                         ExprContext::Invalid => None,
-                    };
-                    if let Some(dunder_name) = dunder_name
-                        && let Some(answers) = self.get_answers(handle)
-                        && let Some(base_type) = answers.get_type_trace(subscript.value.range())
-                    {
-                        return Some((base_type, dunder_name));
-                    }
-                    None
+                    }?;
+                    Some(type_at(subscript.value.range()).map(|base_type| (base_type, dunder_name)))
                 }
                 // Handle iteration `in` keyword in for loops
                 AnyNodeRef::StmtFor(stmt_for) => {
-                    if let Some(answers) = self.get_answers(handle)
-                        && let Some(iter_type) = answers.get_type_trace(stmt_for.iter.range())
-                    {
-                        return Some((iter_type, dunder::ITER));
-                    }
-                    None
+                    Some(type_at(stmt_for.iter.range()).map(|iter_type| (iter_type, dunder::ITER)))
                 }
                 // Handle iteration `in` keyword in comprehensions
                 AnyNodeRef::Comprehension(comp) => {
-                    if let Some(answers) = self.get_answers(handle)
-                        && let Some(iter_type) = answers.get_type_trace(comp.iter.range())
-                    {
-                        return Some((iter_type, dunder::ITER));
-                    }
-                    None
+                    Some(type_at(comp.iter.range()).map(|iter_type| (iter_type, dunder::ITER)))
                 }
                 _ => None,
             })
-        else {
-            return vec![];
-        };
+            .transpose()
+    }
 
-        // Find the attribute definition for the dunder method on the base type
-        self.find_attribute_definition_for_base_type(
-            handle,
-            preference,
-            base_type,
-            &dunder_method_name,
-        )
+    /// Try operator-based go-to-definition. Returns `Ok(None)` when there is
+    /// no operator at the cursor, `Ok(Some(...))` on success, or
+    /// `Err(...)` when an operator was found but couldn't be resolved.
+    fn find_definition_for_operator(
+        &self,
+        handle: &Handle,
+        covering_nodes: &[AnyNodeRef],
+        preference: FindPreference,
+    ) -> Result<Option<Vec1<FindDefinitionItemWithDocstring>>, EmptyResponseReason> {
+        let Some((base_type, dunder_name)) = self.find_operator_dunder(handle, covering_nodes)?
+        else {
+            return Ok(None);
+        };
+        let dunder_str = dunder_name.to_string();
+        let defs = self
+            .find_attribute_definition_for_base_type(handle, preference, base_type, &dunder_name)
+            .map_err(|_| EmptyResponseReason::DefinitionNotFound {
+                name: dunder_str.clone(),
+                context: DefinitionContext::Operator { dunder: dunder_str },
+            })?;
+        Ok(Some(defs))
     }
 
     pub fn find_definition_for_attribute(
@@ -1566,14 +1701,14 @@ impl<'a> Transaction<'a> {
         base_range: TextRange,
         name: &Name,
         preference: FindPreference,
-    ) -> Vec<FindDefinitionItemWithDocstring> {
-        if let Some(answers) = self.get_answers(handle)
-            && let Some(base_type) = answers.get_type_trace(base_range)
-        {
-            self.find_attribute_definition_for_base_type(handle, preference, base_type, name)
-        } else {
-            vec![]
-        }
+    ) -> Result<Vec1<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
+        let answers = self
+            .get_answers(handle)
+            .ok_or(EmptyResponseReason::AnswersNotFound)?;
+        let base_type = answers
+            .get_type_trace(base_range)
+            .ok_or(EmptyResponseReason::TypeTraceNotFound)?;
+        self.find_attribute_definition_for_base_type(handle, preference, base_type, name)
     }
 
     pub(crate) fn find_definition_for_imported_module(
@@ -1581,22 +1716,27 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         module_name: ModuleName,
         preference: FindPreference,
-    ) -> Option<FindDefinitionItemWithDocstring> {
+    ) -> Result<Option<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
         // TODO: Handle relative import (via ModuleName::new_maybe_relative)
-        let handle = self.import_handle_with_preference(handle, module_name, preference)?;
+        let Some(handle) = self.import_handle_with_preference(handle, module_name, preference)
+        else {
+            return Err(EmptyResponseReason::ModuleNotFound);
+        };
         // if the module is not yet loaded, force loading by asking for exports
         // necessary for imports that are not in tdeps (e.g. .py when there is also a .pyi)
         // todo(kylei): better solution
         let _ = self.get_exports(&handle);
 
-        let module_info = self.get_module_info(&handle)?;
-        Some(FindDefinitionItemWithDocstring {
+        let module_info = self
+            .get_module_info(&handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+        Ok(Some(FindDefinitionItemWithDocstring {
             metadata: DefinitionMetadata::Module,
             definition_range: TextRange::default(),
             module: module_info,
             docstring_range: self.get_module_docstring_range(&handle),
             display_name: Some(module_name.to_string()),
-        })
+        }))
     }
 
     fn find_definition_for_dunder_all_entry(
@@ -1624,8 +1764,9 @@ impl<'a> Transaction<'a> {
 
         if module_info.path().is_init() {
             let submodule = module_info.name().append(&name);
-            if let Some(definition) =
-                self.find_definition_for_imported_module(handle, submodule, preference)
+            if let Some(definition) = self
+                .find_definition_for_imported_module(handle, submodule, preference)
+                .unwrap_or(None)
             {
                 return Some(definition);
             }
@@ -1697,10 +1838,12 @@ impl<'a> Transaction<'a> {
         let defs = match callee_kind {
             CalleeKind::Function(name) => self
                 .find_definition_for_name_use(handle, name, preference)
+                .unwrap_or(None)
                 .map_or(vec![], |item| vec![item]),
-            CalleeKind::Method(base_range, name) => {
-                self.find_definition_for_attribute(handle, *base_range, name.id(), preference)
-            }
+            CalleeKind::Method(base_range, name) => self
+                .find_definition_for_attribute(handle, *base_range, name.id(), preference)
+                .map(Vec1::into_vec)
+                .unwrap_or_default(),
             CalleeKind::Unknown => vec![],
         };
         defs.into_iter()
@@ -1714,9 +1857,9 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         preference: FindPreference,
-    ) -> Vec<FindDefinitionItemWithDocstring> {
+    ) -> Result<Vec1<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
         let Some(mod_module) = self.get_ast(handle) else {
-            return vec![];
+            return Err(EmptyResponseReason::AstNotFound);
         };
         let covering_nodes = Ast::locate_node(&mod_module, position);
 
@@ -1726,7 +1869,7 @@ impl<'a> Transaction<'a> {
             && let Some(definition) =
                 self.find_definition_for_dunder_all_entry(handle, position, preference)
         {
-            return vec![definition];
+            return Ok(vec1![definition]);
         }
 
         match Self::identifier_from_covering_nodes(&covering_nodes) {
@@ -1740,13 +1883,41 @@ impl<'a> Transaction<'a> {
                         // Can't use `find_definition_for_simple_def()` here because not all assignments
                         // are guaranteed defs: they might be a modification to a name defined somewhere
                         // else.
-                        self.find_definition_for_name_def(handle, &id, preference)
-                            .map_or(vec![], |item| vec![item])
+                        match self.find_definition_for_name_def(handle, &id, preference)? {
+                            Some(item) => Ok(vec1![item]),
+                            None => Err(EmptyResponseReason::DefinitionNotFound {
+                                name: id.id.to_string(),
+                                context: DefinitionContext::NameDef,
+                            }),
+                        }
                     }
                     ExprContext::Load | ExprContext::Del | ExprContext::Invalid => {
+                        // If this name is the callee of a call expression, jump
+                        // to constructor or __call__ definitions when applicable.
+                        if preference.resolve_call_dunders
+                            && let Some(AnyNodeRef::ExprCall(call)) = covering_nodes.get(1)
+                            && call.func.range() == id.range
+                            && let Some(bindings) = self.get_bindings(handle)
+                        {
+                            let key = Key::BoundName(ShortIdentifier::new(&id));
+                            if bindings.is_valid_key(&key)
+                                && let Some(ty) = self.get_type(handle, &key)
+                            {
+                                let defs =
+                                    self.find_call_target_definitions(handle, preference, ty);
+                                if let Ok(defs) = Vec1::try_from_vec(defs) {
+                                    return Ok(defs);
+                                }
+                            }
+                        }
                         // This is a usage of the variable
-                        self.find_definition_for_name_use(handle, &id, preference)
-                            .map_or(vec![], |item| vec![item])
+                        match self.find_definition_for_name_use(handle, &id, preference)? {
+                            Some(item) => Ok(vec1![item]),
+                            None => Err(EmptyResponseReason::DefinitionNotFound {
+                                name: id.id.to_string(),
+                                context: DefinitionContext::NameUse,
+                            }),
+                        }
                     }
                 }
             }
@@ -1794,117 +1965,170 @@ impl<'a> Transaction<'a> {
                         // Fallback: use the whole module name.
                         resolved_module_name
                     };
-                self.find_definition_for_imported_module(handle, target_module_name, preference)
-                    .map_or(vec![], |item| vec![item])
+                match self.find_definition_for_imported_module(
+                    handle,
+                    target_module_name,
+                    preference,
+                )? {
+                    Some(item) => Ok(vec1![item]),
+                    None => Err(EmptyResponseReason::DefinitionNotFound {
+                        name: identifier.id.to_string(),
+                        context: DefinitionContext::ImportedModule,
+                    }),
+                }
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context:
                     IdentifierContext::ImportedName {
                         name_after_import, ..
                     },
-            }) => self
-                .find_definition_for_name_def(handle, &name_after_import, preference)
-                .map_or(vec![], |item| vec![item]),
+            }) => {
+                match self.find_definition_for_name_def(handle, &name_after_import, preference)? {
+                    Some(item) => Ok(vec1![item]),
+                    None => Err(EmptyResponseReason::DefinitionNotFound {
+                        name: identifier.id.to_string(),
+                        context: DefinitionContext::ImportedName,
+                    }),
+                }
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::MethodDef { docstring_range },
-            }) => self.get_module_info(handle).map_or(vec![], |module| {
-                vec![FindDefinitionItemWithDocstring {
+            }) => {
+                let module = self
+                    .get_module_info(handle)
+                    .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
                     metadata: DefinitionMetadata::Attribute,
                     module,
                     definition_range: identifier.range,
                     docstring_range,
                     display_name: Some(identifier.id.to_string()),
-                }]
-            }),
+                }])
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::FunctionDef { docstring_range },
-            }) => self
-                .find_definition_for_simple_def(handle, &identifier, SymbolKind::Function)
-                .map_or(vec![], |item| {
-                    vec![FindDefinitionItemWithDocstring {
-                        metadata: item.metadata,
-                        definition_range: item.definition_range,
-                        module: item.module,
-                        docstring_range,
-                        display_name: Some(identifier.id.to_string()),
-                    }]
-                }),
+            }) => {
+                let item =
+                    self.find_definition_for_simple_def(handle, &identifier, SymbolKind::Function)?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
+                    metadata: item.metadata,
+                    definition_range: item.definition_range,
+                    module: item.module,
+                    docstring_range,
+                    display_name: Some(identifier.id.to_string()),
+                }])
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::ClassDef { docstring_range },
-            }) => self
-                .find_definition_for_simple_def(handle, &identifier, SymbolKind::Class)
-                .map_or(vec![], |item| {
-                    vec![FindDefinitionItemWithDocstring {
-                        metadata: item.metadata,
-                        definition_range: item.definition_range,
-                        module: item.module,
-                        docstring_range,
-                        display_name: Some(identifier.id.to_string()),
-                    }]
-                }),
+            }) => {
+                let item =
+                    self.find_definition_for_simple_def(handle, &identifier, SymbolKind::Class)?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
+                    metadata: item.metadata,
+                    definition_range: item.definition_range,
+                    module: item.module,
+                    docstring_range,
+                    display_name: Some(identifier.id.to_string()),
+                }])
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::Parameter,
-            }) => self
-                .find_definition_for_simple_def(handle, &identifier, SymbolKind::Parameter)
-                .map_or(vec![], |item| {
-                    vec![FindDefinitionItemWithDocstring {
-                        metadata: item.metadata,
-                        definition_range: item.definition_range,
-                        module: item.module,
-                        docstring_range: None,
-                        display_name: Some(identifier.id.to_string()),
-                    }]
-                }),
+            }) => {
+                let item = self.find_definition_for_simple_def(
+                    handle,
+                    &identifier,
+                    SymbolKind::Parameter,
+                )?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
+                    metadata: item.metadata,
+                    definition_range: item.definition_range,
+                    module: item.module,
+                    docstring_range: None,
+                    display_name: Some(identifier.id.to_string()),
+                }])
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::TypeParameter,
-            }) => self
-                .find_definition_for_simple_def(handle, &identifier, SymbolKind::TypeParameter)
-                .map_or(vec![], |item| {
-                    vec![FindDefinitionItemWithDocstring {
-                        metadata: item.metadata,
-                        definition_range: item.definition_range,
-                        module: item.module,
-                        docstring_range: None,
-                        display_name: Some(identifier.id.to_string()),
-                    }]
-                }),
+            }) => {
+                let item = self.find_definition_for_simple_def(
+                    handle,
+                    &identifier,
+                    SymbolKind::TypeParameter,
+                )?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
+                    metadata: item.metadata,
+                    definition_range: item.definition_range,
+                    module: item.module,
+                    docstring_range: None,
+                    display_name: Some(identifier.id.to_string()),
+                }])
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::ExceptionHandler | IdentifierContext::PatternMatch(_),
-            }) => self
-                .find_definition_for_simple_def(handle, &identifier, SymbolKind::Variable)
-                .map_or(vec![], |item| {
-                    vec![FindDefinitionItemWithDocstring {
-                        metadata: item.metadata,
-                        definition_range: item.definition_range,
-                        module: item.module,
-                        docstring_range: None,
-                        display_name: Some(identifier.id.to_string()),
-                    }]
-                }),
+            }) => {
+                let item =
+                    self.find_definition_for_simple_def(handle, &identifier, SymbolKind::Variable)?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
+                    metadata: item.metadata,
+                    definition_range: item.definition_range,
+                    module: item.module,
+                    docstring_range: None,
+                    display_name: Some(identifier.id.to_string()),
+                }])
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::KeywordArgument(callee_kind),
-            }) => self
-                .find_definition_for_keyword_argument(handle, &identifier, &callee_kind, preference)
-                .map(|item| FindDefinitionItemWithDocstring {
-                    metadata: item.metadata.clone(),
-                    definition_range: item.definition_range,
-                    module: item.module.clone(),
-                    docstring_range: None,
-                    display_name: Some(identifier.id.to_string()),
-                }),
+            }) => {
+                let defs = self
+                    .find_definition_for_keyword_argument(
+                        handle,
+                        &identifier,
+                        &callee_kind,
+                        preference,
+                    )
+                    .map(|item| FindDefinitionItemWithDocstring {
+                        metadata: item.metadata.clone(),
+                        definition_range: item.definition_range,
+                        module: item.module.clone(),
+                        docstring_range: None,
+                        display_name: Some(identifier.id.to_string()),
+                    });
+                Vec1::try_from_vec(defs).map_err(|_| EmptyResponseReason::DefinitionNotFound {
+                    name: identifier.id.to_string(),
+                    context: DefinitionContext::KeywordArgument,
+                })
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
-                self.find_definition_for_attribute(handle, base_range, identifier.id(), preference)
+                // If this attribute is the callee of a call expression, jump
+                // to constructor or __call__ definitions when applicable.
+                if preference.resolve_call_dunders
+                    && let Some(AnyNodeRef::ExprAttribute(attr)) = covering_nodes.get(1)
+                    && let Some(AnyNodeRef::ExprCall(call)) = covering_nodes.get(2)
+                    && call.func.range() == attr.range()
+                    && let Some(ty) = self.get_type_trace(handle, attr.range())
+                {
+                    let defs = self.find_call_target_definitions(handle, preference, ty);
+                    if let Ok(defs) = Vec1::try_from_vec(defs) {
+                        return Ok(defs);
+                    }
+                }
+                Ok(self.find_definition_for_attribute(
+                    handle,
+                    base_range,
+                    identifier.id(),
+                    preference,
+                )?)
             }
             Some(IdentifierWithContext {
                 identifier,
@@ -1913,39 +2137,57 @@ impl<'a> Transaction<'a> {
                 // `global x` or `nonlocal x` — resolve through the MutableCapture
                 // binding, which forwards to the enclosing scope's definition.
                 let key = Key::MutableCapture(ShortIdentifier::new(&identifier));
-                self.find_export_for_key(handle, &key, preference)
-                    .and_then(
-                        |(
-                            handle,
-                            Export {
-                                location,
-                                symbol_kind,
-                                docstring_range,
-                                ..
-                            },
-                        )| {
-                            Some(vec![FindDefinitionItemWithDocstring {
-                                metadata: DefinitionMetadata::Variable(symbol_kind),
-                                definition_range: location,
-                                module: self.get_module_info(&handle)?,
-                                docstring_range,
-                                display_name: Some(identifier.id.to_string()),
-                            }])
-                        },
-                    )
-                    .unwrap_or_default()
+                let Some((
+                    handle,
+                    Export {
+                        location,
+                        symbol_kind,
+                        docstring_range,
+                        ..
+                    },
+                )) = self.find_export_for_key(handle, &key, preference)?
+                else {
+                    return Err(EmptyResponseReason::DefinitionNotFound {
+                        name: identifier.id.to_string(),
+                        context: DefinitionContext::MutableCapture,
+                    });
+                };
+                let module = self
+                    .get_module_info(&handle)
+                    .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
+                    metadata: DefinitionMetadata::Variable(symbol_kind),
+                    definition_range: location,
+                    module,
+                    docstring_range,
+                    display_name: Some(identifier.id.to_string()),
+                }])
             }
             None => {
                 // Check if this is a None literal, if so, resolve to NoneType class
                 if covering_nodes
                     .iter()
                     .any(|node| matches!(node, AnyNodeRef::ExprNoneLiteral(_)))
-                    && let Some(res) = self.find_definition_for_none(handle)
                 {
-                    return res;
+                    return match self.find_definition_for_none(handle)? {
+                        Some(res) => Ok(res),
+                        None => Err(EmptyResponseReason::DefinitionNotFound {
+                            name: "None".to_owned(),
+                            context: DefinitionContext::NoneLiteral,
+                        }),
+                    };
                 }
                 // Fall back to operator handling
-                self.find_definition_for_operator(handle, &covering_nodes, preference)
+                if let Some(defs) =
+                    self.find_definition_for_operator(handle, &covering_nodes, preference)?
+                {
+                    return Ok(defs);
+                }
+                let found = covering_nodes
+                    .first()
+                    .map(|n| format!("{:?}", n.kind()))
+                    .unwrap_or_else(|| "empty".to_owned());
+                Err(EmptyResponseReason::NotAnIdentifier { found })
             }
         }
     }
@@ -1954,53 +2196,53 @@ impl<'a> Transaction<'a> {
     fn find_definition_for_none(
         &self,
         handle: &Handle,
-    ) -> Option<Vec<FindDefinitionItemWithDocstring>> {
+    ) -> Result<Option<Vec1<FindDefinitionItemWithDocstring>>, EmptyResponseReason> {
         let stdlib = self.get_stdlib(handle);
-        let answers = self.get_answers(handle)?;
+        let answers = self
+            .get_answers(handle)
+            .ok_or(EmptyResponseReason::AnswersNotFound)?;
         let none_type = answers.heap().mk_class_type(stdlib.none_type().clone());
         let symbol_def_paths = collect_symbol_def_paths(&none_type);
-        if symbol_def_paths.is_empty() {
-            None
-        } else {
-            Some(symbol_def_paths.map(|(qname, _)| {
-                let module_info = qname.module().clone();
-                FindDefinitionItemWithDocstring {
-                    metadata: DefinitionMetadata::VariableOrAttribute(Some(SymbolKind::Class)),
-                    module: module_info,
-                    definition_range: qname.range(),
-                    docstring_range: None,
-                    display_name: None,
-                }
-            }))
-        }
+        let defs = symbol_def_paths.map(|(qname, _)| {
+            let module_info = qname.module().clone();
+            FindDefinitionItemWithDocstring {
+                metadata: DefinitionMetadata::VariableOrAttribute(Some(SymbolKind::Class)),
+                module: module_info,
+                definition_range: qname.range(),
+                docstring_range: None,
+                display_name: None,
+            }
+        });
+        Ok(Vec1::try_from_vec(defs).ok())
     }
 
-    pub fn goto_definition(&self, handle: &Handle, position: TextSize) -> Vec<TextRangeWithModule> {
-        let mut definitions = self.find_definition(
-            handle,
-            position,
-            FindPreference {
-                prefer_pyi: false,
-                ..Default::default()
-            },
-        );
-        // Add pyi definitions if we haven't found any py definition
-        if definitions.is_empty() {
-            definitions.append(&mut self.find_definition(
+    pub fn goto_definition(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Result<Vec<TextRangeWithModule>, EmptyResponseReason> {
+        let definitions = self
+            .find_definition(
                 handle,
                 position,
-                FindPreference::default(),
-            ));
-        }
+                FindPreference {
+                    prefer_pyi: false,
+                    ..Default::default()
+                },
+            )
+            .or_else(|_| self.find_definition(handle, position, FindPreference::default()));
 
-        definitions.into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+        definitions.map(|defs| {
+            defs.into_vec()
+                .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+        })
     }
 
     pub fn goto_declaration(
         &self,
         handle: &Handle,
         position: TextSize,
-    ) -> Vec<TextRangeWithModule> {
+    ) -> Result<Vec<TextRangeWithModule>, EmptyResponseReason> {
         // Go-to declaration stops at intermediate definitions (imports, type stubs)
         // rather than jumping through to the final implementation
         let definitions = self.find_definition(
@@ -2009,31 +2251,37 @@ impl<'a> Transaction<'a> {
             FindPreference {
                 import_behavior: ImportBehavior::StopAtEverything,
                 prefer_pyi: true,
+                ..Default::default()
             },
-        );
+        )?;
 
-        definitions.into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+        Ok(definitions
+            .into_vec()
+            .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range)))
     }
 
     pub fn goto_type_definition(
         &self,
         handle: &Handle,
         position: TextSize,
-    ) -> Vec<TextRangeWithModule> {
+    ) -> Result<Vec<TextRangeWithModule>, EmptyResponseReason> {
         let type_ = self.get_type_at(handle, position);
 
         if let Some(t) = type_ {
             let symbol_def_paths = collect_symbol_def_paths(&t);
 
             if !symbol_def_paths.is_empty() {
-                return symbol_def_paths.map(|(qname, _)| {
+                return Ok(symbol_def_paths.map(|(qname, _)| {
                     TextRangeWithModule::new(qname.module().clone(), qname.range())
-                });
+                }));
             }
         }
 
         self.find_definition(handle, position, FindPreference::default())
-            .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+            .map(|defs| {
+                defs.into_vec()
+                    .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+            })
     }
 
     /// This function should not be used for user-facing go-to-definition. However, it is exposed to
@@ -2052,6 +2300,8 @@ impl<'a> Transaction<'a> {
                 ..Default::default()
             },
         )
+        .ok()?
+        .into_vec()
         .into_iter()
         .next()
         .map(|item| TextRangeWithModule::new(item.module, item.definition_range))
@@ -2090,7 +2340,7 @@ impl<'a> Transaction<'a> {
     ) -> Option<Vec<(String, Module, TextRange, String)>> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
-        let errors = self.get_errors(vec![handle]).collect_errors().shown;
+        let errors = self.get_errors(vec![handle]).collect_errors().ordinary;
         let mut import_actions = Vec::new();
         let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
@@ -2309,7 +2559,7 @@ impl<'a> Transaction<'a> {
     ) -> Option<Vec<(Module, TextRange, String)>> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
-        let errors = self.get_errors(vec![handle]).collect_errors().shown;
+        let errors = self.get_errors(vec![handle]).collect_errors().ordinary;
         let mut edits = Vec::new();
         for error in errors {
             if error.error_kind() != ErrorKind::RedundantCast {
@@ -2530,7 +2780,6 @@ impl<'a> Transaction<'a> {
     }
 
     /// Detect editable packages by scanning site-packages for direct_url.json files (PEP 610).
-    #[allow(dead_code)]
     fn detect_editable_packages(site_packages: &[PathBuf]) -> Vec<PathBuf> {
         let mut editable_paths = Vec::new();
 
@@ -2594,7 +2843,6 @@ impl<'a> Transaction<'a> {
     }
 
     /// Get editable source paths for the given site-packages, using cache.
-    #[allow(dead_code)]
     fn get_editable_source_paths(site_packages: &[PathBuf]) -> Vec<PathBuf> {
         let mut key: Vec<PathBuf> = site_packages.to_vec();
         key.sort();
@@ -2612,7 +2860,10 @@ impl<'a> Transaction<'a> {
     pub fn prepare_rename(&self, handle: &Handle, position: TextSize) -> Option<TextRange> {
         let identifier_context = self.identifier_at(handle, position);
 
-        let definitions = self.find_definition(handle, position, FindPreference::default());
+        let definitions = self
+            .find_definition(handle, position, FindPreference::default())
+            .map(Vec1::into_vec)
+            .unwrap_or_default();
 
         for FindDefinitionItemWithDocstring { module, .. } in definitions {
             // Block rename only if it's third-party AND not an editable install/source file.
@@ -2640,6 +2891,8 @@ impl<'a> Transaction<'a> {
                 ..Default::default()
             },
         )
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
         .into_iter()
         .filter_map(
             |FindDefinitionItemWithDocstring {
@@ -2953,14 +3206,17 @@ impl<'a> Transaction<'a> {
         if let Some(mod_module) = self.get_ast(handle) {
             let is_valid_use = |x: &ExprName| {
                 if x.id() == expected_name
-                    && let Some((def_handle, Export { location, .. })) = self.find_export_for_key(
-                        handle,
-                        &Key::BoundName(ShortIdentifier::expr_name(x)),
-                        FindPreference {
-                            import_behavior: ImportBehavior::StopAtRenamedImports,
-                            prefer_pyi: false,
-                        },
-                    )
+                    && let Some((def_handle, Export { location, .. })) = self
+                        .find_export_for_key(
+                            handle,
+                            &Key::BoundName(ShortIdentifier::expr_name(x)),
+                            FindPreference {
+                                import_behavior: ImportBehavior::StopAtRenamedImports,
+                                prefer_pyi: false,
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap_or(None)
                     && def_handle.path() == handle.path()
                     && location == definition_range
                 {
@@ -3645,7 +3901,7 @@ mod tests {
     fn param_name_for_positional_argument_marks_vararg_repeats() {
         let params = vec![
             Param::Pos(Name::new_static("x"), any_type(), Required::Required),
-            Param::VarArg(Some(Name::new_static("columns")), any_type()),
+            Param::Varargs(Some(Name::new_static("columns")), any_type()),
             Param::KwOnly(Name::new_static("kw"), any_type(), Required::Required),
         ];
 
@@ -3658,7 +3914,7 @@ mod tests {
     fn param_name_for_positional_argument_handles_missing_names() {
         let params = vec![
             Param::PosOnly(None, any_type(), Required::Required),
-            Param::VarArg(None, any_type()),
+            Param::Varargs(None, any_type()),
         ];
 
         assert!(Transaction::<'static>::param_name_for_positional_argument(&params, 0).is_none());
@@ -3670,7 +3926,7 @@ mod tests {
     fn duplicate_vararg_hints_are_not_emitted() {
         let params = vec![
             Param::Pos(Name::new_static("s"), any_type(), Required::Required),
-            Param::VarArg(Some(Name::new_static("args")), any_type()),
+            Param::Varargs(Some(Name::new_static("args")), any_type()),
             Param::KwOnly(Name::new_static("a"), any_type(), Required::Required),
         ];
 

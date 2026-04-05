@@ -1,0 +1,9 @@
+  8:23-26: typing.Type[builtins.str]
+  9:15-22: Literal['hello'] -> builtins.str
+  12:0-3: bound_method_defining_class.MyClass
+  12:6-15: bound_method_defining_class.MyClass
+  12:6-13: typing.Type[bound_method_defining_class.MyClass]
+  13:0-6: builtins.str
+  13:9-20: builtins.str
+  13:9-18: BoundMethod[bound_method_defining_class.MyClass](bound_method_defining_class.MyClass, bound_method_defining_class.MyClass.greet(bound_method_defining_class.MyClass) -> builtins.str)
+  13:9-12: bound_method_defining_class.MyClass

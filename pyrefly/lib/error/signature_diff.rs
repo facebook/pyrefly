@@ -239,7 +239,7 @@ mod tests {
             .transaction()
             .get_errors(&[handle("main")])
             .collect_errors()
-            .shown
+            .ordinary
             .iter()
             .map(|e| e.msg().to_string())
             .collect()

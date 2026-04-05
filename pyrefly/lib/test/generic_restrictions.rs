@@ -597,16 +597,14 @@ f(X())  # E: `X` is not assignable to upper bound `int | str` of type variable `
 );
 
 testcase!(
-    bug = "This should succeed with no errors",
     test_add_with_constraints,
     r#"
 def add[T: (int, str)](x: T, y: T) -> T:
-    return x + y # E: `+` is not supported between `T` and `T` # E: `+` is not supported between `T` and `T`
+    return x + y
     "#,
 );
 
 testcase!(
-    bug = "Unexpected error in add3",
     test_add_with_upper_bound,
     r#"
 # This is not allowed because it's legal to pass something like `add1(0, "1")` to this function.
@@ -619,36 +617,33 @@ def add2[T: int](x: T, y: T) -> int:
 
 # This is also ok.
 def add3[T: int | float](x: T, y: T) -> int | float:
-    return x + y # E: `+` is not supported
+    return x + y
     "#,
 );
 
 testcase!(
-    bug = "Spurious '`+` is not supported' error",
     test_add_with_upper_bound_and_bad_return_type,
     r#"
 # mypy and pyright both reject both of these, so we do, too.
 def add1[T: int](x: T, y: T) -> T:
     return x + y # E: Returned type `int` is not assignable to declared return type `T`
 def add2[T: int | float](x: T, y: T) -> T:
-    return x + y # E: `+` is not supported # E: Returned type `float | int` is not assignable to declared return type `T`
+    return x + y # E: Returned type `float | int` is not assignable to declared return type `T`
     "#,
 );
 
 testcase!(
-    bug = "This should succeed with no errors. Pyrefly pins the types too early due to https://github.com/facebook/pyrefly/issues/105",
     test_multiple_args_upper_bound,
     r#"
 from typing import assert_type
 
 def f[T: int | str](x: T, y: T): ...
-f(0, "1") # E: `Literal['1']` is not assignable to parameter `y` with type `int`
+f(0, "1")
 
 class A[T]:
     def __init__(self, x: T, y: T): ...
-# Note: pyright says the type is A[int | str]; mypy says A[object].
-# Either is okay, but A[int] is definitely wrong and we shouldn't emit the not assignable error.
-assert_type(A(0, "1"), A[int | str]) # E: assert_type(A[int], A[int | str]) # E: `Literal['1']` is not assignable to parameter `y` with type `int`
+# Note: pyright says the type is A[int | str]; mypy says A[object]. Either is ok.
+assert_type(A(0, "1"), A[int | str])
     "#,
 );
 
@@ -1047,6 +1042,26 @@ def go() -> None:
 );
 
 testcase!(
+    bug = "Fails to catch TypeVar bound violation",
+    test_nested_call_of_overloaded_function_preserves_bound,
+    r#"
+from typing import Any, overload
+
+@overload
+def unbounded[T, U](a: T, b: U) -> T: ...
+@overload
+def unbounded(**kwargs) -> Any: ...
+def unbounded(*args, **kwargs) -> Any: ...
+
+def bounded_str[T: str](x: T) -> T:
+    return x
+
+def go() -> None:
+    bounded_str(unbounded(1, 2))  # Should error: `int` is not assignable to upper bound `str` of type variable `T`
+    "#,
+);
+
+testcase!(
     bug = "Asserted type is wrong",
     test_typevar_default_is_typevar_in_function,
     r#"
@@ -1194,5 +1209,37 @@ def g(x: AnyStr) -> AnyStr:
 # Concrete calls still promote correctly.
 assert_type(f("hi"), str)
 assert_type(f(b"hi"), bytes)
+    "#,
+);
+
+testcase!(
+    bug = "Should not produce a type error; https://github.com/facebook/pyrefly/issues/2644",
+    test_anystr_none_passthrough_classmethod,
+    r#"
+from typing import AnyStr
+
+class A:
+    @classmethod
+    def create(cls, x: AnyStr | None): ...
+
+def test(x: AnyStr | None):
+    A.create(x)  # E: Argument `AnyStr | None` is not assignable to parameter `x` with type `str | None` in function `A.create`
+    "#,
+);
+
+testcase!(
+    test_do_not_match_multiple_constraints,
+    r#"
+def f[T: (int, str)](x: T, y: T): ...
+f(0, "wrong")  # E: `Literal['wrong']` is not assignable to parameter `y` with type `int`
+    "#,
+);
+
+testcase!(
+    bug = "TODO(https://github.com/facebook/pyrefly/issues/105): error message should also flag `Literal['oops']`",
+    test_multiple_bad_specialization,
+    r#"
+def f[T: int](x: T, y: T): ...
+f("oops", None)  # E: `None` is not assignable to upper bound `int`
     "#,
 );

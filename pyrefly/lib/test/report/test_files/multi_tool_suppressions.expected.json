@@ -1,0 +1,54 @@
+{
+  "name": "test",
+  "names": [],
+  "line_count": 10,
+  "symbol_reports": [],
+  "type_ignores": [
+    {
+      "kind": "type",
+      "codes": [
+        "assignment"
+      ],
+      "location": {
+        "line": 6,
+        "column": 8
+      }
+    },
+    {
+      "kind": "pyright",
+      "codes": [
+        "reportGeneralClassIssue"
+      ],
+      "location": {
+        "line": 7,
+        "column": 8
+      }
+    },
+    {
+      "kind": "pyrefly",
+      "codes": [
+        "error-code"
+      ],
+      "location": {
+        "line": 8,
+        "column": 8
+      }
+    },
+    {
+      "kind": "pyre",
+      "codes": [
+        "7"
+      ],
+      "location": {
+        "line": 9,
+        "column": 8
+      }
+    }
+  ],
+  "n_typable": 0,
+  "n_typed": 0,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0
+}

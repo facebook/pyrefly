@@ -756,6 +756,10 @@
                 "start": 60
               },
               "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
                 "name": {
                   "id": 0,
                   "key": "typing.Union"

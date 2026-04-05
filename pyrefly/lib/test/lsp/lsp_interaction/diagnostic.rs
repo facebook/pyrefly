@@ -285,7 +285,10 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
 
 /// Test opening a file while a recheck for another file is happening.
 /// Start with only b open, then open file d while a recheck for b is happening.
+// TODO: Flaky on GitHub CI — disabled until stabilized.
+// https://github.com/facebook/pyrefly/actions/runs/23870936742/job/69602458839
 #[test]
+#[ignore]
 fn test_open_file_during_recheck() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
@@ -1671,4 +1674,55 @@ fn test_no_diagnostics_for_non_open_files_in_open_files_only_mode() {
         "Received unexpected publishDiagnostics for non-open file: {}",
         non_open_file.display()
     );
+}
+
+#[test]
+fn test_deprecated_diagnostic_tag() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]));
+
+    interaction.client.did_open("deprecated_function.py");
+
+    interaction
+        .client
+        .diagnostic("deprecated_function.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "deprecated",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#deprecated"
+                    },
+                    "message": "`old_function` is deprecated\n  use new_function instead",
+                    "range": {
+                        "start": {"line": 12, "character": 0},
+                        "end": {"line": 12, "character": 12}
+                    },
+                    "severity": 2,
+                    "source": "Pyrefly",
+                    "tags": [2]
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
 }

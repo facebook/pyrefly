@@ -469,7 +469,7 @@ files = ["mypy.py"]
         let output = fs_anyhow::read_to_string(&pyrefly_config_path)?;
         assert_eq!(
             output.trim(),
-            r#"untyped-def-behavior = "skip-and-infer-return-any""#
+            "check-unannotated-defs = false\ninfer-return-types = \"never\""
         );
         Ok(())
     }

@@ -148,7 +148,10 @@ impl DebugInfo {
                         answers,
                         &mut res
                     ));
-                    let errors = errors.collect(&error_config).shown.map(|e| Error {
+                    let collected = errors.collect(&error_config);
+                    let mut output_errors = collected.ordinary;
+                    output_errors.extend(collected.directives);
+                    let errors = output_errors.map(|e| Error {
                         location: e.display_range().to_string(),
                         message: e.msg().to_owned(),
                     });

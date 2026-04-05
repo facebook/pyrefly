@@ -129,7 +129,9 @@ fn dump_config(
             ConfigSource::Synthetic => {
                 println!("Default configuration");
             }
-            ConfigSource::PythonToolMarker(path) | ConfigSource::Marker(path) => {
+            ConfigSource::PythonToolMarker(path)
+            | ConfigSource::Marker(path)
+            | ConfigSource::FailedParse(path) => {
                 println!(
                     "Default configuration for project root marked by `{}`",
                     path.display()

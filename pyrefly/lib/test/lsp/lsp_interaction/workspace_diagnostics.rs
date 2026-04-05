@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::DiagnosticSeverity;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Url;
 use lsp_types::notification::Notification as _;
@@ -17,7 +18,7 @@ use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
 use crate::util::get_test_files_root;
 
-/// Test 1: Non-open file gets diagnostics in workspace mode.
+/// Non-open file gets diagnostics in workspace mode.
 ///
 /// When `diagnosticMode` is set to `"workspace"`, opening any file from a
 /// project triggers indexing of the entire project via
@@ -60,7 +61,97 @@ fn test_workspace_diagnostics_for_non_open_file() {
     interaction.shutdown().unwrap();
 }
 
-/// Test 2: `did_close` preserves diagnostics in workspace mode.
+/// Clean non-open workspace files should not be published.
+///
+/// In workspace diagnostic mode, a non-open file with no diagnostics should
+/// not receive an empty `publishDiagnostics` notification. There is nothing to
+/// clear for that URI, so sending the notification only creates traffic and log
+/// spam on large workspaces.
+#[test]
+fn test_workspace_diagnostics_skip_clean_non_open_file() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("workspace_diagnostics");
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "workspace_diagnostics".to_owned(),
+                Url::from_file_path(root_path.clone()).unwrap(),
+            )]),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("clean.py");
+
+    let error_path = root_path.join("errors.py");
+    let clean_path = root_path.join("extra_clean.py");
+    interaction
+        .client
+        .expect_message(
+            "publishDiagnostics for errors.py without any publish for extra_clean.py",
+            |msg| {
+                if let Message::Notification(n) = &msg
+                    && n.method == PublishDiagnostics::METHOD
+                {
+                    let params: PublishDiagnosticsParams =
+                        serde_json::from_value(n.params.clone()).unwrap();
+                    let path = params.uri.to_file_path().unwrap();
+                    if path == clean_path {
+                        return Some(Err(crate::object_model::LspMessageError::Custom {
+                            description: format!(
+                                "Did not expect publishDiagnostics for clean non-open file {}",
+                                clean_path.display()
+                            ),
+                        }));
+                    }
+                    if path == error_path && params.diagnostics.len() == 1 {
+                        return Some(Ok(()));
+                    }
+                }
+                None
+            },
+        )
+        .unwrap();
+
+    let shutdown_handle = interaction.client.send_shutdown();
+    let shutdown_id = shutdown_handle.id.clone();
+    interaction
+        .client
+        .expect_message(
+            "shutdown response without any later publish for extra_clean.py",
+            |msg| {
+                if let Message::Notification(n) = &msg
+                    && n.method == PublishDiagnostics::METHOD
+                {
+                    let params: PublishDiagnosticsParams =
+                        serde_json::from_value(n.params.clone()).unwrap();
+                    if params.uri.to_file_path().unwrap() == clean_path {
+                        return Some(Err(crate::object_model::LspMessageError::Custom {
+                            description: format!(
+                                "Did not expect a later publishDiagnostics for clean non-open file {}",
+                                clean_path.display()
+                            ),
+                        }));
+                    }
+                }
+                if let Message::Response(r) = &msg
+                    && r.id == shutdown_id
+                {
+                    return Some(Ok(()));
+                }
+                None
+            },
+        )
+        .unwrap();
+    interaction.client.send_exit();
+}
+
+/// `did_close` preserves diagnostics in workspace mode.
 ///
 /// When a file is opened and then closed in workspace diagnostic mode, its
 /// diagnostics should not be cleared — the file transitions from versioned
@@ -141,7 +232,7 @@ fn test_workspace_diagnostics_preserved_after_did_close() {
     interaction.shutdown().unwrap();
 }
 
-/// Test 3: Default workspace guardrail.
+/// Default workspace guardrail.
 ///
 /// When `diagnosticMode` is set to `"workspace"` but there are no explicit
 /// workspace folders, workspace diagnostics should NOT be published. The
@@ -183,7 +274,7 @@ fn test_workspace_diagnostics_not_published_without_workspace_folders() {
     interaction.shutdown().unwrap();
 }
 
-/// Test 4: Workspace diagnostics are scoped to config-covered files.
+/// Workspace diagnostics are scoped to config-covered files.
 ///
 /// When `diagnosticMode` is set to `"workspace"`, only files covered by a
 /// discovered pyrefly config should receive workspace diagnostics. Opening
@@ -233,7 +324,7 @@ fn test_workspace_diagnostics_scoped_to_config() {
     interaction.shutdown().unwrap();
 }
 
-/// Test 5: `did_close` clears diagnostics for file outside workspace folders.
+/// `did_close` clears diagnostics for file outside workspace folders.
 ///
 /// A file that is NOT under any explicit workspace folder resolves to the
 /// catch-all default workspace, which always uses `OpenFilesOnly` mode.
@@ -285,7 +376,7 @@ fn test_did_close_clears_diagnostics_outside_workspace_folder() {
     interaction.shutdown().unwrap();
 }
 
-/// Test 6: Multiple configs under one workspace root.
+/// Multiple configs under one workspace root.
 ///
 /// When a workspace root contains multiple pyrefly configs in different
 /// subdirectories, opening a file from each project triggers indexing of
@@ -359,7 +450,7 @@ fn test_workspace_diagnostics_multiple_configs() {
     interaction.shutdown().unwrap();
 }
 
-/// Test 7: Config above workspace root is discovered via upward search.
+/// Config above workspace root is discovered via upward search.
 ///
 /// When the workspace root is a subdirectory but the pyrefly config lives in
 /// a parent directory, opening a file triggers `populate_project_files_if_necessary`
@@ -403,7 +494,7 @@ fn test_workspace_diagnostics_config_above_root() {
     interaction.shutdown().unwrap();
 }
 
-/// Test 8: Switching from workspace to openFilesOnly clears diagnostics.
+/// Switching from workspace to openFilesOnly clears diagnostics.
 ///
 /// When `diagnosticMode` changes from `"workspace"` to `"openFilesOnly"`,
 /// diagnostics for non-open files should be cleared. We first open `clean.py`
@@ -459,7 +550,89 @@ fn test_workspace_diagnostics_cleared_on_mode_switch() {
     interaction.shutdown().unwrap();
 }
 
-/// Test 9: Deleting a non-open file clears its workspace diagnostics.
+/// `did_close` does not produce stale "memory path not found" diagnostics.
+///
+/// When a file is opened (creating an in-memory handle) and then closed in
+/// workspace mode, the Memory handle's backing content is cleared. If workspace
+/// diagnostics are published for the stale Memory handle, `Load::load_from_path`
+/// fails with "memory path not found". This test verifies that closing a file
+/// does not cause such false errors to appear for it.
+#[test]
+fn test_did_close_no_stale_memory_path_errors() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("workspace_diagnostics");
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "workspace_diagnostics".to_owned(),
+                Url::from_file_path(root_path.clone()).unwrap(),
+            )]),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    let errors_path = root_path.join("errors.py");
+
+    // Open errors.py — triggers project indexing and creates a Memory handle.
+    interaction.client.did_open("errors.py");
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(errors_path.clone(), 1)
+        .expect("Expected 1 diagnostic for open errors.py");
+
+    // Close errors.py — the Memory handle's content is cleared, but the handle
+    // may linger in committed state.
+    interaction.client.did_close("errors.py");
+
+    // Send shutdown to fence the message queue. The server processes all pending
+    // work (including any async recheck from did_close) before responding to
+    // shutdown. Drain all messages until the shutdown response, checking every
+    // publishDiagnostics notification for the stale error.
+    let shutdown_handle = interaction.client.send_shutdown();
+    let shutdown_id = shutdown_handle.id.clone();
+    let saw_stale_error = interaction
+        .client
+        .expect_message(
+            "drain all messages until shutdown (checking no stale memory errors)",
+            move |msg| {
+                match msg {
+                    Message::Notification(n) if n.method == PublishDiagnostics::METHOD => {
+                        let params: PublishDiagnosticsParams =
+                            serde_json::from_value(n.params).unwrap();
+                        let path = params.uri.to_file_path().unwrap();
+                        if path == errors_path
+                            && params
+                                .diagnostics
+                                .iter()
+                                .any(|d| d.message.contains("memory path not found"))
+                        {
+                            return Some(Ok(true));
+                        }
+                    }
+                    Message::Response(r) if r.id == shutdown_id => {
+                        // Shutdown response — all server work is done.
+                        return Some(Ok(false));
+                    }
+                    _ => {}
+                }
+                None
+            },
+        )
+        .expect("Expected shutdown response");
+    assert!(
+        !saw_stale_error,
+        "errors.py received 'memory path not found' diagnostic after did_close — stale Memory handle bug"
+    );
+
+    interaction.client.send_exit();
+}
+
+/// Deleting a non-open file clears its workspace diagnostics.
 ///
 /// When a non-open file with workspace diagnostics is deleted from disk and
 /// a `DidChangeWatchedFiles` notification fires with `FileChangeType::Deleted`,
@@ -505,6 +678,138 @@ fn test_workspace_diagnostics_cleared_on_file_delete() {
         .client
         .expect_publish_diagnostics_eventual_error_count(errors_path, 0)
         .expect("Diagnostics should be cleared for deleted errors.py");
+
+    interaction.shutdown().unwrap();
+}
+
+/// Warning-severity diagnostics follow open/close transitions.
+///
+/// In workspace diagnostic mode, non-open files should only receive
+/// error-severity diagnostics. Warning-severity diagnostics should be
+/// restricted to files that are currently open in the editor.
+///
+/// `warning.py` has both a `bad-assignment` (error) and a `bad-return`
+/// (configured as warn in pyrefly.toml). When non-open, only the error
+/// should be published. When opened, both the error and the warning
+/// should appear. When closed again, the file should transition back to
+/// non-open diagnostics and drop the warning. This guards against stale
+/// open-file warnings lingering after `did_close`.
+#[test]
+fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("workspace_diagnostics_severity");
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "workspace_diagnostics_severity".to_owned(),
+                Url::from_file_path(root_path.clone()).unwrap(),
+            )]),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    // Open clean.py to trigger project indexing.
+    interaction.client.did_open("clean.py");
+
+    // warning.py (non-open) has both an error (bad-assignment) and a
+    // warning (bad-return configured as warn). Only the error should be
+    // published for non-open files.
+    let warning_path = root_path.join("warning.py");
+    let warning_path_clone = warning_path.clone();
+    interaction
+        .client
+        .expect_message(
+            "publishDiagnostics for non-open warning.py with only error-severity diagnostics",
+            move |msg| {
+                if let Message::Notification(n) = msg
+                    && n.method == PublishDiagnostics::METHOD
+                {
+                    let params: PublishDiagnosticsParams =
+                        serde_json::from_value(n.params).unwrap();
+                    let path = params.uri.to_file_path().unwrap();
+                    if path == warning_path_clone && !params.diagnostics.is_empty() {
+                        // All published diagnostics should be error-severity.
+                        let all_errors = params
+                            .diagnostics
+                            .iter()
+                            .all(|d| d.severity == Some(DiagnosticSeverity::ERROR));
+                        if all_errors {
+                            return Some(Ok(()));
+                        }
+                    }
+                }
+                None
+            },
+        )
+        .expect("Non-open warning.py should only have error-severity diagnostics");
+
+    // Now open warning.py. The warning diagnostic should appear alongside
+    // the error, proving it exists but was filtered from workspace publishing.
+    interaction.client.did_open("warning.py");
+    interaction
+        .client
+        .expect_message(
+            "publishDiagnostics for opened warning.py with both error and warning",
+            move |msg| {
+                if let Message::Notification(n) = msg
+                    && n.method == PublishDiagnostics::METHOD
+                {
+                    let params: PublishDiagnosticsParams =
+                        serde_json::from_value(n.params).unwrap();
+                    let path = params.uri.to_file_path().unwrap();
+                    if path == warning_path {
+                        let has_error = params
+                            .diagnostics
+                            .iter()
+                            .any(|d| d.severity == Some(DiagnosticSeverity::ERROR));
+                        let has_warning = params
+                            .diagnostics
+                            .iter()
+                            .any(|d| d.severity == Some(DiagnosticSeverity::WARNING));
+                        if has_error && has_warning {
+                            return Some(Ok(()));
+                        }
+                    }
+                }
+                None
+            },
+        )
+        .expect("Opened warning.py should have both error and warning diagnostics");
+
+    // Close warning.py again. The warning should disappear immediately,
+    // proving the file transitioned back to non-open workspace diagnostics.
+    let warning_path = root_path.join("warning.py");
+    interaction.client.did_close("warning.py");
+    interaction
+        .client
+        .expect_message(
+            "publishDiagnostics for closed warning.py with only error-severity diagnostics",
+            move |msg| {
+                if let Message::Notification(n) = msg
+                    && n.method == PublishDiagnostics::METHOD
+                {
+                    let params: PublishDiagnosticsParams =
+                        serde_json::from_value(n.params).unwrap();
+                    let path = params.uri.to_file_path().unwrap();
+                    if path == warning_path && !params.diagnostics.is_empty() {
+                        let all_errors = params
+                            .diagnostics
+                            .iter()
+                            .all(|d| d.severity == Some(DiagnosticSeverity::ERROR));
+                        if all_errors {
+                            return Some(Ok(()));
+                        }
+                    }
+                }
+                None
+            },
+        )
+        .expect("Closed warning.py should return to only error-severity diagnostics");
 
     interaction.shutdown().unwrap();
 }

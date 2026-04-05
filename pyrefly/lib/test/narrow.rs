@@ -160,6 +160,42 @@ def f2(x: E | int):
 );
 
 testcase!(
+    test_ellipsis_is,
+    r#"
+from typing import reveal_type
+from types import EllipsisType
+
+def f(x: int | EllipsisType):
+    if x is ...:
+        reveal_type(x)  # E: Ellipsis
+    else:
+        reveal_type(x)  # E: int
+    if x is not ...:
+        reveal_type(x)  # E: int
+    else:
+        reveal_type(x)  # E: Ellipsis
+    "#,
+);
+
+testcase!(
+    test_ellipsis_eq,
+    r#"
+from typing import reveal_type
+from types import EllipsisType
+
+def f(x: int | EllipsisType):
+    if x == ...:
+        reveal_type(x)  # E: Ellipsis
+    else:
+        reveal_type(x)  # E: int
+    if x != ...:
+        reveal_type(x)  # E: int
+    else:
+        reveal_type(x)  # E: Ellipsis
+    "#,
+);
+
+testcase!(
     test_tri_enum,
     r#"
 from typing import assert_type, Literal
@@ -688,6 +724,25 @@ def f(x: str | int | None):
         assert_type(x, str | int)
     else:
         assert_type(x, None)
+    "#,
+);
+
+testcase!(
+    test_isinstance_union_with_type,
+    r#"
+from typing import assert_type
+def f(x: object):
+    if isinstance(x, type | int):
+        assert_type(x, type | int)
+    isinstance(x, type | int)
+    "#,
+);
+
+testcase!(
+    test_issubclass_union_with_type,
+    r#"
+def f(cls: type):
+    issubclass(cls, type | int)
     "#,
 );
 
@@ -1865,6 +1920,32 @@ def test_type_objects_mixed_with_literals(x: type[int] | type[float] | None, y: 
 );
 
 testcase!(
+    test_narrow_in_with_metaclass,
+    r#"
+class FruitMeta(type):
+    ...
+
+class Fruit(metaclass=FruitMeta):
+    ...
+
+class Banana(Fruit):
+    ...
+
+class Grape(Fruit):
+    ...
+
+def foo(_a: FruitMeta) -> None:
+    return None
+
+def main(a: type[Fruit]) -> None:
+    if a in (Banana,):
+        foo(a)
+    if a in (Grape, Banana):
+        foo(a)
+"#,
+);
+
+testcase!(
     test_narrow_in_with_starred,
     r#"
 from typing import Literal, assert_type
@@ -2938,5 +3019,67 @@ def test3(x: V) -> V:
     else:
         assert_type(x, Never)
         return x
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2607
+testcase!(
+    test_narrow_sequence_to_tuple_return,
+    r#"
+from typing import Sequence
+
+def f(x: Sequence[int]) -> tuple[int, ...]:
+    if isinstance(x, tuple):
+        return x
+    return tuple(x)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2607
+testcase!(
+    test_narrow_sequence_to_tuple_assert_type,
+    r#"
+from typing import Sequence, assert_type
+
+def seq_int(x: Sequence[int]):
+    if isinstance(x, tuple):
+        assert_type(x, tuple[int, ...])
+
+def seq_str(x: Sequence[str]):
+    if isinstance(x, tuple):
+        assert_type(x, tuple[str, ...])
+"#,
+);
+
+testcase!(
+    test_narrow_to_named_tuple,
+    r#"
+from typing import NamedTuple, Sequence, assert_type
+
+class Point(NamedTuple):
+    x: int
+    y: str
+
+def f(x: Sequence[int]) -> Point:
+    if isinstance(x, Point):
+        return x
+    raise ValueError
+
+def g(x: object):
+    if isinstance(x, Point):
+        assert_type(x, Point)
+        assert_type(x.x, int)
+        assert_type(x.y, str)
+"#,
+);
+
+testcase!(
+    test_narrow_concrete_tuple_to_tuple,
+    r#"
+from typing import assert_type
+
+def f(x: tuple[int, str] | int):
+    if isinstance(x, tuple):
+        assert_type(x, tuple[int, str])
 "#,
 );

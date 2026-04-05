@@ -81,8 +81,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// check we just ran. If it was not, return `None`.
     fn resolve_var_opt(&self, ty: &Type, var: Var) -> Option<Type> {
         let res = self.resolve_var(ty, var);
-        // TODO: Really want to check if the Var is constrained in any way.
-        // No way to do that currently, but this is close.
         if matches!(res, Type::Var(..)) {
             None
         } else {
@@ -117,7 +115,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match ty {
             Type::Any(style) => self.heap.mk_any(*style),
             Type::Never(style) => self.heap.mk_never_style(*style),
-            _ => self.solver().expand_vars(var.to_type(self.heap)),
+            _ => self.solver().expand_unwrap(var),
         }
     }
 
@@ -259,52 +257,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_iterable(&self, ty: &Type) -> Option<Type> {
-        // Distribute over union members so each gets its own fresh type
-        // variable. Checking the whole union at once fails because the solver
-        // pins the variable on the first member, then rejects later members
-        // with different element types.
-        let mut failed = false;
-        let result = self.distribute_over_union(ty, |member| {
-            let iter_ty = self.fresh_var();
-            let iterable_ty = self
-                .heap
-                .mk_class_type(self.stdlib.iterable(iter_ty.to_type(self.heap)));
-            if self.is_subset_eq(member, &iterable_ty) {
-                self.resolve_var(member, iter_ty)
-            } else {
-                failed = true;
-                self.heap.mk_never()
-            }
-        });
-        if failed { None } else { Some(result) }
+        let iter_ty = self.fresh_var();
+        let iterable_ty = self
+            .heap
+            .mk_class_type(self.stdlib.iterable(iter_ty.to_type(self.heap)));
+        if self.is_subset_eq(ty, &iterable_ty) {
+            Some(self.resolve_var(ty, iter_ty))
+        } else {
+            None
+        }
     }
 
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_async_iterable(&self, ty: &Type) -> Option<Type> {
-        let mut failed = false;
-        let result = self.distribute_over_union(ty, |member| {
-            let iter_ty = self.fresh_var();
-            let iterable_ty = self
-                .heap
-                .mk_class_type(self.stdlib.async_iterable(iter_ty.to_type(self.heap)));
-            if self.is_subset_eq(member, &iterable_ty) {
-                self.resolve_var(member, iter_ty)
-            } else {
-                failed = true;
-                self.heap.mk_never()
-            }
-        });
-        if failed { None } else { Some(result) }
-    }
-
-    /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
-    pub fn unwrap_async_iterator(&self, ty: &Type) -> Option<Type> {
-        let var = self.fresh_var();
-        let iterator_ty = self
+        let iter_ty = self.fresh_var();
+        let iterable_ty = self
             .heap
-            .mk_class_type(self.stdlib.async_iterator(var.to_type(self.heap)));
-        if self.is_subset_eq(ty, &iterator_ty) {
-            Some(self.resolve_var(ty, var))
+            .mk_class_type(self.stdlib.async_iterable(iter_ty.to_type(self.heap)));
+        if self.is_subset_eq(ty, &iterable_ty) {
+            Some(self.resolve_var(ty, iter_ty))
         } else {
             None
         }
@@ -403,25 +374,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn decompose_generator(&self, ty: &Type) -> Option<(Type, Type, Type)> {
-        let yield_ty = self.fresh_var();
-        let send_ty = self.fresh_var();
-        let return_ty = self.fresh_var();
-        let generator_ty = self.heap.mk_class_type(self.stdlib.generator(
-            yield_ty.to_type(self.heap),
-            send_ty.to_type(self.heap),
-            return_ty.to_type(self.heap),
-        ));
-        if self.is_subset_eq(&generator_ty, ty) {
-            let yield_ty: Type = self.resolve_var_opt(ty, yield_ty)?;
-            let send_ty = self
-                .resolve_var_opt(ty, send_ty)
-                .unwrap_or_else(|| self.heap.mk_none());
-            let return_ty = self
-                .resolve_var_opt(ty, return_ty)
-                .unwrap_or_else(|| self.heap.mk_none());
-            Some((yield_ty, send_ty, return_ty))
-        } else {
-            None
+        match ty {
+            Type::Union(u) => {
+                let mut yield_tys = Vec::new();
+                let mut send_tys = Vec::new();
+                let mut return_tys = Vec::new();
+                for member in &u.members {
+                    let (y, s, r) = self.decompose_generator(member)?;
+                    yield_tys.push(y);
+                    send_tys.push(s);
+                    return_tys.push(r);
+                }
+                Some((
+                    self.unions(yield_tys),
+                    self.unions(send_tys),
+                    self.unions(return_tys),
+                ))
+            }
+            _ => {
+                let yield_ty = self.fresh_var();
+                let send_ty = self.fresh_var();
+                let return_ty = self.fresh_var();
+                let generator_ty = self.heap.mk_class_type(self.stdlib.generator(
+                    yield_ty.to_type(self.heap),
+                    send_ty.to_type(self.heap),
+                    return_ty.to_type(self.heap),
+                ));
+                if self.is_subset_eq(&generator_ty, ty) {
+                    let yield_ty: Type = self.resolve_var_opt(ty, yield_ty)?;
+                    let send_ty = self
+                        .resolve_var_opt(ty, send_ty)
+                        .unwrap_or_else(|| self.heap.mk_none());
+                    let return_ty = self
+                        .resolve_var_opt(ty, return_ty)
+                        .unwrap_or_else(|| self.heap.mk_none());
+                    Some((yield_ty, send_ty, return_ty))
+                } else {
+                    None
+                }
+            }
         }
     }
 

@@ -259,6 +259,19 @@ type Z = int | Y  # E: cyclic self-reference in `Z`
 );
 
 testcase!(
+    test_cyclic_mutual_usage,
+    r#"
+# Mutually recursive type aliases with no base case should not stack overflow
+# when the aliases are used in expressions. 
+type T = U  # E: cyclic self-reference in `T`
+type U = T  # E: cyclic self-reference in `U`
+
+x: T = 1
+not x
+    "#,
+);
+
+testcase!(
     test_cyclic_no_base_case,
     r#"
 # These have no base case — every value would be infinitely nested.

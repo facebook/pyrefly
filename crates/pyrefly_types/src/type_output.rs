@@ -216,7 +216,6 @@ mod tests {
             NestingContext::toplevel(),
             mi,
             None,
-            starlark_map::small_map::SmallMap::new(),
         )
     }
 

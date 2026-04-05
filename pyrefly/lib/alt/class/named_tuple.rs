@@ -31,20 +31,22 @@ use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_named_tuple_elements(&self, cls: &Class, errors: &ErrorCollector) -> SmallSet<Name> {
-        let fields_count = cls.fields().len();
-        let mut elements = Vec::with_capacity(fields_count);
-        for name in cls.fields() {
-            if !cls.is_field_annotated(name) {
+        let Some(class_fields) = self.get_class_fields(cls) else {
+            return SmallSet::new();
+        };
+        let mut elements = Vec::with_capacity(class_fields.len());
+        for name in class_fields.names() {
+            if !class_fields.is_field_annotated(name) {
                 continue;
             }
-            if let Some(range) = cls.field_decl_range(name) {
+            if let Some(range) = class_fields.field_decl_range(name) {
                 elements.push((name.clone(), range));
             }
         }
         elements.sort_by_key(|e: &(Name, ruff_text_size::TextRange)| e.1.start());
         let mut has_seen_default: bool = false;
         for (name, range) in &elements {
-            let has_default = cls.is_field_initialized_on_class(name);
+            let has_default = class_fields.is_field_initialized_on_class(name);
             if !has_default && has_seen_default {
                 self.error(
                     errors,
@@ -107,7 +109,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         has_dynamic_fields: bool,
     ) -> ClassSynthesizedField {
         let mut params = vec![Param::Pos(
-            Name::new_static("cls"),
+            Name::new_static("_cls"),
             self.heap
                 .mk_type_form(self.heap.mk_self_type(self.as_class_type_unchecked(cls))),
             Required::Required,
@@ -116,7 +118,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // The known fields are interleaved with dynamically-resolved fields
             // at unknown positions, so we can't synthesize accurate positional
             // params. Accept everything and rely on runtime behavior.
-            params.push(Param::VarArg(None, self.heap.mk_any_implicit()));
+            params.push(Param::Varargs(None, self.heap.mk_any_implicit()));
             params.push(Param::Kwargs(None, self.heap.mk_any_implicit()));
         } else {
             params.extend(self.get_named_tuple_field_params(cls, elements));
@@ -135,7 +137,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let params = vec![
             self.class_self_param(cls, false),
             // NamedTuple.__init__ accepts any args at runtime; rely on __new__ for checking.
-            Param::VarArg(None, self.heap.mk_any_implicit()),
+            Param::Varargs(None, self.heap.mk_any_implicit()),
             Param::Kwargs(None, self.heap.mk_any_implicit()),
         ];
         let ty = self.heap.mk_function(Function {

@@ -35,6 +35,7 @@ use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::Connection;
+use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::init_test;
 
 #[derive(Default)]
@@ -435,6 +436,33 @@ impl TestTspClient {
             }
         }
     }
+
+    /// Receive messages until a Notification with the given method is found,
+    /// skipping any other messages. Returns the notification params.
+    pub fn expect_notification(&self, method: &str) -> serde_json::Value {
+        loop {
+            match self.receiver.recv_timeout(self.timeout) {
+                Ok(msg) => {
+                    eprintln!(
+                        "client<---server {}",
+                        serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+                    );
+                    if let Message::Notification(ref n) = msg
+                        && n.method == method
+                    {
+                        return n.params.clone();
+                    }
+                    // Skip non-matching messages
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    panic!("Timeout waiting for notification '{method}'");
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("Channel disconnected waiting for notification '{method}'");
+                }
+            }
+        }
+    }
 }
 
 pub struct TspInteraction {
@@ -462,9 +490,16 @@ impl TspInteraction {
 
         // Spawn the server thread and store its handle
         let thread_handle = thread::spawn(move || {
-            run_tsp(conn_server, server_reader, args, &NoTelemetry, None)
-                .map(|_| ())
-                .map_err(|e| std::io::Error::other(e.to_string()))
+            run_tsp(
+                conn_server,
+                server_reader,
+                args,
+                &NoTelemetry,
+                None,
+                TEST_THREAD_COUNT,
+            )
+            .map(|_| ())
+            .map_err(|e| std::io::Error::other(e.to_string()))
         });
 
         server.server_thread = Some(thread_handle);

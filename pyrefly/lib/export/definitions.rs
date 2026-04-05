@@ -163,8 +163,10 @@ pub struct Definitions {
     pub implicitly_imported_submodules: SmallSet<Name>,
     /// Deprecated names that are defined in this module.
     pub deprecated: SmallMap<Name, Deprecation>,
-    /// Names that are marked `Final`
-    pub final_names: SmallSet<Name>,
+    /// Names that are marked `Final`, with their string literal value if assigned one.
+    /// The `Option<String>` is `Some` when the RHS is a string literal (e.g. `X: Final = "x"`),
+    /// used to resolve Final variable references in synthesized class field names.
+    pub final_names: SmallMap<Name, Option<String>>,
     /// Special exports defined in this module
     pub special_exports: SmallMap<Name, SpecialExport>,
     /// Names that are read (not just defined) in this scope.
@@ -673,6 +675,14 @@ impl DefinitionsBuilder {
                     }
                 }
                 let has_final_annotation = is_final_annotation(&x.annotation);
+                let final_string_value = if has_final_annotation {
+                    match x.value.as_deref() {
+                        Some(Expr::StringLiteral(s)) => Some(s.value.to_string()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 match &*x.target {
                     Expr::Name(x) => {
                         self.add_name(
@@ -684,7 +694,9 @@ impl DefinitionsBuilder {
                             ),
                         );
                         if has_final_annotation {
-                            self.inner.final_names.insert(x.id.clone());
+                            self.inner
+                                .final_names
+                                .insert(x.id.clone(), final_string_value);
                         }
                     }
                     _ => self.expr_lvalue(&x.target),

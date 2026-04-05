@@ -17,6 +17,7 @@ use ruff_python_ast::Stmt;
 use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use vec1::Vec1;
 
 use super::extract_shared::line_end_position;
 use super::extract_shared::line_indent_and_start;
@@ -47,7 +48,10 @@ pub(crate) fn safe_delete_code_actions(
     let ast = transaction.get_ast(handle)?;
     let position = selection.start();
     let identifier = transaction.identifier_at(handle, position)?;
-    let definitions = transaction.find_definition(handle, position, FindPreference::default());
+    let definitions = transaction
+        .find_definition(handle, position, FindPreference::default())
+        .map(Vec1::into_vec)
+        .unwrap_or_default();
     if definitions.len() != 1 {
         return None;
     }

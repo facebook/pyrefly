@@ -125,6 +125,11 @@ pub struct LocatedType {
     /// True when the narrowed and unnarrowed types have different structural hashes.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub is_narrowed_mismatch: bool,
+    /// Index into the type table for the contextual type, when the expression
+    /// flows into a slot with a different type than the inferred type (e.g. a
+    /// literal assigned to a `__static__` primitive variable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contextual_type: Option<usize>,
 }
 
 // ---------------------------------------------------------------------------

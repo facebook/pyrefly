@@ -41,6 +41,7 @@ use crate::binding::binding::Keyed;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
+use crate::binding::metadata::BindingsMetadata;
 use crate::binding::table::TableKeyed;
 use crate::config::base::RecursionLimitConfig;
 use crate::dispatch_anyidx;
@@ -48,6 +49,8 @@ use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
+use crate::report::cinderx::CinderxSolutions;
+use crate::report::pysa::PysaSolutions;
 use crate::solver::solver::Solver;
 use crate::solver::solver::VarRecurser;
 use crate::state::ide::IntermediateDefinition;
@@ -58,6 +61,8 @@ use crate::table_for_each;
 use crate::table_mut_for_each;
 use crate::table_try_for_each;
 use crate::types::callable::Callable;
+use crate::types::class::Class;
+use crate::types::class::ClassFields;
 use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;
 use crate::types::heap::TypeHeap;
@@ -218,7 +223,12 @@ table!(
 pub struct Solutions {
     module_info: ModuleInfo,
     table: SolutionsTable,
+    metadata: Arc<BindingsMetadata>,
     index: Option<Arc<Mutex<Index>>>,
+    /// Per-module pysa data, populated when pysa reporting is enabled.
+    pysa_solutions: Option<Arc<PysaSolutions>>,
+    /// Per-module cinderx data, populated when cinderx reporting is enabled.
+    cinderx_solutions: Option<Arc<CinderxSolutions>>,
 }
 
 impl Display for Solutions {
@@ -286,7 +296,20 @@ impl Display for SolutionsDifference<'_> {
 }
 
 impl Solutions {
-    #[allow(dead_code)] // Used in tests.
+    pub fn metadata(&self) -> &Arc<BindingsMetadata> {
+        &self.metadata
+    }
+
+    /// Access per-module pysa data, if pysa reporting was enabled.
+    pub fn pysa_solutions(&self) -> Option<&Arc<PysaSolutions>> {
+        self.pysa_solutions.as_ref()
+    }
+
+    /// Access per-module cinderx data, if cinderx reporting was enabled.
+    pub fn cinderx_solutions(&self) -> Option<&Arc<CinderxSolutions>> {
+        self.cinderx_solutions.as_ref()
+    }
+
     pub fn get<K: Exported>(&self, key: &K) -> &Arc<<K as Keyed>::Answer>
     where
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
@@ -604,6 +627,18 @@ pub trait LookupAnswer: Sized {
     ///
     /// Default implementation is a no-op.
     fn write_unlock_empty_in_module(&self, _calc_id: &CalcId) {}
+
+    /// Look up the class fields for a class, which may be defined in another
+    /// module. The fields are populated during the binding phase and can be
+    /// queried without going through the solve code path.
+    ///
+    /// Returns `None` if the `ClassDefIndex` is stale (e.g., the target module
+    /// was rebuilt with fewer classes during incremental recompilation).
+    ///
+    /// Implementations must register a class-level dependency so that
+    /// incremental rebuilds properly invalidate dependents when class
+    /// fields change.
+    fn get_class_fields(&self, cls: &Class) -> Option<&ClassFields>;
 }
 
 impl Answers {
@@ -669,6 +704,8 @@ impl Answers {
         uniques: &UniqueFactory,
         compute_everything: bool,
         recursion_limit_config: Option<RecursionLimitConfig>,
+        pysa_context: Option<&crate::report::pysa::context::ModuleAnswersContext>,
+        enable_cinderx_solutions: bool,
     ) -> Solutions {
         let mut res = SolutionsTable::default();
 
@@ -758,12 +795,20 @@ impl Answers {
                 }
             }
         }
+
+        let pysa_solutions = pysa_context.map(PysaSolutions::build);
+        let cinderx_solutions =
+            enable_cinderx_solutions.then(|| CinderxSolutions::build(bindings, &answers_solver));
+
         answers_solver.validate_final_thread_state();
 
         Solutions {
             module_info: bindings.module().dupe(),
             table: res,
+            metadata: bindings.metadata().dupe(),
             index: self.index.dupe(),
+            pysa_solutions,
+            cinderx_solutions,
         }
     }
 
@@ -868,7 +913,7 @@ impl Answers {
         // Get the calculation cell from the answer table
         if let Some(calculation) = self.table.get::<K>().get(idx) {
             // No recursive placeholder can exist in the Calculation cell because
-            // placeholders are stored only in SCC-local NodeState::HasPlaceholder.
+            // placeholders are stored only in SCC-local SccNodeState::HasPlaceholder.
             let (_answer, did_write) = calculation.record_value(typed_answer);
             did_write
         } else {

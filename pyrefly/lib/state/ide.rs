@@ -85,6 +85,7 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
                 return Some(current_key);
             }
             Binding::Forward(k)
+            | Binding::PromoteForward(k)
             | Binding::ForwardToFirstUse(k)
             | Binding::Narrow(k, _, _)
             | Binding::LoopPhi(k, ..) => {
@@ -127,7 +128,7 @@ fn create_intermediate_definition_from(
 
     while !gas.stop() {
         match current_binding {
-            Binding::Forward(k) | Binding::ForwardToFirstUse(k) => {
+            Binding::Forward(k) | Binding::PromoteForward(k) | Binding::ForwardToFirstUse(k) => {
                 current_binding = bindings.get(*k)
             }
             Binding::PossibleLegacyTParam(k, _) => {

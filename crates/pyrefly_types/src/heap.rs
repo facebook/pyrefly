@@ -17,15 +17,17 @@
 use std::sync::LazyLock;
 
 use dupe::Dupe;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::uniques::Unique;
 use pyrefly_util::uniques::UniqueFactory;
+use ruff_python_ast::name::Name;
 
 use crate::callable::Callable;
 use crate::callable::Function;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
-use crate::callable::Required;
+use crate::callable::PrefixParam;
 use crate::class::Class;
 use crate::class::ClassType;
 use crate::dimension::SizeExpr;
@@ -46,6 +48,7 @@ use crate::types::AnyStyle;
 use crate::types::BoundMethod;
 use crate::types::Forall;
 use crate::types::Forallable;
+use crate::types::NNModuleType;
 use crate::types::NeverStyle;
 use crate::types::Overload;
 use crate::types::SuperObj;
@@ -143,7 +146,7 @@ impl TypeHeap {
     }
 
     /// Create a `Type::Union` with a display name.
-    pub fn mk_union_with_name(&self, members: Vec<Type>, display_name: Box<str>) -> Type {
+    pub fn mk_union_with_name(&self, members: Vec<Type>, display_name: (ModuleName, Name)) -> Type {
         Type::Union(Box::new(Union {
             members,
             display_name: Some(display_name),
@@ -168,6 +171,11 @@ impl TypeHeap {
     /// Create a `Type::Type` wrapping an inner type.
     pub fn mk_type(&self, inner: Type) -> Type {
         Type::Type(Box::new(inner))
+    }
+
+    /// Create a `Type::TypeForm` wrapping an inner type (PEP 747).
+    pub fn mk_typeform(&self, inner: Type) -> Type {
+        Type::TypeForm(Box::new(inner))
     }
 
     /// Create a `Type::Quantified` from a Quantified.
@@ -296,7 +304,7 @@ impl TypeHeap {
     }
 
     /// Create a `Type::Concatenate` from types and a ParamSpec.
-    pub fn mk_concatenate(&self, types: Box<[(Type, Required)]>, param_spec: Type) -> Type {
+    pub fn mk_concatenate(&self, types: Box<[PrefixParam]>, param_spec: Type) -> Type {
         Type::Concatenate(types, Box::new(param_spec))
     }
     /// Create a `Type::Callable` with ellipsis params.
@@ -317,7 +325,7 @@ impl TypeHeap {
     /// Create a `Type::Callable` with concatenate.
     pub fn mk_callable_concatenate(
         &self,
-        params: Box<[(Type, Required)]>,
+        params: Box<[PrefixParam]>,
         param_spec: Type,
         ret: Type,
     ) -> Type {
@@ -439,6 +447,11 @@ impl TypeHeap {
     /// Create a `Type::Tensor` from a TensorType.
     pub fn mk_tensor(&self, tensor: TensorType) -> Type {
         Type::Tensor(Box::new(tensor))
+    }
+
+    /// Create a `Type::NNModule` from an NNModuleType.
+    pub fn mk_nn_module(&self, module: NNModuleType) -> Type {
+        Type::NNModule(Box::new(module))
     }
 }
 

@@ -13,9 +13,10 @@
 // 1. Create tsp.json and tsp.schema.json from typeServerProtocol.ts
 // 2. Install lsprotocol generator: `pip install git+https://github.com/microsoft/lsprotocol.git`
 // 3. Run: `python generate_protocol.py`
-
 use serde::Deserialize;
 use serde::Serialize;
+use serde_repr::Deserialize_repr;
+use serde_repr::Serialize_repr;
 
 /// This type allows extending any string enum to support custom values.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
@@ -173,25 +174,6 @@ pub enum MessageDirection {
     ServerToClient,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
-pub enum TypeServerVersion {
-    /// Initial protocol version
-    #[serde(rename = "0.1.0")]
-    V010,
-
-    /// Added new request types and fields
-    #[serde(rename = "0.2.0")]
-    V020,
-
-    /// Switch to more complex types
-    #[serde(rename = "0.3.0")]
-    V030,
-
-    /// Switch to Type union and using stubs
-    #[serde(rename = "0.4.0")]
-    Current,
-}
-
 /// Flags that describe the characteristics of a type. These flags can be combined using bitwise operations.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct TypeFlags(pub i32);
@@ -292,93 +274,80 @@ impl std::ops::BitAnd for TypeFlags {
 }
 
 /// Represents the category of a declaration in the type system. This is used to classify declarations such as variables, functions, classes, etc.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
+#[derive(Serialize_repr, Deserialize_repr, PartialEq, Debug, Eq, Clone, Copy)]
+#[repr(u8)]
 pub enum DeclarationCategory {
     /// An intrinsic refers to a symbol that has no actual declaration in the source code, such as built-in types or functions. One such example is a '__class__' declaration.
-    #[serde(rename = "Intrinsic")]
-    Intrinsic,
-
+    Intrinsic = 0,
     /// A variable is a named storage location that can hold a value.
-    #[serde(rename = "Variable")]
-    Variable,
-
+    Variable = 1,
     /// A parameter is a variable that is passed to a function or method.
-    #[serde(rename = "Param")]
-    Param,
-
+    Param = 2,
     /// This is for PEP 695 type parameters.
-    #[serde(rename = "TypeParam")]
-    Typeparam,
-
+    Typeparam = 3,
     /// This is for PEP 695 type aliases.
-    #[serde(rename = "TypeAlias")]
-    Typealias,
-
+    Typealias = 4,
     /// A function is any construct that begins with the `def` keyword and has a body, which can be called with arguments.
-    #[serde(rename = "Function")]
-    Function,
-
+    Function = 5,
     /// A class is any construct that begins with the `class` keyword and has a body, which can be instantiated.
-    #[serde(rename = "Class")]
-    Class,
-
+    Class = 6,
     /// An import declaration, which is a reference to another module.
-    #[serde(rename = "Import")]
-    Import,
+    Import = 7,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
+/// Discriminator for the Type union, identifying which variant a type is.
+#[derive(Serialize_repr, Deserialize_repr, PartialEq, Debug, Eq, Clone, Copy)]
+#[repr(u8)]
 pub enum TypeKind {
     /// unknown, any, never, etc.
-    #[serde(rename = "BuiltIn")]
-    Builtin,
-
+    Builtin = 0,
     /// Base for source-declared types (rarely used directly)
-    #[serde(rename = "Declared")]
-    Declared,
-
+    Declared = 1,
     /// Functions and methods from def statements
-    #[serde(rename = "Function")]
-    Function,
-
+    Function = 2,
     /// Classes from class statements
-    #[serde(rename = "Class")]
-    Class,
-
+    Class = 3,
     /// int | str | None
-    #[serde(rename = "Union")]
-    Union,
-
+    Union = 4,
     /// import os -> os is ModuleType
-    #[serde(rename = "Module")]
-    Module,
-
+    Module = 5,
     /// T, P, Ts in generics
-    #[serde(rename = "TypeVar")]
-    Typevar,
-
+    Typevar = 6,
     /// Functions with multiple @overload signatures
-    #[serde(rename = "Overloaded")]
-    Overloaded,
-
+    Overloaded = 7,
     /// Types that are synthesized by the type checker
-    #[serde(rename = "Synthesized")]
-    Synthesized,
-
+    Synthesized = 8,
     /// Reference by ID for deduplication
-    #[serde(rename = "TypeReference")]
-    Typereference,
+    Typereference = 9,
+}
+
+/// Discriminator for Declaration variants.
+#[derive(Serialize_repr, Deserialize_repr, PartialEq, Debug, Eq, Clone, Copy)]
+#[repr(u8)]
+pub enum DeclarationKind {
+    /// Declaration exists in source code with AST node
+    Regular = 0,
+    /// Declaration created by type checker (no source node)
+    Synthesized = 1,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
-pub enum DeclarationKind {
-    /// Declaration exists in source code with AST node
-    #[serde(rename = "Regular")]
-    Regular,
+pub enum TypeServerVersion {
+    /// Initial protocol version
+    #[serde(rename = "0.1.0")]
+    V010,
 
-    /// Declaration created by type checker (no source node)
-    #[serde(rename = "Synthesized")]
-    Synthesized,
+    /// Added new request types and fields
+    #[serde(rename = "0.2.0")]
+    V020,
+
+    /// Switch to more complex types
+    #[serde(rename = "0.3.0")]
+    V030,
+
+    /// Switch to Type union and using stubs
+    #[serde(rename = "0.4.0")]
+    Current,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
@@ -541,12 +510,12 @@ pub struct SentinelLiteral {
     pub module_name: String,
 }
 
-/// Base interface for all declaration types. Provides the discriminator field for the Declaration union. This is a generic interface that is extended by: - RegularDeclaration (kind = Regular) - SynthesizedDeclaration (kind = Synthesized) The type parameter T ensures that the kind field matches the implementing interface. Used for type-safe discrimination: ```typescript if (declaration.kind === DeclarationKind.Regular) { // TypeScript knows this is RegularDeclaration const node = declaration.node; } ```
+/// Base interface for all declaration types. Provides the discriminator field for the Declaration union.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeclarationBase {
     /// Discriminator field that determines which declaration variant this is. Regular: Has source code and AST node Synthesized: Created by type checker, no source node
-    pub kind: String,
+    pub kind: DeclarationKind,
 }
 
 /// Represents a declaration that exists in source code. Points to the actual AST node where a symbol is declared. Fields: - category: Type of declaration (Variable, Function, Class, etc.) - node: AST node pointing to the declaration location - name: Name of the declared symbol (undefined for anonymous/implicit declarations) Examples: ```python def my_function(x: int) -> str:  # Function declaration return str(x) class MyClass:  # Class declaration x: int      # Variable declaration T = TypeVar('T')  # TypeParam declaration ```
@@ -557,7 +526,7 @@ pub struct RegularDeclaration {
     pub category: DeclarationCategory,
 
     /// Discriminator field that determines which declaration variant this is. Regular: Has source code and AST node Synthesized: Created by type checker, no source node
-    pub kind: String,
+    pub kind: DeclarationKind,
 
     /// Name of the declared symbol, or undefined for anonymous declarations. Example: "foo" for `def foo():`, undefined for lambda functions.
     pub name: Option<String>,
@@ -571,7 +540,7 @@ pub struct RegularDeclaration {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SynthesizedDeclaration {
     /// Discriminator field that determines which declaration variant this is. Regular: Has source code and AST node Synthesized: Created by type checker, no source node
-    pub kind: String,
+    pub kind: DeclarationKind,
 
     /// URI of the file where this symbol is conceptually declared. For built-ins, this might be a special URI; for decorator-generated code, it's the file containing the decorator. Example: File URI of a @dataclass-decorated class for synthesized __init__.
     pub uri: String,
@@ -620,7 +589,7 @@ pub struct TypeBase {
     pub id: i32,
 
     /// Discriminator field that determines which Type variant this is. Used for type narrowing when processing Type unions. Example: `if (type.kind === TypeKind.BuiltIn) { ... }`
-    pub kind: String,
+    pub kind: TypeKind,
 
     /// Information about type aliases. Present when this type was created from a type alias. Contains the alias name, module, file location, type parameters, and type arguments. Example: `type MyList = list[int]` - typeAliasInfo contains name="MyList", typeArgs=[int]
     pub type_alias_info: Option<TypeAliasInfo>,
@@ -640,7 +609,7 @@ pub struct BuiltInType {
     pub id: i32,
 
     /// Discriminator field that determines which Type variant this is. Used for type narrowing when processing Type unions. Example: `if (type.kind === TypeKind.BuiltIn) { ... }`
-    pub kind: String,
+    pub kind: TypeKind,
 
     /// The name of the built-in type. Limited to specific known built-in types. 'unknown': Type cannot be determined 'any': Accepts any value (gradual typing) 'unbound': Variable not yet bound to a value 'ellipsis': The ... literal 'never': Type that never occurs (e.g., function that always raises) 'noreturn': Function that doesn't return (alias for never)
     pub name: String,
@@ -666,7 +635,7 @@ pub struct DeclaredType {
     pub id: i32,
 
     /// Discriminator field that determines which Type variant this is. Used for type narrowing when processing Type unions. Example: `if (type.kind === TypeKind.BuiltIn) { ... }`
-    pub kind: String,
+    pub kind: TypeKind,
 
     /// Information about type aliases. Present when this type was created from a type alias. Contains the alias name, module, file location, type parameters, and type arguments. Example: `type MyList = list[int]` - typeAliasInfo contains name="MyList", typeArgs=[int]
     pub type_alias_info: Option<TypeAliasInfo>,
@@ -689,7 +658,7 @@ pub struct FunctionType {
     pub id: i32,
 
     /// Discriminator field that determines which Type variant this is. Used for type narrowing when processing Type unions. Example: `if (type.kind === TypeKind.BuiltIn) { ... }`
-    pub kind: String,
+    pub kind: TypeKind,
 
     /// The return type annotation of the function. Example: In `def foo() -> int:`, returnType is the int type.
     pub return_type: Option<Box<Type>>,
@@ -715,7 +684,7 @@ pub struct ClassType {
     pub id: i32,
 
     /// Discriminator field that determines which Type variant this is. Used for type narrowing when processing Type unions. Example: `if (type.kind === TypeKind.BuiltIn) { ... }`
-    pub kind: String,
+    pub kind: TypeKind,
 
     /// The literal value if this class represents a literal (e.g., int literal 42, str literal "hello"). Can be a primitive value, enum member, or sentinel object. Example: For the literal `42`, literalValue = 42.
     pub literal_value: Option<LiteralValue>,
@@ -738,7 +707,7 @@ pub struct UnionType {
     pub id: i32,
 
     /// Discriminator field that determines which Type variant this is. Used for type narrowing when processing Type unions. Example: `if (type.kind === TypeKind.BuiltIn) { ... }`
-    pub kind: String,
+    pub kind: TypeKind,
 
     /// Array of types that make up this union. Example: For `int | str | None`, subTypes = [int, str, None].
     pub sub_types: Vec<Type>,
@@ -758,7 +727,7 @@ pub struct ModuleType {
     pub id: i32,
 
     /// Discriminator field that determines which Type variant this is. Used for type narrowing when processing Type unions. Example: `if (type.kind === TypeKind.BuiltIn) { ... }`
-    pub kind: String,
+    pub kind: TypeKind,
 
     /// Fully qualified name of the module. Example: "os.path" for the os.path module.
     pub module_name: String,
@@ -784,7 +753,7 @@ pub struct OverloadedType {
     pub implementation: Option<Box<Type>>,
 
     /// Discriminator field that determines which Type variant this is. Used for type narrowing when processing Type unions. Example: `if (type.kind === TypeKind.BuiltIn) { ... }`
-    pub kind: String,
+    pub kind: TypeKind,
 
     /// List of overload signatures for this overloaded function. Each overload represents a different way the function can be called. Example: For a function with @overload decorators, each overload is in this array.
     pub overloads: Vec<Type>,
@@ -813,7 +782,7 @@ pub struct SynthesizedType {
     pub id: i32,
 
     /// Discriminator field that determines which Type variant this is. Used for type narrowing when processing Type unions. Example: `if (type.kind === TypeKind.BuiltIn) { ... }`
-    pub kind: String,
+    pub kind: TypeKind,
 
     pub metadata: SynthesizedTypeMetadata,
 
@@ -834,7 +803,7 @@ pub struct TypeReferenceType {
     pub id: i32,
 
     /// Discriminator field that determines which Type variant this is. Used for type narrowing when processing Type unions. Example: `if (type.kind === TypeKind.BuiltIn) { ... }`
-    pub kind: String,
+    pub kind: TypeKind,
 
     /// Information about type aliases. Present when this type was created from a type alias. Contains the alias name, module, file location, type parameters, and type arguments. Example: `type MyList = list[int]` - typeAliasInfo contains name="MyList", typeArgs=[int]
     pub type_alias_info: Option<TypeAliasInfo>,

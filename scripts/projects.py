@@ -484,7 +484,6 @@ def get_mypy_primer_projects() -> list[Project]:
             pyrefly_cmd="{pyrefly} src tests",
             expected_mypy_success=True,
             cost={"mypy": 40},
-            skip_determinism_check=True,
         ),
         Project(
             location="https://github.com/Legrandin/pycryptodome",
@@ -561,7 +560,6 @@ def get_mypy_primer_projects() -> list[Project]:
             pyrefly_cmd="{pyrefly} parso",
             expected_mypy_success=True,
             cost={"pyright": 75},
-            skip_determinism_check=True,
         ),
         Project(
             location="https://github.com/konradhalas/dacite",
@@ -644,7 +642,7 @@ def get_mypy_primer_projects() -> list[Project]:
             mypy_cmd="{mypy} .",
             pyright_cmd="{pyright}",
             pyrefly_cmd="{pyrefly} .",
-            deps=["types-freezegun", "types-mock", "httpx", "anyio", "pytest"],
+            deps=["types-freezegun", "httpx", "anyio", "pytest"],
             expected_mypy_success=True,
         ),
         Project(
@@ -747,7 +745,6 @@ def get_mypy_primer_projects() -> list[Project]:
             pyrefly_cmd="{pyrefly} sympy",
             expected_mypy_success=True,
             cost={"mypy": 35, "pyright": 240},
-            skip_determinism_check=True,
         ),
         Project(
             location="https://github.com/nion-software/nionutils",
@@ -1149,7 +1146,6 @@ def get_mypy_primer_projects() -> list[Project]:
             pyrefly_cmd="{pyrefly} .",
             deps=[
                 "types-six",
-                "types-mock",
                 "cryptography",
                 "types-requests",
                 "types-Markdown",

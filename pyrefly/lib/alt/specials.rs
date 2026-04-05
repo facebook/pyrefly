@@ -28,6 +28,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::types::callable::Param;
+use crate::types::callable::PrefixParam;
 use crate::types::callable::Required;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
@@ -219,7 +220,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 fn is_valid_literal(x: &Type) -> bool {
                     match x {
                         Type::None | Type::Literal(_) | Type::Any(AnyStyle::Error) => true,
-                        Type::Annotated(inner) => is_valid_literal(inner),
+                        Type::Annotated(inner, _) => is_valid_literal(inner),
                         Type::Union(box Union { members: xs, .. }) => {
                             xs.iter().all(is_valid_literal)
                         }
@@ -366,7 +367,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let args = arguments[0..arguments.len() - 1]
                         .iter()
                         .map(|x| {
-                            (
+                            PrefixParam::new(
                                 self.expr_untype(x, TypeFormContext::TupleOrCallableParam, errors),
                                 Required::Required,
                             )
@@ -402,7 +403,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         match self.check_args_and_construct_tuple(elts, errors) {
                             Some((tuple, true)) => {
                                 self.heap.mk_type_form(self.heap.mk_callable_from_vec(
-                                    vec![Param::VarArg(
+                                    vec![Param::Varargs(
                                         None,
                                         self.heap.mk_unpack(self.heap.mk_tuple(tuple)),
                                     )],
@@ -559,9 +560,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     arguments.len()
                 ),
             ),
+            SpecialForm::TypeForm if arguments.len() == 1 => {
+                let inner = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
+                self.heap.mk_type_form(self.heap.mk_typeform(inner))
+            }
+            SpecialForm::TypeForm => self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                format!(
+                    "`TypeForm` requires exactly one argument but got {}",
+                    arguments.len()
+                ),
+            ),
             SpecialForm::Annotated if arguments.len() > 1 => {
                 let inner = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
-                Type::Annotated(Box::new(inner))
+                let metadata: Vec<Type> = arguments[1..]
+                    .iter()
+                    .map(|e| self.expr_infer(e, &self.error_swallower()))
+                    .collect();
+                Type::Annotated(Box::new(inner), metadata.into_boxed_slice())
             }
             SpecialForm::Annotated => self.error(
                 errors,

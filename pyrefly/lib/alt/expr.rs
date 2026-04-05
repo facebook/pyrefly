@@ -56,6 +56,7 @@ use ruff_python_ast::Keyword;
 use ruff_python_ast::Number;
 use ruff_python_ast::Operator;
 use ruff_python_ast::StringLiteralValue;
+use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -71,10 +72,12 @@ use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::Hint;
 use crate::alt::unwrap::HintRef;
+use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LambdaParamId;
+use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::int_from_slice;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -87,7 +90,6 @@ use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::facet::FacetKind;
-use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::param_spec::ParamSpec;
 use crate::types::quantified::Quantified;
@@ -217,9 +219,18 @@ impl Display for ConditionRedundantReason {
     }
 }
 
-static MAX_TUPLE_LENGTH: usize = 256;
+pub(crate) const MAX_TUPLE_LENGTH: usize = 256;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn synthesized_functional_class_type(&self, call: &ExprCall) -> Option<Type> {
+        let anon_key = Key::Anon(call.range);
+        let idx = self
+            .bindings()
+            .key_to_idx_hashed_opt(Hashed::new(&anon_key))?;
+        matches!(self.bindings().get(idx), Binding::ClassDef(..))
+            .then(|| self.get_hashed(Hashed::new(&anon_key)).ty().clone())
+    }
+
     /// Infer a type for an expression, with an optional type hint that influences the inferred type.
     /// The inferred type is also checked against the hint.
     pub fn expr(
@@ -275,8 +286,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if Ast::is_synthesized_empty_name(x) {
                     TypeInfo::of_ty(self.heap.mk_any_error())
                 } else {
-                    self.get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                        .arc_clone()
+                    let result = self
+                        .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
+                        .arc_clone();
+                    // Complements PromoteForward for seeded captures.
+                    if self.bindings().should_promote_at_range(x.range) {
+                        result.map_ty(|ty| ty.promote_shallow_implicit_literals(self.stdlib))
+                    } else {
+                        result
+                    }
                 }
             }
             Expr::Attribute(x) => {
@@ -425,7 +443,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.bindings().get_lambda_param_id(&x.name),
                             var,
                         );
-                        Param::VarArg(Some(x.name.id.clone()), self.solver().force_var(var))
+                        Param::Varargs(Some(x.name.id.clone()), self.solver().force_var(var))
                     }));
                     params.extend(parameters.kwarg.iter().map(|x| {
                         let var = self.solver().fresh_unwrap(self.uniques);
@@ -577,6 +595,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::YieldFrom(x) => self.get(&KeyYieldFrom(x.range)).return_ty.clone(),
             Expr::Compare(x) => self.compare_infer(x, errors),
             Expr::Call(x) => {
+                if let Some(ty) = self.synthesized_functional_class_type(x) {
+                    return ty;
+                }
                 let callee_ty = self.expr_infer(&x.func, errors);
                 if let Some(d) = self.call_to_dict(&callee_ty, &x.arguments) {
                     self.dict_infer(&d, hint, x.range, errors)
@@ -801,7 +822,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 _ => {
-                    let ty = self.expr_infer_type_no_trace(
+                    let ty = self.expr_infer_with_hint(
                         elt,
                         if unbounded.is_empty() {
                             hint_ts_iter.next().or(default_hint)
@@ -1213,9 +1234,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
-        let target = match op {
-            BoolOp::And => false,
-            BoolOp::Or => true,
+        // `target` is the truthiness that causes short-circuiting: `and` short-circuits on
+        // falsy values, `or` on truthy values.
+        //
+        // `result_narrow` is used to narrow all but the last operand to values that could actually be
+        // returned as the result — for `and` that means the falsy subset, and vice versa for `or`.
+        // For example: `X and Y` only returns `X` if it is falsy, so the returned type is `IsFalsy(X) | Y`
+        let (target, result_narrow) = match op {
+            BoolOp::And => (false, AtomicNarrowOp::IsFalsy),
+            BoolOp::Or => (true, AtomicNarrowOp::IsTruthy),
         };
         let should_shortcircuit =
             |t: &Type, r: TextRange| self.as_bool(t, r, errors) == Some(target);
@@ -1250,21 +1277,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None => t.clone(),
                         Some(acc) => self.union(acc, t.clone()),
                     });
-                    // Narrow the type for the result of the boolop
-                    let t = if i != last_index
-                        && t == self.heap.mk_class_type(self.stdlib.bool().clone())
-                    {
-                        Lit::Bool(target).to_implicit_type()
-                    } else if i != last_index
-                        && t == self.heap.mk_class_type(self.stdlib.int().clone())
-                        && !target
-                    {
-                        LitInt::new(0).to_implicit_type()
-                    } else if i != last_index
-                        && t == self.heap.mk_class_type(self.stdlib.str().clone())
-                        && !target
-                    {
-                        Lit::Str(Default::default()).to_implicit_type()
+                    let t = if i != last_index {
+                        self.atomic_narrow(&t, &result_narrow, value.range(), errors)
                     } else {
                         t
                     };
@@ -2222,7 +2236,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Type::ClassType(ref cls) | Type::SelfType(ref cls)
-                    if let Some(tuple) = self.as_tuple(cls) =>
+                    if let Some(tuple) = self.as_tuple(cls)
+                        && !self.class_overrides_tuple_getitem(cls) =>
                 {
                     self.infer_tuple_subscript(
                         tuple,
@@ -2352,7 +2367,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         // Convert a slice bound expression to a dimension type.
+        // For unary negation (-expr), we preserve the Mul(-1, ...) wrapper
+        // without canonicalizing, so adjust_negative can detect negative bounds
+        // even after the distributive law would otherwise distribute -1 across sums.
         let to_dim = |expr: &Expr| -> Type {
+            // Detect syntactic unary minus: -(inner)
+            if let Expr::UnaryOp(x) = expr
+                && x.op == UnaryOp::USub
+            {
+                let inner_ty = self.expr_infer(&x.operand, errors);
+                let inner_dim = match inner_ty {
+                    Type::Literal(ref lit) if let Some(val) = lit.value.as_index_i64() => {
+                        // Literal negation: just negate the value directly
+                        return self.heap.mk_size(SizeExpr::Literal(-val));
+                    }
+                    Type::Dim(ref inner) => (**inner).clone(),
+                    Type::Quantified(_) | Type::Size(_) => inner_ty.clone(),
+                    _ => return Type::any_implicit(),
+                };
+                // Wrap in Mul(-1, ...) WITHOUT canonicalizing.
+                // This preserves the structural signal for adjust_negative.
+                // The final canonicalization happens in TensorShape::from_types.
+                return Type::Size(SizeExpr::Mul(
+                    Box::new(Type::Size(SizeExpr::Literal(-1))),
+                    Box::new(inner_dim),
+                ));
+            }
             let ty = self.expr_infer(expr, errors);
             match ty {
                 Type::Literal(ref lit) if let Some(val) = lit.value.as_index_i64() => {
@@ -2364,10 +2404,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
 
+        // Extract a step value from a slice step expression.
+        // Supports literal integers, Dim[S], and Size types.
+        let to_step = |expr: &Expr| -> Option<Type> {
+            let ty = self.expr_infer(expr, errors);
+            match &ty {
+                Type::Literal(lit) if let Some(val) = lit.value.as_index_i64() => {
+                    Some(self.heap.mk_size(SizeExpr::Literal(val)))
+                }
+                Type::Dim(_) => Some(ty.clone()),
+                Type::Quantified(_) | Type::Size(_) => Some(ty.clone()),
+                _ => Option::None,
+            }
+        };
+
         // Classify a non-slice, non-ellipsis index expression into an IndexOp.
         // Returns None to bail to shapeless for unclassifiable indices.
         let classify_index_expr = |expr: &Expr| -> Option<IndexOp> {
+            // None literal → NewAxis (inserts dim of size 1)
+            if matches!(expr, Expr::NoneLiteral(_)) {
+                return Some(IndexOp::NewAxis);
+            }
             let idx_ty = self.expr_infer(expr, errors);
+            // None type (e.g. from a variable typed as None)
+            if matches!(&idx_ty, Type::None) {
+                return Some(IndexOp::NewAxis);
+            }
+            if let Type::Tensor(ref idx_tensor) = idx_ty {
+                if let TensorShape::Concrete(dims) = &idx_tensor.shape {
+                    return Some(IndexOp::TensorIndex(dims.clone()));
+                }
+                return None; // shapeless index tensor → bail
+            }
             if let Type::Tuple(ref tuple) = idx_ty {
                 return match tuple {
                     Tuple::Concrete(elems) => Some(IndexOp::Fancy(Some(elems.len() as i64))),
@@ -2388,21 +2456,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Classify any index expression (including slices) into an IndexOp.
         let classify = |expr: &Expr| -> Option<IndexOp> {
             match expr {
-                Expr::Slice(ExprSlice { lower, upper, .. }) => {
+                Expr::Slice(ExprSlice {
+                    lower, upper, step, ..
+                }) => {
                     let start = lower.as_ref().map(|e| to_dim(e));
                     let stop = upper.as_ref().map(|e| to_dim(e));
-                    Some(IndexOp::Slice { start, stop })
+                    let step_val = step.as_ref().and_then(|e| to_step(e));
+                    Some(IndexOp::Slice {
+                        start,
+                        stop,
+                        step: step_val,
+                    })
                 }
                 _ => classify_index_expr(expr),
             }
         };
 
         match index {
-            // Slice operation: tensor[start:stop]
-            Expr::Slice(ExprSlice { lower, upper, .. }) => {
+            // Slice operation: tensor[start:stop:step]
+            Expr::Slice(ExprSlice {
+                lower, upper, step, ..
+            }) => {
                 let start = lower.as_ref().map(|e| to_dim(e));
                 let stop = upper.as_ref().map(|e| to_dim(e));
-                match index_shape_slice(&tensor_type.shape, start, stop) {
+                let step_val = step.as_ref().and_then(|e| to_step(e));
+                match index_shape_slice(&tensor_type.shape, start, stop, step_val) {
                     Ok(shape) => TensorType::new(tensor_type.base_class.clone(), shape).to_type(),
                     Err(err) => self.error(
                         errors,
@@ -2414,6 +2492,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             // Bare ellipsis: tensor[...] - preserves entire shape
             Expr::EllipsisLiteral(_) => tensor_type.clone().to_type(),
+            // None index: tensor[None] - inserts a new dimension of size 1 at the front
+            Expr::NoneLiteral(_) => {
+                let one = self.heap.mk_size(SizeExpr::Literal(1));
+                let mut new_dims = vec![one];
+                match &tensor_type.shape {
+                    TensorShape::Concrete(dims) => {
+                        new_dims.extend(dims.iter().cloned());
+                        TensorType::new(
+                            tensor_type.base_class.clone(),
+                            TensorShape::from_types(new_dims),
+                        )
+                        .to_type()
+                    }
+                    TensorShape::Unpacked(box (prefix, middle, suffix)) => {
+                        new_dims.extend(prefix.iter().cloned());
+                        TensorType::new(
+                            tensor_type.base_class.clone(),
+                            TensorShape::Unpacked(Box::new((
+                                new_dims,
+                                middle.clone(),
+                                suffix.clone(),
+                            ))),
+                        )
+                        .to_type()
+                    }
+                }
+            }
             // Tuple index: tensor[:, -1, :] - apply each index to corresponding dimension
             Expr::Tuple(ExprTuple { elts, .. }) => {
                 // Check for ellipsis and validate at most one
@@ -2578,6 +2683,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             }
+            // Unary negation: -N, -1, -(N + 1), etc.
+            Expr::UnaryOp(x) if x.op == UnaryOp::USub => {
+                let inner = self.parse_dimension_expr(&x.operand, errors)?;
+                Some(self.heap.mk_size(SizeExpr::sub(
+                    self.heap.mk_size(SizeExpr::Literal(0)),
+                    inner,
+                )))
+            }
             // Binary operations: N + M, N * M, etc.
             Expr::BinOp(ExprBinOp {
                 left, op, right, ..
@@ -2592,6 +2705,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Operator::FloorDiv => {
                         Some(self.heap.mk_size(SizeExpr::floor_div(left_dim, right_dim)))
                     }
+                    Operator::Pow => Some(self.heap.mk_size(SizeExpr::pow(left_dim, right_dim))),
                     _ => {
                         self.error(
                             errors,

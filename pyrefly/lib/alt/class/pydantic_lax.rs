@@ -12,6 +12,7 @@ use pyrefly_types::keywords::ConverterMap;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
+use ruff_python_ast::name::Name;
 use starlark_map::ordered_map::OrderedMap;
 
 use crate::alt::answers::LookupAnswer;
@@ -30,8 +31,12 @@ fn capitalize_first(s: &str) -> String {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    fn lax_display_name_for_class(&self, cls: &ClassType) -> String {
-        format!("{}{}", LAX_PREFIX, capitalize_first(cls.name().as_str()))
+    fn lax_display_name_for_class(&self, cls: &ClassType) -> Name {
+        Name::new(format!(
+            "{}{}",
+            LAX_PREFIX,
+            capitalize_first(cls.name().as_str())
+        ))
     }
 
     fn types_to_lax_union(&self, base_type: &ClassType, types: &[&ClassType]) -> Type {
@@ -42,7 +47,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect();
         let mut union_type = self.unions(expanded_types);
         if let Type::Union(ref mut boxed_union) = union_type {
-            boxed_union.display_name = Some(display_name.into_boxed_str());
+            boxed_union.display_name = Some((ModuleName::unknown(), display_name));
         }
         union_type
     }

@@ -7,16 +7,19 @@
 
 use std::io::Write;
 use std::sync::Arc;
+use std::time::Instant;
 
 use clap::Parser;
 use clap::ValueEnum;
 use lsp_types::ServerInfo;
 use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::thread_pool::ThreadCount;
 
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::util::CommandExitStatus;
 use crate::lsp::non_wasm::external_provider::ExternalProvider;
 use crate::lsp::non_wasm::module_helpers::PathRemapper;
+use crate::lsp::non_wasm::module_helpers::ThriftRemapper;
 use crate::lsp::non_wasm::server::Connection;
 use crate::lsp::non_wasm::server::InitializeInfo;
 use crate::lsp::non_wasm::server::MessageReader;
@@ -75,10 +78,13 @@ pub fn run_lsp(
     args: LspArgs,
     server_info: Option<ServerInfo>,
     path_remapper: Option<PathRemapper>,
+    thrift_remapper: Option<ThriftRemapper>,
     telemetry: &impl Telemetry,
     external_references: Arc<dyn ExternalProvider>,
     wrapper: Option<ConfigConfigurerWrapper>,
+    thread_count: ThreadCount,
 ) -> anyhow::Result<()> {
+    let lsp_start_time = Instant::now();
     if let Some(initialize_info) =
         initialize_connection(&connection, &mut reader, args.indexing_mode, server_info)?
     {
@@ -90,9 +96,12 @@ pub fn run_lsp(
             args.workspace_indexing_limit,
             args.build_system_blocking,
             path_remapper,
+            thrift_remapper,
             telemetry,
             external_references,
             wrapper,
+            thread_count,
+            lsp_start_time,
         )?;
     }
     Ok(())
@@ -122,9 +131,11 @@ impl LspArgs {
         self,
         version: &str,
         path_remapper: Option<PathRemapper>,
+        thrift_remapper: Option<ThriftRemapper>,
         telemetry: &impl Telemetry,
         external_references: Arc<dyn ExternalProvider>,
         wrapper: Option<ConfigConfigurerWrapper>,
+        thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
         // Note that we must have our logging only write out to stderr.
         eprintln!("starting generic LSP server");
@@ -144,9 +155,11 @@ impl LspArgs {
             self,
             Some(server_info),
             path_remapper,
+            thrift_remapper,
             telemetry,
             external_references,
             wrapper,
+            thread_count,
         )?;
         io_threads.join()?;
         // We have shut down gracefully.

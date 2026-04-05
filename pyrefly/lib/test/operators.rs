@@ -28,6 +28,102 @@ def compare[T: int](x: T, y: T) -> bool:
 );
 
 testcase!(
+    test_constrained_type_var_comparison,
+    r#"
+from typing import Generic, TypeVar, assert_type
+
+N = TypeVar("N", int, str)
+
+class A(Generic[N]):
+    a: N
+
+    def foo(self, b: N) -> None:
+        assert_type(self.a < b, bool)
+"#,
+);
+
+testcase!(
+    test_bound_typevar_comparison,
+    r#"
+def f1[T: int | float](x: T, y: T) -> bool:
+    # Ok because you can compare an int and a float
+    return x < y
+def f2[T: int | str](x: T, y: T) -> bool:
+    return x < y  # E: not supported between `int` and `str`  # E: not supported between `str` and `int`
+    "#,
+);
+
+testcase!(
+    test_cannot_compare_unrestricted_typevar,
+    r#"
+def f1[T](x: T) -> bool:
+    return x < 0  # E: not supported between `T` and `Literal[0]`
+def f2[T](x: T) -> bool:
+    return 0 < x  # E: not supported between `Literal[0]` and `T`
+    "#,
+);
+
+testcase!(
+    test_preserve_typevar_through_comparison_and_binop,
+    r#"
+from typing import Any, Protocol, Self, TypeVar
+
+class NativeExpr:
+    def __ge__(self, value: Any, /) -> Self: ...
+    def __add__(self, value: Any, /) -> Self: ...
+
+NativeExprT = TypeVar("NativeExprT", bound=NativeExpr)
+
+class SQLExpr(Protocol[NativeExprT]):
+    def _window(self) -> NativeExprT: ...
+    def _when(self, condition: NativeExprT) -> NativeExprT: ...
+
+    def do_stuff(self) -> None:
+        x = self._window()
+        y_ge = x >= 1
+        z_add = x + 1
+        self._when(y_ge)
+        self._when(z_add)
+    "#,
+);
+
+testcase!(
+    test_compare_typevars,
+    r#"
+from typing import Generic, Protocol, TypeVar
+
+Weight = TypeVar("Weight", bound="ImplementationWeight")
+SelfWeight = TypeVar("SelfWeight", bound="ImplementationWeight")
+
+class ImplementationWeight(Protocol):
+    def __lt__(self: SelfWeight, other: SelfWeight) -> bool: ...
+
+class CandidateWeight(Generic[Weight]):
+    weight: Weight
+    def __lt__(self, other: CandidateWeight[Weight]) -> bool:
+        return self.weight < other.weight
+    "#,
+);
+
+testcase!(
+    test_add_typevars,
+    r#"
+from typing import Generic, Protocol, TypeVar
+
+Weight = TypeVar("Weight", bound="ImplementationWeight")
+SelfWeight = TypeVar("SelfWeight", bound="ImplementationWeight")
+
+class ImplementationWeight(Protocol):
+    def __add__(self: SelfWeight, other: SelfWeight) -> SelfWeight: ...
+
+class CandidateWeight(Generic[Weight]):
+    weight: Weight
+    def __add__(self, other: CandidateWeight[Weight]) -> Weight:
+        return self.weight + other.weight
+    "#,
+);
+
+testcase!(
     test_negative_literals,
     r#"
 from typing import Literal
@@ -829,23 +925,143 @@ def test(x, y):
 testcase!(
     test_int_pow_inference,
     r#"
-from typing import assert_type, Any
+from typing import assert_type, Any, Literal
 
-# Typeshed covers __pow__ for Literal[1..25] (-> int) and
-# Literal[-1..-25] (-> float).
+# We special-case int ** int:
+# exponent is 0 -> Literal[1]
+# exponent is positive -> int
+# exponent is negative -> float
+assert_type(2 ** 0, Literal[1])
+assert_type((-2) ** 0, Literal[1])
 assert_type(2 ** 25, int)
-assert_type(2 ** -25, float)
-
-# For exponents outside the typeshed range, we special-case int ** int:
-# positive exponent -> int, negative exponent -> float.
 assert_type(2 ** 26, int)
 assert_type(2 ** 100, int)
 assert_type((-2) ** 26, int)
+assert_type(2 ** -25, float)
 assert_type(2 ** -26, float)
 assert_type(2 ** -100, float)
 
-# When the exponent sign is unknown, fall back to Any like typeshed.
+# When the exponent sign is unknown, fall back to __pow__ (-> Any).
 def f(x: int, y: int) -> None:
     assert_type(x ** y, Any)
+"#,
+);
+
+testcase!(
+    test_augassign,
+    r#"
+from typing import Any, assert_type
+def f1(x):
+    y = 1
+    y = y + x
+    # `x` may be a non-`int` with an `__radd__` method with an unknown return type
+    assert_type(y, Any)
+def f2(x):
+    y = 1
+    y += x
+    assert_type(y, Any)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2915
+testcase!(
+    bug = "Should detect division by zero with literal zero divisor",
+    test_division_by_zero_literal,
+    r#"
+from typing import Literal
+
+x = 10 / 0
+y = 10 // 0
+z = 10 % 0
+
+# Variable with Literal[0] type
+zero: Literal[0] = 0
+a = 10 / zero
+b = 10 // zero
+c = 10 % zero
+
+# Union containing Literal[0]
+mixed: int | Literal[0] = 0
+d = 10 / mixed
+e = 10 // mixed
+f = 10 % mixed
+"#,
+);
+
+testcase!(
+    test_unary_op_on_class_object,
+    r#"
+class Widget:
+    def __pos__(self) -> int:
+        return 1
+    def __neg__(self) -> int:
+        return -1
+    def __invert__(self) -> int:
+        return 0
+
+# These are fine on instances:
+w = Widget()
++w
+-w
+~w
+
+# Instance operators don't apply to class objects:
++Widget  # E: Unary `+` is not supported on `type[Widget]`
+-Widget  # E: Unary `-` is not supported on `type[Widget]`
+~Widget  # E: Unary `~` is not supported on `type[Widget]`
+"#,
+);
+
+testcase!(
+    test_binop_on_class_object,
+    r#"
+class Vector:
+    def __add__(self, other: "Vector") -> "Vector":
+        return Vector()
+
+# Fine on instances:
+Vector() + Vector()
+
+# Instance operators don't apply to class objects:
+Vector + Vector  # E: `+` is not supported
+"#,
+);
+
+testcase!(
+    test_augmented_assign_unsupported,
+    r#"
+class Point:
+    pass
+
+p = Point()
+p += 1  # E: `+=` is not supported
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2914
+testcase!(
+    bug = "Should detect unsupported-bool-conversion when __bool__ is not callable",
+    test_bool_conversion_non_callable,
+    r#"
+class BadBool:
+    __bool__: int = 3
+
+assert BadBool()
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2913
+testcase!(
+    bug = "Should detect unsupported-bool-conversion in membership tests",
+    test_bool_conversion_in_contains,
+    r#"
+class BadBool:
+    __bool__: int = 3
+
+class Container:
+    def __contains__(self, item: object) -> BadBool:
+        return BadBool()
+
+10 in Container()
 "#,
 );

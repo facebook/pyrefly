@@ -269,6 +269,71 @@ def main():
     assert_eq!(report, "Variable `unused_var` is unused");
 }
 
+// Reassigning a parameter inside a loop using its own value should not be
+// reported as unused.
+#[test]
+fn test_parameter_reassignment_in_loop() {
+    let code = r#"
+def x(lim):
+    while lim > 0:
+        lim = lim - 1
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+// Assigning a parameter to a global variable should not report the global as unused.
+#[test]
+fn test_global_assignment_from_parameter() {
+    let code = r#"
+COUNT = 0
+
+def func(count: int) -> int:
+    global COUNT
+    COUNT = count
+    return count
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+// Local variable reassigned using its own value in a loop should not be
+// reported as unused.
+#[test]
+fn test_local_reassignment_in_loop() {
+    let code = r#"
+def f():
+    x = 0
+    while x < 10:
+        x = x + 1
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+// Reassigning a parameter using a slice of itself in a loop should not be
+// reported as unused.
+#[test]
+fn test_parameter_slice_reassignment_in_loop() {
+    let code = r#"
+from os import write as _write
+
+def _write_all(fd: int, data: bytes):
+    while (n := _write(fd, data)) < len(data):
+        data = data[n:]
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
 // Test for issue #1961: `import a as a` and `from x import a as a` are explicit re-exports
 // per the Python typing spec and should NOT be reported as unused imports.
 // See: https://typing.python.org/en/latest/spec/distributing.html#import-conventions

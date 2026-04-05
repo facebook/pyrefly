@@ -88,8 +88,10 @@ pub enum ExportLocation {
     OtherModule(ModuleName, Option<Name>),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Exports {
+    module_name: ModuleName,
+    is_init: bool,
     /// The underlying definitions.
     /// Note that these aren't actually required, once we have calculated the other fields,
     /// but they take up very little space, so not worth the hassle to detect when
@@ -143,6 +145,8 @@ impl Exports {
         }
 
         Self {
+            module_name: module_info.name(),
+            is_init: module_info.path().is_init(),
             definitions,
             wildcard: Calculation::new(),
             exports: Calculation::new(),
@@ -286,11 +290,7 @@ impl Exports {
     /// Returns entries in `__all__` that don't exist in the module's definitions.
     /// Only validates explicitly user-defined `__all__` entries, not synthesized ones.
     /// Returns a vector of (range, name) tuples for invalid entries.
-    pub fn invalid_dunder_all_entries(
-        &self,
-        lookup: &dyn LookupExport,
-        module_info: &ModuleInfo,
-    ) -> Vec<(TextRange, Name)> {
+    pub fn invalid_dunder_all_entries(&self, lookup: &dyn LookupExport) -> Vec<(TextRange, Name)> {
         // Only validate if __all__ was explicitly defined and resolvable
         if self.definitions.dunder_all.kind != DunderAllKind::Specified {
             return Vec::new();
@@ -320,8 +320,8 @@ impl Exports {
                     continue;
                 }
                 // In __init__.py, __all__ can list submodule names
-                if module_info.path().is_init() {
-                    let submodule = module_info.name().append(name);
+                if self.is_init {
+                    let submodule = self.module_name.append(name);
                     if lookup.module_exists(submodule).finding().is_some() {
                         continue;
                     }
@@ -338,7 +338,7 @@ impl Exports {
             for (name, definition) in self.definitions.definitions.iter_hashed() {
                 let deprecation = self.definitions.deprecated.get_hashed(name).cloned();
                 let special_export = self.definitions.special_exports.get_hashed(name).copied();
-                let is_final = self.definitions.final_names.contains_hashed(name);
+                let is_final = self.definitions.final_names.contains_key_hashed(name);
                 let export = match &definition.style {
                     DefinitionStyle::Annotated(symbol_kind, ..)
                     | DefinitionStyle::Unannotated(symbol_kind) => {
@@ -391,6 +391,22 @@ impl Exports {
                     }
                 }
             }
+            // Invalid __all__ entries get a ThisModule export so importers resolve
+            // them through normal import resolution (to the synthesized
+            // Binding::Any(AnyStyle::Error) created in bindings.rs).
+            for (range, name) in self.invalid_dunder_all_entries(lookup) {
+                result.insert(
+                    name,
+                    ExportLocation::ThisModule(Export {
+                        location: range,
+                        symbol_kind: None,
+                        docstring_range: None,
+                        deprecation: None,
+                        is_final: false,
+                        special_export: None,
+                    }),
+                );
+            }
             Arc::new(result)
         };
         self.exports.calculate(f).unwrap_or_default()
@@ -431,8 +447,7 @@ mod tests {
     impl LookupExport for SmallMap<ModuleName, Arc<Exports>> {
         fn export_exists(&self, module: ModuleName, k: &Name) -> bool {
             self.get(&module)
-                .map(|x| x.exports(self).contains_key(k))
-                .unwrap_or(false)
+                .is_some_and(|x| x.exports(self).contains_key(k))
         }
 
         fn get_wildcard(&self, module: ModuleName) -> Option<Arc<SmallSet<Name>>> {
@@ -447,7 +462,7 @@ mod tests {
         fn module_exists(&self, module: ModuleName) -> FindingOrError<()> {
             match self.get(&module) {
                 Some(_) => FindingOrError::new_finding(()),
-                None => FindingOrError::Error(FindError::not_found(anyhow!("Error"), module)),
+                None => FindingOrError::Error(FindError::missing_import(anyhow!("Error"), module)),
             }
         }
 

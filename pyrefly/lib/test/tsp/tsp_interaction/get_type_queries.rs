@@ -10,6 +10,7 @@
 
 use lsp_types::Url;
 use tempfile::TempDir;
+use tsp_types::TypeKind;
 
 use crate::test::tsp::tsp_interaction::object_model::TspInteraction;
 use crate::test::tsp::tsp_interaction::object_model::get_current_snapshot;
@@ -37,14 +38,15 @@ fn setup_project(file_content: &str) -> (TspInteraction, String, i32) {
 }
 
 /// Helper to extract the "kind" field from a type query result.
-fn assert_kind(result: &serde_json::Value, expected_kind: &str) {
+fn assert_kind(result: &serde_json::Value, expected_kind: TypeKind) {
     let kind = result
         .get("kind")
-        .and_then(|v| v.as_str())
-        .unwrap_or_else(|| panic!("Expected 'kind' field in type result: {result}"));
+        .and_then(|v| v.as_u64())
+        .unwrap_or_else(|| panic!("Expected 'kind' field (integer) in type result: {result}"));
+    let expected = expected_kind as u64;
     assert_eq!(
-        kind, expected_kind,
-        "Expected kind={expected_kind}, got kind={kind} in: {result}"
+        kind, expected,
+        "Expected kind={expected_kind:?} ({expected}), got kind={kind} in: {result}"
     );
 }
 
@@ -87,7 +89,7 @@ fn test_get_declared_type_int_annotation() {
     );
     let result = resp.result.expect("Expected result");
     assert!(!result.is_null(), "Expected non-null type");
-    assert_kind(&result, "Class");
+    assert_kind(&result, TypeKind::Class);
 
     tsp.shutdown();
 }
@@ -141,7 +143,7 @@ fn test_get_computed_type_int_is_class() {
     let (mut tsp, file_uri, snapshot) = setup_project("x = 42\n");
 
     let result = get_computed_type_ok(&mut tsp, &file_uri, 0, 0, snapshot);
-    assert_kind(&result, "Class");
+    assert_kind(&result, TypeKind::Class);
 
     // Literal types carry a literalValue field
     let literal_value = result.get("literalValue");
@@ -164,7 +166,7 @@ fn test_get_computed_type_string_is_class() {
     let (mut tsp, file_uri, snapshot) = setup_project("s = \"hello\"\n");
 
     let result = get_computed_type_ok(&mut tsp, &file_uri, 0, 0, snapshot);
-    assert_kind(&result, "Class");
+    assert_kind(&result, TypeKind::Class);
 
     let literal_value = result.get("literalValue");
     assert!(
@@ -185,7 +187,7 @@ fn test_get_computed_type_none_is_builtin() {
     let (mut tsp, file_uri, snapshot) = setup_project("x = None\n");
 
     let result = get_computed_type_ok(&mut tsp, &file_uri, 0, 0, snapshot);
-    assert_kind(&result, "BuiltIn");
+    assert_kind(&result, TypeKind::Builtin);
 
     let name = result.get("name").and_then(|v| v.as_str());
     assert_eq!(name, Some("none"), "Expected builtin name 'none'");
@@ -198,7 +200,7 @@ fn test_get_computed_type_bool_is_class() {
     let (mut tsp, file_uri, snapshot) = setup_project("b = True\n");
 
     let result = get_computed_type_ok(&mut tsp, &file_uri, 0, 0, snapshot);
-    assert_kind(&result, "Class");
+    assert_kind(&result, TypeKind::Class);
 
     tsp.shutdown();
 }
@@ -208,7 +210,7 @@ fn test_get_computed_type_list_is_class() {
     let (mut tsp, file_uri, snapshot) = setup_project("xs = [1, 2, 3]\n");
 
     let result = get_computed_type_ok(&mut tsp, &file_uri, 0, 0, snapshot);
-    assert_kind(&result, "Class");
+    assert_kind(&result, TypeKind::Class);
 
     let decl = result.get("declaration").expect("Expected declaration");
     let name = decl.get("name").and_then(|v| v.as_str());
@@ -225,7 +227,7 @@ fn test_get_computed_type_function_is_synthesized() {
 
     let result = get_computed_type_ok(&mut tsp, &file_uri, 0, 4, snapshot);
     // Function types are emitted as SynthesizedType with CALLABLE flag
-    assert_kind(&result, "Synthesized");
+    assert_kind(&result, TypeKind::Synthesized);
 
     let flags = result.get("flags").and_then(|v| v.as_i64());
     // CALLABLE = 4
@@ -248,10 +250,10 @@ fn test_get_computed_type_union_annotation() {
     // is a valid type with a known kind.
     let kind = result
         .get("kind")
-        .and_then(|v| v.as_str())
+        .and_then(|v| v.as_u64())
         .expect("Expected kind");
     assert!(
-        kind == "Class" || kind == "Union",
+        kind == TypeKind::Class as u64 || kind == TypeKind::Union as u64,
         "Expected Class or Union for union-annotated var, got {kind}"
     );
 
@@ -264,7 +266,7 @@ fn test_get_computed_type_class_definition() {
     let (mut tsp, file_uri, snapshot) = setup_project("class MyClass:\n    pass\n");
 
     let result = get_computed_type_ok(&mut tsp, &file_uri, 0, 6, snapshot);
-    assert_kind(&result, "Class");
+    assert_kind(&result, TypeKind::Class);
 
     // INSTANTIABLE = 1
     let flags = result.get("flags").and_then(|v| v.as_i64());
@@ -310,7 +312,7 @@ fn test_get_expected_type_str_annotation() {
     let result = resp.result.expect("Expected result");
     assert!(!result.is_null(), "Expected non-null type");
     // The variable `y` should have a Class kind
-    assert_kind(&result, "Class");
+    assert_kind(&result, TypeKind::Class);
 
     tsp.shutdown();
 }
@@ -349,9 +351,9 @@ fn test_all_three_methods_return_same_kind_for_simple_var() {
     let r3 = resp3.result.expect("expected result");
 
     // All should have the same kind
-    let kind1 = r1.get("kind").and_then(|v| v.as_str()).unwrap();
-    let kind2 = r2.get("kind").and_then(|v| v.as_str()).unwrap();
-    let kind3 = r3.get("kind").and_then(|v| v.as_str()).unwrap();
+    let kind1 = r1.get("kind").and_then(|v| v.as_u64()).unwrap();
+    let kind2 = r2.get("kind").and_then(|v| v.as_u64()).unwrap();
+    let kind3 = r3.get("kind").and_then(|v| v.as_u64()).unwrap();
     assert_eq!(kind1, kind2, "declared vs computed kind mismatch");
     assert_eq!(kind2, kind3, "computed vs expected kind mismatch");
 

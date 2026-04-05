@@ -2954,3 +2954,30 @@ info.
         );
     }
 }
+
+#[test]
+fn dot_complete_method_chain_with_import_error() {
+    // Reproduces the benchmark failure: trailing dot on method call chain
+    // when the file has an unresolvable import used in the same function.
+    let code = r#"
+from nonexistent import request
+class Response:
+    status_code: int = 200
+class Client:
+    def get(self, url: str) -> Response:
+        return Response()
+client = Client()
+def users() -> None:
+    x = request.args
+    resp = client.get("url").
+    #                        ^
+    return None
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let trimmed = report.trim();
+    assert!(
+        trimmed.contains("status_code"),
+        "missing status_code in completions:\n{trimmed}"
+    );
+}

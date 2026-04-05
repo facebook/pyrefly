@@ -1,156 +1,93 @@
 {
-  "variables": [],
+  "name": "test",
+  "names": [
+    "test.Complete.method",
+    "test.Incomplete.method_unannotated",
+    "test.Incomplete.method_partial",
+    "test.Incomplete.method_complete",
+    "test.Complete",
+    "test.Incomplete"
+  ],
   "line_count": 21,
-  "functions": [
+  "symbol_reports": [
     {
+      "kind": "function",
       "name": "test.Complete.method",
-      "return_annotation": "bool",
-      "is_return_type_known": true,
-      "parameters": [
-        {
-          "name": "self",
-          "annotation": null,
-          "is_type_known": true,
-          "location": {
-            "line": 8,
-            "column": 16
-          }
-        },
-        {
-          "name": "x",
-          "annotation": "int",
-          "is_type_known": true,
-          "location": {
-            "line": 8,
-            "column": 22
-          }
-        }
-      ],
-      "is_type_known": true,
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
       "location": {
         "line": 8,
         "column": 5
       }
     },
     {
+      "kind": "function",
       "name": "test.Incomplete.method_unannotated",
-      "return_annotation": null,
-      "is_return_type_known": false,
-      "parameters": [
-        {
-          "name": "self",
-          "annotation": null,
-          "is_type_known": true,
-          "location": {
-            "line": 13,
-            "column": 28
-          }
-        },
-        {
-          "name": "x",
-          "annotation": null,
-          "is_type_known": false,
-          "location": {
-            "line": 13,
-            "column": 34
-          }
-        }
-      ],
-      "is_type_known": false,
+      "n_typable": 2,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 2,
       "location": {
         "line": 13,
         "column": 5
       }
     },
     {
+      "kind": "function",
       "name": "test.Incomplete.method_partial",
-      "return_annotation": null,
-      "is_return_type_known": false,
-      "parameters": [
-        {
-          "name": "self",
-          "annotation": null,
-          "is_type_known": true,
-          "location": {
-            "line": 16,
-            "column": 24
-          }
-        },
-        {
-          "name": "x",
-          "annotation": "int",
-          "is_type_known": true,
-          "location": {
-            "line": 16,
-            "column": 30
-          }
-        }
-      ],
-      "is_type_known": false,
+      "n_typable": 2,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 1,
       "location": {
         "line": 16,
         "column": 5
       }
     },
     {
+      "kind": "function",
       "name": "test.Incomplete.method_complete",
-      "return_annotation": "bool",
-      "is_return_type_known": true,
-      "parameters": [
-        {
-          "name": "self",
-          "annotation": null,
-          "is_type_known": true,
-          "location": {
-            "line": 19,
-            "column": 25
-          }
-        },
-        {
-          "name": "x",
-          "annotation": "int",
-          "is_type_known": true,
-          "location": {
-            "line": 19,
-            "column": 31
-          }
-        }
-      ],
-      "is_type_known": true,
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
       "location": {
         "line": 19,
         "column": 5
       }
-    }
-  ],
-  "classes": [
+    },
     {
+      "kind": "class",
       "name": "test.Complete",
-      "incomplete_attributes": [],
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
       "location": {
         "line": 7,
         "column": 1
       }
     },
     {
+      "kind": "class",
       "name": "test.Incomplete",
-      "incomplete_attributes": [
-        {
-          "name": "method_partial",
-          "declared_in": "test.Incomplete"
-        },
-        {
-          "name": "method_unannotated",
-          "declared_in": "test.Incomplete"
-        }
-      ],
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
       "location": {
         "line": 12,
         "column": 1
       }
     }
   ],
-  "suppressions": [],
-  "annotation_completeness": 50.0,
-  "type_completeness": 100.0
+  "type_ignores": [],
+  "n_typable": 8,
+  "n_typed": 5,
+  "n_any": 0,
+  "n_untyped": 3,
+  "coverage": 62.5,
+  "strict_coverage": 62.5
 }

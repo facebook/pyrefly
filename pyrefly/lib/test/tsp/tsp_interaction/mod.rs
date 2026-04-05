@@ -13,3 +13,4 @@ pub mod get_supported_protocol_version;
 pub mod get_type_queries;
 pub mod object_model;
 pub mod resolve_import;
+pub mod snapshot_changed;

@@ -237,6 +237,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
     ) -> Arc<Type> {
         let inner = match binding {
             BindingExport::Forward(idx) => Binding::Forward(*idx),
+            BindingExport::PromoteForward(idx) => Binding::PromoteForward(*idx),
             BindingExport::AnnotatedForward(ann, idx) => {
                 Binding::AnnotatedType(*ann, Box::new(Binding::Forward(*idx)))
             }

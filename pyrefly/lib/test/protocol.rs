@@ -714,6 +714,27 @@ issubclass(X, Sized) # E: Runtime checkable protocol `Sized` has an unsafe overl
 );
 
 testcase!(
+    test_runtime_checkable_missing_members_do_not_overlap,
+    r#"
+from typing import Any, Generator, Iterable, Protocol, runtime_checkable
+
+def test1(a: Iterable[Any]) -> None:
+    isinstance(a, Generator)
+
+@runtime_checkable
+class P(Protocol):
+    x: int
+    y: int
+
+class C:
+    x: str
+
+def test2(x: C):
+    isinstance(x, P)
+"#,
+);
+
+testcase!(
     test_runtime_checkable_generics_no_error,
     r#"
 from typing import Protocol, runtime_checkable, TypeVar
@@ -948,7 +969,6 @@ other_flag = False
 }
 
 testcase!(
-    bug = "conformance: Module with Literal[100] should be accepted for protocol expecting int",
     test_protocols_modules_conformance,
     env_protocols_modules(),
     r#"
@@ -960,7 +980,7 @@ class Options1(Protocol):
     one_flag: bool
     other_flag: bool
 
-op1: Options1 = _protocols_modules1  # E: `Module[_protocols_modules1]` is not assignable to `Options1`
+op1: Options1 = _protocols_modules1
 "#,
 );
 
@@ -983,5 +1003,20 @@ class Foo(Generic[T]):
 
 def to_foo() -> Foo[MySeries]:
     ...
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2925
+testcase!(
+    bug = "Should detect ambiguous protocol members with value assignments",
+    test_protocol_ambiguous_member,
+    r#"
+from typing import Protocol
+
+class Ambiguous(Protocol):
+    # Assigning a value in a Protocol body is ambiguous: is it declaring
+    # a member with a type, or providing a default value?
+    x = None
+    y = ...
 "#,
 );

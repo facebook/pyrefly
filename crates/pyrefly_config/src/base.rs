@@ -25,6 +25,20 @@ pub enum UntypedDefBehavior {
     SkipAndInferReturnAny,
 }
 
+/// Controls when Pyrefly infers return types for functions without explicit return annotations.
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Default)]
+#[derive(ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum InferReturnTypes {
+    /// Never infer return types; unannotated returns are treated as `Any`.
+    Never,
+    /// Infer return types only for functions with at least one parameter or return annotation.
+    Annotated,
+    /// Infer return types for all checked functions, including completely unannotated ones.
+    #[default]
+    Checked,
+}
+
 /// How to handle when recursion depth limit is exceeded.
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Default)]
 #[derive(ValueEnum)]
@@ -78,6 +92,7 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "crate::util::none_or_empty")]
     pub(crate) ignore_missing_imports: Option<Vec<ModuleWildcard>>,
 
+    /// Deprecated: use `check-unannotated-defs` and `infer-return-types` instead.
     /// How should we handle analyzing and inferring the function signature if it's untyped?
     #[serde(
         default,
@@ -87,6 +102,20 @@ pub struct ConfigBase {
         alias = "untyped_def_behavior"
     )]
     pub untyped_def_behavior: Option<UntypedDefBehavior>,
+
+    /// Whether to type check the bodies of unannotated function definitions.
+    /// Defaults to true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_unannotated_defs: Option<bool>,
+
+    /// Controls when Pyrefly infers return types for functions without explicit return annotations.
+    /// - `never`: unannotated returns are always treated as `Any`.
+    /// - `annotated`: infer return types only for functions with at least one annotation.
+    /// - `checked`: infer return types for all checked functions (default).
+    ///   Only applies to functions whose bodies are checked; unannotated functions
+    ///   are only eligible when `check-unannotated-defs` is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infer_return_types: Option<InferReturnTypes>,
 
     /// Whether to disable type errors in language server. By default errors will be shown in IDEs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,6 +159,12 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict_callable_subtyping: Option<bool>,
 
+    /// Whether to use spec-compliant overload evaluation semantics.
+    /// When false (the default), Pyrefly attempts to resolve ambiguous calls precisely.
+    /// When true, overload evaluation follows the typing spec exactly, falling back to `Any` more frequently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_compliant_overloads: Option<bool>,
+
     /// Any unknown config items
     #[serde(default, flatten)]
     pub(crate) extras: ExtraConfigs,
@@ -156,6 +191,26 @@ impl ConfigBase {
         }
     }
 
+    /// Resolve the deprecated `untyped_def_behavior` field into the two new fields
+    /// (`check_unannotated_defs` and `infer_return_types`).
+    /// New fields take precedence; the old field only fills in unset values.
+    pub fn resolve_legacy_untyped_def_behavior(&mut self) {
+        let behavior = self.untyped_def_behavior.unwrap_or_default();
+        if self.check_unannotated_defs.is_none() {
+            self.check_unannotated_defs = Some(!matches!(
+                behavior,
+                UntypedDefBehavior::SkipAndInferReturnAny
+            ));
+        }
+        if self.infer_return_types.is_none() {
+            self.infer_return_types = Some(match behavior {
+                UntypedDefBehavior::CheckAndInferReturnType => InferReturnTypes::Checked,
+                UntypedDefBehavior::CheckAndInferReturnAny
+                | UntypedDefBehavior::SkipAndInferReturnAny => InferReturnTypes::Never,
+            });
+        }
+    }
+
     pub fn get_errors(base: &Self) -> Option<&ErrorDisplayConfig> {
         base.errors.as_ref()
     }
@@ -168,8 +223,12 @@ impl ConfigBase {
         base.ignore_missing_imports.as_deref()
     }
 
-    pub fn get_untyped_def_behavior(base: &Self) -> Option<UntypedDefBehavior> {
-        base.untyped_def_behavior
+    pub fn get_check_unannotated_defs(base: &Self) -> Option<bool> {
+        base.check_unannotated_defs
+    }
+
+    pub fn get_infer_return_types(base: &Self) -> Option<InferReturnTypes> {
+        base.infer_return_types
     }
 
     pub fn get_disable_type_errors_in_ide(base: &Self) -> Option<bool> {
@@ -211,5 +270,9 @@ impl ConfigBase {
 
     pub fn get_strict_callable_subtyping(base: &Self) -> Option<bool> {
         base.strict_callable_subtyping
+    }
+
+    pub fn get_spec_compliant_overloads(base: &Self) -> Option<bool> {
+        base.spec_compliant_overloads
     }
 }

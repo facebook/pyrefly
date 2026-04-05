@@ -165,6 +165,12 @@ impl ModuleStateMut {
         self.steps.solutions.load_full()
     }
 
+    /// Borrow the solutions via a Guard, avoiding Arc refcount operations.
+    /// The Guard keeps the data alive without incrementing the Arc refcount.
+    pub fn load_solutions(&self) -> Guard<Option<Arc<Solutions>>> {
+        self.steps.solutions.load()
+    }
+
     pub fn line_count(&self) -> usize {
         self.steps.line_count()
     }
@@ -252,9 +258,8 @@ impl ModuleStateMut {
         dirty_require
     }
 
-    /// Drain into a read-only snapshot for committed state.
-    /// The `ModuleStateMut` should not be reused after this call.
-    pub fn take_and_freeze(&self) -> ModuleState {
+    /// Consume and produce a frozen `ModuleState`.
+    pub fn take_and_freeze(self) -> ModuleState {
         let (computed, dirty) = self.computed_dirty.load();
         ModuleState {
             require: self.require(),

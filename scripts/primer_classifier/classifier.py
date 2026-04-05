@@ -24,6 +24,7 @@ from .llm_client import (
     assign_verdict_with_llm,
     CategoryVerdict,
     classify_with_llm,
+    critique_reasoning,
     generate_suggestions,
     LLMError,
 )
@@ -696,13 +697,31 @@ def classify_project(
             base.method = "llm"
             return base
 
-        # Pass 2: assign verdict based on reasoning
+        # Pass 1.5: self-critique the reasoning for factual errors
+        try:
+            critiqued_reason, critiqued_categories = critique_reasoning(
+                llm_result.reason,
+                llm_result.categories,
+                errors_text,
+                source_context,
+                model,
+            )
+        except LLMError as e:
+            print(
+                f"  Warning: self-critique failed for {project.name}: {e}, "
+                "using original reasoning",
+                file=sys.stderr,
+            )
+            critiqued_reason = llm_result.reason
+            critiqued_categories = llm_result.categories
+
+        # Pass 2: assign verdict based on (critiqued) reasoning
         verdict, categories_with_verdicts = assign_verdict_with_llm(
-            llm_result.reason, llm_result.categories, model
+            critiqued_reason, critiqued_categories, model
         )
 
         base.verdict = verdict
-        base.reason = llm_result.reason
+        base.reason = critiqued_reason
         base.method = "llm"
         base.categories = categories_with_verdicts
         base.pr_attribution = llm_result.pr_attribution
@@ -720,6 +739,74 @@ def classify_project(
         base.method = "heuristic"
 
     return base
+
+
+def _enforce_cross_project_consistency(
+    classifications: list[Classification],
+) -> None:
+    """Enforce verdict consistency across projects that share error kinds.
+
+    When multiple LLM-classified projects share the same error kind(s) and
+    have conflicting verdicts, the majority verdict wins. This prevents the
+    classifier from saying "overload resolution improved" for one project
+    and "overload resolution regressed" for another with the same pattern.
+
+    Modifies classifications in place.
+    """
+    # Only consider LLM-classified projects with clear verdicts
+    llm_classified = [
+        c for c in classifications
+        if c.method == "llm" and c.verdict in ("regression", "improvement")
+    ]
+    if len(llm_classified) < 2:
+        return
+
+    # Group projects by their error kinds (using frozenset for hashability)
+    kind_to_projects: dict[str, list[Classification]] = defaultdict(list)
+    for c in llm_classified:
+        for kind in c.error_kinds:
+            kind_to_projects[kind].append(c)
+
+    # For each error kind shared by multiple projects, check consistency
+    already_adjusted: set[str] = set()
+    for kind, group in kind_to_projects.items():
+        if len(group) < 2:
+            continue
+
+        verdicts = [c.verdict for c in group]
+        if len(set(verdicts)) <= 1:
+            continue  # already consistent
+
+        # Count verdicts
+        verdict_counts: dict[str, int] = {}
+        for v in verdicts:
+            verdict_counts[v] = verdict_counts.get(v, 0) + 1
+
+        majority = max(verdict_counts, key=lambda v: verdict_counts[v])
+        minority_count = sum(
+            c for v, c in verdict_counts.items() if v != majority
+        )
+
+        # Only enforce if majority is clear (> minority)
+        if verdict_counts[majority] <= minority_count:
+            continue
+
+        # Update minority projects to match majority
+        adjusted_names = []
+        for c in group:
+            if c.verdict != majority and c.project_name not in already_adjusted:
+                old = c.verdict
+                c.verdict = majority
+                adjusted_names.append(c.project_name)
+                already_adjusted.add(c.project_name)
+
+        if adjusted_names:
+            print(
+                f"  Cross-project consistency [{kind}]: "
+                f"{', '.join(adjusted_names)} adjusted to {majority} "
+                f"(vote: {verdict_counts})",
+                file=sys.stderr,
+            )
 
 
 def classify_all(
@@ -766,6 +853,11 @@ def classify_all(
         )
         result.classifications.append(classification)
 
+    # Enforce cross-project consistency before counting verdicts
+    _enforce_cross_project_consistency(result.classifications)
+
+    # Count verdicts after consistency enforcement
+    for classification in result.classifications:
         if classification.verdict == "regression":
             result.regressions += 1
         elif classification.verdict == "improvement":

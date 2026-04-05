@@ -9,8 +9,10 @@ use std::sync::Arc;
 
 use clap::Subcommand;
 use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::thread_pool::ThreadCount;
 
 use crate::commands::buck_check::BuckCheckArgs;
+use crate::commands::check::CheckResult;
 use crate::commands::check::FullCheckArgs;
 use crate::commands::check::SnippetCheckArgs;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
@@ -19,6 +21,7 @@ use crate::commands::infer::InferArgs;
 use crate::commands::init::InitArgs;
 use crate::commands::lsp::LspArgs;
 use crate::commands::report::ReportArgs;
+use crate::commands::stubgen::StubgenArgs;
 use crate::commands::suppress::SuppressArgs;
 use crate::commands::tsp::TspArgs;
 use crate::commands::util::CommandExitStatus;
@@ -55,6 +58,8 @@ pub enum Command {
     Report(ReportArgs),
     /// Suppress type errors by adding ignore comments, or remove unused ignores.
     Suppress(SuppressArgs),
+    /// Generate .pyi stub files from Python source files.
+    Stubgen(StubgenArgs),
 }
 
 impl Command {
@@ -63,24 +68,41 @@ impl Command {
         version: &str,
         telemetry: &impl Telemetry,
         config_configurer_wrapper: Option<ConfigConfigurerWrapper>,
-    ) -> anyhow::Result<CommandExitStatus> {
+        thread_count: ThreadCount,
+    ) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
         match self {
-            Command::Check(args) => args.run(config_configurer_wrapper).await,
-            Command::Snippet(args) => args.run(config_configurer_wrapper).await,
-            Command::BuckCheck(args) => args.run(),
-            Command::Lsp(args) => args.run(
-                version,
+            Command::Check(args) => args.run(config_configurer_wrapper, thread_count).await,
+            Command::Snippet(args) => args.run(config_configurer_wrapper, thread_count).await,
+            Command::BuckCheck(args) => Ok((args.run(thread_count)?, None)),
+            Command::Lsp(args) => Ok((
+                args.run(
+                    version,
+                    None,
+                    None,
+                    telemetry,
+                    Arc::new(NoExternalProvider),
+                    config_configurer_wrapper,
+                    thread_count,
+                )?,
                 None,
-                telemetry,
-                Arc::new(NoExternalProvider),
-                config_configurer_wrapper,
-            ),
-            Command::Tsp(args) => args.run(telemetry, config_configurer_wrapper),
-            Command::Init(args) => args.run(config_configurer_wrapper.clone()),
-            Command::Infer(args) => args.run(config_configurer_wrapper),
-            Command::DumpConfig(args) => args.run(config_configurer_wrapper),
-            Command::Report(args) => args.run(config_configurer_wrapper),
-            Command::Suppress(args) => args.run(config_configurer_wrapper),
+            )),
+            Command::Tsp(args) => Ok((
+                args.run(telemetry, config_configurer_wrapper, thread_count)?,
+                None,
+            )),
+            Command::Init(args) => Ok((
+                args.run(config_configurer_wrapper.clone(), thread_count)?,
+                None,
+            )),
+            Command::Infer(args) => Ok((args.run(config_configurer_wrapper, thread_count)?, None)),
+            Command::DumpConfig(args) => Ok((args.run(config_configurer_wrapper)?, None)),
+            Command::Report(args) => Ok((args.run(config_configurer_wrapper, thread_count)?, None)),
+            Command::Suppress(args) => {
+                Ok((args.run(config_configurer_wrapper, thread_count)?, None))
+            }
+            Command::Stubgen(args) => {
+                Ok((args.run(config_configurer_wrapper, thread_count)?, None))
+            }
         }
     }
 }

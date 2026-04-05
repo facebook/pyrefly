@@ -54,22 +54,20 @@ assert_type(foo(1), int)
 );
 
 testcase!(
-    bug = "We allow annotated legacy type vars as *values*, but they don't work downstream.",
     test_annotated_legacy_type_var,
     r#"
 from typing import TypeVar, ParamSpec, TypeVarTuple
-T_bad_ann: int = TypeVar("T_bad_ann")  # E: `TypeVar` is not assignable to `int`
-P_bad_ann: int = ParamSpec("P_bad_ann")  # E: `ParamSpec` is not assignable to `int`
-Ts_bad_ann: int = TypeVarTuple("Ts_bad_ann")  # E: `TypeVarTuple` is not assignable to `int`
+T_bad_ann: int = TypeVar("T_bad_ann")  # E: not assignable to variable `T_bad_ann` with type `int`
+P_bad_ann: int = ParamSpec("P_bad_ann")  # E: not assignable to variable `P_bad_ann` with type `int`
+Ts_bad_ann: int = TypeVarTuple("Ts_bad_ann")  # E: not assignable to variable `Ts_bad_ann` with type `int`
 
-# All of these are legal assignments, but we won't understand them downstream
+# Annotated legacy type vars work as type annotations
 T: TypeVar = TypeVar("T")
 P: ParamSpec = ParamSpec("P")
 Ts: TypeVarTuple = TypeVarTuple("Ts")
 
-# For example, see this:
-def f(x: T) -> T:  # E: Expected a type form, got instance of `TypeVar  # E: Expected a type form, got instance of `TypeVar`
-    pass
+def f(x: T) -> T:
+    return x
 "#,
 );
 
@@ -584,7 +582,7 @@ class C(Generic[T]): ...
 def append(x: C[T], y: T):
     pass
 v: C[int] = C()
-append(v, "test")  # E: Argument `Literal['test']` is not assignable to parameter `y` with type `int`
+append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
 "#,
 );
 
@@ -597,7 +595,7 @@ class C(typing.Generic[T]): ...
 def append(x: C[T], y: T):
     pass
 v: C[int] = C()
-append(v, "test")  # E: Argument `Literal['test']` is not assignable to parameter `y` with type `int`
+append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
 "#,
 );
 

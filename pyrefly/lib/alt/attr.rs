@@ -24,11 +24,9 @@ use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_types::types::Var;
 use pyrefly_util::suggest::best_suggestion;
-use ruff_python_ast::Expr;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
-use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 use vec1::vec1;
@@ -38,9 +36,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::expr::TypeOrExpr;
-use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
-use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyExport;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -641,8 +637,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn add_class_fields(&self, class: &Class, candidates: &mut SmallSet<Name>) {
         let mut add_fields_for = |cls: &Class| {
-            for name in cls.fields() {
-                candidates.insert(name.clone());
+            if let Some(class_fields) = self.get_class_fields(cls) {
+                for name in class_fields.names() {
+                    candidates.insert(name.clone());
+                }
             }
         };
         add_fields_for(class);
@@ -1095,16 +1093,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ty = match &got {
             TypeOrExpr::Expr(got) => self.expr(
                 got,
-                Some((&attr_ty, &|| TypeCheckContext {
-                    kind: TypeCheckKind::Attribute(attr_name.clone()),
-                    context: context.map(|ctx| ctx()),
+                Some((&attr_ty, &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::Attribute(attr_name.clone()))
+                        .with_context(context.map(|ctx| ctx()))
                 })),
                 errors,
             ),
             TypeOrExpr::Type(got, _) => {
-                self.check_type(got, &attr_ty, range, errors, &|| TypeCheckContext {
-                    kind: TypeCheckKind::Attribute(attr_name.clone()),
-                    context: context.map(|ctx| ctx()),
+                self.check_type(got, &attr_ty, range, errors, &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::Attribute(attr_name.clone()))
+                        .with_context(context.map(|ctx| ctx()))
                 });
                 (*got).clone()
             }
@@ -1130,45 +1128,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             return Some((names, has_dict));
         }
-
-        let key = KeyClassField(cls.index(), dunder::SLOTS.clone());
-        let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
-        let binding = self.bindings().get::<KeyClassField>(idx);
-        let ClassFieldDefinition::AssignedInBody { value, .. } = &binding.definition else {
-            return None;
-        };
-        let ExprOrBinding::Expr(expr) = value.as_ref() else {
-            return None;
-        };
-
-        fn extract_names_from_elts(elts: &[Expr]) -> Option<(SmallSet<Name>, bool)> {
-            let mut names = SmallSet::new();
-            let mut has_dict = false;
-            for elt in elts {
-                let Expr::StringLiteral(s) = elt else {
-                    return None;
-                };
-                let name = Name::new(s.value.to_str());
-                if name == dunder::DICT {
-                    has_dict = true;
-                }
-                names.insert(name);
-            }
-            Some((names, has_dict))
-        }
-
-        match expr {
-            Expr::Tuple(t) => extract_names_from_elts(&t.elts),
-            Expr::List(l) => extract_names_from_elts(&l.elts),
-            Expr::StringLiteral(s) => {
-                let mut names = SmallSet::new();
-                let name = Name::new(s.value.to_str());
-                let has_dict = name == dunder::DICT;
-                names.insert(name);
-                Some((names, has_dict))
-            }
-            _ => None,
-        }
+        let slots = metadata.slots_info()?;
+        Some((slots.names.clone(), slots.has_dict))
     }
 
     /// Compute the effective slots policy for a class instance write.
@@ -1230,12 +1191,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn has_custom_setattr(&self, cls: &Class) -> bool {
-        if cls.contains(&dunder::SETATTR) {
+        if self
+            .get_class_fields(cls)
+            .is_some_and(|f| f.contains(&dunder::SETATTR))
+        {
             return true;
         }
         let mro = self.get_mro_for_class(cls);
         for ancestor in mro.ancestors_no_object() {
-            if ancestor.class_object().contains(&dunder::SETATTR) {
+            if self
+                .get_class_fields(ancestor.class_object())
+                .is_some_and(|f| f.contains(&dunder::SETATTR))
+            {
                 return true;
             }
         }
@@ -1690,6 +1657,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ => self.get_class_attribute(class, attr_name),
                 };
                 match attr {
+                    Some(
+                        no_access @ ClassAttribute::NoAccess(
+                            NoAccessReason::ClassUseOfInstanceAttribute(_),
+                        ),
+                    ) => {
+                        // Instance-only attributes from `__slots__` produce slot descriptors.
+                        // The order of precedence is: data descriptors > slot descriptors > non-descriptor attributes
+                        // All attributes on `type` like `__name__` are considered data descriptors, despite not being annotated as such.
+                        let metadata = self.get_metadata_for_class(class.class_object());
+                        let metaclass = metadata.metaclass(self.stdlib);
+                        let metaclass_attr =
+                            self.get_metaclass_attribute(class, metaclass, attr_name);
+                        match metaclass_attr {
+                            Some(meta_attr)
+                                if meta_attr.is_data_descriptor()
+                                    || metaclass.class_object().is_builtin("type") =>
+                            {
+                                acc.found_class_attribute(meta_attr, base)
+                            }
+                            _ => acc.found_class_attribute(no_access, base),
+                        }
+                    }
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None => {
                         // Classes are instances of their metaclass, which defaults to `builtins.type`.
@@ -2129,6 +2118,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Use TensorInstance to preserve shape information through attribute lookup
                 acc.push(AttributeBase1::TensorInstance((*tensor).clone()))
             }
+            Type::NNModule(module) => {
+                // NNModule delegates attribute access to its underlying class
+                acc.push(AttributeBase1::ClassInstance(module.class.clone()))
+            }
             Type::Size(_) => {
                 // Dimension values behave like int for attribute access
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
@@ -2463,12 +2456,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             // At runtime, `Annotated[T, ...]` is an instance of `typing._AnnotatedAlias`,
             // which inherits from `typing._GenericAlias`. We model it as `GenericAlias`.
-            Type::Annotated(_) => acc.push(AttributeBase1::ClassInstance(
+            Type::Annotated(_, _) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.generic_alias().clone(),
             )),
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
             | Type::Type(_)
+            | Type::TypeForm(_)
             | Type::Unpack(_)
             | Type::Concatenate(_, _)
             | Type::ParamSpecValue(_)
@@ -2588,11 +2582,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     {
         let mut seen = SmallSet::new();
         for c in mro {
+            let Some(class_fields) = self.get_class_fields(c) else {
+                continue;
+            };
             match expected_attribute_name {
                 None => {
-                    for fld in c.fields() {
+                    for fld in class_fields.names() {
                         if seen.insert(fld)
-                            && let Some(range) = c.field_decl_range(fld)
+                            && let Some(range) = class_fields.field_decl_range(fld)
                         {
                             res.push(AttrInfo {
                                 name: fld.clone(),
@@ -2601,7 +2598,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 definition: AttrDefinition::FullyResolved {
                                     cls: c.dupe(),
                                     range,
-                                    docstring_range: c.field_docstring_range(fld),
+                                    docstring_range: class_fields.field_docstring_range(fld),
                                 },
                                 is_reexport: false,
                             });
@@ -2609,7 +2606,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Some(expected_attribute_name) => {
-                    if let Some(range) = c.field_decl_range(expected_attribute_name) {
+                    if let Some(range) = class_fields.field_decl_range(expected_attribute_name) {
                         res.push(AttrInfo {
                             name: expected_attribute_name.clone(),
                             ty: None,
@@ -2617,7 +2614,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             definition: AttrDefinition::FullyResolved {
                                 cls: c.dupe(),
                                 range,
-                                docstring_range: c.field_docstring_range(expected_attribute_name),
+                                docstring_range: class_fields
+                                    .field_docstring_range(expected_attribute_name),
                             },
                             is_reexport: false,
                         });

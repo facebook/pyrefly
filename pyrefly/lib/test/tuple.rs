@@ -486,6 +486,20 @@ def test(x: tuple[int] | tuple[str]) -> None:
 );
 
 testcase!(
+    test_tuple_repeat,
+    r#"
+from typing import assert_type, Literal
+
+assert_type((42,) * 2, tuple[Literal[42], Literal[42]])
+assert_type(2 * (42,), tuple[Literal[42], Literal[42]])
+assert_type((1, "x") * 2, tuple[Literal[1], Literal["x"], Literal[1], Literal["x"]])
+assert_type((1,) * 0, tuple[()])
+assert_type((1,) * -1, tuple[()])
+assert_type((1,) * 257, tuple[Literal[1], ...])
+"#,
+);
+
+testcase!(
     test_unpack_tuple_with_double_def,
     r#"
 from typing import Unpack, Any
@@ -552,6 +566,37 @@ def f(x: TupleChild[int, str]):
     assert_type(x[0], int)
     assert_type(x[1], str)
     x[2]  # E: Index 2 out of range for tuple with 2 elements
+    "#,
+);
+
+testcase!(
+    test_tuple_subclass_getitem_override,
+    r#"
+from typing import assert_type
+
+class Foo(tuple[int, ...]):
+    def __getitem__(self, name: str) -> int:  # E: `Foo.__getitem__` has type
+        ...
+
+def test(foo: Foo) -> None:
+    assert_type(foo["test"], int)
+    "#,
+);
+
+testcase!(
+    test_tuple_subclass_inherited_getitem_override,
+    r#"
+from typing import assert_type
+
+class Parent(tuple[int, ...]):
+    def __getitem__(self, name: str) -> int:  # E: `Parent.__getitem__` has type
+        ...
+
+class Child(Parent):
+    pass
+
+def test(c: Child) -> None:
+    assert_type(c["test"], int)
     "#,
 );
 

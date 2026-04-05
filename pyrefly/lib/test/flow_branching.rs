@@ -573,7 +573,7 @@ def fun(x: A | B | C) -> None:
 testcase!(
     test_match_class,
     r#"
-from typing import assert_type
+from typing import assert_type, assert_never
 
 class Foo:
     x: int
@@ -596,21 +596,36 @@ def fun(foo: Foo, bar: Bar, baz: Baz) -> None:
         case Foo(a, b):
             assert_type(a, int)
             assert_type(b, str)
+        case _:
+            assert_never(foo)
+    match foo:
         case Foo(x = b, y = a):
             assert_type(a, str)
             assert_type(b, int)
+        case _:
+            assert_never(foo)
+    match foo:
         case Foo(a, b, c):  # E: Cannot match positional sub-patterns in `Foo`\n  Index 2 out of range for `__match_args__`
             pass
+        case _:
+            assert_never(foo)
     match bar:
         case Bar(1):  # E: Object of class `Bar` has no attribute `__match_args__`
             pass
         case Bar(a):  # E: Object of class `Bar` has no attribute `__match_args__`
             pass
+        case _:
+            assert_never(bar)
+    match bar:
         case Bar(x = a):
             assert_type(a, int)
+        case _:
+            assert_never(bar)
     match baz:
         case Baz(1):  # E: Expected literal string in `__match_args__`
             pass
+        case _:
+            assert_never(baz)  # E: Argument `Baz` is not assignable to parameter `arg` with type `Never`
 "#,
 );
 
@@ -645,7 +660,7 @@ testcase!(
     bug = "we don't narrow attributes in a positional pattern",
     test_match_class_union,
     r#"
-from typing import assert_type, Literal
+from typing import assert_type, assert_never, Literal
 
 class Foo:
     x: int
@@ -663,14 +678,6 @@ def test(x: Foo | Bar) -> None:
             assert_type(x, Foo)
             assert_type(x.x, int)
             assert_type(x.y, str)
-        case Foo(a, b):
-            assert_type(x, Foo)
-            assert_type(a, int)
-            assert_type(b, str)
-        case Foo(x = b, y = a):
-            assert_type(x, Foo)
-            assert_type(a, str)
-            assert_type(b, int)
         case Foo(x = 1, y = ""):
             assert_type(x, Foo)
             assert_type(x.x, Literal[1])
@@ -678,11 +685,29 @@ def test(x: Foo | Bar) -> None:
         case Bar("bar"):
             assert_type(x, Bar)
             assert_type(x.x, str)  # we want to narrow this to Literal["bar"]
+
+def test_keyword_irrefutable(x: Foo | Bar) -> None:
+    match x:
+        case Foo(x = b, y = a):
+            assert_type(x, Foo)
+            assert_type(a, str)
+            assert_type(b, int)
         case Bar(a) as b:
             assert_type(x, Bar)
             assert_type(b, Bar)
             assert_type(a, str)
             assert_type(b, Bar)
+        case _:
+            assert_never(x)
+
+def test_positional(x: Foo | Bar) -> None:
+    match x:
+        case Foo(1, "a"):
+            pass
+        case Foo(a, b):
+            assert_type(x, Foo)
+            assert_type(a, int)
+            assert_type(b, str)
 "#,
 );
 
@@ -1337,6 +1362,7 @@ def f() -> int:
 
 // elif condition only executes if the first `if` was False — walrus may not run.
 testcase!(
+    bug = "In order to fix false positives, we handled narrows differently in if/elif and introduced a false negative here",
     test_walrus_in_elif,
     r#"
 def condition() -> bool: ...
@@ -1345,7 +1371,109 @@ def f() -> bool:
         pass
     elif (x := condition()):
         pass
-    return x  # E: `x` may be uninitialized
+    return x  # False negative: x winds up getting applied as if it were in the base flow due to the negative narrow
+    "#,
+);
+
+// When the `if` branch raises, the elif condition must execute before
+// reaching code after the if/elif block, so the walrus is always assigned.
+testcase!(
+    test_walrus_in_elif_with_raise,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if not foo():
+        raise AssertionError()
+    elif (_bar := bar()) > 1:
+        raise AssertionError()
+    print(_bar)
+    "#,
+);
+
+// The walrus assignment should propagate to the base flow so the
+// merge does not falsely report "may be uninitialized".
+testcase!(
+    test_walrus_in_elif_targeting_declared_local,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    x: int
+    if not foo():
+        raise AssertionError()
+    elif (x := bar()) > 1:
+        raise AssertionError()
+    print(x)
+    "#,
+);
+
+testcase!(
+    test_walrus_multiple_elif,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if not foo():
+        raise AssertionError()
+    elif (x := bar()) > 1:
+        raise AssertionError()
+    elif (y := bar()) > 2:
+        raise AssertionError()
+    print(x)
+    print(y)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_elif_with_else,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if not foo():
+        raise AssertionError()
+    elif (x := bar()) > 1:
+        pass
+    else:
+        pass
+    print(x)
+    "#,
+);
+
+// the walrus may not execute, so x should be possibly-uninitialized.
+testcase!(
+    bug = "Should report x as possibly uninitialized since the if branch does not terminate",
+    test_walrus_in_elif_preceding_if_no_terminate,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if foo():
+        pass
+    elif (x := bar()) > 1:
+        pass
+    print(x)  # should be an error: x may be uninitialized
     "#,
 );
 
@@ -1814,10 +1942,9 @@ def f(c: Color) -> str:
 );
 
 testcase!(
-    bug = "isinstance exhaustiveness not yet working for all union patterns",
     test_if_elif_isinstance_exhaustive,
     r#"
-def f(x: int | str) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+def f(x: int | str) -> str:
     if isinstance(x, int):
         return "int"
     elif isinstance(x, str):
@@ -1878,10 +2005,9 @@ def f(x: Literal["a", "b", "c"]) -> str:
 );
 
 testcase!(
-    bug = "mixed is/isinstance narrowing exhaustiveness not yet working",
     test_if_elif_mixed_narrowing,
     r#"
-def f(x: int | None) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+def f(x: int | None) -> str:
     if x is None:
         return "none"
     elif isinstance(x, int):
@@ -1910,6 +2036,115 @@ def f(x: int | str, y: int | str) -> str:  # E: Function declared to return `str
         return "y is str"
     # Different subjects in different branches - cannot determine exhaustiveness
 "#,
+);
+
+testcase!(
+    test_if_elif_mixed_subjects_one_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(x: Color, y: int | str) -> str:
+    if x == Color.RED:
+        return "red"
+    elif isinstance(y, int):
+        return "y is int"
+    elif x == Color.GREEN:
+        return "green"
+    elif x == Color.BLUE:
+        return "blue"
+"#,
+);
+
+// Regression test for the first example bug reported in https://github.com/facebook/pyrefly/issues/1286
+testcase!(
+    test_match_can_narrow_union_to_never_in_wildcard,
+    r#"
+from typing import assert_never
+class A:...
+class B:...
+
+def go(mdl:A|B):
+    match mdl:
+        case A():
+            print('A')
+        case B():
+            print('B')
+        case _:
+            assert_never(mdl)
+    "#,
+);
+
+testcase!(
+    test_match_keyword_wildcard_pattern_is_irrefutable,
+    r#"
+from dataclasses import dataclass
+from typing import assert_never
+
+@dataclass
+class A: ...
+
+@dataclass
+class B:
+    x: int
+
+T = A | B
+
+def test(x: T):
+    match x:
+        case A(): ...
+        case B(x=_): ...
+        case _:
+            assert_never(x)
+    "#,
+);
+
+testcase!(
+    test_match_exhausts_literal_type,
+    r#"
+from typing import Literal, assert_never
+
+type A = Literal['A']
+
+class C:
+    def __init__(self, a: A) -> None:
+        self.a = a
+
+    def f(self) -> None:
+        match self.a:
+            case 'A':
+                pass
+            case ever:
+                assert_never(ever)
+    "#,
+);
+
+// Regression test for the third example bug reported in https://github.com/facebook/pyrefly/issues/1286
+testcase!(
+    test_enum_exhaustive_match_and_uninitialized_local,
+    r#"
+from enum import IntEnum
+
+class Rating(IntEnum):
+    Again = 1
+    Hard = 2
+    Good = 3
+    Easy = 4
+
+def foo()->Rating:
+    ...
+
+x = foo()
+match x:
+    case Rating.Again:
+        y = 1
+    case Rating.Easy | Rating.Good | Rating.Hard:
+        y = 2
+print(y)
+    "#,
 );
 
 // Issue #2406: NoReturn in except block should make variable always initialized

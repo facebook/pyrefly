@@ -36,6 +36,7 @@ use tsp_types::BuiltInType;
 use tsp_types::ClassType as TspClassType;
 use tsp_types::Declaration;
 use tsp_types::DeclarationCategory;
+use tsp_types::DeclarationKind;
 use tsp_types::LiteralValue;
 use tsp_types::ModuleType as TspModuleType;
 use tsp_types::Node;
@@ -47,23 +48,10 @@ use tsp_types::SynthesizedType;
 use tsp_types::SynthesizedTypeMetadata;
 use tsp_types::Type as TspType;
 use tsp_types::TypeFlags;
+use tsp_types::TypeKind;
 use tsp_types::UnionType;
 
 use crate::lsp::module_helpers::to_real_path;
-
-// ---------------------------------------------------------------------------
-// Wire-protocol discriminator values for the `kind` field.
-// These must match the serde rename values in the generated protocol types.
-// ---------------------------------------------------------------------------
-const KIND_BUILTIN: &str = "BuiltIn";
-const KIND_CLASS: &str = "Class";
-const KIND_UNION: &str = "Union";
-const KIND_MODULE: &str = "Module";
-const KIND_OVERLOADED: &str = "Overloaded";
-const KIND_SYNTHESIZED: &str = "Synthesized";
-
-/// Declaration kind for source-level declarations.
-const DECL_KIND_REGULAR: &str = "Regular";
 
 /// Monotonic counter used to assign unique ids to converted types.
 static NEXT_TYPE_ID: AtomicI32 = AtomicI32::new(1);
@@ -109,7 +97,7 @@ pub fn convert_type(ty: &PyreflyType) -> TspType {
             TspType::Union(UnionType {
                 flags: TypeFlags::NONE,
                 id: next_id(),
-                kind: KIND_UNION.to_owned(),
+                kind: TypeKind::Union,
                 sub_types,
                 type_alias_info: None,
             })
@@ -119,7 +107,7 @@ pub fn convert_type(ty: &PyreflyType) -> TspType {
         PyreflyType::Module(m) => TspType::Module(TspModuleType {
             flags: TypeFlags::NONE,
             id: next_id(),
-            kind: KIND_MODULE.to_owned(),
+            kind: TypeKind::Module,
             module_name: m.to_string(),
             type_alias_info: None,
             uri: String::new(),
@@ -134,7 +122,7 @@ pub fn convert_type(ty: &PyreflyType) -> TspType {
                     declaration: Declaration::Regular(declaration),
                     flags: TypeFlags::INSTANCE,
                     id: next_id(),
-                    kind: KIND_CLASS.to_owned(),
+                    kind: TypeKind::Class,
                     literal_value: None,
                     type_alias_info: None,
                     type_args: None,
@@ -162,7 +150,7 @@ pub fn convert_type(ty: &PyreflyType) -> TspType {
                 flags: TypeFlags::CALLABLE,
                 id: next_id(),
                 implementation: None,
-                kind: KIND_OVERLOADED.to_owned(),
+                kind: TypeKind::Overloaded,
                 overloads,
                 type_alias_info: None,
             })
@@ -210,7 +198,7 @@ fn convert_class_type(ct: &PyreflyClassType, flags: TypeFlags) -> TspType {
         declaration: Declaration::Regular(declaration),
         flags,
         id: next_id(),
-        kind: KIND_CLASS.to_owned(),
+        kind: TypeKind::Class,
         literal_value: None,
         type_alias_info: None,
         type_args,
@@ -226,7 +214,7 @@ fn convert_class_def(cls: &Class) -> TspType {
         declaration: Declaration::Regular(declaration),
         flags: TypeFlags::INSTANTIABLE,
         id: next_id(),
-        kind: KIND_CLASS.to_owned(),
+        kind: TypeKind::Class,
         literal_value: None,
         type_alias_info: None,
         type_args: None,
@@ -244,22 +232,23 @@ fn convert_literal(lit: &pyrefly_types::literal::Literal) -> TspType {
                 declaration: Declaration::Regular(declaration),
                 flags: TypeFlags::LITERAL,
                 id: next_id(),
-                kind: KIND_CLASS.to_owned(),
+                kind: TypeKind::Class,
                 literal_value: None,
                 type_alias_info: None,
                 type_args: None,
             })
         }
         other => {
-            let literal_value = match other {
-                Lit::Int(i) => Some(LiteralValue::Int(i.as_i64().unwrap_or(0) as i32)),
-                Lit::Bool(b) => Some(LiteralValue::Bool(*b)),
-                Lit::Str(s) => Some(LiteralValue::String(s.to_string())),
-                Lit::Bytes(_) | Lit::Enum(_) => None,
+            let (literal_value, class_name) = match other {
+                Lit::Int(i) => (
+                    Some(LiteralValue::Int(i.as_i64().unwrap_or(0) as i32)),
+                    "int",
+                ),
+                Lit::Bool(b) => (Some(LiteralValue::Bool(*b)), "bool"),
+                Lit::Str(s) => (Some(LiteralValue::String(s.to_string())), "str"),
+                Lit::Bytes(_) | Lit::Enum(_) => (None, ""),
             };
             if let Some(lv) = literal_value {
-                // Use a RegularDeclaration with no name so the client falls
-                // back to the display string (e.g. "Literal[1]").
                 let dummy_node = Node {
                     range: TspRange {
                         start: TspPosition {
@@ -275,14 +264,14 @@ fn convert_literal(lit: &pyrefly_types::literal::Literal) -> TspType {
                 };
                 TspType::Class(TspClassType {
                     declaration: Declaration::Regular(RegularDeclaration {
-                        kind: DECL_KIND_REGULAR.to_owned(),
-                        category: DeclarationCategory::Variable,
-                        name: None,
+                        kind: DeclarationKind::Regular,
+                        category: DeclarationCategory::Class,
+                        name: Some(class_name.to_owned()),
                         node: dummy_node,
                     }),
-                    flags: TypeFlags::INSTANCE,
+                    flags: TypeFlags::INSTANCE.with_literal(),
                     id: next_id(),
-                    kind: KIND_CLASS.to_owned(),
+                    kind: TypeKind::Class,
                     literal_value: Some(lv),
                     type_alias_info: None,
                     type_args: None,
@@ -314,12 +303,12 @@ fn convert_function(callable: &Callable, kind: &FunctionKind) -> TspType {
         TspType::Synthesized(SynthesizedType {
             flags: TypeFlags::CALLABLE,
             id: next_id(),
-            kind: KIND_SYNTHESIZED.to_owned(),
+            kind: TypeKind::Synthesized,
             metadata: SynthesizedTypeMetadata {
                 module: TspModuleType {
                     flags: TypeFlags::NONE,
                     id: next_id(),
-                    kind: KIND_MODULE.to_owned(),
+                    kind: TypeKind::Module,
                     module_name,
                     type_alias_info: None,
                     uri: module_uri,
@@ -334,7 +323,7 @@ fn convert_function(callable: &Callable, kind: &FunctionKind) -> TspType {
         TspType::Synthesized(SynthesizedType {
             flags: TypeFlags::CALLABLE,
             id: next_id(),
-            kind: KIND_SYNTHESIZED.to_owned(),
+            kind: TypeKind::Synthesized,
             metadata: empty_synthesized_metadata(),
             stub_content: format!("{kind:?}"),
             type_alias_info: None,
@@ -403,8 +392,8 @@ fn collect_callable_type_names(callable: &Callable, names: &mut HashSet<String>)
             }
         }
         Params::ParamSpec(prefix, _) => {
-            for (ty, _) in prefix.iter() {
-                collect_type_names(ty, names);
+            for p in prefix.iter() {
+                collect_type_names(p.ty(), names);
             }
         }
         Params::Ellipsis | Params::Materialization => {}
@@ -453,7 +442,7 @@ fn make_class_declaration(cls: &Class) -> RegularDeclaration {
 
     RegularDeclaration {
         category: DeclarationCategory::Class,
-        kind: DECL_KIND_REGULAR.to_owned(),
+        kind: DeclarationKind::Regular,
         name: Some(cls.name().to_string()),
         node: Node {
             range: lsp_range_to_tsp(lsp_range),
@@ -495,7 +484,7 @@ fn builtin(name: &str) -> TspType {
         declaration: None,
         flags: TypeFlags::NONE,
         id: next_id(),
-        kind: KIND_BUILTIN.to_owned(),
+        kind: TypeKind::Builtin,
         name: name.to_owned(),
         possible_type: None,
         type_alias_info: None,
@@ -509,7 +498,7 @@ fn synthesized(ty: &PyreflyType) -> TspType {
     TspType::Synthesized(SynthesizedType {
         flags: TypeFlags::INSTANCE,
         id: next_id(),
-        kind: KIND_SYNTHESIZED.to_owned(),
+        kind: TypeKind::Synthesized,
         metadata: empty_synthesized_metadata(),
         stub_content: display,
         type_alias_info: None,
@@ -522,7 +511,7 @@ fn empty_synthesized_metadata() -> SynthesizedTypeMetadata {
         module: TspModuleType {
             flags: TypeFlags::NONE,
             id: 0,
-            kind: KIND_MODULE.to_owned(),
+            kind: TypeKind::Module,
             module_name: String::new(),
             type_alias_info: None,
             uri: String::new(),
@@ -547,7 +536,7 @@ mod tests {
             TspType::BuiltInType(b) => {
                 assert_eq!(b.name, "any");
                 assert_eq!(b.flags, TypeFlags::NONE);
-                assert_eq!(b.kind, KIND_BUILTIN);
+                assert_eq!(b.kind, TypeKind::Builtin);
             }
             other => panic!("expected BuiltInType, got {other:?}"),
         }
@@ -647,7 +636,7 @@ mod tests {
         match tsp {
             TspType::Synthesized(s) => {
                 assert_eq!(s.flags, TypeFlags::INSTANCE);
-                assert_eq!(s.kind, KIND_SYNTHESIZED);
+                assert_eq!(s.kind, TypeKind::Synthesized);
             }
             other => panic!("expected SynthesizedType, got {other:?}"),
         }
@@ -663,7 +652,7 @@ mod tests {
         let tsp = convert_type(&union_ty);
         match tsp {
             TspType::Union(u) => {
-                assert_eq!(u.kind, KIND_UNION);
+                assert_eq!(u.kind, TypeKind::Union);
                 assert_eq!(u.flags, TypeFlags::NONE);
                 assert_eq!(u.sub_types.len(), 2);
                 // First member should be BuiltIn "none"
@@ -762,7 +751,10 @@ mod tests {
         let tsp = builtin("any");
         let json = serde_json::to_value(&tsp).unwrap();
         let obj = json.as_object().expect("expected JSON object");
-        assert_eq!(obj.get("kind").and_then(|v| v.as_str()), Some("BuiltIn"));
+        assert_eq!(
+            obj.get("kind").and_then(|v| v.as_u64()),
+            Some(TypeKind::Builtin as u64)
+        );
         assert_eq!(obj.get("name").and_then(|v| v.as_str()), Some("any"));
         assert!(obj.contains_key("id"));
         assert!(obj.contains_key("flags"));
@@ -775,7 +767,10 @@ mod tests {
         let tsp = convert_type(&union_ty);
         let json = serde_json::to_value(&tsp).unwrap();
         let obj = json.as_object().expect("expected JSON object");
-        assert_eq!(obj.get("kind").and_then(|v| v.as_str()), Some("Union"));
+        assert_eq!(
+            obj.get("kind").and_then(|v| v.as_u64()),
+            Some(TypeKind::Union as u64)
+        );
         let sub_types = obj
             .get("subTypes")
             .and_then(|v| v.as_array())
@@ -790,8 +785,8 @@ mod tests {
         let json = serde_json::to_value(&tsp).unwrap();
         let obj = json.as_object().expect("expected JSON object");
         assert_eq!(
-            obj.get("kind").and_then(|v| v.as_str()),
-            Some("Synthesized")
+            obj.get("kind").and_then(|v| v.as_u64()),
+            Some(TypeKind::Synthesized as u64)
         );
         assert!(
             obj.contains_key("stubContent"),

@@ -14,9 +14,6 @@
 //! - Canonical TSP error construction (invalid params, internal, etc.)
 //! - Response dispatch (success or error, routed through `TspInterface`)
 
-// Helpers are public API for upcoming message handlers; suppress until first use.
-#![allow(dead_code)]
-
 use lsp_server::ErrorCode;
 use lsp_server::RequestId;
 use lsp_server::ResponseError;

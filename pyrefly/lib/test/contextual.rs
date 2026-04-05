@@ -702,3 +702,21 @@ def f[T: TD](x: tuple[T, ...]) -> T:
 f(({"x": 0},))  # E: `dict[str, int]` is not assignable to upper bound `TD`
     "#,
 );
+
+testcase!(
+    test_concat_custom_vecs,
+    r#"
+class Vec[T]:  # invariant in T
+    def _items(self) -> list[T]: ...
+    def _append(self, item: T) -> None: ...
+
+def concat_vecs[T1, T2](left: Vec[T1], right: Vec[T2]) -> Vec[T1 | T2]:
+    return Vec()
+
+class A: ...
+class B: ...
+
+def test_vec_concat(left: Vec[A], right: Vec[B]) -> None:
+    _0: Vec[A | B] = concat_vecs(left, right)
+    "#,
+);

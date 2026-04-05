@@ -223,6 +223,7 @@ impl LinedBuffer {
     /// For notebook, the input position is relative to the concatenated contents of the whole notebook
     /// and the output position is relative to a specific cell.
     pub fn to_lsp_position(&self, x: TextSize, notebook: Option<&Notebook>) -> lsp_types::Position {
+        let x = self.clamp_position(x);
         let loc = self
             .lines
             .source_location(x, &self.buffer, PositionEncoding::Utf16);
@@ -247,6 +248,7 @@ impl LinedBuffer {
     /// If the module is a notebook, take an input position relative to the concatenated contents
     /// and return the index of the corresponding notebook cell.
     pub fn to_cell_for_lsp(&self, x: TextSize, notebook: Option<&Notebook>) -> Option<usize> {
+        let x = self.clamp_position(x);
         let loc = self
             .lines
             .source_location(x, &self.buffer, PositionEncoding::Utf16);
@@ -265,6 +267,9 @@ impl LinedBuffer {
     /// Translates an LSP position to a text size.
     /// For notebooks, the input position is relative to a notebook cell and the output
     /// position is relative to the concatenated contents of the notebook.
+    ///
+    /// Per the LSP spec, if the character value is greater than the line length,
+    /// it defaults back to the line length.
     pub fn from_lsp_position(
         &self,
         position: lsp_types::Position,
@@ -280,14 +285,34 @@ impl LinedBuffer {
         } else {
             OneIndexed::from_zero_indexed(position.line as usize)
         };
-        self.lines.offset(
+        // Clamp character offset to the line length per the LSP specification:
+        // "If the character value is greater than the line length it defaults
+        // back to the line length."
+        let line_start = self.lines.line_start(line, &self.buffer);
+        let line_end = self.lines.line_end(line, &self.buffer);
+        let requested = self.lines.offset(
             SourceLocation {
                 line,
                 character_offset: OneIndexed::from_zero_indexed(position.character as usize),
             },
             &self.buffer,
             PositionEncoding::Utf16,
-        )
+        );
+        // line_end includes the trailing newline. Clamp to the content end
+        // (excluding the newline) so that out-of-bounds positions land on the
+        // last real character rather than spilling into the next line.
+        let content_end = if line_end > line_start
+            && self
+                .buffer
+                .as_bytes()
+                .get(line_end.to_usize().saturating_sub(1))
+                == Some(&b'\n')
+        {
+            line_end - TextSize::from(1)
+        } else {
+            line_end
+        };
+        std::cmp::min(requested, content_end)
     }
 
     /// Translates an LSP position to a text range.
@@ -605,5 +630,49 @@ mod tests {
             lined_buffer.display_pos(eof, None),
             lined_buffer.display_pos(past_eof, None)
         );
+    }
+
+    /// Regression test: `to_lsp_position` and `to_cell_for_lsp` must not panic
+    /// when given an offset past the end of the buffer. `display_pos` already
+    /// clamps, but these two methods call `source_location` without clamping,
+    /// which triggers an out-of-bounds panic in `LineIndex::source_location`.
+    /// See the `workspace_symbols` panic in ruff_source_file/line_index.rs.
+    ///
+    /// The content must include non-ASCII characters because the panic occurs
+    /// in the non-ASCII code path of `source_location`, which slices the text
+    /// with `&text[line_start..offset]`. The ASCII fast-path only does
+    /// arithmetic and does not slice, so it would not trigger the panic.
+    #[test]
+    fn test_to_lsp_position_out_of_range_offset() {
+        // Non-ASCII content to trigger the UTF-16 string-slicing code path
+        let contents = Arc::new("def café():\n    pass\n".to_owned());
+        let lined_buffer = LinedBuffer::new(Arc::clone(&contents));
+        let past_eof = TextSize::new(contents.len() as u32 + 100);
+        // This should not panic - it should clamp to the end of the buffer.
+        let _pos = lined_buffer.to_lsp_position(past_eof, None);
+    }
+
+    /// Same as above but for `to_cell_for_lsp`. Even for non-notebook files,
+    /// `to_cell_for_lsp` calls `source_location` unconditionally before
+    /// checking whether a notebook is present.
+    #[test]
+    fn test_to_cell_for_lsp_out_of_range_offset() {
+        let contents = Arc::new("def café():\n    pass\n".to_owned());
+        let lined_buffer = LinedBuffer::new(Arc::clone(&contents));
+        let past_eof = TextSize::new(contents.len() as u32 + 100);
+        // This should not panic - it should clamp to the end of the buffer.
+        let _cell = lined_buffer.to_cell_for_lsp(past_eof, None);
+    }
+
+    /// Same as above but for `to_lsp_range`, which calls `to_lsp_position`
+    /// for both start and end of the range.
+    #[test]
+    fn test_to_lsp_range_out_of_range_offset() {
+        let contents = Arc::new("def café():\n    pass\n".to_owned());
+        let lined_buffer = LinedBuffer::new(Arc::clone(&contents));
+        let past_eof = TextSize::new(contents.len() as u32 + 100);
+        let range = TextRange::new(TextSize::new(0), past_eof);
+        // This should not panic - it should clamp to the end of the buffer.
+        let _lsp_range = lined_buffer.to_lsp_range(range, None);
     }
 }

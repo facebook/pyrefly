@@ -766,16 +766,44 @@ def foo() -> int: # E: Function declared to return `int` but is missing an expli
 );
 
 testcase!(
-    test_return_consistency,
+    test_return_consistency_explicit_return,
     r#"
 from typing import overload
 
 @overload
-def f(x: int) -> int: ...
+def f1(x: int) -> int: ...
 @overload
-def f(x: str) -> str: ...  # E: Overload return type `str` is not assignable to implementation return type `int`
-def f(x: int | str) -> int:
+def f1(x: str) -> str: ...  # E: Overload return type `str` is not assignable to implementation return type `int`
+def f1(x: int | str) -> int:
     return int(x)
+
+@overload
+def f2(x: int) -> int: ...
+@overload
+def f2(x: str) -> str: ...
+def f2(x: int | str) -> int | str:
+    return x
+    "#,
+);
+
+testcase!(
+    test_return_consistency_inferred_return,
+    r#"
+from typing import overload
+
+@overload
+def f1(a: int) -> int: ...
+@overload
+def f1(a: str) -> str: ...  # E: Overload return type `str` is not assignable to implementation return type `int`
+def f1(a):
+    return 1
+
+@overload
+def f2(a: int) -> int: ...
+@overload
+def f2(a: str) -> str: ...
+def f2(a):
+    return 1 if a else ""
     "#,
 );
 
@@ -1547,7 +1575,7 @@ def ndim(shape: tuple[int, ...]) -> int:
     return len(shape)
 
 def demo_gradual(s: tuple[Any, ...]):
-    assert_type(ndim(s), Any)
+    assert_type(ndim(s), int)
 
 def demo_one(s: tuple[int]):
     assert_type(ndim(s), Literal[1])
@@ -1576,8 +1604,7 @@ def f(x: None):
 );
 
 testcase!(
-    bug = "op(A[Any], A[Any]) should be treated as ambiguous",
-    test_ambiguous,
+    test_resolve_ambiguous_precise,
     r#"
 from typing import Any, overload, assert_type
 
@@ -1598,6 +1625,213 @@ def test(x: A[None], y: A[Any]) -> None:
     assert_type(op(x, x), A[None])
     assert_type(op(x, y), A[None])
     assert_type(op(y, x), A[None])
-    assert_type(op(y, y), Any)  # E: assert_type(A[None], Any)
+    assert_type(op(y, y), A[Any])
+    "#,
+);
+
+testcase!(
+    test_resolve_ambiguous_spec_compliant,
+    TestEnv::new().enable_spec_compliant_overloads(),
+    r#"
+from typing import Any, overload, assert_type
+
+class A[T]:  # covariant
+    def get(self) -> T: ...
+
+@overload
+def op(l: A[None], r: A[None]) -> A[None]: ...
+@overload
+def op(l: A[None], r: A[Any]) -> A[None]: ...
+@overload
+def op(l: A[Any], r: A[None]) -> A[None]: ...
+@overload
+def op(l: A[Any], r: A[Any]) -> A[Any]: ...
+def op(l, r) -> A[None | Any]: ...
+
+def test(x: A[None], y: A[Any]) -> None:
+    assert_type(op(x, x), A[None])
+    assert_type(op(x, y), A[None])
+    assert_type(op(y, x), A[None])
+    assert_type(op(y, y), Any)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2043
+testcase!(
+    test_overload_paramspec_unify_with_ellipsis_callable,
+    r#"
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar, overload
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+@overload
+def foo(func: Callable[P, R]) -> Callable[P, R]: ...
+@overload
+def foo() -> None: ...
+
+def foo(func: None | Callable[..., R] = None) -> None | Callable[..., R]:
+    return func
+    "#,
+);
+
+// Even though argument `x` has an unknown type, `f1(x)` and `f2(x)` are not considered ambiguous
+// because parameter `x` has the same type in all candidate overloads.
+testcase!(
+    test_eliminate_non_ambiguous,
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f1(x: str) -> str: ...
+@overload
+def f1(x: str, *args) -> int: ...
+def f1(x, *args) -> str | int: ...
+
+@overload
+def f2(x: str) -> str: ...
+@overload
+def f2(x: str, **kwargs) -> int: ...
+def f2(x, **kwargs) -> str | int: ...
+
+def g(x):
+    assert_type(f1(x), str)
+    assert_type(f2(x), str)
+    "#,
+);
+
+// In spec-compliant mode, because argument `x` has unknown type in `f1(x)` and `f2(x)`, the calls
+// are considered ambiguous and both overloads match, so we fall back to `Any` for the return type.
+// See test_eliminate_non_ambiguous for the non-spec-compliant behavior.
+testcase!(
+    test_eliminate_non_ambiguous_spec_compliant,
+    TestEnv::new().enable_spec_compliant_overloads(),
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f1(x: str) -> str: ...
+@overload
+def f1(x: str, *args) -> int: ...
+def f1(x, *args) -> str | int: ...
+
+@overload
+def f2(x: str) -> str: ...
+@overload
+def f2(x: str, **kwargs) -> int: ...
+def f2(x, **kwargs) -> str | int: ...
+
+def g(x):
+    assert_type(f1(x), Any)
+    assert_type(f2(x), Any)
+    "#,
+);
+
+testcase!(
+    test_do_not_eliminate_variadic,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f(x: str) -> str: ...
+@overload
+def f(x: str | bytes, *args: int) -> int: ...
+def f(x: str | bytes, *args: int) -> str | int:
+    return 0
+
+def g(x):
+    assert_type(f(x), Any)
+    "#,
+);
+
+testcase!(
+    test_eliminate_overload_using_argument_count_even_with_error,
+    r#"
+from typing import assert_type, overload
+
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: int, y: str) -> str: ...
+def f(x, y="") -> int | str: ...
+
+def g(x: int | None):
+    # We should report the mismatch between `int` and `int | None` rather than "No matching overload",
+    # since we know only the first overload can match based on argument count.
+    e = f(x)  # E: `int | None` is not assignable to parameter `x` with type `int`
+    # Even though the call failed, we know that the second overload cannot match based on argument
+    # count, so we should use the return type from the first overload.
+    assert_type(e, int)
+    "#,
+);
+
+testcase!(
+    test_match_overload_using_literal_arg,
+    r#"
+from typing import Any, assert_type, Literal, overload
+
+@overload
+def f(x: int, y: Literal['y']) -> int: ...
+@overload
+def f(x: int, y: Literal['n']) -> str: ...
+@overload
+def f(x: int, y: str) -> int | str: ...
+def f(x, y) -> int | str: ...
+
+def g(x: Any):
+    assert_type(f(x, 'y'), int)
+    "#,
+);
+
+// In non-spec-compliant mode (see test_match_overload_using_literal_arg), step 5 skips
+// materializing arguments whose parameter type is the same across all candidate overloads, so `x`
+// would not be materialized, and the first overload would win. In spec-compliant mode, `x` is
+// materialized, and the call is ambiguous.
+testcase!(
+    test_match_overload_using_literal_arg_spec_compliant,
+    TestEnv::new().enable_spec_compliant_overloads(),
+    r#"
+from typing import Any, assert_type, Literal, overload
+
+@overload
+def f(x: int, y: Literal['y']) -> int: ...
+@overload
+def f(x: int, y: Literal['n']) -> str: ...
+@overload
+def f(x: int, y: str) -> int | str: ...
+def f(x, y) -> int | str: ...
+
+def g(x: Any):
+    assert_type(f(x, 'y'), Any)
+    "#,
+);
+
+testcase!(
+    test_nested_call_to_generic_overload,
+    r#"
+from typing import Literal, overload
+
+def check[T](actual: T) -> T: ...
+
+class Kitten: ...
+class Puppy: ...
+
+@overload
+def read_csv[S](
+    filepath_or_buffer: str,
+    *,
+    iterator: Literal[True],
+) -> Puppy: ...
+@overload
+def read_csv(
+    filepath_or_buffer: str,
+    *,
+    iterator: Literal[False],
+) -> Kitten: ...
+def read_csv(*args, **kwargs) -> Puppy | Kitten: ...
+
+def test_types_csv(path: str) -> None:
+    check(read_csv(path, iterator=False))
     "#,
 );

@@ -31,7 +31,8 @@ use yansi::Painted;
     Eq,
     Hash,
     Deserialize,
-    Serialize
+    Serialize,
+    ValueEnum
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -214,6 +215,8 @@ pub enum ErrorKind {
     MissingSource,
     /// We are using bundled stubs for a package but the source code is missing.
     MissingSourceForStubs,
+    /// The first string argument to a functional type definition does not match the bound name.
+    NameMismatch,
     /// The attribute exists but does not support this access pattern.
     NoAccess,
     /// Attempting to call an overloaded function, but none of the signatures match.
@@ -336,8 +339,10 @@ impl ErrorKind {
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitImport => Severity::Warn,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
+            ErrorKind::InvalidDecorator => Severity::Warn,
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
+            ErrorKind::NameMismatch => Severity::Warn,
             ErrorKind::NonExhaustiveMatch => Severity::Warn,
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
@@ -351,12 +356,19 @@ impl ErrorKind {
             ErrorKind::UnnecessaryComparison => Severity::Warn,
             ErrorKind::Unreachable => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
-            // TODO: up severity to Warn when https://github.com/facebook/pyrefly/issues/1950 is fixed
-            ErrorKind::UntypedImport => Severity::Ignore,
+            ErrorKind::UntypedImport => Severity::Warn,
             ErrorKind::UnusedIgnore => Severity::Ignore,
             ErrorKind::VarianceMismatch => Severity::Warn,
             _ => Severity::Error,
         }
+    }
+
+    /// Returns true if this error kind is a type checker directive rather than
+    /// a real diagnostic. Directives bypass suppression, baseline exclusion,
+    /// and min-severity filtering, but can still be disabled via explicit
+    /// per-kind severity overrides (e.g. `--ignore reveal-type`).
+    pub fn is_directive(self) -> bool {
+        matches!(self, ErrorKind::RevealType)
     }
 
     /// Returns the public documentation URL for this error kind.

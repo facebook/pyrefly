@@ -18,6 +18,7 @@ use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::FindPreference;
@@ -36,7 +37,10 @@ pub(crate) fn inline_variable_code_actions(
         return None;
     }
     let module_info = transaction.get_module_info(handle)?;
-    let defs = transaction.find_definition(handle, position, FindPreference::default());
+    let defs = transaction
+        .find_definition(handle, position, FindPreference::default())
+        .map(Vec1::into_vec)
+        .unwrap_or_default();
     let def = defs.into_iter().find(|def| {
         def.module.path() == module_info.path()
             && matches!(

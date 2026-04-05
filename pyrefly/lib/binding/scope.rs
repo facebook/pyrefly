@@ -96,6 +96,7 @@ pub enum NameReadInfo {
     Anywhere {
         key: Key,
         initialized: InitializedInFlow,
+        is_module_scope: bool,
     },
     /// No such name is defined in the current scope stack.
     NotFound,
@@ -333,6 +334,14 @@ impl StaticInfo {
         }
     }
 }
+/// ALL_CAPS names preserve their literal types (matching pyright).
+pub(crate) fn is_constant_name(name: &Name) -> bool {
+    let s = name.as_str();
+    !s.is_empty()
+        && s.chars().any(|c| c.is_alphabetic())
+        && s.chars()
+            .all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit())
+}
 
 impl Static {
     fn upsert(
@@ -394,7 +403,8 @@ impl Static {
     }
 
     /// Populate static definitions from a list of statements.
-    /// Returns the set of implicit captures (names read but not locally defined).
+    /// Returns the set of implicit captures (names read but not locally defined)
+    /// and a map of Final variable string values.
     fn stmts(
         &mut self,
         x: &[Stmt],
@@ -404,7 +414,7 @@ impl Static {
         sys_info: SysInfo,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
         scopes: Option<&Scopes>,
-    ) -> SmallSet<Name> {
+    ) -> (SmallSet<Name>, SmallMap<Name, String>) {
         let mut d = Definitions::new(
             x,
             module_info.name(),
@@ -453,7 +463,12 @@ impl Static {
                 self.upsert(name.cloned(), range, StaticStyle::MergeableImport, range)
             }
         }
-        implicit_captures
+        let final_string_values = d
+            .final_names
+            .into_iter()
+            .filter_map(|(name, value)| value.map(|v| (name, v)))
+            .collect();
+        (implicit_captures, final_string_values)
     }
 
     fn expr_lvalue(&mut self, x: &Expr) {
@@ -934,6 +949,7 @@ struct ScopeMethod {
 
 #[derive(Clone, Debug)]
 struct ScopeFunction {
+    name: Identifier,
     parameters: SmallMap<Name, ParameterUsage>,
     yields_and_returns: YieldsAndReturns,
     is_async: bool,
@@ -979,15 +995,10 @@ pub struct UnusedVariable {
     pub range: TextRange,
 }
 
-impl Default for ScopeFunction {
-    fn default() -> Self {
-        Self::new(false)
-    }
-}
-
 impl ScopeFunction {
-    fn new(is_async: bool) -> Self {
+    fn new(name: Identifier, is_async: bool) -> Self {
         Self {
+            name,
             parameters: SmallMap::new(),
             yields_and_returns: Default::default(),
             is_async,
@@ -1116,6 +1127,9 @@ pub struct Scope {
     /// from enclosing scopes. Populated during `init_current_static` from the
     /// `Definitions` phase. Used to seed flow entries for captured variables.
     implicit_captures: SmallSet<Name>,
+    /// Names marked `Final` with string literal values, e.g. `X: Final = "x"`.
+    /// Used to resolve Final variable references in synthesized class field names.
+    final_string_values: SmallMap<Name, String>,
 }
 
 impl Scope {
@@ -1134,6 +1148,7 @@ impl Scope {
             finally_depth: 0,
             with_depth: 0,
             implicit_captures: SmallSet::new(),
+            final_string_values: SmallMap::new(),
         }
     }
 
@@ -1166,18 +1181,18 @@ impl Scope {
         )
     }
 
-    pub fn function(range: TextRange, is_async: bool) -> Self {
+    pub fn function(range: TextRange, name: Identifier, is_async: bool) -> Self {
         Self::new(
             range,
             FlowBarrier::BlockFlow,
-            ScopeKind::Function(ScopeFunction::new(is_async)),
+            ScopeKind::Function(ScopeFunction::new(name, is_async)),
         )
     }
-    pub fn lambda(range: TextRange, is_async: bool) -> Self {
+    pub fn lambda(range: TextRange, name: Identifier, is_async: bool) -> Self {
         Self::new(
             range,
             FlowBarrier::AllowFlowUnchecked,
-            ScopeKind::Function(ScopeFunction::new(is_async)),
+            ScopeKind::Function(ScopeFunction::new(name, is_async)),
         )
     }
 
@@ -1316,6 +1331,20 @@ impl Scopes {
             .collect()
     }
 
+    /// True if the first non-class scope defining this name is the module scope.
+    pub fn is_defined_at_module_scope(&self, name: &Name) -> bool {
+        for node in self.scopes.iter().rev() {
+            let scope = &node.scope;
+            if matches!(scope.kind, ScopeKind::Class(_)) {
+                continue;
+            }
+            if scope.stat.0.contains_key(name) {
+                return matches!(scope.kind, ScopeKind::Module);
+            }
+        }
+        false
+    }
+
     /// The range of the current (innermost) scope.
     pub fn current_scope_range(&self) -> TextRange {
         self.current().range
@@ -1390,6 +1419,26 @@ impl Scopes {
     pub fn in_function_scope(&self) -> bool {
         self.iter_rev()
             .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
+    }
+
+    /// Reconstruct the current `NestingContext` from the scope stack.
+    pub fn nesting_context(&self) -> NestingContext {
+        let mut ctx = NestingContext::toplevel();
+        for node in self.scopes.iter() {
+            match &node.scope.kind {
+                ScopeKind::Class(c) => {
+                    ctx = NestingContext::class(ShortIdentifier::new(&c.name), ctx);
+                }
+                ScopeKind::Function(f) => {
+                    ctx = NestingContext::function(ShortIdentifier::new(&f.name), ctx);
+                }
+                ScopeKind::Method(m) => {
+                    ctx = NestingContext::function(ShortIdentifier::new(&m.name), ctx);
+                }
+                _ => {}
+            }
+        }
+        ctx
     }
 
     pub fn current_static_contains(&self, name: &Name) -> bool {
@@ -1558,7 +1607,7 @@ impl Scopes {
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
     ) {
         let mut initialize = |scope: &mut Scope, myself: Option<&Self>| {
-            let implicit_captures = scope.stat.stmts(
+            let (implicit_captures, final_string_values) = scope.stat.stmts(
                 x,
                 module_info,
                 top_level,
@@ -1568,6 +1617,7 @@ impl Scopes {
                 myself,
             );
             scope.implicit_captures = implicit_captures;
+            scope.final_string_values = final_string_values;
             // Presize the flow, as its likely to need as much space as static
             scope.flow.info.reserve(scope.stat.0.capacity());
         };
@@ -1583,6 +1633,21 @@ impl Scopes {
             initialize(&mut current, Some(self));
             self.push(current);
         }
+    }
+
+    /// Look up a Final variable's string literal value in the current scope stack.
+    /// Searches from the innermost scope outward, stopping at the first scope
+    /// that binds the name, even if it's not Final.
+    pub fn lookup_final_string_value(&self, name: &Name) -> Option<&str> {
+        for node in self.scopes.iter().rev() {
+            if let Some(value) = node.scope.final_string_values.get(name) {
+                return Some(value.as_str());
+            }
+            if node.scope.stat.0.contains_key(name) {
+                return None;
+            }
+        }
+        None
     }
 
     pub fn push(&mut self, scope: Scope) {
@@ -1613,7 +1678,7 @@ impl Scopes {
         if in_class {
             self.push(Scope::method(range, name.clone(), is_async));
         } else {
-            self.push(Scope::function(range, is_async));
+            self.push(Scope::function(range, name.clone(), is_async));
         }
     }
 
@@ -1994,6 +2059,47 @@ impl Scopes {
         Some(self.current().flow.get_info(name)?.value()?.idx)
     }
 
+    /// Get the flow idx for `name` in the current fork's **base** flow (the flow captured
+    /// at `start_fork` time, before any branches were started).
+    ///
+    /// This is used to look up names for exhaustiveness bindings, where the current flow
+    /// is empty (reset by `finish_branch`) but we need the correctly-narrowed type from
+    /// the enclosing context in which the if/elif statement appears.
+    ///
+    /// Returns `None` if there is no active fork or the name is not in the base flow.
+    pub fn current_fork_base_idx(&self, name: &Name) -> Option<Idx<Key>> {
+        Some(self.current().forks.last()?.base.get_info(name)?.idx())
+    }
+
+    /// Copy walrus-defined names from the current branch flow into the fork's
+    /// base flow. Walrus names must be in the base flow so the merge can
+    /// distinguish paths where the walrus was vs. wasn't evaluated. This works
+    /// because branches started before the walrus don't inherit the new name.
+    ///
+    /// Also updates base entries that are uninitialized (e.g. `x: int` with no
+    /// assignment) when the branch has an initialized binding, so that the
+    /// merge does not falsely report "may be uninitialized".
+    pub fn propagate_new_flow_entries_to_fork_base(&mut self) {
+        let scope = self.current_mut();
+        let fork = scope
+            .forks
+            .last_mut()
+            .expect("propagate_new_flow_entries_to_fork_base called outside of a fork");
+        for (name, info) in scope.flow.info.iter() {
+            if let Some(existing) = fork.base.info.get(name) {
+                // Update the base entry if it is uninitialized but the branch
+                // has an initialized binding (e.g. walrus targeting `x: int`).
+                if matches!(existing.initialized(), InitializedInFlow::No)
+                    && !matches!(info.initialized(), InitializedInFlow::No)
+                {
+                    fork.base.info.insert(name.clone(), info.clone());
+                }
+            } else {
+                fork.base.info.insert(name.clone(), info.clone());
+            }
+        }
+    }
+
     /// Return the current binding index and flow style for `name`, if it exists
     /// in any enclosing scope.
     pub fn binding_idx_for_name(&self, name: &Name) -> Option<(Idx<Key>, FlowStyle)> {
@@ -2099,6 +2205,25 @@ impl Scopes {
         }
     }
 
+    fn is_parameter_used(&self, name: &Name) -> bool {
+        match &self.current().kind {
+            ScopeKind::Function(scope) => {
+                scope.parameters.get(name).is_some_and(|usage| usage.used)
+            }
+            ScopeKind::Method(scope) => scope.parameters.get(name).is_some_and(|usage| usage.used),
+            _ => false,
+        }
+    }
+
+    /// Check if a name is declared as `global` or `nonlocal` in the current scope.
+    fn is_mutable_capture(&self, name: &Name) -> bool {
+        self.current()
+            .stat
+            .0
+            .get(name)
+            .is_some_and(|info| matches!(info.style, StaticStyle::MutableCapture(_)))
+    }
+
     pub fn register_import(&mut self, name: &Identifier) {
         self.register_import_internal(name, false);
     }
@@ -2159,21 +2284,27 @@ impl Scopes {
     }
 
     pub fn register_variable(&mut self, name: &Identifier) {
-        // Track variables in Module, Function, and Method scopes
+        // Track variables in Module, Function, and Method scopes.
         // Module-level variables won't be reported as unused since they can be imported
-        // by other modules, but function/method-level variables will be reported
+        // by other modules, but function/method-level variables will be reported.
         if matches!(
             self.current().kind,
             ScopeKind::Module | ScopeKind::Function(_) | ScopeKind::Method(_)
         ) {
-            // Preserve the `used` flag if the variable was already marked as used
+            // Don't track variables declared as `global` or `nonlocal` — they are
+            // visible to other scopes and can't be considered locally unused.
+            if self.is_mutable_capture(&name.id) {
+                return;
+            }
+            // Preserve the `used` flag if the variable was already marked as used.
             // This handles cases like `foo = foo + 1` in loops where the variable
             // is read before being reassigned
             let was_used = self
                 .current()
                 .variables
                 .get(&name.id)
-                .is_some_and(|usage| usage.used);
+                .is_some_and(|usage| usage.used)
+                || self.is_parameter_used(&name.id);
             self.current_mut().variables.insert(
                 name.id.clone(),
                 VariableUsage {
@@ -2732,6 +2863,7 @@ impl Scopes {
                     } else {
                         InitializedInFlow::No
                     },
+                    is_module_scope: matches!(scope.kind, ScopeKind::Module),
                 });
             }
             None

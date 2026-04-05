@@ -55,9 +55,9 @@ Coding style: All code must be clean, documented and minimal. That means:
   complicated work at all.
 - If some code looks heavyweight, perhaps with lots of conditionals, then think
   harder for a more elegant way of achieving it.
-- Code should have comments, and functions should have docstrings. The best
+- Code should have comments and functions should have docstrings. The best
   comments are ones that introduce invariants, or prove that invariants are
-  being upheld, or indicate which invariants the code relies upon.
+  being upheld, or indicate which invariants the code relies upon. Don't duplicate comments, or write unnecessary comments for code that is obvious.
 - **Unreachable states must panic, not silently degrade.** Do not use defensive
   programming to handle states that should be impossible. If a match arm, Option,
   or Result should never occur given the surrounding invariants, use
@@ -75,6 +75,16 @@ Coding style: All code must be clean, documented and minimal. That means:
   inline qualified paths (e.g., write `use crate::foo::Bar;` and then `Bar`,
   not `crate::foo::Bar` inline). The only exception is when there is a name
   collision between two imports, which is rare.
+
+## Commit Messages
+
+Do not write a laundry list of implementation changes. Focus on:
+
+- **Why**: what problem or design gap motivated the change
+- **What** (high level): the approach or solution, not individual file edits
+- **Why it works**: how the code changes realize the solution
+
+A reader should be able to understand the intent and rationale from the commit message, without following all the code changes in details.
 
 ## Development environments
 
@@ -129,7 +139,7 @@ Running `buck test pyrefly:pyrefly` triggers both test targets.
   You can override this with `--mode buck` or `--mode cargo`.
 - For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
-  `./test.py --no-test --no-conformance`
+  `./test.py --no-test --no-conformance --no-jsonschema`
 
 ### After modifying BUCK files (internal only)
 

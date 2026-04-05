@@ -31,6 +31,7 @@ use pyrefly_types::callable::Function;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
+use pyrefly_types::class::ClassFields;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
@@ -47,6 +48,7 @@ use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Decorator;
@@ -69,6 +71,7 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers_solver::AnswersSolver;
@@ -288,8 +291,13 @@ impl<'a> CalleesWithLocation<'a> {
                         .end()
                         .checked_sub(TextSize::from(1))
                         .unwrap(),
-                    FindPreference::default(),
+                    FindPreference {
+                        resolve_call_dunders: false,
+                        ..FindPreference::default()
+                    },
                 )
+                .map(Vec1::into_vec)
+                .unwrap_or_default()
                 .into_iter()
                 .collect_vec()
                 .as_slice()
@@ -500,8 +508,11 @@ impl<'a> CalleesWithLocation<'a> {
             && let Type::ClassType(class) = &arg_type
         {
             let repr_callees =
-                self.callee_from_mro(class.class_object(), "__repr__", |_solver, c| {
-                    if c.contains(&REPR) {
+                self.callee_from_mro(class.class_object(), "__repr__", |solver, c| {
+                    if solver
+                        .get_class_fields(c)
+                        .is_some_and(|f| f.contains(&REPR))
+                    {
                         Some(format!("{}.{}.__repr__", c.module_name(), c.name()))
                     } else {
                         None
@@ -682,8 +693,13 @@ impl<'a> CalleesWithLocation<'a> {
                 &self.handle,
                 // take location of last included character in range (which should work for identifiers and attributes)
                 callee_range.end().checked_sub(TextSize::from(1)).unwrap(),
-                FindPreference::default(),
+                FindPreference {
+                    resolve_call_dunders: false,
+                    ..FindPreference::default()
+                },
             )
+            .map(Vec1::into_vec)
+            .unwrap_or_default()
             .into_iter()
             // filter out attributes since we don't know how to handle them
             .filter(|d| !matches!(d.metadata, DefinitionMetadata::Attribute))
@@ -731,13 +747,14 @@ impl<'a> CalleesWithLocation<'a> {
     fn find_init_or_new(&self, cls: &Class) -> Vec<Callee> {
         self.callee_from_mro(cls, "__init__", |solver, c| {
             // find first class that has __init__ or __new__
-            let has_init = c.contains(&dunder::INIT)
+            let class_fields = solver.get_class_fields(c);
+            let has_init = class_fields.is_some_and(|f| f.contains(&dunder::INIT))
                 || solver
                     .get_from_class(c, &KeyClassSynthesizedFields(c.index()))
                     .is_some_and(|f| f.get(&dunder::INIT).is_some());
             if has_init {
                 Some(format!("{}.{}.__init__", c.module_name(), c.name()))
-            } else if c.contains(&dunder::NEW) {
+            } else if class_fields.is_some_and(|f| f.contains(&dunder::NEW)) {
                 Some(format!("{}.{}.__new__", c.module_name(), c.name()))
             } else {
                 None
@@ -766,6 +783,7 @@ impl<'a> CalleesWithLocation<'a> {
             Type::Union(box Union { members: tys, .. }) => {
                 self.init_or_new_from_union(tys, callee_range)
             }
+            Type::Any(_) => vec![],
             x => {
                 panic!(
                     "unexpected type at [{}]: {x:?}",
@@ -836,7 +854,7 @@ impl<'a> CalleesWithLocation<'a> {
             Type::Callable(..) => self.for_callable(callee_range),
             Type::Type(box ty) => self.init_or_new_from_type(ty, callee_range),
             // Annotated[T, ...] is not callable (matching as_call_target_impl).
-            Type::Annotated(_) => vec![],
+            Type::Annotated(_, _) => vec![],
 
             Type::ClassDef(cls) => self.find_init_or_new(cls),
             Type::Forall(v) => match &v.body {
@@ -850,8 +868,11 @@ impl<'a> CalleesWithLocation<'a> {
                 Forallable::TypeAlias(TypeAliasData::Ref(_)) => vec![],
             },
             Type::SelfType(c) | Type::ClassType(c) => {
-                self.callee_from_mro(c.class_object(), "__call__", |_solver, c| {
-                    if c.contains(&dunder::CALL) {
+                self.callee_from_mro(c.class_object(), "__call__", |solver, c| {
+                    if solver
+                        .get_class_fields(c)
+                        .is_some_and(|f| f.contains(&dunder::CALL))
+                    {
                         Some(format!("{}.{}.__call__", c.module_name(), c.name()))
                     } else {
                         None
@@ -873,8 +894,8 @@ impl<'a> CalleesWithLocation<'a> {
 }
 
 impl Query {
-    pub fn new(config_finder: ConfigFinder) -> Self {
-        let state = State::new(config_finder);
+    pub fn new(config_finder: ConfigFinder, thread_count: ThreadCount) -> Self {
+        let state = State::new(config_finder, thread_count);
         Self {
             state,
             sys_info: SysInfo::default(),
@@ -924,7 +945,10 @@ impl Query {
         let errors = transaction.as_mut().get_errors(&handles);
         self.state.commit_transaction(transaction, None);
         let project_root = PathBuf::new();
-        errors.collect_errors().shown.map(|e| {
+        let collected = errors.collect_errors();
+        let mut output_errors = collected.ordinary;
+        output_errors.extend(collected.directives);
+        output_errors.map(|e| {
             // We deliberately don't have a Display for `Error`, to encourage doing the right thing.
             // But we just hack something up as this code is experimental.
             let mut s = Cursor::new(Vec::new());
@@ -984,8 +1008,12 @@ impl Query {
         let answers = transaction.get_answers(&handle)?;
 
         if let Some(Type::ClassDef(cd)) = &class_ty {
-            let res = cd
-                .fields()
+            let class_fields = bindings
+                .get_class_fields(cd.index())
+                .cloned()
+                .unwrap_or_else(ClassFields::empty);
+            let res = class_fields
+                .names()
                 .filter_map(|n| {
                     let class_field_index = KeyClassField(cd.index(), n.clone());
                     let class_field_idx =
@@ -1230,10 +1258,10 @@ impl Query {
         )]);
         t.run(&[handle.dupe()], Require::Everything, None);
         let errors = t.get_errors([handle]).collect_errors();
-        if !errors.shown.is_empty() {
+        if !errors.ordinary.is_empty() {
             let mut res = Vec::new();
             let project_root = PathBuf::new();
-            for e in errors.shown {
+            for e in errors.ordinary {
                 e.write_line(&mut Cursor::new(&mut res), project_root.as_path(), true)
                     .unwrap();
             }

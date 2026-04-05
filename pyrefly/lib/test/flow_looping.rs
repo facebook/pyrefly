@@ -11,12 +11,23 @@ use crate::testcase;
 testcase!(
     test_loop_with_generic_pin,
     r#"
+from typing import assert_type, Sequence
+
 def condition() -> bool: ...
+
 def f[T](x: T, y: list[T]) -> T: ...
 x = 5
 y: list[str] = []
 while condition():
-    x = f(x, y)  # E: Argument `list[str]` is not assignable to parameter `y` with type `list[int]` in function `f`
+    x = f(x, y)  # E: Argument `list[str]` is not assignable to parameter `y` with type `list[int | str]` in function `f`
+assert_type(x, int | str)
+
+def g[T](x: T, y: Sequence[T]) -> T: ...
+z = 5
+w: list[str] = []
+while condition():
+    z = g(z, w)
+assert_type(z, int | str)
 "#,
 );
 
@@ -905,5 +916,15 @@ testcase!(
 def process(value: int | float):
     for i in range(2):
         (v, value) = divmod(value, 7)
+"#,
+);
+
+testcase!(
+    test_possibly_unresolved_after_loop,
+    r#"
+items: list[int] = []
+for item in items:
+    last = item
+last  # E: `last` may be uninitialized
 "#,
 );
