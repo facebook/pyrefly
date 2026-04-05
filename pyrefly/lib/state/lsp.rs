@@ -81,6 +81,7 @@ use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
+use crate::binding::binding::KeyClassField;
 use crate::config::error_kind::ErrorKind;
 use crate::error::suppress::detect_line_ending;
 use crate::export::exports::Export;
@@ -895,6 +896,43 @@ impl<'a> Transaction<'a> {
         answers.get_annotation_type_at(idx)
     }
 
+    /// Returns the resolved declaration type without applying attribute-access substitutions.
+    pub(crate) fn class_field_type_at_definition(
+        &self,
+        handle: &Handle,
+        identifier: ShortIdentifier,
+    ) -> Option<Type> {
+        let ast = self.get_ast(handle)?;
+        let mut enclosing_class = None;
+        for node in Ast::locate_node(&ast, identifier.range().start())
+            .into_iter()
+            .skip(1)
+        {
+            match node {
+                AnyNodeRef::StmtFunctionDef(_)
+                | AnyNodeRef::ExprLambda(_)
+                | AnyNodeRef::ExprListComp(_)
+                | AnyNodeRef::ExprSetComp(_)
+                | AnyNodeRef::ExprDictComp(_)
+                | AnyNodeRef::ExprGenerator(_) => return None,
+                AnyNodeRef::StmtClassDef(class_def) => {
+                    enclosing_class = Some(class_def);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let enclosing_class = enclosing_class?;
+        let answers = self.get_answers(handle)?;
+        let bindings = answers.bindings();
+        let class_index = bindings.class_def_index(enclosing_class)?;
+        let name = Name::new(bindings.module().code_at(identifier.range()));
+        let key = KeyClassField(class_index, name);
+        let idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+        let field = answers.get_idx(idx)?;
+        field.has_explicit_annotation().then(|| field.ty())
+    }
+
     fn get_chosen_overload_trace_for_surface(
         &self,
         handle: &Handle,
@@ -1507,7 +1545,12 @@ impl<'a> Transaction<'a> {
                 if !bindings.is_valid_key(&key) {
                     return None;
                 }
-                let mut ty = answers.get_type_at(bindings.key_to_idx(&key))?;
+                let mut ty = if matches!(context, IdentifierContext::Expr(ExprContext::Store)) {
+                    self.class_field_type_at_definition(handle, ShortIdentifier::new(identifier))
+                        .or_else(|| answers.get_type_at(bindings.key_to_idx(&key)))?
+                } else {
+                    answers.get_type_at(bindings.key_to_idx(&key))?
+                };
                 // Only a plain expression reference coerces to its callee signature.
                 if coerce_callees && let IdentifierContext::Expr(_) = context {
                     let call_args_range = self.callee_at(handle, position).and_then(
