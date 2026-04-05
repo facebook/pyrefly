@@ -74,6 +74,7 @@ use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::wasm::completion::CompletionOptions;
+use crate::lsp::wasm::signature_help::is_constructor_call;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
@@ -975,6 +976,29 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn get_constructor_keyword_argument_type(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Option<Type> {
+        let call_info = self.get_callables_from_call(handle, position)?;
+        let callee_type = self
+            .get_answers(handle)?
+            .get_type_trace(call_info.callee_range)?;
+        if !is_constructor_call(callee_type) {
+            return None;
+        }
+
+        let chosen_overload_index =
+            call_info
+                .chosen_overload_index
+                .or((call_info.callables.len() == 1).then_some(0))?;
+        let callable = call_info.callables.get(chosen_overload_index)?.clone();
+        let params = Self::normalize_singleton_function_type_into_params(callable)?;
+        let arg_index = Self::active_parameter_index(&params, &call_info.active_argument)?;
+        Some(params.get(arg_index)?.as_type().clone())
+    }
+
     fn get_type_at_impl(
         &self,
         handle: &Handle,
@@ -1136,7 +1160,8 @@ impl<'a> Transaction<'a> {
                         return None;
                     }
                     self.get_type_for_surface(handle, &key, for_display)
-                }),
+                })
+                .or_else(|| self.get_constructor_keyword_argument_type(handle, position)),
             Some(IdentifierWithContext {
                 identifier: _,
                 context: IdentifierContext::Attribute { range, .. },
