@@ -2287,6 +2287,10 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    fn position_is_between(position: TextSize, left_end: TextSize, right_start: TextSize) -> bool {
+        TextRange::new(left_end, right_start).contains(position)
+    }
+
     /// Try to find the dunder method associated with an operator at the cursor.
     ///
     /// Returns:
@@ -2295,10 +2299,6 @@ impl<'a> Transaction<'a> {
     /// - `Err(NotAnIdentifier)` — operator without a dunder (`not`, `is`, `is not`)
     /// - `Err(AnswersNotFound)` — operator found but answers unavailable
     /// - `Err(TypeTraceNotFound)` — operator found but base expression has no type trace
-    fn position_is_between(position: TextSize, left_end: TextSize, right_start: TextSize) -> bool {
-        TextRange::new(left_end, right_start).contains(position)
-    }
-
     fn find_operator_dunder(
         &self,
         handle: &Handle,
@@ -2420,13 +2420,6 @@ impl<'a> Transaction<'a> {
                     }))
                 }
                 AnyNodeRef::ExprSubscript(subscript) => {
-                    if !Self::position_is_between(
-                        position,
-                        subscript.value.range().end(),
-                        subscript.slice.range().start(),
-                    ) {
-                        return None;
-                    }
                     let dunder_name = match subscript.ctx {
                         ExprContext::Load => Some(dunder::GETITEM),
                         ExprContext::Store => Some(dunder::SETITEM),
