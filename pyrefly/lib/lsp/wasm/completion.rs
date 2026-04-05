@@ -1191,8 +1191,30 @@ impl Transaction<'_> {
                             &mut result,
                             in_string_literal,
                         );
+<<<<<<< HEAD
                         // `dict_key_claimed` was computed up front; when a dict key was
                         // offered we skip the overload literal completions.
+||||||| parent of a2b84bfde (fix)
+                        let dict_key_claimed = self.add_dict_key_completions(
+                            handle,
+                            mod_module.as_ref(),
+                            position,
+                            &mut result,
+                        );
+=======
+                        self.add_dict_value_literal_completions(
+                            handle,
+                            mod_module.as_ref(),
+                            position,
+                            &mut result,
+                        );
+                        let dict_key_claimed = self.add_dict_key_completions(
+                            handle,
+                            mod_module.as_ref(),
+                            position,
+                            &mut result,
+                        );
+>>>>>>> a2b84bfde (fix)
                         if !dict_key_claimed {
                             self.add_literal_completions(
                                 handle,
