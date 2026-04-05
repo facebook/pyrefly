@@ -520,7 +520,8 @@ mod tests {
             false,
             Tool::default_enabled(),
         ));
-        assert!(collected.shown.is_empty());
         assert_eq!(collected.suppressed.len(), 1);
+        assert!(collected.disabled.is_empty());
+        assert!(collected.baseline.is_empty());
     }
 }
