@@ -399,6 +399,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ));
                     }
                 }
+                if let Some(ty) = &mut ann.ty
+                    && ty.any(|t| matches!(t, Type::SpecialForm(SpecialForm::SelfType)))
+                {
+                    // The binding phase reports invalid uses of `Self` (for example, outside a class).
+                    // Replace any unresolved `Self` special forms with `Any` so they do not leak into
+                    // later phases as internal errors.
+                    ty.subst_self_special_form_mut(&self.heap.mk_any_error());
+                }
                 if let Some(ty) = &ann.ty {
                     self.check_legacy_typevar_scoping(ty, x.range(), errors);
                 }

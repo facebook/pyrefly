@@ -241,6 +241,31 @@ tupleSelf = tuple[Self] # E: `Self` must appear within a class
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3008
+testcase!(
+    test_self_outside_class_no_internal_error_via_classmethod_trampoline,
+    r#"
+from typing import Callable, Self, TypeVar
+
+TReturn = TypeVar("TReturn")
+
+def trampoline(orig: Callable[..., TReturn]) -> TReturn:
+    ...
+
+def person_create_with_name_trampoline(cls, *args, **kwargs):
+    return trampoline(person_create_with_name_orig)
+
+class Person:
+    name: str
+    create_with_name = classmethod(person_create_with_name_trampoline)
+
+def person_create_with_name_orig(cls, name: str) -> Self:  # E: `Self` must appear within a class
+    return cls()
+
+Person.create_with_name("foo").name
+    "#,
+);
+
 testcase!(
     test_self_inside_class,
     r#"
