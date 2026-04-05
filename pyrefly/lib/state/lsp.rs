@@ -1586,9 +1586,14 @@ impl<'a> Transaction<'a> {
     /// - `Err(NotAnIdentifier)` — operator without a dunder (`not`, `is`, `is not`)
     /// - `Err(AnswersNotFound)` — operator found but answers unavailable
     /// - `Err(TypeTraceNotFound)` — operator found but base expression has no type trace
+    fn position_is_between(position: TextSize, left_end: TextSize, right_start: TextSize) -> bool {
+        TextRange::new(left_end, right_start).contains(position)
+    }
+
     fn find_operator_dunder(
         &self,
         handle: &Handle,
+        position: TextSize,
         covering_nodes: &[AnyNodeRef],
     ) -> Result<Option<(Type, Name)>, EmptyResponseReason> {
         // Look up the type of an expression, distinguishing "no answers"
@@ -1606,10 +1611,19 @@ impl<'a> Transaction<'a> {
             .iter()
             .find_map(|node| match node {
                 AnyNodeRef::ExprCompare(compare) => {
-                    for op in &compare.ops {
+                    let mut left = compare.left.as_ref();
+                    for (op, right) in compare.ops.iter().zip(compare.comparators.iter()) {
+                        if !Self::position_is_between(
+                            position,
+                            left.range().end(),
+                            right.range().start(),
+                        ) {
+                            left = right;
+                            continue;
+                        }
                         // Handle membership test operators (in/not in) - uses __contains__ on the right operand
                         if matches!(op, CmpOp::In | CmpOp::NotIn) {
-                            let result = type_at(compare.comparators.first()?.range())
+                            let result = type_at(right.range())
                                 .map(|right_type| (right_type, dunder::CONTAINS));
                             return Some(result);
                         }
@@ -1626,18 +1640,33 @@ impl<'a> Transaction<'a> {
                         }
                         // Handle rich comparison operators
                         if let Some(dunder_name) = dunder::rich_comparison_dunder(*op) {
-                            let result = type_at(compare.left.range())
-                                .map(|left_type| (left_type, dunder_name));
+                            let result =
+                                type_at(left.range()).map(|left_type| (left_type, dunder_name));
                             return Some(result);
                         }
+                        left = right;
                     }
                     None
                 }
                 AnyNodeRef::ExprBinOp(binop) => {
+                    if !Self::position_is_between(
+                        position,
+                        binop.left.range().end(),
+                        binop.right.range().start(),
+                    ) {
+                        return None;
+                    }
                     let dunder_name = Name::new_static(binop.op.dunder());
                     Some(type_at(binop.left.range()).map(|left_type| (left_type, dunder_name)))
                 }
                 AnyNodeRef::ExprUnaryOp(unaryop) => {
+                    if !Self::position_is_between(
+                        position,
+                        unaryop.range.start(),
+                        unaryop.operand.range().start(),
+                    ) {
+                        return None;
+                    }
                     let dunder_name = match unaryop.op {
                         UnaryOp::Invert => Ok(dunder::INVERT),
                         UnaryOp::UAdd => Ok(dunder::POS),
@@ -1651,6 +1680,13 @@ impl<'a> Transaction<'a> {
                     }))
                 }
                 AnyNodeRef::ExprSubscript(subscript) => {
+                    if !Self::position_is_between(
+                        position,
+                        subscript.value.range().end(),
+                        subscript.slice.range().start(),
+                    ) {
+                        return None;
+                    }
                     let dunder_name = match subscript.ctx {
                         ExprContext::Load => Some(dunder::GETITEM),
                         ExprContext::Store => Some(dunder::SETITEM),
@@ -1661,10 +1697,24 @@ impl<'a> Transaction<'a> {
                 }
                 // Handle iteration `in` keyword in for loops
                 AnyNodeRef::StmtFor(stmt_for) => {
+                    if !Self::position_is_between(
+                        position,
+                        stmt_for.target.range().end(),
+                        stmt_for.iter.range().start(),
+                    ) {
+                        return None;
+                    }
                     Some(type_at(stmt_for.iter.range()).map(|iter_type| (iter_type, dunder::ITER)))
                 }
                 // Handle iteration `in` keyword in comprehensions
                 AnyNodeRef::Comprehension(comp) => {
+                    if !Self::position_is_between(
+                        position,
+                        comp.target.range().end(),
+                        comp.iter.range().start(),
+                    ) {
+                        return None;
+                    }
                     Some(type_at(comp.iter.range()).map(|iter_type| (iter_type, dunder::ITER)))
                 }
                 _ => None,
@@ -1678,10 +1728,12 @@ impl<'a> Transaction<'a> {
     fn find_definition_for_operator(
         &self,
         handle: &Handle,
+        position: TextSize,
         covering_nodes: &[AnyNodeRef],
         preference: FindPreference,
     ) -> Result<Option<Vec1<FindDefinitionItemWithDocstring>>, EmptyResponseReason> {
-        let Some((base_type, dunder_name)) = self.find_operator_dunder(handle, covering_nodes)?
+        let Some((base_type, dunder_name)) =
+            self.find_operator_dunder(handle, position, covering_nodes)?
         else {
             return Ok(None);
         };
@@ -2178,9 +2230,12 @@ impl<'a> Transaction<'a> {
                     };
                 }
                 // Fall back to operator handling
-                if let Some(defs) =
-                    self.find_definition_for_operator(handle, &covering_nodes, preference)?
-                {
+                if let Some(defs) = self.find_definition_for_operator(
+                    handle,
+                    position,
+                    &covering_nodes,
+                    preference,
+                )? {
                     return Ok(defs);
                 }
                 let found = covering_nodes
