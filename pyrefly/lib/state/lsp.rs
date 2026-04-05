@@ -2193,13 +2193,6 @@ impl<'a> Transaction<'a> {
                     }))
                 }
                 AnyNodeRef::ExprSubscript(subscript) => {
-                    if !Self::position_is_between(
-                        position,
-                        subscript.value.range().end(),
-                        subscript.slice.range().start(),
-                    ) {
-                        return None;
-                    }
                     let dunder_name = match subscript.ctx {
                         ExprContext::Load => Some(dunder::GETITEM),
                         ExprContext::Store => Some(dunder::SETITEM),
