@@ -107,18 +107,18 @@ impl ParamList {
     }
 
     /// Create a new ParamList from a list of types
-    pub fn new_types(xs: Vec<(Type, Required)>) -> Self {
-        Self(xs.into_map(|(t, req)| Param::PosOnly(None, t, req)))
+    pub fn new_types(xs: Vec<PrefixParam>) -> Self {
+        Self(xs.into_map(|p| p.into_param()))
     }
 
-    /// Prepend some position-only parameters.
-    pub fn prepend_types(&self, pre: &[(Type, Required)]) -> Cow<'_, ParamList> {
+    /// Prepend some positional parameters, for `Concatenate`
+    pub fn prepend_types(&self, pre: &[PrefixParam]) -> Cow<'_, ParamList> {
         if pre.is_empty() {
             Cow::Borrowed(self)
         } else {
             Cow::Owned(ParamList(
                 pre.iter()
-                    .map(|(t, req)| Param::PosOnly(None, t.clone(), req.clone()))
+                    .map(|p| p.to_param())
                     .chain(self.0.iter().cloned())
                     .collect(),
             ))
@@ -225,6 +225,67 @@ impl ParamList {
     }
 }
 
+/// Represents a prefix parameter in `Concatenate`.
+/// Prefix params can be either positional-only or positional (named).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub enum PrefixParam {
+    PosOnly(Option<Name>, Type, Required),
+    Pos(Name, Type, Required),
+}
+
+impl PrefixParam {
+    /// Create a positional-only prefix param (no name).
+    pub fn new(ty: Type, required: Required) -> Self {
+        Self::PosOnly(None, ty, required)
+    }
+
+    pub fn ty(&self) -> &Type {
+        match self {
+            Self::PosOnly(_, ty, _) | Self::Pos(_, ty, _) => ty,
+        }
+    }
+
+    pub fn ty_mut(&mut self) -> &mut Type {
+        match self {
+            Self::PosOnly(_, ty, _) | Self::Pos(_, ty, _) => ty,
+        }
+    }
+
+    /// Convert to a positional-only `Param`. Per the typing spec, params before
+    /// `*args: P.args` are always positional-only at the call site, regardless of
+    /// whether they were originally `Pos` or `PosOnly` in the function definition.
+    pub fn into_param(self) -> Param {
+        match self {
+            Self::PosOnly(name, ty, required) => Param::PosOnly(name, ty, required),
+            Self::Pos(name, ty, required) => Param::PosOnly(Some(name), ty, required),
+        }
+    }
+
+    /// Convert to a positional-only `Param` by cloning. See `into_param`.
+    pub fn to_param(&self) -> Param {
+        match self {
+            Self::PosOnly(name, ty, required) => {
+                Param::PosOnly(name.clone(), ty.clone(), required.clone())
+            }
+            Self::Pos(name, ty, required) => {
+                Param::PosOnly(Some(name.clone()), ty.clone(), required.clone())
+            }
+        }
+    }
+
+    /// Convert to a `Param` preserving the Pos vs PosOnly distinction.
+    /// Used for subset/subtype checking where name matching matters.
+    pub fn to_subset_param(&self) -> Param {
+        match self {
+            Self::PosOnly(name, ty, required) => {
+                Param::PosOnly(name.clone(), ty.clone(), required.clone())
+            }
+            Self::Pos(name, ty, required) => Param::Pos(name.clone(), ty.clone(), required.clone()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Params {
@@ -238,7 +299,7 @@ pub enum Params {
     /// E.g. `Concatenate[int, str, P]` would be `ParamSpec([int, str], P)`,
     /// while `P` alone would be `ParamSpec([], P)`.
     /// `P` may resolve to `Type::ParamSpecValue`, `Type::Concatenate`, or `Type::Ellipsis`
-    ParamSpec(Box<[(Type, Required)]>, Type),
+    ParamSpec(Box<[PrefixParam]>, Type),
 }
 
 impl Params {
@@ -657,7 +718,7 @@ impl Callable {
                     if i > 0 {
                         output.write_str(", ")?;
                     }
-                    write_type(&arg.0, output)?;
+                    write_type(arg.ty(), output)?;
                 }
                 match pspec {
                     Type::ParamSpecValue(params) => {
@@ -730,7 +791,7 @@ impl Callable {
         }
     }
 
-    pub fn concatenate(args: Box<[(Type, Required)]>, param_spec: Type, ret: Type) -> Self {
+    pub fn concatenate(args: Box<[PrefixParam]>, param_spec: Type, ret: Type) -> Self {
         Self {
             params: Params::ParamSpec(args, param_spec),
             ret,
@@ -765,9 +826,9 @@ impl Callable {
                 params: Params::ParamSpec(ts, p),
                 ret,
             } => {
-                let ((first, _), rest) = ts.split_first()?;
+                let (first, rest) = ts.split_first()?;
                 Some((
-                    first,
+                    first.ty(),
                     Self::concatenate(rest.iter().cloned().collect(), p.clone(), ret.clone()),
                 ))
             }
@@ -793,7 +854,7 @@ impl Callable {
             Self {
                 params: Params::ParamSpec(ts, _),
                 ret: _,
-            } => ts.first().cloned().map(|x| x.0),
+            } => ts.first().map(|x| x.ty().clone()),
             Self {
                 params: Params::Ellipsis,
                 ret: _,
@@ -1132,6 +1193,7 @@ mod tests {
     use crate::callable::Callable;
     use crate::callable::Param;
     use crate::callable::ParamList;
+    use crate::callable::PrefixParam;
     use crate::callable::Required;
     use crate::types::Type;
 
@@ -1251,8 +1313,8 @@ mod tests {
     fn test_arg_counts_paramspec() {
         let callable = Callable::concatenate(
             vec![
-                (Type::None, Required::Required),
-                (Type::None, Required::Required),
+                PrefixParam::new(Type::None, Required::Required),
+                PrefixParam::new(Type::None, Required::Required),
             ]
             .into_boxed_slice(),
             Type::any_implicit(),

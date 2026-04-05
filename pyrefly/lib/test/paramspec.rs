@@ -371,7 +371,7 @@ def outer(f: Callable[P, None]) -> Callable[P, None]:
 
   def bar(*args: P.args, **kwargs: P.kwargs) -> None:
     foo(1, *args, **kwargs)   # Accepted
-    foo(x=1, *args, **kwargs) # Rejected # E: Expected 1 more positional argument # E: Unexpected keyword argument `x`
+    foo(x=1, *args, **kwargs) # Rejected # E: Expected argument `x` to be positional
 
   return bar
 "#,
@@ -762,5 +762,65 @@ class Task(Generic[P]):
 # Any should be accepted as a valid ParamSpec argument
 def foo(task: Task[Any]) -> None:
     pass
+"#,
+);
+
+testcase!(
+    test_paramspec_complex_decorator_with_concatenate,
+    r#"
+from typing import *
+
+T = TypeVar("T")
+P = ParamSpec("P")
+
+def decorator(
+    cls: type[object], foo: str | None = None
+) -> Callable[[Callable[Concatenate[Callable[P, T], P], T]], Callable[P, T]]:
+    raise NotImplementedError()
+
+class Cls: pass
+
+@decorator(Cls)
+def test(
+    foo: Callable[Concatenate[Cls, P], object],
+    self: Cls,
+    *args: P.args,
+    **kwargs: P.kwargs,
+):
+    return foo(self, *args, **kwargs)
+"#,
+);
+
+testcase!(
+    test_paramspec_protocol_overload_named_arg_matching,
+    r#"
+from typing import *
+
+T = TypeVar('T')
+T_co = TypeVar('T_co', covariant=True)
+P = ParamSpec('P')
+K = TypeVar('K')
+K_con = TypeVar('K_con', contravariant=True)
+
+class Wrapper(Generic[P, T]):
+    def call(self, *args: P.args, **kwargs: P.kwargs) -> T: ...
+
+class InstanceMethod(Protocol[K_con, P, T_co]):
+    def __call__(_self, self: K_con, *args: P.args, **kwargs: P.kwargs) -> T_co: ...
+
+class BareFn(Protocol[P, T_co]):
+    def __call__(_self, *args: P.args, **kwargs: P.kwargs) -> T_co: ...
+
+@overload
+def asyncable(fn: InstanceMethod[K, P, T]) -> Wrapper[P, T]: ...
+@overload
+def asyncable(fn: BareFn[P, T]) -> Wrapper[P, T]: ...
+def asyncable(fn) -> Wrapper[P, T]: ...
+
+@asyncable
+def bare_fn(a: int) -> str: ...
+
+# Should match BareFn overload, NOT InstanceMethod
+reveal_type(bare_fn) # E: Wrapper[[a: int], str]
 "#,
 );

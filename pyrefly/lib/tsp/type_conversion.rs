@@ -392,8 +392,8 @@ fn collect_callable_type_names(callable: &Callable, names: &mut HashSet<String>)
             }
         }
         Params::ParamSpec(prefix, _) => {
-            for (ty, _) in prefix.iter() {
-                collect_type_names(ty, names);
+            for p in prefix.iter() {
+                collect_type_names(p.ty(), names);
             }
         }
         Params::Ellipsis | Params::Materialization => {}

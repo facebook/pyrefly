@@ -28,6 +28,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::types::callable::Param;
+use crate::types::callable::PrefixParam;
 use crate::types::callable::Required;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
@@ -366,7 +367,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let args = arguments[0..arguments.len() - 1]
                         .iter()
                         .map(|x| {
-                            (
+                            PrefixParam::new(
                                 self.expr_untype(x, TypeFormContext::TupleOrCallableParam, errors),
                                 Required::Required,
                             )

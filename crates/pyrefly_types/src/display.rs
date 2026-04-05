@@ -1075,7 +1075,7 @@ impl<'a> TypeDisplayContext<'a> {
                 write!(
                     output,
                     "{}",
-                    commas_iter(|| append(args.iter().map(|x| x.0.clone()), [pspec]))
+                    commas_iter(|| append(args.iter().map(|x| x.ty().clone()), [pspec]))
                 )?;
                 output.write_str("]")
             }

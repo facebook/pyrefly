@@ -48,6 +48,7 @@ use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
+use crate::types::callable::PrefixParam;
 use crate::types::callable::Required;
 use crate::types::class::ClassType;
 use crate::types::quantified::QuantifiedKind;
@@ -751,15 +752,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     fn is_paramlist_subset_of_paramspec(
         &mut self,
         got: &ParamList,
-        want_ts: &[(Type, Required)],
+        want_ts: &[PrefixParam],
         want_pspec: &Type,
     ) -> Result<(), SubsetError> {
         if got.len() < want_ts.len() {
             return Err(SubsetError::Other);
         }
-        let args = ParamList::new_types(want_ts.to_owned());
+        // Preserve Pos vs PosOnly so that the subset checker can reject name mismatches
+        // (e.g. Pos("a", int) vs Pos("self", K) fails, but PosOnly matches any name).
+        let args: Vec<Param> = want_ts.iter().map(|p| p.to_subset_param()).collect();
         let (pre, post) = got.items().split_at(args.len());
-        self.is_subset_param_list(pre, args.items())?;
+        self.is_subset_param_list(pre, &args)?;
         self.is_subset_eq(
             &self
                 .solver
@@ -771,16 +774,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
     fn is_paramspec_subset_of_paramlist(
         &mut self,
-        got_ts: &[(Type, Required)],
+        got_ts: &[PrefixParam],
         got_pspec: &Type,
         want: &ParamList,
     ) -> Result<(), SubsetError> {
         if want.len() < got_ts.len() {
             return Err(SubsetError::Other);
         }
-        let args = ParamList::new_types(got_ts.to_owned());
+        let args: Vec<Param> = got_ts.iter().map(|p| p.to_subset_param()).collect();
         let (pre, post) = want.items().split_at(args.len());
-        self.is_subset_param_list(args.items(), pre)?;
+        self.is_subset_param_list(&args, pre)?;
         self.is_subset_eq(
             got_pspec,
             &self
@@ -792,9 +795,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
     fn is_paramspec_subset_of_paramspec(
         &mut self,
-        got_ts: &[(Type, Required)],
+        got_ts: &[PrefixParam],
         got_pspec: &Type,
-        want_ts: &[(Type, Required)],
+        want_ts: &[PrefixParam],
         want_pspec: &Type,
     ) -> Result<(), SubsetError> {
         // TODO: consider required-ness in prepended params
@@ -802,34 +805,32 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             Ordering::Greater => {
                 let (got_ts_pre, got_ts_post) = got_ts.split_at(want_ts.len());
                 for (l, u) in got_ts_pre.iter().zip(want_ts.iter()) {
-                    self.is_subset_eq(&u.0, &l.0)?;
+                    self.is_subset_eq(u.ty(), l.ty())?;
                 }
-                let got_ts_post = got_ts_post.to_vec().into_boxed_slice();
                 self.is_subset_eq(
                     want_pspec,
                     &self
                         .solver
                         .heap
-                        .mk_concatenate(got_ts_post, got_pspec.clone()),
+                        .mk_concatenate(got_ts_post.to_vec().into_boxed_slice(), got_pspec.clone()),
                 )
             }
             Ordering::Less => {
                 let (want_ts_pre, want_ts_post) = want_ts.split_at(got_ts.len());
                 for (l, u) in got_ts.iter().zip(want_ts_pre.iter()) {
-                    self.is_subset_eq(&u.0, &l.0)?;
+                    self.is_subset_eq(u.ty(), l.ty())?;
                 }
-                let want_ts_post = want_ts_post.to_vec().into_boxed_slice();
                 self.is_subset_eq(
-                    &self
-                        .solver
-                        .heap
-                        .mk_concatenate(want_ts_post, want_pspec.clone()),
+                    &self.solver.heap.mk_concatenate(
+                        want_ts_post.to_vec().into_boxed_slice(),
+                        want_pspec.clone(),
+                    ),
                     got_pspec,
                 )
             }
             Ordering::Equal => {
                 for (l, u) in got_ts.iter().zip(want_ts.iter()) {
-                    self.is_subset_eq(&u.0, &l.0)?;
+                    self.is_subset_eq(u.ty(), l.ty())?;
                 }
                 self.is_subset_eq(want_pspec, got_pspec)
             }
@@ -1156,7 +1157,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         .zip(requiredness.iter())
                         .map(|(arg, required)| match arg {
                             CallArg::Arg(TypeOrExpr::Type(t, _)) => {
-                                ((**t).clone(), (**required).clone())
+                                PrefixParam::new((**t).clone(), (**required).clone())
                             }
                             // We manually constructed the callargs above, so we know their exact shape.
                             _ => unreachable!(),

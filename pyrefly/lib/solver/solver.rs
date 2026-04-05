@@ -55,6 +55,7 @@ use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
+use crate::types::callable::PrefixParam;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::module::ModuleType;
@@ -684,14 +685,8 @@ impl Solver {
                 *x = self.heap.mk_param_spec_value(params);
             }
             if let Type::Concatenate(ts, box Type::Concatenate(ts2, pspec)) = x {
-                *x = self.heap.mk_concatenate(
-                    ts.iter()
-                        .chain(ts2.iter())
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                    (**pspec).clone(),
-                );
+                let combined: Box<[PrefixParam]> = ts.iter().chain(ts2.iter()).cloned().collect();
+                *x = self.heap.mk_concatenate(combined, (**pspec).clone());
             }
             let (callable, kind) = match x {
                 Type::Callable(c) => (Some(&mut **c), None),

@@ -27,7 +27,7 @@ use crate::callable::Function;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
-use crate::callable::Required;
+use crate::callable::PrefixParam;
 use crate::class::Class;
 use crate::class::ClassType;
 use crate::dimension::SizeExpr;
@@ -304,7 +304,7 @@ impl TypeHeap {
     }
 
     /// Create a `Type::Concatenate` from types and a ParamSpec.
-    pub fn mk_concatenate(&self, types: Box<[(Type, Required)]>, param_spec: Type) -> Type {
+    pub fn mk_concatenate(&self, types: Box<[PrefixParam]>, param_spec: Type) -> Type {
         Type::Concatenate(types, Box::new(param_spec))
     }
     /// Create a `Type::Callable` with ellipsis params.
@@ -325,7 +325,7 @@ impl TypeHeap {
     /// Create a `Type::Callable` with concatenate.
     pub fn mk_callable_concatenate(
         &self,
-        params: Box<[(Type, Required)]>,
+        params: Box<[PrefixParam]>,
         param_spec: Type,
         ret: Type,
     ) -> Type {

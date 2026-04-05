@@ -5987,23 +5987,12 @@
     {
       "code": -2,
       "column": 13,
-      "concise_description": "Unexpected keyword argument `x` in function `foo`",
-      "description": "Unexpected keyword argument `x` in function `foo`",
+      "concise_description": "Expected argument `x` to be positional in function `foo`",
+      "description": "Expected argument `x` to be positional in function `foo`",
       "line": 83,
       "name": "unexpected-keyword",
       "severity": "error",
       "stop_column": 14,
-      "stop_line": 83
-    },
-    {
-      "code": -2,
-      "column": 13,
-      "concise_description": "Expected 1 more positional argument in function `foo`",
-      "description": "Expected 1 more positional argument in function `foo`",
-      "line": 83,
-      "name": "bad-argument-count",
-      "severity": "error",
-      "stop_column": 16,
       "stop_line": 83
     },
     {

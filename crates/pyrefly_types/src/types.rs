@@ -39,9 +39,9 @@ use crate::callable::FunctionKind;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
+use crate::callable::PrefixParam;
 use crate::callable::PropertyMetadata;
 use crate::callable::PropertyRole;
-use crate::callable::Required;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
@@ -819,7 +819,7 @@ pub enum Type {
     ParamSpec(ParamSpec),
     TypeVarTuple(TypeVarTuple),
     SpecialForm(SpecialForm),
-    Concatenate(Box<[(Type, Required)]>, Box<Type>),
+    Concatenate(Box<[PrefixParam]>, Box<Type>),
     ParamSpecValue(ParamList),
     /// The type of a value which is annotated with `P.args`.
     Args(Box<Quantified>),
@@ -1130,11 +1130,7 @@ impl Type {
         matches!(self, Type::Unpack(_))
     }
 
-    pub fn callable_concatenate(
-        args: Box<[(Type, Required)]>,
-        param_spec: Type,
-        ret: Type,
-    ) -> Self {
+    pub fn callable_concatenate(args: Box<[PrefixParam]>, param_spec: Type, ret: Type) -> Self {
         Type::Callable(Box::new(Callable::concatenate(args, param_spec, ret)))
     }
 

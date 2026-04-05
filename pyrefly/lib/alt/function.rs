@@ -75,6 +75,7 @@ use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
+use crate::types::callable::PrefixParam;
 use crate::types::callable::PropertyMetadata;
 use crate::types::callable::PropertyRole;
 use crate::types::callable::Required;
@@ -686,8 +687,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 def.params
                     .iter()
                     .filter_map(|p| match p {
-                        Param::PosOnly(_, ty, req) => Some((ty.clone(), req.clone())),
-                        Param::Pos(_, ty, req) => Some((ty.clone(), req.clone())),
+                        Param::PosOnly(name, ty, req) => {
+                            Some(PrefixParam::PosOnly(name.clone(), ty.clone(), req.clone()))
+                        }
+                        Param::Pos(name, ty, req) => {
+                            Some(PrefixParam::Pos(name.clone(), ty.clone(), req.clone()))
+                        }
                         _ => None,
                     })
                     .collect(),
