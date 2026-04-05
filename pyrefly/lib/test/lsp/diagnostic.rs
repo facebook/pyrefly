@@ -321,7 +321,7 @@ def f():
 fn test_fstring_format_specifier_counts_as_variable_use() {
     let code = r#"
 def pprint(d: dict[str, object]) -> None:
-    max_len = max(map(len, d))
+    max_len = max(len(k) for k in d)
     print("\n".join(f"{key:<{max_len}}: {value}" for key, value in d.items()))
 "#;
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
