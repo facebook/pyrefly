@@ -1027,6 +1027,30 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    pub(crate) fn target_imported_module_name(
+        handle: &Handle,
+        identifier: &Identifier,
+        module_name: ModuleName,
+        dots: u32,
+        position: TextSize,
+    ) -> ModuleName {
+        let resolved_module_name = resolve_relative_module_name(handle, module_name, dots);
+
+        let components = resolved_module_name.components();
+        if let Some(idx) = components.iter().position(|c| c == &identifier.id) {
+            ModuleName::from_parts(&components[..=idx])
+        } else if identifier.as_str() == resolved_module_name.as_str() {
+            let module_str = resolved_module_name.as_str();
+            let offset = (position - identifier.range.start())
+                .to_usize()
+                .min(module_str.len());
+            let idx = module_str[..offset].matches('.').count();
+            ModuleName::from_parts(&components[..=idx])
+        } else {
+            resolved_module_name
+        }
+    }
+
     fn callee_at(&self, handle: &Handle, position: TextSize) -> Option<ExprCall> {
         let mod_module = self.get_ast(handle)?;
         fn f(x: &Expr, find: TextSize, res: &mut Option<ExprCall>) {
@@ -2475,29 +2499,24 @@ impl<'a> Transaction<'a> {
                     },
             }) => {
                 let resolved_module_name = resolve_relative_module_name(handle, module_name, dots);
-
-                // Build the module name for lookup based on identifier position.
                 let components = resolved_module_name.components();
-
-                let target_idx =
-                    if let Some(idx) = components.iter().position(|c| c == &identifier.id) {
-                        idx
-                    } else if identifier.as_str() == resolved_module_name.as_str() {
-                        // Identifier matches full module name; decide which component based on position offset.
-                        let module_str = resolved_module_name.as_str();
-                        let offset = (position - identifier.range.start())
-                            .to_usize()
-                            .min(module_str.len());
-                        module_str[..offset].matches('.').count()
-                    } else {
-                        components.len() - 1
-                    };
-                let target_module_name = ModuleName::from_parts(&components[..=target_idx]);
-                if let Ok(Some(item)) =
-                    self.find_definition_for_imported_module(handle, target_module_name, preference)
-                {
-                    return Ok(vec1![item]);
+                let target_module_name = Self::target_imported_module_name(
+                    handle,
+                    &identifier,
+                    module_name,
+                    dots,
+                    position,
+                );
+                match self.find_definition_for_imported_module(
+                    handle,
+                    target_module_name,
+                    preference,
+                ) {
+                    Ok(Some(item)) => return Ok(vec1![item]),
+                    Ok(None) | Err(EmptyResponseReason::ModuleNotFound) => {}
+                    Err(reason) => return Err(reason),
                 }
+                let target_idx = target_module_name.components().len() - 1;
 
                 if let Some(item) = self.fallback_find_definition_module_name_with_suffix(
                     handle,
