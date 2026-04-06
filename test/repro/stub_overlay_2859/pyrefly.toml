@@ -1,0 +1,3 @@
+# Pyrefly configuration with stub path
+# This SHOULD make Pyrefly find stubs/mypackage/_core.pyi, but it doesn't (bug)
+search-path = ["stubs"]
