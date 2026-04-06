@@ -5077,6 +5077,39 @@
   "enums_member_values.py": [
     {
       "code": -2,
+      "column": 12,
+      "concise_description": "assert_type(int, Literal[1]) failed",
+      "description": "assert_type(int, Literal[1]) failed",
+      "line": 21,
+      "name": "assert-type",
+      "severity": "error",
+      "stop_column": 43,
+      "stop_line": 21
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "assert_type(int, Literal[1]) failed",
+      "description": "assert_type(int, Literal[1]) failed",
+      "line": 22,
+      "name": "assert-type",
+      "severity": "error",
+      "stop_column": 41,
+      "stop_line": 22
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "assert_type(int, Literal[1, 3]) failed",
+      "description": "assert_type(int, Literal[1, 3]) failed",
+      "line": 26,
+      "name": "assert-type",
+      "severity": "error",
+      "stop_column": 50,
+      "stop_line": 26
+    },
+    {
+      "code": -2,
       "column": 16,
       "concise_description": "assert_type(int, Literal[1, 2, 3]) failed",
       "description": "assert_type(int, Literal[1, 2, 3]) failed",
@@ -5111,8 +5144,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Enum member `GREEN` has type `Literal['green']`, must match the `_value_` attribute annotation of `int`",
-      "description": "Enum member `GREEN` has type `Literal['green']`, must match the `_value_` attribute annotation of `int`",
+      "concise_description": "Enum member `GREEN` has type `str`, must match the `_value_` attribute annotation of `int`",
+      "description": "Enum member `GREEN` has type `str`, must match the `_value_` attribute annotation of `int`",
       "line": 78,
       "name": "bad-assignment",
       "severity": "error",

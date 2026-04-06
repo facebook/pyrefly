@@ -1762,8 +1762,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Determine the final type, promoting literals when appropriate.
         // Skip literal promotion for NNModule types: their fields are captured
         // constructor args that must preserve literal types for shape inference.
-        let (ty, unpromoted_ty) = if matches!(value_ty, Type::NNModule(_)) {
-            (value_ty, None)
+        let ty = if matches!(value_ty, Type::NNModule(_)) {
+            value_ty
         } else {
             let mut has_implicit_literal = value_ty.is_implicit_literal();
             if !has_implicit_literal && matches!(initialization, ClassFieldInitialization::Method) {
@@ -1771,7 +1771,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     has_implicit_literal |= current_type_node.is_implicit_literal();
                 });
             }
-            // Save any unpromoted literal types, we need them for enums
             if annotation
                 .as_ref()
                 .and_then(|ann| ann.ty.as_ref())
@@ -1779,10 +1778,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && matches!(read_only_reason, None | Some(ReadOnlyReason::NamedTuple))
                 && has_implicit_literal
             {
-                let pre = value_ty.clone();
-                (value_ty.promote_implicit_literals(self.stdlib), Some(pre))
+                value_ty.promote_implicit_literals(self.stdlib)
             } else {
-                (value_ty, None)
+                value_ty
             }
         };
 
@@ -1866,7 +1864,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             name,
             direct_annotation.as_ref(),
             &ty,
-            unpromoted_ty.as_ref(),
             field_definition,
             descriptor.is_some(),
             range,
@@ -2108,7 +2105,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         direct_annotation: Option<&Annotation>,
         ty: &Type,
-        unpromoted_ty: Option<&Type>,
         field_definition: &ClassFieldDefinition,
         is_descriptor: bool,
         range: TextRange,
@@ -2118,7 +2114,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             class,
             name,
             direct_annotation,
-            unpromoted_ty.unwrap_or(ty),
+            ty,
             field_definition,
             is_descriptor,
             range,
@@ -3997,21 +3993,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         field: &Name,
         ancestor: (&str, &str),
     ) -> bool {
-        self.field_defining_class_matches(cls, field, |c| {
-            c.has_toplevel_qname(ancestor.0, ancestor.1)
-        })
-    }
-
-    /// Check whether the defining class of `field` on `cls` satisfies `predicate`.
-    /// Returns false if the field does not exist.
-    pub fn field_defining_class_matches(
-        &self,
-        cls: &Class,
-        field: &Name,
-        predicate: impl FnOnce(&Class) -> bool,
-    ) -> bool {
-        self.get_class_member_with_defining_class(cls, field)
-            .is_some_and(|member| predicate(&member.defining_class))
+        let member = self.get_class_member_with_defining_class(cls, field);
+        match member {
+            Some(member) => member.is_defined_on(ancestor.0, ancestor.1),
+            None => false,
+        }
     }
 
     /// Get the class's `__new__` method.
