@@ -83,7 +83,8 @@ def f(x: Literal[E.X]) -> int: ...
 def f(x: E) -> int | str | None: ...
 def f(x) -> int | str | None: ...
 
-assert_type(f(E.X), int)
+# Without narrowing enum members to literal types, `E.X` matches the `E` overload.
+assert_type(f(E.X), int | str | None)
 "#,
 );
 
