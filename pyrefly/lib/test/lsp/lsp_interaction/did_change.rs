@@ -7,6 +7,7 @@
 
 use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
+use pyrefly::commands::lsp::IndexingMode;
 use serde_json::json;
 
 use crate::object_model::InitializeSettings;
@@ -178,6 +179,48 @@ fn test_text_document_did_change_unicode() {
         .client
         .diagnostic("utf.py")
         .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn test_text_document_did_change_updates_symlinked_imports() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().unwrap();
+    let module_path = root.path().join("test_module.py");
+    let symlink_path = root.path().join("sym.py");
+    let importer_path = root.path().join("test_import.py");
+    std::fs::write(&module_path, "def hello(name: str) -> None:\n    pass\n").unwrap();
+    symlink(&module_path, &symlink_path).unwrap();
+    std::fs::write(&importer_path, "from sym import hello\nhello(\"John\")\n").unwrap();
+
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            workspace_folders: Some(vec![(
+                "test".to_owned(),
+                Url::from_file_path(root.path()).unwrap(),
+            )]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("test_module.py");
+    interaction.client.did_open("test_import.py");
+    interaction.client.did_change(
+        "test_module.py",
+        "def hello(name: str, times: int) -> None:\n    pass\n",
+    );
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(importer_path, 1)
         .unwrap();
 
     interaction.shutdown().unwrap();
