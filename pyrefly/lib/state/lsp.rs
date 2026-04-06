@@ -52,6 +52,7 @@ use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -214,6 +215,11 @@ pub struct FindPreference {
     /// when callers need the raw definition (e.g., call-graph queries that
     /// unwrap decorators like `@lru_cache`).
     pub resolve_call_dunders: bool,
+    /// If no parameter matches a keyword name (including after checking the callee
+    /// signature), resolve to the callee's own definition (e.g. function or method
+    /// name). Enabled for go-to-definition; disabled for rename and find-refs so
+    /// invalid keywords do not resolve to the callee symbol.
+    pub keyword_argument_fallback_to_callee: bool,
 }
 
 impl Default for FindPreference {
@@ -222,6 +228,7 @@ impl Default for FindPreference {
             import_behavior: ImportBehavior::JumpThroughEverything,
             prefer_pyi: true,
             resolve_call_dunders: true,
+            keyword_argument_fallback_to_callee: false,
         }
     }
 }
@@ -851,19 +858,43 @@ impl<'a> Transaction<'a> {
         callee_range: TextRange,
         param_name: &Identifier,
     ) -> Option<TextRange> {
+        fn find_parameter_in_function(
+            function_def: &ruff_python_ast::StmtFunctionDef,
+            param_name: &Identifier,
+        ) -> Option<TextRange> {
+            // Include positional-only parameters: the type checker may reject
+            // `f(x=0)` for `def f(x, /)`, but go-to-definition should still land on `x`.
+            for posonly_param in function_def.parameters.posonlyargs.iter() {
+                if posonly_param.name().id() == param_name.id() {
+                    return Some(posonly_param.name().range());
+                }
+            }
+            for regular_param in function_def.parameters.args.iter() {
+                if regular_param.name().id() == param_name.id() {
+                    return Some(regular_param.name().range());
+                }
+            }
+            for kwonly_param in function_def.parameters.kwonlyargs.iter() {
+                if kwonly_param.name().id() == param_name.id() {
+                    return Some(kwonly_param.name().range());
+                }
+            }
+            None
+        }
+
         let covering_nodes = Ast::locate_node(ast, callee_range.start());
         match (covering_nodes.first(), covering_nodes.get(1)) {
             (Some(AnyNodeRef::Identifier(_)), Some(AnyNodeRef::StmtFunctionDef(function_def))) => {
-                // Only check regular and kwonly params since posonly params cannot be passed by name
-                // on the caller side.
-                for regular_param in function_def.parameters.args.iter() {
-                    if regular_param.name().id() == param_name.id() {
-                        return Some(regular_param.name().range());
-                    }
-                }
-                for kwonly_param in function_def.parameters.kwonlyargs.iter() {
-                    if kwonly_param.name().id() == param_name.id() {
-                        return Some(kwonly_param.name().range());
+                find_parameter_in_function(function_def, param_name)
+            }
+            (Some(AnyNodeRef::Identifier(_)), Some(AnyNodeRef::StmtClassDef(class_def))) => {
+                // Constructor keyword args can come from class calls; prefer explicit __init__
+                // parameter ranges when available.
+                for stmt in class_def.body.iter() {
+                    if let Stmt::FunctionDef(function_def) = stmt
+                        && function_def.name.id.as_str() == "__init__"
+                    {
+                        return find_parameter_in_function(function_def, param_name);
                     }
                 }
                 None
@@ -1816,14 +1847,21 @@ impl<'a> Transaction<'a> {
             };
 
             for range in ranges.into_iter() {
-                let refined_param_range =
-                    self.refine_param_location_for_callee(ast.as_ref(), range, identifier);
-                // TODO(grievejia): Should we filter out unrefinable ranges here?
-                results.push(FindDefinitionItem {
-                    metadata: DefinitionMetadata::Variable(Some(SymbolKind::Variable)),
-                    definition_range: refined_param_range.unwrap_or(range),
-                    module: module_info.dupe(),
-                })
+                if let Some(refined_param_range) =
+                    self.refine_param_location_for_callee(ast.as_ref(), range, identifier)
+                {
+                    results.push(FindDefinitionItem {
+                        metadata: DefinitionMetadata::Variable(Some(SymbolKind::Variable)),
+                        definition_range: refined_param_range,
+                        module: module_info.dupe(),
+                    });
+                } else if preference.keyword_argument_fallback_to_callee {
+                    results.push(FindDefinitionItem {
+                        metadata: DefinitionMetadata::Variable(Some(SymbolKind::Variable)),
+                        definition_range: range,
+                        module: module_info.dupe(),
+                    });
+                }
             }
         }
         results
@@ -2227,10 +2265,20 @@ impl<'a> Transaction<'a> {
                 position,
                 FindPreference {
                     prefer_pyi: false,
+                    keyword_argument_fallback_to_callee: true,
                     ..Default::default()
                 },
             )
-            .or_else(|_| self.find_definition(handle, position, FindPreference::default()));
+            .or_else(|_| {
+                self.find_definition(
+                    handle,
+                    position,
+                    FindPreference {
+                        keyword_argument_fallback_to_callee: true,
+                        ..Default::default()
+                    },
+                )
+            });
 
         definitions.map(|defs| {
             defs.into_vec()
@@ -2251,6 +2299,7 @@ impl<'a> Transaction<'a> {
             FindPreference {
                 import_behavior: ImportBehavior::StopAtEverything,
                 prefer_pyi: true,
+                keyword_argument_fallback_to_callee: true,
                 ..Default::default()
             },
         )?;
@@ -2277,11 +2326,18 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        self.find_definition(handle, position, FindPreference::default())
-            .map(|defs| {
-                defs.into_vec()
-                    .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
-            })
+        self.find_definition(
+            handle,
+            position,
+            FindPreference {
+                keyword_argument_fallback_to_callee: true,
+                ..Default::default()
+            },
+        )
+        .map(|defs| {
+            defs.into_vec()
+                .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+        })
     }
 
     /// This function should not be used for user-facing go-to-definition. However, it is exposed to
@@ -2858,23 +2914,32 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn prepare_rename(&self, handle: &Handle, position: TextSize) -> Option<TextRange> {
-        let identifier_context = self.identifier_at(handle, position);
+        let identifier_context = self.identifier_at(handle, position)?;
 
         let definitions = self
             .find_definition(handle, position, FindPreference::default())
             .map(Vec1::into_vec)
             .unwrap_or_default();
 
-        for FindDefinitionItemWithDocstring { module, .. } in definitions {
+        for FindDefinitionItemWithDocstring { module, .. } in &definitions {
             // Block rename only if it's third-party AND not an editable install/source file.
 
-            if self.is_third_party_module(&module, handle) && !self.is_source_file(&module, handle)
-            {
+            if self.is_third_party_module(module, handle) && !self.is_source_file(module, handle) {
                 return None;
             }
         }
 
-        Some(identifier_context?.identifier.range)
+        // If we can't resolve a keyword argument to a concrete parameter symbol, reject rename
+        // instead of advertising a rename target that will later produce no edits.
+        if matches!(
+            identifier_context.context,
+            IdentifierContext::KeywordArgument(_)
+        ) && definitions.is_empty()
+        {
+            return None;
+        }
+
+        Some(identifier_context.identifier.range)
     }
 
     pub fn find_local_references(

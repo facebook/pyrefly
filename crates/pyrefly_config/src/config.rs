@@ -730,7 +730,10 @@ impl ConfigFile {
     }
 
     pub fn from_real_config_file(&self) -> bool {
-        matches!(self.source, ConfigSource::File(_))
+        matches!(
+            self.source,
+            ConfigSource::File(_) | ConfigSource::FailedParse(_)
+        )
     }
 
     pub fn python_version(&self) -> PythonVersion {
@@ -1225,7 +1228,7 @@ impl ConfigFile {
 
         let mut configure_source_db = |build_system: &mut BuildSystem| {
             let root = match &self.source {
-                ConfigSource::File(path) => {
+                ConfigSource::File(path) | ConfigSource::FailedParse(path) => {
                     let mut root = path.to_path_buf();
                     root.pop();
                     root
@@ -1278,7 +1281,7 @@ impl ConfigFile {
              ));
         }
 
-        if let ConfigSource::File(path) = &self.source {
+        if let ConfigSource::File(path) | ConfigSource::FailedParse(path) = &self.source {
             configure_errors
                 .into_map(|e| ConfigError::warn(e.context(format!("{}", path.display()))))
         } else {
@@ -2489,6 +2492,10 @@ output-format = "omit-errors"
             matches!(config.source, ConfigSource::FailedParse(_)),
             "Expected FailedParse, got {:?}",
             config.source
+        );
+        assert!(
+            config.from_real_config_file(),
+            "FailedParse config should be treated as a real config file"
         );
         assert!(!errors.is_empty(), "Expected errors for invalid TOML");
         // The config should still respect the file's location for project root detection.

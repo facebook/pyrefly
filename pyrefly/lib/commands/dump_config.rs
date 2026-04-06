@@ -129,15 +129,13 @@ fn dump_config(
             ConfigSource::Synthetic => {
                 println!("Default configuration");
             }
-            ConfigSource::PythonToolMarker(path)
-            | ConfigSource::Marker(path)
-            | ConfigSource::FailedParse(path) => {
+            ConfigSource::PythonToolMarker(path) | ConfigSource::Marker(path) => {
                 println!(
                     "Default configuration for project root marked by `{}`",
                     path.display()
                 );
             }
-            ConfigSource::File(path) => {
+            ConfigSource::File(path) | ConfigSource::FailedParse(path) => {
                 let config_from = if std::env::var(&config_env)
                     .is_ok_and(|f| &Path::new(&f).absolutize() == path)
                 {

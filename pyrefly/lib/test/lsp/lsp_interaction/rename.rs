@@ -48,6 +48,37 @@ fn test_prepare_rename() {
 }
 
 #[test]
+fn test_prepare_rename_dataclass_keyword_argument_returns_null() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("rename_dataclass_keyword");
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    let user_code = root_path.join("user_code.py");
+    interaction.client.did_open("user_code.py");
+
+    interaction
+        .client
+        .send_request::<PrepareRenameRequest>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&user_code).unwrap().to_string()
+            },
+            "position": {
+                "line": 10,
+                "character": 4
+            }
+        }))
+        .expect_response(serde_json::Value::Null)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
     let root = get_test_files_root();
     let root_path = root.path().join("rename_third_party");

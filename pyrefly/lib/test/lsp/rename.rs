@@ -140,3 +140,61 @@ Rename locations:
         report.trim(),
     );
 }
+
+#[test]
+fn test_rename_dataclass_keyword_argument_does_not_rename_class() {
+    let code = r#"
+from dataclasses import dataclass
+
+@dataclass
+class Foo:
+    a: int
+    b: str
+
+Foo(
+    a=123,
+#   ^
+    b="abc",
+)
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+10 |     a=123,
+         ^
+Rename locations:
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn test_rename_init_parameter_updates_constructor_keyword_argument() {
+    let code = r#"
+class Foo:
+    def __init__(self, value):
+        pass
+
+Foo(
+    value=1,
+#   ^
+)
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+7 |     value=1,
+        ^
+Rename locations:
+3 |     def __init__(self, value):
+                           ^^^^^
+7 |     value=1,
+        ^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}

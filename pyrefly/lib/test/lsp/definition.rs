@@ -439,7 +439,7 @@ Definition Result:
            ^
 Definition Result:
 4 | def baz(x: int, /) -> None: pass
-        ^^^
+            ^
 "#
         .trim(),
         report.trim(),
