@@ -137,7 +137,7 @@ fn dump_config(
                     path.display()
                 );
             }
-            ConfigSource::File(path) => {
+            ConfigSource::File(path) | ConfigSource::FailedParse(path) => {
                 let config_from = if std::env::var(&config_env)
                     .is_ok_and(|f| &Path::new(&f).absolutize() == path)
                 {

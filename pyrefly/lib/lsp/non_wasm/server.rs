@@ -2689,7 +2689,7 @@ impl Server {
                 | ConfigSource::Marker(_)
                 | ConfigSource::FailedParse(_) => TypeErrorDisplayStatus::NoConfigFile,
                 // We actually have a pyrefly.toml, so we can decide based on the config.
-                ConfigSource::File(_) => {
+                ConfigSource::File(_) | ConfigSource::FailedParse(_) => {
                     if config.disable_type_errors_in_ide(path) {
                         TypeErrorDisplayStatus::DisabledInConfigFile
                     } else {

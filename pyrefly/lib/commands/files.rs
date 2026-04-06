@@ -125,7 +125,7 @@ fn get_globs_and_config_for_project(
         None => get_project_config_for_current_dir(args, wrapper)?,
     };
     match &config.source {
-        ConfigSource::File(path) => {
+        ConfigSource::File(path) | ConfigSource::FailedParse(path) => {
             info!("Checking project configured at `{}`", path.display());
         }
         ConfigSource::FailedParse(path) => {
