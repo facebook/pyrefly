@@ -77,13 +77,33 @@ enum FindResult {
     CompiledModule(PathBuf),
 }
 
+fn canonicalize_found_path(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
+}
+
 impl FindResult {
     fn single_file(path: PathBuf, ext: &str) -> Self {
+        let path = canonicalize_found_path(path);
         if ext == "pyi" {
             Self::SingleFilePyiModule(path)
         } else {
             Self::SingleFilePyModule(path)
         }
+    }
+
+    fn regular_package(init_path: PathBuf, next_root: PathBuf) -> Self {
+        Self::RegularPackage(
+            canonicalize_found_path(init_path),
+            canonicalize_found_path(next_root),
+        )
+    }
+
+    fn namespace_package(path: PathBuf) -> Self {
+        Self::NamespacePackage(Vec1::new(canonicalize_found_path(path)))
+    }
+
+    fn compiled_module(path: PathBuf) -> Self {
+        Self::CompiledModule(canonicalize_found_path(path))
     }
 
     fn style(&self) -> Option<ModuleStyle> {
@@ -163,7 +183,7 @@ fn find_one_part_in_root(
         for candidate_init_suffix in candidate_init_suffixes {
             let init_path = candidate_dir.join(candidate_init_suffix);
             if timed_stat(timing, || init_path.exists()) {
-                return Some(FindResult::RegularPackage(init_path, candidate_dir));
+                return Some(FindResult::regular_package(init_path, candidate_dir));
             } else if let Some(v) = phantom_paths.as_deref_mut() {
                 v.push(init_path);
             }
@@ -199,7 +219,7 @@ fn find_one_part_in_root(
     for candidate_compiled_suffix in COMPILED_FILE_SUFFIXES {
         let candidate_path = root.join(format!("{name}.{candidate_compiled_suffix}"));
         if timed_stat(timing, || candidate_path.exists()) {
-            let result = FindResult::CompiledModule(candidate_path);
+            let result = FindResult::compiled_module(candidate_path);
             if let Some(filter) = style_filter {
                 // compiled files are considered executable
                 match filter {
@@ -215,7 +235,7 @@ fn find_one_part_in_root(
 
     // Finally check if `name` corresponds to a namespace package.
     if dir_exists {
-        return Some(FindResult::NamespacePackage(Vec1::new(candidate_dir)));
+        return Some(FindResult::namespace_package(candidate_dir));
     } else if let Some(v) = phantom_paths.as_deref_mut() {
         v.push(candidate_dir);
     }
@@ -284,7 +304,7 @@ fn find_one_part_prefix<'a>(
                                 let init_path = path.join(candidate_init_suffix);
                                 if init_path.exists() {
                                     results.push((
-                                        FindResult::RegularPackage(init_path, path.clone()),
+                                        FindResult::regular_package(init_path, path.clone()),
                                         ModuleName::from_str(name),
                                     ));
                                     break;
@@ -311,7 +331,7 @@ fn find_one_part_prefix<'a>(
                                 ));
                             } else if COMPILED_FILE_SUFFIXES.contains(&ext) {
                                 results.push((
-                                    FindResult::CompiledModule(path.clone()),
+                                    FindResult::compiled_module(path.clone()),
                                     ModuleName::from_str(stem),
                                 ));
                             }
@@ -325,6 +345,13 @@ fn find_one_part_prefix<'a>(
     // Add namespace packages to results
     for (name, roots) in namespace_roots {
         if let Ok(namespace_roots) = Vec1::try_from_vec(roots) {
+            let namespace_roots = Vec1::try_from_vec(
+                namespace_roots
+                    .into_iter()
+                    .map(canonicalize_found_path)
+                    .collect(),
+            )
+            .expect("canonicalizing a non-empty namespace package should stay non-empty");
             results.push((FindResult::NamespacePackage(namespace_roots), name));
         }
     }
@@ -2449,6 +2476,39 @@ mod tests {
             FindingOrError::new_finding(ModulePath::filesystem(
                 root.join("search_root2/standalone2.py")
             ))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_find_module_resolves_symlink_to_real_path() {
+        use std::os::unix::fs::symlink;
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let target = root.join("test_module.py");
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::file_with_contents(
+                "test_module.py",
+                "def hello(name):\n    pass\n",
+            )],
+        );
+        symlink(&target, root.join("sym.py")).unwrap();
+
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("sym"),
+                [root.to_path_buf()].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(target))
         );
     }
 

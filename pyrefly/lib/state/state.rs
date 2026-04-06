@@ -1023,7 +1023,13 @@ impl<'a> Transaction<'a> {
                 .get_cached_loader(&self.get_module(handle).config.read())
                 .find_import(module, Some(handle.path()), Some(&self.timing)),
         };
-        path.map(|path| Handle::new(module, path, handle.sys_info().dupe()))
+        path.map(|path| {
+            Handle::new(
+                module,
+                self.prefer_memory_path(path),
+                handle.sys_info().dupe(),
+            )
+        })
     }
 
     /// Create a handle for import `module` within the handle `handle`, preferring `.py` over `.pyi`
@@ -1039,7 +1045,13 @@ impl<'a> Transaction<'a> {
                 .get_cached_loader(&self.get_module(handle).config.read())
                 .find_import_prefer_executable(module, Some(handle.path()), Some(&self.timing)),
         };
-        path.map(|path| Handle::new(module, path, handle.sys_info().dupe()))
+        path.map(|path| {
+            Handle::new(
+                module,
+                self.prefer_memory_path(path),
+                handle.sys_info().dupe(),
+            )
+        })
     }
 
     /// Create a handle for import `module` within the handle `handle`
@@ -1686,6 +1698,23 @@ impl<'a> Transaction<'a> {
         MemoryFilesLookup::new(&self.readable.memory, &self.data.memory_overlay)
     }
 
+    fn prefer_memory_path(&self, path: ModulePath) -> ModulePath {
+        let ModulePathDetails::FileSystem(filesystem_path) = path.details() else {
+            return path;
+        };
+        let memory_lookup = self.memory_lookup();
+        if memory_lookup.get(filesystem_path).is_some() {
+            return ModulePath::memory((**filesystem_path).clone());
+        }
+        if let Ok(canonical_path) = filesystem_path.canonicalize()
+            && canonical_path != **filesystem_path
+            && memory_lookup.get(&canonical_path).is_some()
+        {
+            return ModulePath::memory(canonical_path);
+        }
+        path
+    }
+
     fn get_cached_loader(&self, loader: &ArcId<ConfigFile>) -> Arc<LoaderFindCache> {
         self.data
             .updated_loaders
@@ -2039,8 +2068,18 @@ impl<'a> Transaction<'a> {
 
     /// Invalidate based on what a watcher told you.
     pub fn invalidate_events(&mut self, events: &CategorizedEvents) {
+        let modified_symlink = events.modified.iter().any(|path| {
+            std::fs::symlink_metadata(path)
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false)
+        });
+
         // If any files were added or removed, we need to invalidate the find step.
-        if !events.created.is_empty() || !events.removed.is_empty() || !events.unknown.is_empty() {
+        if !events.created.is_empty()
+            || !events.removed.is_empty()
+            || !events.unknown.is_empty()
+            || modified_symlink
+        {
             self.invalidate_find();
         }
 
@@ -2421,7 +2460,7 @@ impl<'a> TransactionHandle<'a> {
                 // Explicit path — already resolved. Bypass imports entirely.
                 FindingOrError::new_finding(Handle::new(
                     module,
-                    path.dupe(),
+                    self.transaction.prefer_memory_path(path.dupe()),
                     self.module_data.handle.sys_info().dupe(),
                 ))
             }
@@ -2460,7 +2499,7 @@ impl<'a> TransactionHandle<'a> {
                 path.map(|path| {
                     Handle::new(
                         module,
-                        path.dupe(),
+                        self.transaction.prefer_memory_path(path.dupe()),
                         self.module_data.handle.sys_info().dupe(),
                     )
                 })
