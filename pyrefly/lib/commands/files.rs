@@ -128,12 +128,6 @@ fn get_globs_and_config_for_project(
         ConfigSource::File(path) | ConfigSource::FailedParse(path) => {
             info!("Checking project configured at `{}`", path.display());
         }
-        ConfigSource::FailedParse(path) => {
-            warn!(
-                "Config at `{}` failed to parse, checking with default configuration",
-                path.display()
-            );
-        }
         ConfigSource::PythonToolMarker(path) | ConfigSource::Marker(path) => {
             info!(
                 "Found `{}` marking project root, checking root directory with default configuration",

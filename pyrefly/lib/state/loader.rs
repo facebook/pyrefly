@@ -56,18 +56,18 @@ impl FindError {
         config_source: &ConfigSource,
     ) -> FindError {
         let config_suffix = match config_source {
-            ConfigSource::File(p) | ConfigSource::FailedParse(p) => {
+            ConfigSource::File(p) => {
                 format!(" (from config in `{}`)", p.display())
-            }
-            ConfigSource::PythonToolMarker(p) | ConfigSource::Marker(p) => {
-                format!(
-                    " (from default config for project root marked by `{}`)",
-                    p.display()
-                )
             }
             ConfigSource::FailedParse(p) => {
                 format!(
                     " (from default config for `{}` which failed to parse)",
+                    p.display()
+                )
+            }
+            ConfigSource::PythonToolMarker(p) | ConfigSource::Marker(p) => {
+                format!(
+                    " (from default config for project root marked by `{}`)",
                     p.display()
                 )
             }

@@ -2685,10 +2685,11 @@ impl Server {
                 // In this case, we have a config file like mypy.ini, or a pyproject.toml
                 // with Python tool sections but no [tool.pyrefly]. We don't parse it for
                 // pyrefly config, so treat it as if we don't have any config.
-                ConfigSource::PythonToolMarker(_)
-                | ConfigSource::Marker(_)
-                | ConfigSource::FailedParse(_) => TypeErrorDisplayStatus::NoConfigFile,
-                // We actually have a pyrefly.toml, so we can decide based on the config.
+                ConfigSource::PythonToolMarker(_) | ConfigSource::Marker(_) => {
+                    TypeErrorDisplayStatus::NoConfigFile
+                }
+                // We actually have a pyrefly.toml (or found one but failed to parse it), so we
+                // can decide based on the loaded defaults tied to that path.
                 ConfigSource::File(_) | ConfigSource::FailedParse(_) => {
                     if config.disable_type_errors_in_ide(path) {
                         TypeErrorDisplayStatus::DisabledInConfigFile
