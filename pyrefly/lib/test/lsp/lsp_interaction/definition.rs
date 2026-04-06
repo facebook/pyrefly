@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -139,6 +140,47 @@ fn test_go_to_def_basic(root: &TempDir, workspace_folders: Option<Vec<(String, U
         .definition(file, 9, 7)
         .expect_definition_response_from_root("bar.py", 6, 6, 6, 9)
         .unwrap();
+}
+
+#[test]
+fn goto_definition_recovers_from_stale_disk_source_file() {
+    let root = TempDir::with_prefix("pyrefly_goto_def_stale_disk").unwrap();
+    fs::write(
+        root.path().join("foo.py"),
+        "from bar import target\n\nvalue = target\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("bar.py"), "target = 1\n").unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            ..Default::default()
+        })
+        .unwrap();
+    interaction.client.did_open("foo.py");
+
+    interaction
+        .client
+        .definition("foo.py", 2, 10)
+        .expect_definition_response_from_root("bar.py", 0, 0, 0, 6)
+        .unwrap();
+
+    fs::write(
+        root.path().join("foo.py"),
+        "# rebased\nfrom bar import target\n\nvalue = target\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("bar.py"), "# moved\ntarget = 1\n").unwrap();
+
+    interaction
+        .client
+        .definition("foo.py", 3, 10)
+        .expect_definition_response_from_root("bar.py", 1, 0, 1, 6)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
 }
 
 #[test]
