@@ -409,9 +409,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let bases_with_nonempty_slots: Vec<&Class> = bases_with_metadata
                 .iter()
                 .filter(|(_, metadata)| {
-                    metadata
-                        .slots_info()
-                        .is_some_and(|si| !si.names.is_empty())
+                    metadata.slots_info().is_some_and(|si| !si.names.is_empty())
                 })
                 .map(|(base, _)| base)
                 .collect();
