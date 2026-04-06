@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -197,6 +198,55 @@ fn test_go_to_def_relative_path_helper() {
             (9, 7, "bar.py", 6, 6, 6, 9),
         ],
     );
+}
+
+#[test]
+fn definition_on_import_module_while_recheck_is_blocked() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("basic");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let bar_path = root_path.join("bar.py");
+    let bar_contents = fs::read_to_string(&bar_path).unwrap();
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            file_watch: true,
+            ..Default::default()
+        })
+        .unwrap();
+    interaction.client.did_open("bar.py");
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(bar_path.clone(), 0)
+        .expect("Failed to receive initial diagnostics for bar");
+    interaction.client.did_open("foo.py");
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(root_path.join("foo.py"), 0)
+        .expect("Failed to receive initial diagnostics for foo");
+
+    interaction.do_not_commit_next_recheck();
+    interaction
+        .client
+        .edit_file("bar.py", &bar_contents.replace("foo = 3", "foo = 4"));
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(bar_path, 0)
+        .expect("Failed to receive diagnostics while the recheck was blocked");
+
+    interaction
+        .client
+        .definition("foo.py", 5, 7)
+        .expect_definition_response_from_root("bar.py", 0, 0, 0, 0)
+        .unwrap();
+
+    interaction.continue_recheck();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
