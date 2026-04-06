@@ -1588,7 +1588,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             } => {
                 let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
-                if metadata.is_protocol() && direct_annotation.is_none() {
+                if metadata.is_protocol()
+                    && direct_annotation.is_none()
+                    && !is_dunder(name.as_str())
+                {
                     self.error(
                         errors,
                         range,
