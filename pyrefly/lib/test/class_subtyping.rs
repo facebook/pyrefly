@@ -346,31 +346,6 @@ class Both(Foo, Bar): # E: Field `foo` has inconsistent types inherited from mul
 );
 
 testcase!(
-    test_multiple_inheritance_methods_name_only_mismatch,
-    r#"
-class ConditionBase:
-    def __and__(self, other: object) -> "And":
-        return And()
-
-    def __or__(self, other: object) -> "Or":
-        return Or()
-
-class AttributeBase:
-    def __and__(self, value: object) -> "And":
-        return And()
-
-    def __or__(self, value: object) -> "Or":
-        return Or()
-
-class And: ...
-class Or: ...
-
-class ConditionAttributeBase(ConditionBase, AttributeBase):
-    pass
-"#,
-);
-
-testcase!(
     test_multiple_inheritance_compatible_generic_methods,
     r#"
 class Foo[T1]:

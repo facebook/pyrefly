@@ -3583,28 +3583,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         for (field_name, inherited_field_infos_by_ancestor) in inherited_fields.iter() {
             if inherited_field_infos_by_ancestor.len() > 1 {
-                let inherited_name_only_mismatch = || {
-                    for (i, left) in inherited_field_infos_by_ancestor.iter().enumerate() {
-                        for right in inherited_field_infos_by_ancestor.iter().skip(i + 1) {
-                            if !left.ty.is_toplevel_callable() || !right.ty.is_toplevel_callable() {
-                                return false;
-                            }
-                            let left_to_right =
-                                self.is_subset_eq_with_reason(&left.ty, &right.ty).err();
-                            let right_to_left =
-                                self.is_subset_eq_with_reason(&right.ty, &left.ty).err();
-                            match (left_to_right, right_to_left) {
-                                (None, None) => {}
-                                (
-                                    Some(SubsetError::PosParamName(left_name, right_name)),
-                                    Some(SubsetError::PosParamName(right_name2, left_name2)),
-                                ) if left_name == left_name2 && right_name == right_name2 => {}
-                                _ => return false,
-                            }
-                        }
-                    }
-                    true
-                };
                 let types: Vec<Type> = inherited_field_infos_by_ancestor
                     .iter()
                     .map(|info| info.ty.clone())
@@ -3614,9 +3592,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // element of `types` that is a common base type for all elements. If an
                 // intersection is produced (or `Never` if the types are disjoint), then there was
                 // no common base type, so the inheritance is inconsistent.
-                if matches!(intersect, Type::Intersect(_) | Type::Never(_))
-                    && !inherited_name_only_mismatch()
-                {
+                if matches!(intersect, Type::Intersect(_) | Type::Never(_)) {
                     let mut error_msg = vec1![
                         format!(
                             "Field `{field_name}` has inconsistent types inherited from multiple base classes"
