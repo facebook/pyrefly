@@ -43,18 +43,8 @@ import tests.perf.scale_test.domain_models as upstream_4
 import tests.perf.scale_test.data_layer as downstream_4
 
 # Circular import mesh for indexer stress tests.
-_MESH_IMPORTS = (
-    upstream_1,
-    downstream_1,
-    upstream_2,
-    downstream_2,
-    upstream_3,
-    downstream_3,
-    upstream_4,
-    downstream_4,
-)
-_MESH_NAMES = tuple(module.__name__.rsplit('.', maxsplit=1)
-                    [-1] for module in _MESH_IMPORTS)
+_MESH_IMPORTS = (upstream_1, downstream_1, upstream_2, downstream_2, upstream_3, downstream_3, upstream_4, downstream_4,)
+_MESH_NAMES = tuple(module.__name__.rsplit('.', maxsplit=1)[-1] for module in _MESH_IMPORTS)
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -196,7 +186,6 @@ class ServiceMeshGenericNode0(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class ServiceMeshProtocol1(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_1"
 
@@ -245,7 +234,6 @@ class ServiceMeshGenericNode1(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class ServiceMeshProtocol2(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_2"
@@ -296,7 +284,6 @@ class ServiceMeshGenericNode2(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class ServiceMeshProtocol3(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_3"
 
@@ -345,7 +332,6 @@ class ServiceMeshGenericNode3(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class ServiceMeshProtocol4(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_4"
@@ -396,7 +382,6 @@ class ServiceMeshGenericNode4(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class ServiceMeshProtocol5(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_5"
 
@@ -445,7 +430,6 @@ class ServiceMeshGenericNode5(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class ServiceMeshProtocol6(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_6"
@@ -496,7 +480,6 @@ class ServiceMeshGenericNode6(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class ServiceMeshProtocol7(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_7"
 
@@ -545,7 +528,6 @@ class ServiceMeshGenericNode7(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class ServiceMeshProtocol8(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_8"
@@ -596,7 +578,6 @@ class ServiceMeshGenericNode8(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class ServiceMeshProtocol9(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_9"
 
@@ -645,7 +626,6 @@ class ServiceMeshGenericNode9(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class ServiceMeshProtocol10(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_10"
@@ -696,7 +676,6 @@ class ServiceMeshGenericNode10(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class ServiceMeshProtocol11(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_11"
 
@@ -745,7 +724,6 @@ class ServiceMeshGenericNode11(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class ServiceMeshProtocol12(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_12"
@@ -796,7 +774,6 @@ class ServiceMeshGenericNode12(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class ServiceMeshProtocol13(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_13"
 
@@ -845,7 +822,6 @@ class ServiceMeshGenericNode13(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class ServiceMeshProtocol14(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_14"
@@ -896,7 +872,6 @@ class ServiceMeshGenericNode14(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class ServiceMeshProtocol15(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_15"
 
@@ -946,7 +921,6 @@ class ServiceMeshGenericNode15(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class ServiceMeshProtocol16(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_16"
 
@@ -995,7 +969,6 @@ class ServiceMeshGenericNode16(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class ServiceMeshProtocol17(Protocol[T, U]):
     label: ClassVar[str] = "service_mesh_protocol_17"
@@ -1054,54 +1027,45 @@ class ServiceMeshRoot0(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class ServiceMeshChain0Level1(ServiceMeshRoot0[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain0Level2(ServiceMeshChain0Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain0Level3(ServiceMeshChain0Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain0Level4(ServiceMeshChain0Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain0Level5(ServiceMeshChain0Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain0Level6(ServiceMeshChain0Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain0Level7(ServiceMeshChain0Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain0Level8(ServiceMeshChain0Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshRoot1(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1110,54 +1074,45 @@ class ServiceMeshRoot1(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class ServiceMeshChain1Level1(ServiceMeshRoot1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain1Level2(ServiceMeshChain1Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain1Level3(ServiceMeshChain1Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain1Level4(ServiceMeshChain1Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain1Level5(ServiceMeshChain1Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain1Level6(ServiceMeshChain1Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain1Level7(ServiceMeshChain1Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain1Level8(ServiceMeshChain1Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshRoot2(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1166,54 +1121,45 @@ class ServiceMeshRoot2(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class ServiceMeshChain2Level1(ServiceMeshRoot2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain2Level2(ServiceMeshChain2Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain2Level3(ServiceMeshChain2Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain2Level4(ServiceMeshChain2Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain2Level5(ServiceMeshChain2Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain2Level6(ServiceMeshChain2Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain2Level7(ServiceMeshChain2Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain2Level8(ServiceMeshChain2Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshRoot3(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1222,54 +1168,45 @@ class ServiceMeshRoot3(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class ServiceMeshChain3Level1(ServiceMeshRoot3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain3Level2(ServiceMeshChain3Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain3Level3(ServiceMeshChain3Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain3Level4(ServiceMeshChain3Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain3Level5(ServiceMeshChain3Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain3Level6(ServiceMeshChain3Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain3Level7(ServiceMeshChain3Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain3Level8(ServiceMeshChain3Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshRoot4(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1278,54 +1215,45 @@ class ServiceMeshRoot4(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class ServiceMeshChain4Level1(ServiceMeshRoot4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain4Level2(ServiceMeshChain4Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain4Level3(ServiceMeshChain4Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain4Level4(ServiceMeshChain4Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain4Level5(ServiceMeshChain4Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain4Level6(ServiceMeshChain4Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain4Level7(ServiceMeshChain4Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain4Level8(ServiceMeshChain4Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshRoot5(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1334,54 +1262,45 @@ class ServiceMeshRoot5(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class ServiceMeshChain5Level1(ServiceMeshRoot5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain5Level2(ServiceMeshChain5Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain5Level3(ServiceMeshChain5Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain5Level4(ServiceMeshChain5Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain5Level5(ServiceMeshChain5Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain5Level6(ServiceMeshChain5Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain5Level7(ServiceMeshChain5Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain5Level8(ServiceMeshChain5Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshRoot6(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1390,54 +1309,45 @@ class ServiceMeshRoot6(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class ServiceMeshChain6Level1(ServiceMeshRoot6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain6Level2(ServiceMeshChain6Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain6Level3(ServiceMeshChain6Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain6Level4(ServiceMeshChain6Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain6Level5(ServiceMeshChain6Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain6Level6(ServiceMeshChain6Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain6Level7(ServiceMeshChain6Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain6Level8(ServiceMeshChain6Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshRoot7(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1446,54 +1356,45 @@ class ServiceMeshRoot7(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class ServiceMeshChain7Level1(ServiceMeshRoot7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain7Level2(ServiceMeshChain7Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain7Level3(ServiceMeshChain7Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain7Level4(ServiceMeshChain7Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain7Level5(ServiceMeshChain7Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain7Level6(ServiceMeshChain7Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain7Level7(ServiceMeshChain7Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain7Level8(ServiceMeshChain7Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshRoot8(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1502,48 +1403,40 @@ class ServiceMeshRoot8(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class ServiceMeshChain8Level1(ServiceMeshRoot8[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain8Level2(ServiceMeshChain8Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain8Level3(ServiceMeshChain8Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain8Level4(ServiceMeshChain8Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain8Level5(ServiceMeshChain8Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain8Level6(ServiceMeshChain8Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class ServiceMeshChain8Level7(ServiceMeshChain8Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class ServiceMeshChain8Level8(ServiceMeshChain8Level7[T]):
     def project(self) -> T:
@@ -1604,7 +1497,6 @@ class ServiceMeshService0(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class ServiceMeshService1(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -1657,7 +1549,6 @@ class ServiceMeshService1(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class ServiceMeshService2(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1712,7 +1603,6 @@ class ServiceMeshService2(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class ServiceMeshService3(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -1765,7 +1655,6 @@ class ServiceMeshService3(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class ServiceMeshService4(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1820,7 +1709,6 @@ class ServiceMeshService4(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class ServiceMeshService5(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -1873,7 +1761,6 @@ class ServiceMeshService5(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class ServiceMeshService6(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1928,7 +1815,6 @@ class ServiceMeshService6(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class ServiceMeshService7(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -1981,7 +1867,6 @@ class ServiceMeshService7(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class ServiceMeshService8(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2036,7 +1921,6 @@ class ServiceMeshService8(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class ServiceMeshService9(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2089,7 +1973,6 @@ class ServiceMeshService9(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class ServiceMeshService10(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2144,7 +2027,6 @@ class ServiceMeshService10(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class ServiceMeshService11(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2197,7 +2079,6 @@ class ServiceMeshService11(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class ServiceMeshService12(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2252,7 +2133,6 @@ class ServiceMeshService12(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class ServiceMeshService13(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2305,7 +2185,6 @@ class ServiceMeshService13(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class ServiceMeshService14(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2360,7 +2239,6 @@ class ServiceMeshService14(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class ServiceMeshService15(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2413,7 +2291,6 @@ class ServiceMeshService15(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class ServiceMeshService16(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2468,7 +2345,6 @@ class ServiceMeshService16(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class ServiceMeshService17(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2521,7 +2397,6 @@ class ServiceMeshService17(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class ServiceMeshService18(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2576,7 +2451,6 @@ class ServiceMeshService18(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class ServiceMeshService19(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2630,7 +2504,6 @@ class ServiceMeshService19(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class ServiceMeshService20(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2683,7 +2556,6 @@ class ServiceMeshService20(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class ServiceMeshService21(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2760,6 +2632,7 @@ def run_service_mesh_pipeline(
 __all__ = [
     "PayloadProtocol",
     "RepositoryProtocol",
+    "CallableFallback",
     "GenericEnvelope",
     "ModuleDescriptor",
     "build_service_mesh_descriptor",

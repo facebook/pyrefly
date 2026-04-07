@@ -43,18 +43,8 @@ import tests.perf.scale_test.service_mesh as upstream_4
 import tests.perf.scale_test.base_types as downstream_4
 
 # Circular import mesh for indexer stress tests.
-_MESH_IMPORTS = (
-    upstream_1,
-    downstream_1,
-    upstream_2,
-    downstream_2,
-    upstream_3,
-    downstream_3,
-    upstream_4,
-    downstream_4,
-)
-_MESH_NAMES = tuple(module.__name__.rsplit('.', maxsplit=1)
-                    [-1] for module in _MESH_IMPORTS)
+_MESH_IMPORTS = (upstream_1, downstream_1, upstream_2, downstream_2, upstream_3, downstream_3, upstream_4, downstream_4,)
+_MESH_NAMES = tuple(module.__name__.rsplit('.', maxsplit=1)[-1] for module in _MESH_IMPORTS)
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -196,7 +186,6 @@ class DataLayerGenericNode0(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DataLayerProtocol1(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_1"
 
@@ -245,7 +234,6 @@ class DataLayerGenericNode1(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DataLayerProtocol2(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_2"
@@ -296,7 +284,6 @@ class DataLayerGenericNode2(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DataLayerProtocol3(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_3"
 
@@ -345,7 +332,6 @@ class DataLayerGenericNode3(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DataLayerProtocol4(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_4"
@@ -396,7 +382,6 @@ class DataLayerGenericNode4(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DataLayerProtocol5(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_5"
 
@@ -445,7 +430,6 @@ class DataLayerGenericNode5(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DataLayerProtocol6(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_6"
@@ -496,7 +480,6 @@ class DataLayerGenericNode6(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DataLayerProtocol7(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_7"
 
@@ -545,7 +528,6 @@ class DataLayerGenericNode7(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DataLayerProtocol8(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_8"
@@ -596,7 +578,6 @@ class DataLayerGenericNode8(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DataLayerProtocol9(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_9"
 
@@ -645,7 +626,6 @@ class DataLayerGenericNode9(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DataLayerProtocol10(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_10"
@@ -696,7 +676,6 @@ class DataLayerGenericNode10(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DataLayerProtocol11(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_11"
 
@@ -745,7 +724,6 @@ class DataLayerGenericNode11(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DataLayerProtocol12(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_12"
@@ -796,7 +774,6 @@ class DataLayerGenericNode12(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DataLayerProtocol13(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_13"
 
@@ -845,7 +822,6 @@ class DataLayerGenericNode13(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DataLayerProtocol14(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_14"
@@ -896,7 +872,6 @@ class DataLayerGenericNode14(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DataLayerProtocol15(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_15"
 
@@ -946,7 +921,6 @@ class DataLayerGenericNode15(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DataLayerProtocol16(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_16"
 
@@ -995,7 +969,6 @@ class DataLayerGenericNode16(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DataLayerProtocol17(Protocol[T, U]):
     label: ClassVar[str] = "data_layer_protocol_17"
@@ -1054,54 +1027,45 @@ class DataLayerRoot0(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DataLayerChain0Level1(DataLayerRoot0[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain0Level2(DataLayerChain0Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain0Level3(DataLayerChain0Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain0Level4(DataLayerChain0Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain0Level5(DataLayerChain0Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain0Level6(DataLayerChain0Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain0Level7(DataLayerChain0Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain0Level8(DataLayerChain0Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerRoot1(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1110,54 +1074,45 @@ class DataLayerRoot1(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DataLayerChain1Level1(DataLayerRoot1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain1Level2(DataLayerChain1Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain1Level3(DataLayerChain1Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain1Level4(DataLayerChain1Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain1Level5(DataLayerChain1Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain1Level6(DataLayerChain1Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain1Level7(DataLayerChain1Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain1Level8(DataLayerChain1Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerRoot2(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1166,54 +1121,45 @@ class DataLayerRoot2(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DataLayerChain2Level1(DataLayerRoot2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain2Level2(DataLayerChain2Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain2Level3(DataLayerChain2Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain2Level4(DataLayerChain2Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain2Level5(DataLayerChain2Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain2Level6(DataLayerChain2Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain2Level7(DataLayerChain2Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain2Level8(DataLayerChain2Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerRoot3(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1222,54 +1168,45 @@ class DataLayerRoot3(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DataLayerChain3Level1(DataLayerRoot3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain3Level2(DataLayerChain3Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain3Level3(DataLayerChain3Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain3Level4(DataLayerChain3Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain3Level5(DataLayerChain3Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain3Level6(DataLayerChain3Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain3Level7(DataLayerChain3Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain3Level8(DataLayerChain3Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerRoot4(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1278,54 +1215,45 @@ class DataLayerRoot4(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DataLayerChain4Level1(DataLayerRoot4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain4Level2(DataLayerChain4Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain4Level3(DataLayerChain4Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain4Level4(DataLayerChain4Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain4Level5(DataLayerChain4Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain4Level6(DataLayerChain4Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain4Level7(DataLayerChain4Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain4Level8(DataLayerChain4Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerRoot5(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1334,54 +1262,45 @@ class DataLayerRoot5(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DataLayerChain5Level1(DataLayerRoot5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain5Level2(DataLayerChain5Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain5Level3(DataLayerChain5Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain5Level4(DataLayerChain5Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain5Level5(DataLayerChain5Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain5Level6(DataLayerChain5Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain5Level7(DataLayerChain5Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain5Level8(DataLayerChain5Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerRoot6(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1390,54 +1309,45 @@ class DataLayerRoot6(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DataLayerChain6Level1(DataLayerRoot6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain6Level2(DataLayerChain6Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain6Level3(DataLayerChain6Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain6Level4(DataLayerChain6Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain6Level5(DataLayerChain6Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain6Level6(DataLayerChain6Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain6Level7(DataLayerChain6Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain6Level8(DataLayerChain6Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerRoot7(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1446,54 +1356,45 @@ class DataLayerRoot7(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DataLayerChain7Level1(DataLayerRoot7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain7Level2(DataLayerChain7Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain7Level3(DataLayerChain7Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain7Level4(DataLayerChain7Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain7Level5(DataLayerChain7Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain7Level6(DataLayerChain7Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain7Level7(DataLayerChain7Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain7Level8(DataLayerChain7Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerRoot8(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1502,48 +1403,40 @@ class DataLayerRoot8(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DataLayerChain8Level1(DataLayerRoot8[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain8Level2(DataLayerChain8Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain8Level3(DataLayerChain8Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain8Level4(DataLayerChain8Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain8Level5(DataLayerChain8Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain8Level6(DataLayerChain8Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DataLayerChain8Level7(DataLayerChain8Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DataLayerChain8Level8(DataLayerChain8Level7[T]):
     def project(self) -> T:
@@ -1604,7 +1497,6 @@ class DataLayerService0(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class DataLayerService1(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -1657,7 +1549,6 @@ class DataLayerService1(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DataLayerService2(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1712,7 +1603,6 @@ class DataLayerService2(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class DataLayerService3(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -1765,7 +1655,6 @@ class DataLayerService3(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DataLayerService4(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1820,7 +1709,6 @@ class DataLayerService4(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class DataLayerService5(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -1873,7 +1761,6 @@ class DataLayerService5(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DataLayerService6(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1928,7 +1815,6 @@ class DataLayerService6(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class DataLayerService7(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -1981,7 +1867,6 @@ class DataLayerService7(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DataLayerService8(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2036,7 +1921,6 @@ class DataLayerService8(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class DataLayerService9(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2089,7 +1973,6 @@ class DataLayerService9(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DataLayerService10(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2144,7 +2027,6 @@ class DataLayerService10(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class DataLayerService11(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2197,7 +2079,6 @@ class DataLayerService11(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DataLayerService12(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2252,7 +2133,6 @@ class DataLayerService12(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class DataLayerService13(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2305,7 +2185,6 @@ class DataLayerService13(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DataLayerService14(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2360,7 +2239,6 @@ class DataLayerService14(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class DataLayerService15(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2413,7 +2291,6 @@ class DataLayerService15(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DataLayerService16(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2468,7 +2345,6 @@ class DataLayerService16(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class DataLayerService17(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2521,7 +2397,6 @@ class DataLayerService17(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DataLayerService18(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2576,7 +2451,6 @@ class DataLayerService18(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class DataLayerService19(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2630,7 +2504,6 @@ class DataLayerService19(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class DataLayerService20(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2683,7 +2556,6 @@ class DataLayerService20(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DataLayerService21(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2760,6 +2632,7 @@ def run_data_layer_pipeline(
 __all__ = [
     "PayloadProtocol",
     "RepositoryProtocol",
+    "CallableFallback",
     "GenericEnvelope",
     "ModuleDescriptor",
     "build_data_layer_descriptor",

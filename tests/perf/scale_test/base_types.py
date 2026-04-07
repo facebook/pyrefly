@@ -2632,6 +2632,7 @@ def run_base_types_pipeline(
 __all__ = [
     "PayloadProtocol",
     "RepositoryProtocol",
+    "CallableFallback",
     "GenericEnvelope",
     "ModuleDescriptor",
     "build_base_types_descriptor",

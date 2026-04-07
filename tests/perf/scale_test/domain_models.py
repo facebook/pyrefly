@@ -2632,6 +2632,7 @@ def run_domain_models_pipeline(
 __all__ = [
     "PayloadProtocol",
     "RepositoryProtocol",
+    "CallableFallback",
     "GenericEnvelope",
     "ModuleDescriptor",
     "build_domain_models_descriptor",

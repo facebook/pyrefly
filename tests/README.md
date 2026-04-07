@@ -34,6 +34,14 @@ source .venv/bin/activate
 python3 -m pip install --upgrade pip
 ```
 
+Windows PowerShell equivalent:
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+py -3 -m pip install --upgrade pip
+```
+
 Run from repository root:
 
 ```bash

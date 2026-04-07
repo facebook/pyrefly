@@ -2632,6 +2632,7 @@ def run_orchestration_pipeline(
 __all__ = [
     "PayloadProtocol",
     "RepositoryProtocol",
+    "CallableFallback",
     "GenericEnvelope",
     "ModuleDescriptor",
     "build_orchestration_descriptor",
