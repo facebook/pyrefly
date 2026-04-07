@@ -767,7 +767,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     errors,
                                     Some(&context),
                                 ) {
-                                    ret
+                                    self.check_dunder_bool_is_callable(&ret, x.range, errors);
+                                    self.heap.mk_class_type(self.stdlib.bool().clone())
                                 } else {
                                     let iteration_errors = self.error_collector();
                                     let iterables = self.iterate(

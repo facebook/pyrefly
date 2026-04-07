@@ -1056,7 +1056,6 @@ assert BadBool()
 
 // https://github.com/facebook/pyrefly/issues/2913
 testcase!(
-    bug = "Should detect unsupported-bool-conversion in membership tests",
     test_bool_conversion_in_contains,
     r#"
 class BadBool:
@@ -1066,6 +1065,6 @@ class Container:
     def __contains__(self, item: object) -> BadBool:
         return BadBool()
 
-10 in Container()
+10 in Container()  # E: The `__bool__` attribute of `BadBool` has type `int`, which is not callable
 "#,
 );
