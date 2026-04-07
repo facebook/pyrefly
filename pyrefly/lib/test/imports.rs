@@ -460,7 +460,17 @@ testcase!(
     test_export_all_wrongly,
     env_export_all_wrongly(),
     r#"
-from foo import bad_definition  # E: Could not import `bad_definition` from `foo`
+from foo import bad_definition
+x = bad_definition
+"#,
+);
+
+testcase!(
+    test_export_all_wrongly_missing_other_name,
+    env_export_all_wrongly(),
+    r#"
+from foo import missing_definition  # E: Could not import `missing_definition` from `foo`
+x = missing_definition
 "#,
 );
 
@@ -468,7 +478,7 @@ testcase!(
     test_export_all_wrongly_star,
     env_export_all_wrongly(),
     r#"
-from foo import *  # E: Could not import `bad_definition` from `foo`
+from foo import *
 "#,
 );
 
@@ -1417,5 +1427,101 @@ testcase!(
 from typing import assert_type
 from test.foo import bar
 assert_type(bar, int)
+"#,
+);
+
+/// Create a test environment with extra-extension `.cinc` modules.
+fn env_extra_ext_cinc_import() -> TestEnv {
+    let mut t =
+        TestEnv::new().with_extra_file_extensions(vec!["cinc".to_owned(), "cconf".to_owned()]);
+    t.add_with_path(
+        "service.config.cinc",
+        "service/config.cinc",
+        r#"
+x: int = 42
+class Config:
+    name: str
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_extra_ext_cinc_import,
+    env_extra_ext_cinc_import(),
+    r#"
+from typing import assert_type
+import service.config.cinc as config
+assert_type(config.x, int)
+"#,
+);
+
+// Test importing a `.cconf` file (another extra extension).
+fn env_extra_ext_cconf_import() -> TestEnv {
+    let mut t =
+        TestEnv::new().with_extra_file_extensions(vec!["cinc".to_owned(), "cconf".to_owned()]);
+    t.add_with_path(
+        "service.settings.cconf",
+        "service/settings.cconf",
+        r#"
+value: str = "hello"
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_extra_ext_cconf_import,
+    env_extra_ext_cconf_import(),
+    r#"
+from typing import assert_type
+import service.settings.cconf as settings
+assert_type(settings.value, str)
+"#,
+);
+
+// Test importing an extra-extension file with dots in the filename.
+fn env_extra_ext_dotted_filename_import() -> TestEnv {
+    let mut t =
+        TestEnv::new().with_extra_file_extensions(vec!["cinc".to_owned(), "cconf".to_owned()]);
+    t.add_with_path(
+        "foo.file1.name2.cinc",
+        "foo/file1.name2.cinc",
+        r#"
+y: float = 3.14
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_extra_ext_dotted_filename_import,
+    env_extra_ext_dotted_filename_import(),
+    r#"
+from typing import assert_type
+import foo.file1.name2.cinc as mod
+assert_type(mod.y, float)
+"#,
+);
+
+// Test using `from ... import` syntax with extra-extension modules.
+testcase!(
+    test_extra_ext_from_import,
+    env_extra_ext_cinc_import(),
+    r#"
+from typing import assert_type
+from service.config.cinc import x, Config
+assert_type(x, int)
+c = Config()
+assert_type(c.name, str)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2983
+testcase!(
+    test_malformed_def_from_star,
+    r#"
+def # E: Expected an identifier
+from *a # E: Expected `)` # E: Cannot find module # E: only allowed at module level # E: Expected a module name # E: Star import must be the only import # E: Expected `,`
 "#,
 );

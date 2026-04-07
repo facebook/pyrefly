@@ -48,6 +48,7 @@ use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Decorator;
@@ -70,6 +71,7 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers_solver::AnswersSolver;
@@ -294,6 +296,8 @@ impl<'a> CalleesWithLocation<'a> {
                         ..FindPreference::default()
                     },
                 )
+                .map(Vec1::into_vec)
+                .unwrap_or_default()
                 .into_iter()
                 .collect_vec()
                 .as_slice()
@@ -694,6 +698,8 @@ impl<'a> CalleesWithLocation<'a> {
                     ..FindPreference::default()
                 },
             )
+            .map(Vec1::into_vec)
+            .unwrap_or_default()
             .into_iter()
             // filter out attributes since we don't know how to handle them
             .filter(|d| !matches!(d.metadata, DefinitionMetadata::Attribute))
@@ -777,6 +783,7 @@ impl<'a> CalleesWithLocation<'a> {
             Type::Union(box Union { members: tys, .. }) => {
                 self.init_or_new_from_union(tys, callee_range)
             }
+            Type::Any(_) => vec![],
             x => {
                 panic!(
                     "unexpected type at [{}]: {x:?}",
@@ -847,7 +854,7 @@ impl<'a> CalleesWithLocation<'a> {
             Type::Callable(..) => self.for_callable(callee_range),
             Type::Type(box ty) => self.init_or_new_from_type(ty, callee_range),
             // Annotated[T, ...] is not callable (matching as_call_target_impl).
-            Type::Annotated(_) => vec![],
+            Type::Annotated(_, _) => vec![],
 
             Type::ClassDef(cls) => self.find_init_or_new(cls),
             Type::Forall(v) => match &v.body {
@@ -887,8 +894,8 @@ impl<'a> CalleesWithLocation<'a> {
 }
 
 impl Query {
-    pub fn new(config_finder: ConfigFinder) -> Self {
-        let state = State::new(config_finder);
+    pub fn new(config_finder: ConfigFinder, thread_count: ThreadCount) -> Self {
+        let state = State::new(config_finder, thread_count);
         Self {
             state,
             sys_info: SysInfo::default(),

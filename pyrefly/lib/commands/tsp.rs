@@ -7,9 +7,11 @@
 
 use std::io::Write;
 use std::sync::Arc;
+use std::time::Instant;
 
 use clap::Parser;
 use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::thread_pool::ThreadCount;
 
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
@@ -44,6 +46,7 @@ pub fn run_tsp(
     args: TspArgs,
     telemetry: &impl Telemetry,
     wrapper: Option<ConfigConfigurerWrapper>,
+    thread_count: ThreadCount,
 ) -> anyhow::Result<()> {
     if let Some(initialize_info) =
         initialize_tsp_connection(&connection, &mut reader, args.indexing_mode)?
@@ -51,6 +54,8 @@ pub fn run_tsp(
         // Create an LSP server instance for the TSP server to use.
         let lsp_queue = LspQueue::new();
         let surface = telemetry.surface();
+        let agent_session_id = telemetry.agent_session_id();
+        let agent_invocation_id = telemetry.agent_invocation_id();
         let lsp_server = Server::new(
             connection,
             lsp_queue,
@@ -60,9 +65,14 @@ pub fn run_tsp(
             args.workspace_indexing_limit,
             false,
             surface,
+            agent_session_id,
+            agent_invocation_id,
             None, // No path remapping for TSP
+            None, // No thrift remapping for TSP
             Arc::new(NoExternalProvider),
             wrapper,
+            thread_count,
+            Instant::now(),
         );
 
         // Reuse the existing lsp_loop but with TSP initialization
@@ -92,6 +102,7 @@ impl TspArgs {
         self,
         telemetry: &impl Telemetry,
         wrapper: Option<ConfigConfigurerWrapper>,
+        thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
         // Note that we must have our logging only write out to stderr.
         eprintln!("starting TSP server");
@@ -100,7 +111,7 @@ impl TspArgs {
         // also be implemented to use sockets or HTTP.
         let (connection, reader, io_threads) = Connection::stdio();
 
-        run_tsp(connection, reader, self, telemetry, wrapper)?;
+        run_tsp(connection, reader, self, telemetry, wrapper, thread_count)?;
         io_threads.join()?;
         // We have shut down gracefully.
         // Use writeln! instead of eprintln! to avoid panicking if stderr is closed.

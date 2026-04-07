@@ -8,7 +8,6 @@
 /// This file contains a new implementation of the lsp_interaction test suite. Soon it will replace the old one.
 use std::iter::once;
 use std::marker::PhantomData;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -56,8 +55,10 @@ use lsp_types::request::GotoTypeDefinition;
 use lsp_types::request::HoverRequest;
 use lsp_types::request::Initialize;
 use lsp_types::request::InlayHintRequest;
+use lsp_types::request::PrepareRenameRequest;
 use lsp_types::request::References;
 use lsp_types::request::RegisterCapability;
+use lsp_types::request::Rename;
 use lsp_types::request::Request as _;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
@@ -70,6 +71,7 @@ use pyrefly::commands::lsp::IndexingMode;
 use pyrefly::commands::lsp::LspArgs;
 use pyrefly::commands::lsp::run_lsp;
 use pyrefly::lsp::non_wasm::external_provider::NoExternalProvider;
+use pyrefly::lsp::non_wasm::module_helpers::ThriftRemapper;
 use pyrefly::lsp::non_wasm::protocol::JsonRpcMessage;
 use pyrefly::lsp::non_wasm::protocol::Message;
 use pyrefly::lsp::non_wasm::protocol::Notification;
@@ -86,6 +88,7 @@ use pyrefly_util::thread_pool::ThreadCount;
 use serde_json::Value;
 use serde_json::json;
 
+use crate::init::TEST_THREAD_COUNT;
 use crate::init::init_test;
 
 #[derive(Debug)]
@@ -1292,7 +1295,6 @@ pub struct TestTelemetry {
 }
 
 impl TestTelemetry {
-    #[expect(dead_code)]
     pub fn new() -> Self {
         Self {
             subscribers: Mutex::new(Vec::new()),
@@ -1301,7 +1303,6 @@ impl TestTelemetry {
 
     /// Register a new subscriber. Returns a [`Receiver`] that will receive all
     /// future [`RecordedTelemetryEvent`]s wrapped in [`Arc`].
-    #[expect(dead_code)]
     pub fn subscribe(&self) -> Receiver<Arc<RecordedTelemetryEvent>> {
         let (sender, receiver) = crossbeam_channel::unbounded();
         self.subscribers
@@ -1330,6 +1331,14 @@ impl Telemetry for TestTelemetry {
     fn surface(&self) -> Option<String> {
         None
     }
+
+    fn agent_session_id(&self) -> Option<String> {
+        None
+    }
+
+    fn agent_invocation_id(&self) -> Option<String> {
+        None
+    }
 }
 
 impl LspInteraction {
@@ -1344,7 +1353,17 @@ impl LspInteraction {
             build_system_blocking: false,
             enable_external_references: false,
         };
-        Self::new_with_args(args, NoTelemetry, None)
+        Self::new_with_args(args, NoTelemetry, None, None)
+    }
+
+    pub fn new_with_thrift_remapper(thrift_remapper: Option<ThriftRemapper>) -> Self {
+        let args = LspArgs {
+            indexing_mode: IndexingMode::None,
+            workspace_indexing_limit: 50,
+            build_system_blocking: false,
+            enable_external_references: false,
+        };
+        Self::new_with_args(args, NoTelemetry, None, thrift_remapper)
     }
 
     /// Create an `LspInteraction` with custom [`LspArgs`] and a custom
@@ -1354,8 +1373,11 @@ impl LspInteraction {
         args: LspArgs,
         telemetry: T,
         thread_count: Option<ThreadCount>,
+        thrift_remapper: Option<ThriftRemapper>,
     ) -> Self {
-        init_test(thread_count.unwrap_or(ThreadCount::NumThreads(NonZeroUsize::new(3).unwrap())));
+        init_test();
+
+        let thread_count = thread_count.unwrap_or(TEST_THREAD_COUNT);
 
         let ((conn_client, _client_reader), (conn_server, server_reader)) = Connection::memory();
 
@@ -1370,9 +1392,11 @@ impl LspInteraction {
                 args,
                 None,
                 None,
+                thrift_remapper,
                 &telemetry,
                 Arc::new(NoExternalProvider),
                 None,
+                thread_count,
             );
             finish_server.notify_finished();
         });
@@ -1632,6 +1656,26 @@ impl LspInteraction {
         }))
     }
 
+    /// Sends a go-to-implementation request for a notebook cell at the specified position
+    pub fn implementation_cell(
+        &self,
+        file_name: &str,
+        cell_name: &str,
+        line: u32,
+        col: u32,
+    ) -> ClientRequestHandle<'_, GotoImplementation> {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        self.client.send_request(json!({
+            "textDocument": {
+                "uri": cell_uri
+            },
+            "position": {
+                "line": line,
+                "character": col
+            }
+        }))
+    }
+
     /// Sends a references request for a notebook cell at the specified position
     pub fn references_cell(
         &self,
@@ -1774,6 +1818,97 @@ impl LspInteraction {
                 "diagnostics": []
             }
         }))
+    }
+
+    /// Sends a provide_type request for a notebook cell at the specified position
+    pub fn provide_type_cell(
+        &self,
+        file_name: &str,
+        cell_name: &str,
+        line: u32,
+        col: u32,
+    ) -> ClientRequestHandle<'_, ProvideType> {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        self.client.send_request(json!({
+            "textDocument": {
+                "uri": cell_uri
+            },
+            "positions": [{
+                "line": line,
+                "character": col
+            }]
+        }))
+    }
+
+    /// Sends a prepare rename request for a notebook cell at the specified position
+    pub fn prepare_rename_cell(
+        &self,
+        file_name: &str,
+        cell_name: &str,
+        line: u32,
+        col: u32,
+    ) -> ClientRequestHandle<'_, PrepareRenameRequest> {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        self.client.send_request(json!({
+            "textDocument": {
+                "uri": cell_uri
+            },
+            "position": {
+                "line": line,
+                "character": col
+            }
+        }))
+    }
+
+    /// Sends a rename request for a notebook cell at the specified position
+    pub fn rename_cell(
+        &self,
+        file_name: &str,
+        cell_name: &str,
+        line: u32,
+        col: u32,
+        new_name: &str,
+    ) -> ClientRequestHandle<'_, Rename> {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        self.client.send_request(json!({
+            "textDocument": {
+                "uri": cell_uri
+            },
+            "position": {
+                "line": line,
+                "character": col
+            },
+            "newName": new_name
+        }))
+    }
+
+    /// Sends a typeErrorDisplayStatus request for a notebook cell and returns the status string.
+    pub fn type_error_display_status_cell(&self, file_name: &str, cell_name: &str) -> String {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = self.client.next_request_id();
+        self.client.send_message(Message::Request(Request {
+            id: id.clone(),
+            method: "pyrefly/textDocument/typeErrorDisplayStatus".to_owned(),
+            params: json!({
+                "uri": cell_uri
+            }),
+            activity_key: None,
+        }));
+        self.client
+            .expect_message(
+                "Response for pyrefly/textDocument/typeErrorDisplayStatus",
+                |msg| {
+                    if let Message::Response(x) = msg
+                        && x.id == id
+                    {
+                        let result: String = serde_json::from_value(x.result.unwrap()).unwrap();
+                        Some(Ok(result))
+                    } else {
+                        None
+                    }
+                },
+            )
+            .unwrap()
     }
 
     /// Testing helper: Sets a flag on the server to prevent the next recheck from committing.

@@ -48,9 +48,10 @@ struct Args {
 async fn run() -> anyhow::Result<ExitCode> {
     let args = Args::parse_from(get_args_expanded(args_os())?);
     args.common.init(false);
+    let thread_count = args.common.thread_count();
     let (status, _) = args
         .command
-        .run(crate_version!(), &NoTelemetry, None)
+        .run(crate_version!(), &NoTelemetry, None, thread_count)
         .await?;
     Ok(status.to_exit_code())
 }

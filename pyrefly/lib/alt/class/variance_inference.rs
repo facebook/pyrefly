@@ -169,8 +169,8 @@ fn on_type(
                     // Unknown params
                 }
                 Params::ParamSpec(prefix, param_spec) => {
-                    for (ty, _) in prefix.iter() {
-                        on_type(variance.inv(), inj, ty, on_edge, on_var);
+                    for p in prefix.iter() {
+                        on_type(variance.inv(), inj, p.ty(), on_edge, on_var);
                     }
                     on_type(variance.inv(), inj, param_spec, on_edge, on_var);
                 }
@@ -263,8 +263,8 @@ fn on_type(
                     // Unknown params
                 }
                 Params::ParamSpec(prefix, param_spec) => {
-                    for (ty, _) in prefix.iter() {
-                        on_type(variance.inv(), inj, ty, on_edge, on_var);
+                    for p in prefix.iter() {
+                        on_type(variance.inv(), inj, p.ty(), on_edge, on_var);
                     }
                     on_type(variance.inv(), inj, param_spec, on_edge, on_var);
                 }
@@ -295,7 +295,8 @@ fn on_type(
                 SizeExpr::Add(l, r)
                 | SizeExpr::Sub(l, r)
                 | SizeExpr::Mul(l, r)
-                | SizeExpr::FloorDiv(l, r) => {
+                | SizeExpr::FloorDiv(l, r)
+                | SizeExpr::Pow(l, r) => {
                     on_type(Variance::Invariant, inj, l, on_edge, on_var);
                     on_type(Variance::Invariant, inj, r, on_edge, on_var);
                 }

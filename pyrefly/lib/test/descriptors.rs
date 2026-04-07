@@ -178,6 +178,23 @@ def f(c: C) -> None:
 );
 
 testcase!(
+    test_property_decorated_with_lru_cache,
+    r#"
+import functools
+
+class Foo:
+    @property
+    @functools.lru_cache
+    def foo(self) -> dict[str, str]:
+        return {"a": "b"}
+
+def main() -> None:
+    Foo.foo.get("a")
+    Foo().foo.get("a")
+    "#,
+);
+
+testcase!(
     bug = "cached_property's __name__ should not exist and attrname should be a str",
     test_cached_property_attrname,
     r#"
@@ -648,7 +665,6 @@ class User(Base):
 );
 
 testcase!(
-    bug = "Overloaded __get__ on descriptor fails with type[T] where T is bounded; https://github.com/facebook/pyrefly/issues/1083",
     test_overloaded_descriptor_get_with_bounded_typevar,
     r#"
 from typing import Callable, overload
@@ -675,7 +691,7 @@ class B[T: A]:
         self.a = a
 
     def f(self):
-        for k in self.a.x:  # E: No matching overload found for function `MyDescriptor.__get__`
+        for k in self.a.x:
             print(k)
     "#,
 );

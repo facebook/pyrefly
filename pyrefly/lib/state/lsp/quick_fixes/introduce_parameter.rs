@@ -28,6 +28,7 @@ use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use super::extract_shared::MethodInfo;
 use super::extract_shared::code_at_range;
@@ -328,7 +329,10 @@ fn expression_uses_local_names(
         if param_names.contains(name) {
             continue;
         }
-        let defs = transaction.find_definition(handle, range.start(), FindPreference::default());
+        let defs = transaction
+            .find_definition(handle, range.start(), FindPreference::default())
+            .map(Vec1::into_vec)
+            .unwrap_or_default();
         if defs.iter().any(|def| {
             def.module.path() == module_path
                 && function_def.range().contains_range(def.definition_range)
@@ -486,6 +490,8 @@ fn build_callsite_edits(
             function_ctx.function_def.name.range.start(),
             FindPreference::default(),
         )
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
         .into_iter()
         .find(|def| {
             def.module.path() == module_info.path()

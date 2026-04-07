@@ -14,12 +14,13 @@ use pyrefly_python::symbol_kind::SymbolKind;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
-use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use vec1::Vec1;
 
-use super::extract_shared::line_end_position;
 use super::extract_shared::line_indent_and_start;
+use super::extract_shared::needs_pass_after_removal;
+use super::extract_shared::statement_removal_range_from_range;
 use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
@@ -47,7 +48,10 @@ pub(crate) fn safe_delete_code_actions(
     let ast = transaction.get_ast(handle)?;
     let position = selection.start();
     let identifier = transaction.identifier_at(handle, position)?;
-    let definitions = transaction.find_definition(handle, position, FindPreference::default());
+    let definitions = transaction
+        .find_definition(handle, position, FindPreference::default())
+        .map(Vec1::into_vec)
+        .unwrap_or_default();
     if definitions.len() != 1 {
         return None;
     }
@@ -186,16 +190,4 @@ fn matches_definition(stmt: &Stmt, definition_range: TextRange) -> bool {
         Stmt::TypeAlias(type_alias) => type_alias.name.range() == definition_range,
         _ => false,
     }
-}
-
-fn statement_removal_range_from_range(source: &str, range: TextRange) -> Option<TextRange> {
-    let (_, line_start) = line_indent_and_start(source, range.start())?;
-    let line_end = line_end_position(source, range.end());
-    Some(TextRange::new(line_start, line_end))
-}
-
-fn needs_pass_after_removal(body: &[Stmt], removed_range: TextRange) -> bool {
-    let mut non_docstring = body.iter().filter(|stmt| !is_docstring_stmt(stmt));
-    let only_stmt = non_docstring.next();
-    non_docstring.next().is_none() && only_stmt.is_some_and(|stmt| stmt.range() == removed_range)
 }

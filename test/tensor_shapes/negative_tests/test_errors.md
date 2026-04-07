@@ -22,7 +22,9 @@ ERROR `Tensor[2, 3]` is not assignable to `Tensor[100, 3]` [bad-assignment]
   --> *test_compare_generic_tensor.py:36:36 (glob)
    |
 36 | wrong_assignment: Tensor[100, 3] = result2  # Should ERROR if result2 is Tensor[2, 3]
-   |                                    ^^^^^^^
+   |                   --------------   ^^^^^^^
+   |                   |
+   |                   declared type
    |
   Size mismatch: expected 100, got 2
 [1]
@@ -47,6 +49,12 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_check_symbolic_binding.p
 ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[4, 3]` [bad-return]
   --> *test_check_symbolic_binding.py:35:12 (glob)
    |
+30 | def test_symbolic_identity_wrong() -> Tensor[4, 3]:
+   |                                       ------------ declared return type
+31 |     """This should ERROR - expected type doesn't match"""
+32 |     x_concrete: Tensor[2, 3] = torch.randn(2, 3)
+33 |     result = accepts_symbolic_returns_symbolic(x_concrete)
+34 |     reveal_type(result)
 35 |     return result  # Should ERROR: Tensor[2, 3] not assignable to Tensor[4, 3]
    |            ^^^^^^
    |
@@ -60,6 +68,10 @@ ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Te
 ERROR Returned type `Dim[(M * N)]` is not assignable to declared return type `Dim[(M + N)]` [bad-return]
   --> *test_check_symbolic_binding.py:41:12 (glob)
    |
+38 | def numel_returns_bad_explicit_symint[N, M](x: Tensor[N, M]) -> Dim[N + M]:
+   |                                                                 ---------- declared return type
+39 |     s = x.numel()
+40 |     reveal_type(s)
 41 |     return s
    |            ^
    |
@@ -73,6 +85,10 @@ ERROR Returned type `Dim[(M * N)]` is not assignable to declared return type `Di
 ERROR Returned type `Tensor[(M * N)]` is not assignable to declared return type `Tensor[(M + N)]` [bad-return]
   --> *test_check_symbolic_binding.py:47:12 (glob)
    |
+44 | def view_returns_bad_explicit_tensor[N, M](x: Tensor[N, M]) -> Tensor[N + M]:
+   |                                                                ------------- declared return type
+45 |     v = x.view(-1)
+46 |     reveal_type(v)
 47 |     return v
    |            ^
    |
@@ -86,6 +102,10 @@ ERROR Returned type `Tensor[(M * N)]` is not assignable to declared return type 
 ERROR Returned type `Dim[(M * N)]` is not assignable to declared return type `Dim[K]` [bad-return]
   --> *test_check_symbolic_binding.py:53:12 (glob)
    |
+50 | def numel_returns_bad_implicit_symint[N, M, K](x: Tensor[N, M]) -> Dim[K]:
+   |                                                                    ------ declared return type
+51 |     s = x.numel()
+52 |     reveal_type(s)
 53 |     return s
    |            ^
    |
@@ -99,6 +119,10 @@ ERROR Returned type `Dim[(M * N)]` is not assignable to declared return type `Di
 ERROR Returned type `Tensor[(M * N)]` is not assignable to declared return type `Tensor[K]` [bad-return]
   --> *test_check_symbolic_binding.py:59:12 (glob)
    |
+56 | def view_returns_bad_implicit_tensor[N, M, K](x: Tensor[N, M]) -> Tensor[K]:
+   |                                                                   --------- declared return type
+57 |     v = x.view(-1)
+58 |     reveal_type(v)
 59 |     return v
    |            ^
    |
@@ -131,6 +155,13 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_literal_shape_check.py"
 ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[4, 3]` [bad-return]
   --> *test_literal_shape_check.py:22:12 (glob)
    |
+16 | def test_literal_shape_mismatch() -> Tensor[4, 3]:
+   |                                      ------------ declared return type
+17 |     """This should definitely error - literal shape mismatch"""
+18 |     x: Tensor[2, 3] = torch.randn(2, 3)
+19 |     reveal_type(x)
+20 |
+21 |     # This should ERROR
 22 |     return x  # Tensor[2, 3] not assignable to Tensor[4, 3]
    |            ^
    |
@@ -161,14 +192,18 @@ ERROR `Tensor[2, 3]` is not assignable to `Tensor[4, 3]` [bad-assignment]
   --> *test_typevar_substitution_bug.py:35:27 (glob)
    |
 35 |     case2: Tensor[4, 3] = result  # Should ERROR but doesn't (N=4)
-   |                           ^^^^^^
+   |            ------------   ^^^^^^
+   |            |
+   |            declared type
    |
   Size mismatch: expected 4, got 2
 ERROR `Tensor[2, 3]` is not assignable to `Tensor[100, 3]` [bad-assignment]
   --> *test_typevar_substitution_bug.py:36:29 (glob)
    |
 36 |     case3: Tensor[100, 3] = result  # Should ERROR but probably doesn't (N=100)
-   |                             ^^^^^^
+   |            --------------   ^^^^^^
+   |            |
+   |            declared type
    |
   Size mismatch: expected 100, got 2
 [1]
@@ -211,6 +246,15 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_concat_flatten_types.py"
 ERROR Returned type `Tensor[7, 3]` is not assignable to declared return type `Tensor[100, 3]` [bad-return]
   --> *test_concat_flatten_types.py:39:12 (glob)
    |
+31 | def test_concat_what_is_actual_type() -> Tensor[100, 3]:
+   |                                          -------------- declared return type
+32 |     """What type does concat actually return?"""
+33 |     x: Tensor[2, 3] = torch.randn(2, 3)
+34 |     y: Tensor[5, 3] = torch.randn(5, 3)
+35 |     z = concat_symbolic(x, y)
+36 |     reveal_type(z)  # Expected: Tensor[7, 3], but might be Tensor[N + M, 3]?
+37 |
+38 |     # Test if wrong type is accepted
 39 |     return z  # Should ERROR if z is Tensor[7, 3]
    |            ^
    |
@@ -224,6 +268,14 @@ ERROR Returned type `Tensor[7, 3]` is not assignable to declared return type `Te
 ERROR Returned type `Tensor[24]` is not assignable to declared return type `Tensor[999]` [bad-return]
   --> *test_concat_flatten_types.py:49:12 (glob)
    |
+42 | def test_flatten_what_is_actual_type() -> Tensor[999]:
+   |                                           ----------- declared return type
+43 |     """What type does flatten actually return?"""
+44 |     x: Tensor[2, 3, 4] = torch.randn(2, 3, 4)
+45 |     y = flatten_symbolic(x)
+46 |     reveal_type(y)  # Expected: Tensor[24], but might be Tensor[B * N * M]?
+47 |
+48 |     # Test if wrong type is accepted
 49 |     return y  # Should ERROR if y is Tensor[24]
    |            ^
    |
@@ -382,6 +434,9 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_subtyping.py"
 ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[4, 3]` [bad-return]
   --> *test_tensor_subtyping.py:33:12 (glob)
    |
+31 | def tensor_wrong_first_dim(x: Tensor[2, 3]) -> Tensor[4, 3]:
+   |                                                ------------ declared return type
+32 |     """ERROR: First dimension mismatch"""
 33 |     return x  # ERROR: Tensor[2, 3] not assignable to Tensor[4, 3]
    |            ^
    |
@@ -389,6 +444,9 @@ ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Te
 ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[2, 5]` [bad-return]
   --> *test_tensor_subtyping.py:38:12 (glob)
    |
+36 | def tensor_wrong_second_dim(x: Tensor[2, 3]) -> Tensor[2, 5]:
+   |                                                 ------------ declared return type
+37 |     """ERROR: Second dimension mismatch"""
 38 |     return x  # ERROR: Tensor[2, 3] not assignable to Tensor[2, 5]
    |            ^
    |
@@ -396,6 +454,9 @@ ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Te
 ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[2, 3, 4]` [bad-return]
   --> *test_tensor_subtyping.py:43:12 (glob)
    |
+41 | def tensor_wrong_rank(x: Tensor[2, 3]) -> Tensor[2, 3, 4]:
+   |                                           --------------- declared return type
+42 |     """ERROR: Rank mismatch"""
 43 |     return x  # ERROR: Tensor[2, 3] not assignable to Tensor[2, 3, 4]
    |            ^
    |
@@ -403,12 +464,18 @@ ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Te
 ERROR Returned type `Tensor[N, M]` is not assignable to declared return type `Tensor[M, N]` [bad-return]
   --> *test_tensor_subtyping.py:68:12 (glob)
    |
+66 | def tensor_generic_wrong_order[N, M](x: Tensor[N, M]) -> Tensor[M, N]:
+   |                                                          ------------ declared return type
+67 |     """ERROR: Swapped dimensions"""
 68 |     return x  # ERROR: Tensor[N, M] not assignable to Tensor[M, N]
    |            ^
    |
 ERROR Returned type `Tensor[N, 3]` is not assignable to declared return type `Tensor[N, 5]` [bad-return]
   --> *test_tensor_subtyping.py:78:12 (glob)
    |
+76 | def tensor_generic_first_dim_wrong[N](x: Tensor[N, 3]) -> Tensor[N, 5]:
+   |                                                           ------------ declared return type
+77 |     """ERROR: Second dimension mismatch even with generic first"""
 78 |     return x  # ERROR: Tensor[N, 3] not assignable to Tensor[N, 5]
    |            ^
    |
@@ -416,6 +483,9 @@ ERROR Returned type `Tensor[N, 3]` is not assignable to declared return type `Te
 ERROR Returned type `Tensor[N, M]` is not assignable to declared return type `Tensor[(M + N)]` [bad-return]
   --> *test_tensor_subtyping.py:88:12 (glob)
    |
+86 | def tensor_add_dims[N, M](x: Tensor[N, M]) -> Tensor[N + M]:
+   |                                               ------------- declared return type
+87 |     """ERROR: Can't just return 2D tensor as 1D with sum dimension"""
 88 |     return x  # ERROR: Tensor[N, M] not assignable to Tensor[N + M]
    |            ^
    |
@@ -423,6 +493,9 @@ ERROR Returned type `Tensor[N, M]` is not assignable to declared return type `Te
 ERROR Returned type `Tensor[(1 + N), 3]` is not assignable to declared return type `Tensor[(2 + N), 3]` [bad-return]
   --> *test_tensor_subtyping.py:98:12 (glob)
    |
+96 | def tensor_different_arithmetic[N](x: Tensor[N + 1, 3]) -> Tensor[N + 2, 3]:
+   |                                                            ---------------- declared return type
+97 |     """ERROR: Different arithmetic expression"""
 98 |     return x  # ERROR: N + 1 not equal to N + 2
    |            ^
    |
@@ -430,6 +503,9 @@ ERROR Returned type `Tensor[(1 + N), 3]` is not assignable to declared return ty
 ERROR Returned type `Tensor[(M + N), 3]` is not assignable to declared return type `Tensor[(M * N), 3]` [bad-return]
    --> *test_tensor_subtyping.py:108:12 (glob)
     |
+106 | def tensor_add_vs_mul[N, M](x: Tensor[N + M, 3]) -> Tensor[N * M, 3]:
+    |                                                     ---------------- declared return type
+107 |     """ERROR: Addition vs multiplication"""
 108 |     return x  # ERROR: N + M not equal to N * M
     |            ^
     |
@@ -437,6 +513,9 @@ ERROR Returned type `Tensor[(M + N), 3]` is not assignable to declared return ty
 ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[4, 3]` [bad-return]
    --> *test_tensor_subtyping.py:123:12 (glob)
     |
+121 | def call_generic_wrong_return(x: Tensor[2, 3]) -> Tensor[4, 3]:
+    |                                                   ------------ declared return type
+122 |     """ERROR: Generic identity returns Tensor[2, 3], not Tensor[4, 3]"""
 123 |     return tensor_generic_identity(x)  # ERROR
     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
     |
@@ -451,6 +530,9 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_indexing.py"
 ERROR Returned type `Tensor[20]` is not assignable to declared return type `Tensor[10, 20]` [bad-return]
    --> *test_tensor_indexing.py:317:12 (glob)
     |
+315 | def index_wrong_result(x: Tensor[10, 20]) -> Tensor[10, 20]:
+    |                                              -------------- declared return type
+316 |     """ERROR: Integer index reduces rank, can't return 2D"""
 317 |     return x[0]  # ERROR: Tensor[20] not assignable to Tensor[10, 20]
     |            ^^^^
     |
@@ -458,6 +540,9 @@ ERROR Returned type `Tensor[20]` is not assignable to declared return type `Tens
 ERROR Returned type `Tensor[5, 20]` is not assignable to declared return type `Tensor[3, 20]` [bad-return]
    --> *test_tensor_indexing.py:322:12 (glob)
     |
+320 | def slice_wrong_size(x: Tensor[10, 20]) -> Tensor[3, 20]:
+    |                                            ------------- declared return type
+321 |     """ERROR: Slice [:5] gives 5 elements, not 3"""
 322 |     return x[:5]  # ERROR: Tensor[5, 20] not assignable to Tensor[3, 20]
     |            ^^^^^
     |
@@ -472,6 +557,9 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_arithmetic.py"
 ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[4, 5]` [bad-return]
    --> *test_tensor_arithmetic.py:145:12 (glob)
     |
+143 | def add_wrong_shape(x: Tensor[2, 3]) -> Tensor[4, 5]:
+    |                                         ------------ declared return type
+144 |     """ERROR: Arithmetic preserves shape, can't return different shape"""
 145 |     return x + 1.0  # ERROR: Tensor[2, 3] not assignable to Tensor[4, 5]
     |            ^^^^^^^
     |
@@ -479,6 +567,9 @@ ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Te
 ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[2, 3, 4]` [bad-return]
    --> *test_tensor_arithmetic.py:150:12 (glob)
     |
+148 | def mul_wrong_rank(x: Tensor[2, 3]) -> Tensor[2, 3, 4]:
+    |                                        --------------- declared return type
+149 |     """ERROR: Scalar mul preserves rank"""
 150 |     return x * 2.0  # ERROR: Tensor[2, 3] not assignable to Tensor[2, 3, 4]
     |            ^^^^^^^
     |
@@ -486,6 +577,9 @@ ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Te
 ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[1, 3]` [bad-return]
    --> *test_tensor_arithmetic.py:160:12 (glob)
     |
+158 | def broadcast_wrong_return(x: Tensor[1, 3], y: Tensor[2, 3]) -> Tensor[1, 3]:
+    |                                                                 ------------ declared return type
+159 |     """ERROR: Broadcast result is [2, 3], not [1, 3]"""
 160 |     return x + y  # ERROR: Tensor[2, 3] not assignable to Tensor[1, 3]
     |            ^^^^^
     |
@@ -524,6 +618,9 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_generic_exprs.py"
 ERROR Returned type `Tensor[5]` is not assignable to declared return type `Tensor[6]` [bad-return]
    --> *test_tensor_generic_exprs.py:122:12 (glob)
     |
+120 | def test_sum_dims_wrong(x: Tensor[2, 3]) -> Tensor[6]:
+    |                                             --------- declared return type
+121 |     """ERROR: N+M=5, not 6"""
 122 |     return sum_dims(x)  # ERROR
     |            ^^^^^^^^^^^
     |
@@ -531,6 +628,9 @@ ERROR Returned type `Tensor[5]` is not assignable to declared return type `Tenso
 ERROR Returned type `Tensor[6]` is not assignable to declared return type `Tensor[5]` [bad-return]
    --> *test_tensor_generic_exprs.py:127:12 (glob)
     |
+125 | def test_product_dims_wrong(x: Tensor[2, 3]) -> Tensor[5]:
+    |                                                 --------- declared return type
+126 |     """ERROR: N*M=6, not 5"""
 127 |     return product_dims(x)  # ERROR
     |            ^^^^^^^^^^^^^^^
     |
@@ -538,6 +638,9 @@ ERROR Returned type `Tensor[6]` is not assignable to declared return type `Tenso
 ERROR Returned type `Tensor[8, 5]` is not assignable to declared return type `Tensor[4, 5]` [bad-return]
    --> *test_tensor_generic_exprs.py:132:12 (glob)
     |
+130 | def test_double_first_wrong(x: Tensor[4, 5]) -> Tensor[4, 5]:
+    |                                                 ------------ declared return type
+131 |     """ERROR: First dim should be 8, not 4"""
 132 |     return double_first(x)  # ERROR
     |            ^^^^^^^^^^^^^^^
     |
@@ -552,6 +655,9 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_expr_equiv.py"
 ERROR Returned type `Tensor[(M + N)]` is not assignable to declared return type `Tensor[(M * N)]` [bad-return]
   --> *test_tensor_expr_equiv.py:85:12 (glob)
    |
+83 | def add_not_equal_mul[N, M](x: Tensor[N + M]) -> Tensor[N * M]:
+   |                                                  ------------- declared return type
+84 |     """ERROR: N + M != N * M in general"""
 85 |     return x
    |            ^
    |
@@ -559,6 +665,9 @@ ERROR Returned type `Tensor[(M + N)]` is not assignable to declared return type 
 ERROR Returned type `Tensor[(1 + N)]` is not assignable to declared return type `Tensor[(2 + N)]` [bad-return]
   --> *test_tensor_expr_equiv.py:90:12 (glob)
    |
+88 | def different_constants[N](x: Tensor[N + 1]) -> Tensor[N + 2]:
+   |                                                 ------------- declared return type
+89 |     """ERROR: N + 1 != N + 2"""
 90 |     return x
    |            ^
    |
@@ -566,6 +675,9 @@ ERROR Returned type `Tensor[(1 + N)]` is not assignable to declared return type 
 ERROR Returned type `Tensor[5, 4]` is not assignable to declared return type `Tensor[6, 4]` [bad-return]
   --> *test_tensor_expr_equiv.py:95:12 (glob)
    |
+93 | def wrong_literal_simplification(x: Tensor[2 + 3, 4]) -> Tensor[6, 4]:
+   |                                                          ------------ declared return type
+94 |     """ERROR: 2 + 3 = 5, not 6"""
 95 |     return x
    |            ^
    |
@@ -580,6 +692,9 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_variadic.py"
 ERROR Returned type `Tensor[10, 20]` is not assignable to declared return type `Tensor[10, 30]` [bad-return]
   --> *test_tensor_variadic.py:97:12 (glob)
    |
+95 | def test_variadic_identity_wrong(x: Tensor[10, 20]) -> Tensor[10, 30]:
+   |                                                        -------------- declared return type
+96 |     """ERROR: shape should be preserved"""
 97 |     return variadic_identity(x)
    |            ^^^^^^^^^^^^^^^^^^^^
    |
@@ -587,6 +702,9 @@ ERROR Returned type `Tensor[10, 20]` is not assignable to declared return type `
 ERROR Returned type `tuple[Tensor[1], Tensor[2, 3, 4]]` is not assignable to declared return type `tuple[Tensor[1], Tensor[2, 3]]` [bad-return]
    --> *test_tensor_variadic.py:104:12 (glob)
     |
+102 | ) -> tuple[Tensor[1], Tensor[2, 3]]:
+    |      ------------------------------ declared return type
+103 |     """ERROR: rest should be [2,3,4] not [2,3]"""
 104 |     return split_first_rest(x)
     |            ^^^^^^^^^^^^^^^^^^^
     |

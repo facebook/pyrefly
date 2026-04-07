@@ -19,9 +19,10 @@ use std::time::Instant;
 
 use lsp_types::Url;
 use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
 use pyrefly_util::fs_anyhow::read_to_string;
+use pyrefly_util::telemetry::NoTelemetry;
 use pyrefly_util::thread_pool::ThreadCount;
-use pyrefly_util::thread_pool::init_thread_pool;
 use serde_json::json;
 
 use crate::object_model::InitializeSettings;
@@ -39,9 +40,15 @@ fn test_pytorch_error_propagation_latency() {
         pytorch_path
     );
 
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
-    // Override the default 3-thread limit to use all available cores for realistic benchmarking
-    init_thread_pool(ThreadCount::AllThreads);
+    let args = LspArgs {
+        indexing_mode: IndexingMode::LazyBlocking,
+        workspace_indexing_limit: 50,
+        build_system_blocking: false,
+        enable_external_references: false,
+    };
+    // Use all available cores for realistic benchmarking
+    let mut interaction =
+        LspInteraction::new_with_args(args, NoTelemetry, Some(ThreadCount::AllThreads), None);
     interaction.set_root(pytorch_root.clone());
 
     interaction

@@ -35,6 +35,7 @@ use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::Connection;
+use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::init_test;
 
 #[derive(Default)]
@@ -489,9 +490,16 @@ impl TspInteraction {
 
         // Spawn the server thread and store its handle
         let thread_handle = thread::spawn(move || {
-            run_tsp(conn_server, server_reader, args, &NoTelemetry, None)
-                .map(|_| ())
-                .map_err(|e| std::io::Error::other(e.to_string()))
+            run_tsp(
+                conn_server,
+                server_reader,
+                args,
+                &NoTelemetry,
+                None,
+                TEST_THREAD_COUNT,
+            )
+            .map(|_| ())
+            .map_err(|e| std::io::Error::other(e.to_string()))
         });
 
         server.server_thread = Some(thread_handle);

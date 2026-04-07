@@ -13,6 +13,7 @@ use ruff_python_ast::ModModule;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtFunctionDef;
+use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::visitor::walk_expr;
 use ruff_python_ast::visitor::walk_stmt;
@@ -440,4 +441,45 @@ pub(super) fn is_member_stmt(stmt: &Stmt) -> bool {
         stmt,
         Stmt::FunctionDef(_) | Stmt::ClassDef(_) | Stmt::Assign(_) | Stmt::AnnAssign(_)
     )
+}
+
+/// Computes the full-line removal range for a statement (leading indent through trailing newline).
+pub(super) fn statement_removal_range(source: &str, stmt: &Stmt) -> Option<TextRange> {
+    statement_removal_range_from_range(source, stmt.range())
+}
+
+/// Computes the full-line removal range for a text range (leading indent through trailing newline).
+pub(super) fn statement_removal_range_from_range(
+    source: &str,
+    range: TextRange,
+) -> Option<TextRange> {
+    let (_, line_start) = line_indent_and_start(source, range.start())?;
+    let line_end = line_end_position(source, range.end());
+    Some(TextRange::new(line_start, line_end))
+}
+
+/// Returns true if removing the statement at `removed_range` would leave the body
+/// with only docstrings, requiring a `pass` placeholder.
+pub(super) fn needs_pass_after_removal(body: &[Stmt], removed_range: TextRange) -> bool {
+    let mut non_docstring = body.iter().filter(|stmt| !is_docstring_stmt(stmt));
+    let only_stmt = non_docstring.next();
+    non_docstring.next().is_none() && only_stmt.is_some_and(|stmt| stmt.range() == removed_range)
+}
+
+/// Extracts the text at `range` from `source` and reindents from `from_indent` to `to_indent`.
+/// Ensures the result ends with a newline.
+pub(super) fn reindent_statement(
+    source: &str,
+    range: TextRange,
+    from_indent: &str,
+    to_indent: &str,
+) -> String {
+    let start = range.start().to_usize().min(source.len());
+    let end = range.end().to_usize().min(source.len());
+    let raw = if start < end { &source[start..end] } else { "" };
+    let mut text = reindent_block(raw, from_indent, to_indent);
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
 }

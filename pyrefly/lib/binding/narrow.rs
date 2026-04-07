@@ -493,6 +493,34 @@ impl NarrowOp {
         }
     }
 
+    /// Removes all `Placeholder` operations from this narrow op tree.
+    /// Used when all sub-patterns of a class pattern are irrefutable, meaning the
+    /// Placeholders (added by `and_all` for unmerged names) are spurious and would
+    /// incorrectly block negative narrowing.
+    pub fn strip_placeholders(&mut self) {
+        match self {
+            Self::Atomic(_, AtomicNarrowOp::Placeholder) => {
+                // Replace standalone Placeholder with nothing — caller handles this case
+            }
+            Self::And(ops) => {
+                ops.retain(|op| !matches!(op, Self::Atomic(_, AtomicNarrowOp::Placeholder)));
+                for op in ops.iter_mut() {
+                    op.strip_placeholders();
+                }
+                // If only one op remains, unwrap the And
+                if ops.len() == 1 {
+                    *self = ops.pop().unwrap();
+                }
+            }
+            Self::Or(ops) => {
+                for op in ops.iter_mut() {
+                    op.strip_placeholders();
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn or(&mut self, other: Self) {
         match self {
             Self::Or(ops) => ops.push(other),

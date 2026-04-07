@@ -237,6 +237,63 @@ def f(b: bool) -> None:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2868
+testcase!(
+    test_return_while_else,
+    r#"
+def find_match(items: list[int], target: int) -> int:
+    i = 0
+    while i < len(items):
+        if items[i] == target:
+            return i
+        i += 1
+    else:
+        return -1
+"#,
+);
+
+testcase!(
+    test_return_while_break_else,
+    r#"
+def f(x: bool) -> int:  # E: Function declared to return `int`, but one or more paths are missing an explicit `return`
+    while x:
+        break
+    else:
+        return 1
+"#,
+);
+
+testcase!(
+    test_return_while_else_no_return,
+    r#"
+def f(x: bool) -> int:  # E: Function declared to return `int`, but one or more paths are missing an explicit `return`
+    while x:
+        return 1
+    else:
+        pass
+"#,
+);
+
+testcase!(
+    test_return_while_true_no_break,
+    r#"
+def f() -> int:
+    while True:
+        return 1
+"#,
+);
+
+testcase!(
+    test_return_while_false_break_else,
+    r#"
+def f() -> int:
+    while False:
+        break
+    else:
+        return 1
+"#,
+);
+
 testcase!(
     test_return_then_dead_code,
     r#"
@@ -787,5 +844,20 @@ class A:
 class B(A):
     def foo(self):
         print(3)
+"#,
+);
+
+testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/2912 - list(dict.items()) incorrectly errors when returned directly with a union return type",
+    test_return_list_dict_items_union_return_type,
+    r#"
+from typing import Sequence
+
+def _process_null_values(
+    null_values: dict[str, str],
+) -> Sequence[str] | list[tuple[str, str]]:
+    if isinstance(null_values, dict):
+        return list(null_values.items())  # E: Argument `dict_items[str, str]` is not assignable to parameter `iterable` with type `Iterable[str]` in function `list.__init__`
+    return ['a', 'b']
 "#,
 );

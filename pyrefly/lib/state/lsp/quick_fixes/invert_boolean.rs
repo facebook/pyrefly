@@ -18,6 +18,7 @@ use ruff_python_ast::UnaryOp;
 use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use vec1::Vec1;
 
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
@@ -61,7 +62,10 @@ pub(crate) fn invert_boolean_code_actions(
         return None;
     }
     let target_name = identifier.identifier.id.to_string();
-    let definitions = transaction.find_definition(handle, position, FindPreference::default());
+    let definitions = transaction
+        .find_definition(handle, position, FindPreference::default())
+        .map(Vec1::into_vec)
+        .unwrap_or_default();
     let definition = definitions.first()?;
     if !matches!(definition.metadata, DefinitionMetadata::Variable(_)) {
         return None;

@@ -65,7 +65,7 @@ For instance, the following pairs are functionally similar:
 | Construct 1 | Construct 2 |
 | --- | --- |
 | A match statement | A series of chained if/else statements |
-| The legacy union type syntax  `Union[X, Y]` | The new syntax `X | Y` |
+| The legacy union type syntax  `Union[X, Y]` | The new syntax `X \| Y` |
 | A NewType definition `X = NewType("X", Y)` | A standard class definition `class X(Y): pass` |
 | The functional namedtuple definition `Point = namedtuple("Point", ["x", "y"])` | A class-based namedtuple definition `class Point(NamedTuple)` with `x` and `y` as members |
 

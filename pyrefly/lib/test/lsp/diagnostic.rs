@@ -317,6 +317,19 @@ def f():
     assert_eq!(report, "No unused variables");
 }
 
+#[test]
+fn test_fstring_format_specifier_counts_as_variable_use() {
+    let code = r#"
+def pprint(d: dict[str, object]) -> None:
+    max_len = max(len(k) for k in d)
+    print("\n".join(f"{key:<{max_len}}: {value}" for key, value in d.items()))
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
 // Reassigning a parameter using a slice of itself in a loop should not be
 // reported as unused.
 #[test]

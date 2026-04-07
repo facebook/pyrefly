@@ -6,13 +6,10 @@
  */
 
 use anstream::ColorChoice;
-use pyrefly_util::thread_pool::ThreadCount;
-use pyrefly_util::thread_pool::init_thread_pool;
+pub use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use pyrefly_util::trace::init_tracing;
 
-pub fn init_test(num_threads: ThreadCount) {
+pub fn init_test() {
     ColorChoice::write_global(ColorChoice::Always);
     init_tracing(true, true);
-    // Enough threads to see parallelism bugs, but not too many to debug through.
-    init_thread_pool(num_threads);
 }

@@ -611,3 +611,22 @@ def g():
   yield from f()
 "#,
 );
+
+testcase!(
+    test_yield_from_with_union_return_annotation,
+    r#"
+from typing import Any, Iterator, reveal_type
+
+def foo() -> list[tuple[Any, ...]]:
+    ...
+
+def bar1() -> Iterator[tuple[Any, ...]] | Iterator[dict[str, Any]]:
+    yield from foo()
+
+def bar2() -> Iterator[tuple[Any, ...]]:
+    yield from foo()
+
+reveal_type(bar1)  # E: revealed type: () -> Iterator[dict[str, Any]] | Iterator[tuple[Any, ...]]
+reveal_type(bar2)  # E: revealed type: () -> Iterator[tuple[Any, ...]]
+"#,
+);

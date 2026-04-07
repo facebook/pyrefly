@@ -150,6 +150,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Type(box Type::Tuple(_)) => Some(self.instantiate_unbounded_tuple()),
             Type::Type(box Type::Any(a)) => Some((TParams::empty(), a.propagate())),
+            // type[type[Any]] is what we get when `type` appears in an annotation position.
+            // We treat it as type[Any].
+            Type::Type(box ty @ Type::Type(box Type::Any(_))) => {
+                Some((TParams::empty(), ty.clone()))
+            }
             Type::Type(box Type::SpecialForm(SpecialForm::Callable)) => Some((
                 TParams::empty(),
                 self.heap

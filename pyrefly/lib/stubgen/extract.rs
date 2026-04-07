@@ -17,6 +17,7 @@ use std::sync::Arc;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::Param;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Expr;
@@ -33,6 +34,9 @@ use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
+use crate::export::definitions::Definitions;
+use crate::export::definitions::DunderAllEntry;
+use crate::export::definitions::DunderAllKind;
 use crate::state::state::Transaction;
 
 /// A single module's stub content, in source order.
@@ -117,6 +121,8 @@ pub fn extract_module_stub(
         })
         .collect();
 
+    let dunder_all = resolve_dunder_all(&ast.body, &module_info);
+
     let mut ctx = ExtractionContext {
         bindings: &bindings,
         answers: &answers,
@@ -124,6 +130,7 @@ pub fn extract_module_stub(
         config,
         uses_incomplete: false,
         function_map: &function_map,
+        dunder_all: &dunder_all,
     };
 
     let items = extract_stmts(&ast.body, &mut ctx, false);
@@ -141,6 +148,9 @@ struct ExtractionContext<'a> {
     config: &'a ExtractConfig,
     uses_incomplete: bool,
     function_map: &'a HashMap<TextRange, DecoratedFunction>,
+    /// When `__all__` is explicitly defined, only these names are exported
+    /// at module level. `None` means no explicit `__all__` — use convention.
+    dunder_all: &'a Option<HashSet<Name>>,
 }
 
 fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) -> Vec<StubItem> {
@@ -180,6 +190,11 @@ fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) ->
                 // TypeVar/NamedTuple/TypedDict calls and old-style type aliases
                 // (e.g. `X = List[int]`, `X = int | str`) are preserved verbatim.
                 if is_type_constructor_or_alias(assign) {
+                    if let [Expr::Name(n)] = assign.targets.as_slice()
+                        && !should_include_name(n.id.as_str(), ctx.config, in_class, ctx.dunder_all)
+                    {
+                        continue;
+                    }
                     let text = source_text(ctx.module_info, assign.range()).to_owned();
                     items.push(StubItem::TypeAlias(StubTypeAlias { text }));
                 } else {
@@ -189,6 +204,11 @@ fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) ->
                 }
             }
             Stmt::TypeAlias(type_alias) => {
+                if let Expr::Name(n) = type_alias.name.as_ref()
+                    && !should_include_name(n.id.as_str(), ctx.config, in_class, ctx.dunder_all)
+                {
+                    continue;
+                }
                 let text = source_text(ctx.module_info, type_alias.range()).to_owned();
                 items.push(StubItem::TypeAlias(StubTypeAlias { text }));
             }
@@ -218,7 +238,7 @@ fn extract_function(
     in_class: bool,
 ) -> Option<StubFunction> {
     let name = func_def.name.id.as_str();
-    if !should_include_name(name, ctx.config, in_class) {
+    if !should_include_name(name, ctx.config, in_class, ctx.dunder_all) {
         return None;
     }
 
@@ -457,7 +477,7 @@ fn extract_return_type(
 
 fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Option<StubClass> {
     let name = class_def.name.id.as_str();
-    if !should_include_name(name, ctx.config, false) {
+    if !should_include_name(name, ctx.config, false, ctx.dunder_all) {
         return None;
     }
 
@@ -525,7 +545,7 @@ fn extract_ann_assign(
         Expr::Name(n) => n.id.as_str(),
         _ => return None,
     };
-    if !should_include_name(name, ctx.config, in_class) {
+    if !should_include_name(name, ctx.config, in_class, ctx.dunder_all) {
         return None;
     }
 
@@ -553,7 +573,7 @@ fn extract_assign(
     for target in &assign.targets {
         if let Expr::Name(name_expr) = target {
             let name = name_expr.id.as_str();
-            if !should_include_name(name, ctx.config, in_class) {
+            if !should_include_name(name, ctx.config, in_class, ctx.dunder_all) {
                 continue;
             }
 
@@ -610,7 +630,50 @@ fn extract_docstring(body: &[Stmt]) -> Option<String> {
     None
 }
 
-fn should_include_name(name: &str, config: &ExtractConfig, in_class: bool) -> bool {
+/// Parse `__all__` from the module AST using the existing `Definitions`
+/// infrastructure. Returns `Some(names)` when the module explicitly defines
+/// `__all__` and it can be statically resolved, `None` otherwise.
+fn resolve_dunder_all(body: &[Stmt], module_info: &Module) -> Option<HashSet<Name>> {
+    let defs = Definitions::new(
+        body,
+        module_info.name(),
+        module_info.path().is_init(),
+        SysInfo::default(),
+    );
+    if !matches!(defs.dunder_all.kind, DunderAllKind::Specified) {
+        return None;
+    }
+    let mut names = HashSet::new();
+    for entry in &defs.dunder_all.entries {
+        match entry {
+            DunderAllEntry::Name(_, name) => {
+                names.insert(name.clone());
+            }
+            DunderAllEntry::Remove(_, name) => {
+                names.remove(name);
+            }
+            DunderAllEntry::Module(..) => {
+                // Cross module __all__ re-exports require import resolution;
+                // fall back to convention-based filtering.
+                return None;
+            }
+        }
+    }
+    Some(names)
+}
+
+fn should_include_name(
+    name: &str,
+    config: &ExtractConfig,
+    in_class: bool,
+    dunder_all: &Option<HashSet<Name>>,
+) -> bool {
+    // At module level with an explicit `__all__`, only export listed names.
+    if !in_class && let Some(all_names) = dunder_all {
+        return all_names.contains(name);
+    }
+
+    // Convention-based filtering when no explicit `__all__` is present.
     // Dunder names are always part of the public protocol.
     if name.starts_with("__") && name.ends_with("__") {
         return true;

@@ -18,6 +18,7 @@ use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::qname::QName;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::commas_iter;
@@ -38,9 +39,9 @@ use crate::callable::FunctionKind;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
+use crate::callable::PrefixParam;
 use crate::callable::PropertyMetadata;
 use crate::callable::PropertyRole;
-use crate::callable::Required;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
@@ -225,15 +226,30 @@ impl TParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct TArgs(Box<(Arc<TParams>, Box<[Type]>)>);
+#[derive(TypeEq)]
+pub struct TArgs(Arc<(Arc<TParams>, Box<[Type]>)>);
+
+impl Visit<Type> for TArgs {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        self.0.0.visit(f);
+        self.0.1.visit(f);
+    }
+}
+
+impl VisitMut<Type> for TArgs {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        // Arc<TParams> has a no-op VisitMut, so we only need to visit the types.
+        let inner = Arc::make_mut(&mut self.0);
+        inner.1.visit_mut(f);
+    }
+}
 
 impl TArgs {
     pub fn new(tparams: Arc<TParams>, targs: Vec<Type>) -> Self {
         if tparams.len() != targs.len() {
             panic!("TParams and TArgs must have the same length");
         }
-        Self(Box::new((tparams, targs.into_boxed_slice())))
+        Self(Arc::new((tparams, targs.into_boxed_slice())))
     }
 
     pub fn tparams(&self) -> &TParams {
@@ -245,7 +261,8 @@ impl TArgs {
     }
 
     pub fn iter_paired_mut(&mut self) -> impl ExactSizeIterator<Item = (&Quantified, &mut Type)> {
-        self.0.0.iter().zip(self.0.1.iter_mut())
+        let inner = Arc::make_mut(&mut self.0);
+        inner.0.iter().zip(inner.1.iter_mut())
     }
 
     pub fn len(&self) -> usize {
@@ -257,7 +274,7 @@ impl TArgs {
     }
 
     pub fn as_mut(&mut self) -> &mut [Type] {
-        &mut self.0.1
+        &mut Arc::make_mut(&mut self.0).1
     }
 
     pub fn is_empty(&self) -> bool {
@@ -586,7 +603,7 @@ pub enum SuperObj {
 #[derive(Debug, Clone, Eq, TypeEq, PartialOrd, Ord)]
 pub struct Union {
     pub members: Vec<Type>,
-    pub display_name: Option<Box<str>>,
+    pub display_name: Option<(ModuleName, Name)>,
 }
 
 impl PartialEq for Union {
@@ -795,13 +812,14 @@ pub enum Type {
     /// Used for special form `Annotated[T, ...]`.
     /// This is transparent when resolving annotations, but is not callable and
     /// cannot be assigned to `type[T]`.
-    Annotated(Box<Type>),
+    /// The second field carries the metadata items (the `...` in `Annotated[T, ...]`).
+    Annotated(Box<Type>, Box<[Type]>),
     Unpack(Box<Type>),
     TypeVar(TypeVar),
     ParamSpec(ParamSpec),
     TypeVarTuple(TypeVarTuple),
     SpecialForm(SpecialForm),
-    Concatenate(Box<[(Type, Required)]>, Box<Type>),
+    Concatenate(Box<[PrefixParam]>, Box<Type>),
     ParamSpecValue(ParamList),
     /// The type of a value which is annotated with `P.args`.
     Args(Box<Quantified>),
@@ -817,6 +835,8 @@ pub enum Type {
     KwargsValue(Box<Quantified>),
     /// Used to represent a type that has a value representation, e.g. a class
     Type(Box<Type>),
+    /// TypeForm[T] — a type form object (PEP 747).
+    TypeForm(Box<Type>),
     Ellipsis,
     Any(AnyStyle),
     Never(NeverStyle),
@@ -883,7 +903,7 @@ impl Visit for Type {
             Type::ElementOfTypeVarTuple(x) => x.visit(f),
             Type::TypeGuard(x) => x.visit(f),
             Type::TypeIs(x) => x.visit(f),
-            Type::Annotated(x) => x.visit(f),
+            Type::Annotated(x, _metadata) => x.visit(f),
             Type::Unpack(x) => x.visit(f),
             Type::TypeVar(x) => x.visit(f),
             Type::ParamSpec(x) => x.visit(f),
@@ -896,6 +916,7 @@ impl Visit for Type {
             Type::ArgsValue(x) => x.visit(f),
             Type::KwargsValue(x) => x.visit(f),
             Type::Type(x) => x.visit(f),
+            Type::TypeForm(x) => x.visit(f),
             Type::Ellipsis => {}
             Type::Any(x) => x.visit(f),
             Type::Never(x) => x.visit(f),
@@ -937,7 +958,7 @@ impl VisitMut for Type {
             Type::ElementOfTypeVarTuple(x) => x.visit_mut(f),
             Type::TypeGuard(x) => x.visit_mut(f),
             Type::TypeIs(x) => x.visit_mut(f),
-            Type::Annotated(x) => x.visit_mut(f),
+            Type::Annotated(x, _metadata) => x.visit_mut(f),
             Type::Unpack(x) => x.visit_mut(f),
             Type::TypeVar(x) => x.visit_mut(f),
             Type::ParamSpec(x) => x.visit_mut(f),
@@ -950,6 +971,7 @@ impl VisitMut for Type {
             Type::ArgsValue(x) => x.visit_mut(f),
             Type::KwargsValue(x) => x.visit_mut(f),
             Type::Type(x) => x.visit_mut(f),
+            Type::TypeForm(x) => x.visit_mut(f),
             Type::Ellipsis => {}
             Type::Any(x) => x.visit_mut(f),
             Type::Never(x) => x.visit_mut(f),
@@ -1108,11 +1130,7 @@ impl Type {
         matches!(self, Type::Unpack(_))
     }
 
-    pub fn callable_concatenate(
-        args: Box<[(Type, Required)]>,
-        param_spec: Type,
-        ret: Type,
-    ) -> Self {
+    pub fn callable_concatenate(args: Box<[PrefixParam]>, param_spec: Type, ret: Type) -> Self {
         Type::Callable(Box::new(Callable::concatenate(args, param_spec, ret)))
     }
 
@@ -1679,17 +1697,42 @@ impl Type {
         sigs
     }
 
-    pub fn promote_implicit_literals(mut self, stdlib: &Stdlib) -> Type {
-        fn g(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
-            ty.recurse_mut(&mut |ty| g(ty, f));
-            f(ty);
-        }
-        g(&mut self, &mut |ty| match &ty {
+    fn widen_one_implicit_literal(ty: &mut Type, stdlib: &Stdlib) {
+        match &*ty {
             Type::Literal(lit) if lit.style == LitStyle::Implicit => {
                 *ty = lit.value.general_class_type(stdlib).clone().to_type()
             }
             Type::LiteralString(LitStyle::Implicit) => *ty = stdlib.str().clone().to_type(),
             _ => {}
+        }
+    }
+
+    /// Like `promote_implicit_literals` but only recurses into unions.
+    pub fn promote_shallow_implicit_literals(mut self, stdlib: &Stdlib) -> Type {
+        match &mut self {
+            Type::Union(union) => {
+                for member in &mut union.members {
+                    Self::widen_one_implicit_literal(member, stdlib);
+                }
+            }
+            _ => Self::widen_one_implicit_literal(&mut self, stdlib),
+        }
+        self
+    }
+
+    pub fn promote_implicit_literals(mut self, stdlib: &Stdlib) -> Type {
+        fn g(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
+            // Don't recurse into NNModule fields — they carry captured constructor
+            // args (e.g., padding=Literal[1]) that DSL forward functions need as
+            // concrete literals to compute output shapes.
+            if matches!(ty, Type::NNModule(_)) {
+                return;
+            }
+            ty.recurse_mut(&mut |ty| g(ty, f));
+            f(ty);
+        }
+        g(&mut self, &mut |ty| {
+            Self::widen_one_implicit_literal(ty, stdlib)
         });
         self
     }
@@ -1850,6 +1893,7 @@ impl Type {
             Type::Literal(lit) if let Lit::Int(x) = &lit.value => Some(x.as_bool()),
             Type::Literal(lit) if let Lit::Bytes(x) = &lit.value => Some(!x.is_empty()),
             Type::Literal(lit) if let Lit::Str(x) = &lit.value => Some(!x.is_empty()),
+            Type::Type(_) => Some(true),
             Type::None => Some(false),
             Type::Tuple(Tuple::Concrete(elements)) => Some(!elements.is_empty()),
             Type::Union(box Union { members, .. }) => {
@@ -1908,6 +1952,16 @@ impl Type {
             members,
             display_name: None,
         }))
+    }
+
+    /// Returns `true` if this type is an explicit type variable — i.e., a `Quantified` or
+    /// legacy `TypeVar` that a user wrote in an annotation.
+    pub fn is_explicit_type_variable(&self) -> bool {
+        match self {
+            Type::Quantified(q) => q.is_type_var(),
+            Type::TypeVar(_) => true,
+            _ => false,
+        }
     }
 }
 

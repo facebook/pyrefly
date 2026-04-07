@@ -18,6 +18,8 @@ use pyrefly_types::types::Union;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
+use pyrefly_util::thread_pool::ThreadCount;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextSize;
@@ -35,6 +37,15 @@ use crate::types::heap::TypeHeap;
 use crate::types::simplify::unions_with_literals;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
+
+/// Check if a statement is a `from __future__ import ...` statement.
+/// New imports must be inserted after `__future__` imports to produce valid Python.
+fn is_future_import_stmt(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::ImportFrom(import_from) if import_from.module.as_ref().is_some_and(|m| m.id == "__future__")
+    )
+}
 
 #[deny(clippy::missing_docs_in_private_items)]
 /// Flags for controlling the behavior of the autotype command
@@ -202,6 +213,9 @@ fn format_hints(
         if formatted_hint.contains("Never") {
             continue;
         }
+        if formatted_hint.contains("Overload") {
+            continue;
+        }
         if formatted_hint == "None" && kind == AnnotationKind::Parameter {
             continue;
         }
@@ -255,6 +269,7 @@ impl InferArgs {
     pub fn run(
         mut self,
         wrapper: Option<ConfigConfigurerWrapper>,
+        thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
         self.config_override.validate()?;
         // The infer command must analyze function bodies to produce meaningful
@@ -265,16 +280,17 @@ impl InferArgs {
         self.config_override
             .set_infer_return_types_if_unset(InferReturnTypes::Checked);
         let (files_to_check, config_finder) = self.files.resolve(self.config_override, wrapper)?;
-        Self::run_inner(files_to_check, config_finder, self.flags)
+        Self::run_inner(files_to_check, config_finder, self.flags, thread_count)
     }
 
     pub fn run_inner(
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
         flags: InferFlags,
+        thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
         let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
-        let state = State::new(config_finder);
+        let state = State::new(config_finder, thread_count);
         let holder = Forgetter::new(state, false);
         let handles = Handles::new(expanded_file_list);
         // Use Exports as the default require level for dependency modules —
@@ -343,7 +359,7 @@ impl InferArgs {
                     let position = ast
                         .body
                         .iter()
-                        .find(|stmt| !is_docstring_stmt(stmt))
+                        .find(|stmt| !is_docstring_stmt(stmt) && !is_future_import_stmt(stmt))
                         .map_or(ast.range.end(), |stmt| stmt.range().start());
                     let mut imports: Vec<(TextSize, String, String)> = needed_imports
                         .into_iter()
@@ -399,9 +415,11 @@ mod test {
     use pretty_assertions::assert_str_eq;
     use pyrefly_util::globs::FilteredGlobs;
     use pyrefly_util::globs::Globs;
+    use pyrefly_util::globs::HiddenDirFilter;
     use tempfile;
 
     use super::*;
+    use crate::test::util::TEST_THREAD_COUNT;
     use crate::test::util::TestEnv;
 
     fn assert_annotations(input: &str, output: &str, flags: Option<InferFlags>) {
@@ -413,9 +431,14 @@ mod test {
         t.add(&path.display().to_string(), input);
         let includes =
             Globs::new(vec![format!("{}/**/*", tdir.path().display()).to_owned()]).unwrap();
-        let f_globs = Box::new(FilteredGlobs::new(includes, Globs::empty(), None));
+        let f_globs = Box::new(FilteredGlobs::new(
+            includes,
+            Globs::empty(),
+            None,
+            HiddenDirFilter::Disabled,
+        ));
         let config_finder = t.config_finder();
-        let result = InferArgs::run_inner(f_globs, config_finder, flags);
+        let result = InferArgs::run_inner(f_globs, config_finder, flags, TEST_THREAD_COUNT);
         assert!(
             result.is_ok(),
             "autotype command failed: {:?}",
@@ -450,7 +473,7 @@ mod test {
         t.add(&file_two_path.display().to_string(), file_two);
         t.add(&config_path.display().to_string(), configuration);
         let args = InferArgs::parse_from(["infer", "--config", &config_path.display().to_string()]);
-        let result = args.run(None);
+        let result = args.run(None, TEST_THREAD_COUNT);
         assert!(result.is_ok(), "infer command failed: {:?}", result.err());
 
         let got_file = fs_anyhow::read_to_string(&file_one_path).unwrap();
@@ -890,7 +913,7 @@ class MyClass:
         t.add(&file_private_path.display().to_string(), file_private);
         t.add(&config_path.display().to_string(), configuration);
         let args = InferArgs::parse_from(["infer", "--config", &config_path.display().to_string()]);
-        let result = args.run(None);
+        let result = args.run(None, TEST_THREAD_COUNT);
         assert!(result.is_ok(), "infer command failed: {:?}", result.err());
 
         let got_file = fs_anyhow::read_to_string(&file_one_path).unwrap();
@@ -906,6 +929,57 @@ class MyClass:
             "Should not import from private module, got:\n{}",
             got_file,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_imports_after_future_import() -> anyhow::Result<()> {
+        // New imports must be inserted after `from __future__ import annotations`,
+        // not before it, to produce valid Python.
+        let file_one = r#"from __future__ import annotations
+from file_two import get_a
+def foo():
+    return get_a()
+"#;
+        let file_two = r#"
+class ExampleA:
+    pass
+def get_a():
+    return ExampleA()
+"#;
+        let output = r#"from __future__ import annotations
+from file_two import ExampleA
+from file_two import get_a
+def foo() -> ExampleA:
+    return get_a()
+"#;
+        assert_imports_and_annotations(file_one, file_two, output);
+        Ok(())
+    }
+
+    #[test]
+    fn test_imports_after_future_import_with_docstring() -> anyhow::Result<()> {
+        // New imports must be inserted after both the docstring and `from __future__ import`.
+        let file_one = r#""""Module docstring."""
+from __future__ import annotations
+from file_two import get_a
+def foo():
+    return get_a()
+"#;
+        let file_two = r#"
+class ExampleA:
+    pass
+def get_a():
+    return ExampleA()
+"#;
+        let output = r#""""Module docstring."""
+from __future__ import annotations
+from file_two import ExampleA
+from file_two import get_a
+def foo() -> ExampleA:
+    return get_a()
+"#;
+        assert_imports_and_annotations(file_one, file_two, output);
         Ok(())
     }
 }

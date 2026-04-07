@@ -48,6 +48,7 @@ pub enum SpecialForm {
     Tuple,
     Type,
     TypeAlias,
+    TypeForm,
     TypeGuard,
     TypeIs,
     TypedDict,
@@ -96,6 +97,15 @@ impl SpecialForm {
             | Self::TypedDict => false,
             _ => true,
         }
+    }
+
+    /// Is this special form a valid type expression on its own (without parameters)?
+    /// Used to reject bare forms like `Optional` from being assigned to `TypeForm`.
+    pub fn is_valid_bare_type_expression(self) -> bool {
+        matches!(
+            self,
+            Self::LiteralString | Self::Never | Self::NoReturn | Self::Type | Self::TypeForm
+        )
     }
 
     pub fn to_qualifier(self) -> Option<Qualifier> {
@@ -150,6 +160,10 @@ mod tests {
         assert_eq!(
             SpecialForm::from_str("Self").unwrap(),
             SpecialForm::SelfType
+        );
+        assert_eq!(
+            SpecialForm::from_str("TypeForm").unwrap(),
+            SpecialForm::TypeForm
         );
         assert!(SpecialForm::from_str("NotASpecial").is_err());
     }

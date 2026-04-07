@@ -86,3 +86,12 @@ $ python3 -m venv $TMPDIR/venv && \
  INFO 0 errors* (glob)
 [0]
 ```
+
+## We show how many warnings are hidden
+
+```scrut {output_stream: stderr}
+$ echo "x: str = 0" > $TMPDIR/test.py && \
+> $PYREFLY check $TMPDIR/test.py --warn=bad-assignment
+ INFO 0 errors (1 warning not shown)* (glob)
+[0]
+```

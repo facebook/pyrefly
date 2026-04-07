@@ -200,7 +200,7 @@ impl<T: TspInterface> TspServer<T> {
             GetTypeParams,
         ) -> Result<Option<tsp_types::Type>, lsp_server::ResponseError>,
     ) {
-        let params: GetTypeParams = match serde_json::from_value(raw_params) {
+        let params: GetTypeParams = match serde_json::from_value::<GetTypeParams>(raw_params) {
             Ok(p) => p,
             Err(e) => {
                 self.send_err(
@@ -211,8 +211,12 @@ impl<T: TspInterface> TspServer<T> {
             }
         };
         match handler(self, params) {
-            Ok(result) => self.send_ok(id, result),
-            Err(err) => self.send_err(id, err),
+            Ok(result) => {
+                self.send_ok(id, result);
+            }
+            Err(err) => {
+                self.send_err(id, err);
+            }
         }
     }
 }
@@ -223,7 +227,6 @@ pub fn tsp_loop(
     _initialization: InitializeInfo,
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
-    eprintln!("Reading TSP messages");
     let server = TspServer::new(lsp_server);
 
     std::thread::scope(|scope| {

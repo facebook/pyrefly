@@ -9,6 +9,7 @@ use std::cell::Cell;
 use std::cell::Ref;
 use std::cell::RefCell;
 use std::cell::RefMut;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 use std::mem;
@@ -54,6 +55,7 @@ use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
+use crate::types::callable::PrefixParam;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::module::ModuleType;
@@ -76,6 +78,31 @@ const VAR_LEAK: &str = "Internal error: a variable has leaked from one module to
 /// and each recursive call to is_subset_eq can use several KB of stack space
 /// due to large enums (Type) and lock guards.
 const INITIAL_GAS: Gas = Gas::new(200);
+
+/// Accumulated bounds for a solver variable.
+#[derive(Clone, Debug, Default)]
+struct Bounds {
+    lower: Vec<Type>,
+    upper: Vec<Type>,
+}
+
+impl Bounds {
+    fn new() -> Self {
+        Self {
+            lower: Vec::new(),
+            upper: Vec::new(),
+        }
+    }
+
+    fn extend(&mut self, other: Bounds) {
+        self.lower.extend(other.lower);
+        self.upper.extend(other.upper);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.lower.is_empty() && self.upper.is_empty()
+    }
+}
 
 #[derive(Debug)]
 enum Variable {
@@ -103,12 +130,12 @@ enum Variable {
         // collect lower bounds for typevars rather than eagerly pinning them. Currently, the only
         // thing it does is store `Any` lower bounds to avoid pinning to `Any` unless we have no
         // other solution.
-        lower_bounds: Vec<Type>,
+        bounds: Bounds,
     },
     /// A variable caused by general recursion, e.g. `x = f(); def f(): return x`.
     Recursive,
     /// A variable that used to decompose a type, e.g. getting T from Awaitable[T]
-    Unwrap(Vec<Type>),
+    Unwrap(Bounds),
     /// A variable whose answer has been determined
     Answer(Type),
 }
@@ -130,7 +157,7 @@ impl Display for Variable {
             Variable::PartialQuantified(q)
             | Variable::Quantified {
                 quantified: q,
-                lower_bounds: _,
+                bounds: _,
             } => {
                 let label = if matches!(self, Variable::PartialQuantified(_)) {
                     "PartialQuantified"
@@ -314,10 +341,15 @@ pub enum PinError {
 pub struct Solver {
     variables: Mutex<Variables>,
     instantiation_errors: RwLock<SmallMap<Var, TypeVarSpecializationError>>,
+    /// Cross-call cache for protocol conformance results.
+    /// Only caches results for types that contain no Vars, to ensure
+    /// soundness across different subset contexts.
+    protocol_cache: Mutex<HashMap<(Type, Type), Result<(), SubsetError>>>,
     pub infer_with_first_use: bool,
     pub heap: TypeHeap,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
+    pub spec_compliant_overloads: bool,
 }
 
 impl Display for Solver {
@@ -339,19 +371,35 @@ impl Solver {
         infer_with_first_use: bool,
         tensor_shapes: bool,
         strict_callable_subtyping: bool,
+        spec_compliant_overloads: bool,
     ) -> Self {
         Self {
             variables: Default::default(),
             instantiation_errors: Default::default(),
+            protocol_cache: Default::default(),
             infer_with_first_use,
             heap: TypeHeap::new(),
             tensor_shapes,
             strict_callable_subtyping,
+            spec_compliant_overloads,
         }
     }
 
     pub fn recurse<'a>(&self, var: Var, recurser: &'a VarRecurser) -> Option<Guard<'a, Var>> {
         self.variables.lock().recurse(var, recurser)
+    }
+
+    /// Look up a cached protocol conformance result.
+    pub fn check_protocol_cache(&self, got: &Type, want: &Type) -> Option<Result<(), SubsetError>> {
+        self.protocol_cache
+            .lock()
+            .get(&(got.clone(), want.clone()))
+            .cloned()
+    }
+
+    /// Store a protocol conformance result.
+    pub fn store_protocol_cache(&self, got: Type, want: Type, result: Result<(), SubsetError>) {
+        self.protocol_cache.lock().insert((got, want), result);
     }
 
     /// Force all non-recursive Vars in `vars`.
@@ -367,7 +415,7 @@ impl Solver {
             }
             Variable::Quantified {
                 quantified: q,
-                lower_bounds: _,
+                bounds: _,
             } => {
                 // A Variable::Quantified should always be finished (see `finish_quantified`) by
                 // the code that creates it, because we need to know when we're done collecting
@@ -389,12 +437,11 @@ impl Solver {
                 Some(PinError::ImplicitPartialContained(range))
             }
             Variable::PartialContained(_) => None,
-            Variable::Unwrap(lower_bounds) => {
-                *variable = Variable::Answer(if lower_bounds.is_empty() {
-                    Type::any_implicit()
-                } else {
-                    self.solve_lower_bounds(mem::take(lower_bounds))
-                });
+            Variable::Unwrap(bounds) => {
+                *variable = Variable::Answer(
+                    self.solve_bounds(mem::take(bounds))
+                        .unwrap_or_else(Type::any_implicit),
+                );
                 None
             }
         }
@@ -469,12 +516,13 @@ impl Solver {
                     }
                     Variable::Quantified {
                         quantified: _,
-                        lower_bounds,
+                        bounds,
                     }
-                    | Variable::Unwrap(lower_bounds)
-                        if expand_unfinished_variables && !lower_bounds.is_empty() =>
+                    | Variable::Unwrap(bounds)
+                        if expand_unfinished_variables
+                            && let Some(bound) = self.solve_bounds(bounds.clone()) =>
                     {
-                        *t = self.solve_lower_bounds(lower_bounds.clone());
+                        *t = bound;
                         drop(variable);
                         drop(lock);
                         self.expand_with_limit(t, limit - 1, recurser, expand_unfinished_variables);
@@ -496,8 +544,8 @@ impl Solver {
         let variables = self.variables.lock();
         match &*variables.get(v) {
             Variable::Answer(t) => t.clone(),
-            Variable::Unwrap(lower_bounds) if !lower_bounds.is_empty() => {
-                self.solve_lower_bounds(lower_bounds.clone())
+            Variable::Unwrap(bounds) if let Some(bound) = self.solve_bounds(bounds.clone()) => {
+                bound
             }
             _ => v.to_type(&self.heap),
         }
@@ -521,18 +569,14 @@ impl Solver {
                 let ty = match &mut *e {
                     Variable::Quantified {
                         quantified: q,
-                        lower_bounds,
-                    } => {
-                        if lower_bounds.is_empty() {
-                            q.as_gradual_type()
-                        } else {
-                            self.solve_lower_bounds(mem::take(lower_bounds))
-                        }
-                    }
+                        bounds,
+                    } => self
+                        .solve_bounds(mem::take(bounds))
+                        .unwrap_or_else(|| q.as_gradual_type()),
                     Variable::PartialQuantified(q) => q.as_gradual_type(),
-                    Variable::Unwrap(lower_bounds) if !lower_bounds.is_empty() => {
-                        self.solve_lower_bounds(mem::take(lower_bounds))
-                    }
+                    Variable::Unwrap(bounds) => self
+                        .solve_bounds(mem::take(bounds))
+                        .unwrap_or_else(|| self.heap.mk_any_implicit()),
                     _ => self.heap.mk_any_implicit(),
                 };
                 *e = Variable::Answer(ty.clone());
@@ -641,14 +685,8 @@ impl Solver {
                 *x = self.heap.mk_param_spec_value(params);
             }
             if let Type::Concatenate(ts, box Type::Concatenate(ts2, pspec)) = x {
-                *x = self.heap.mk_concatenate(
-                    ts.iter()
-                        .chain(ts2.iter())
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                    (**pspec).clone(),
-                );
+                let combined: Box<[PrefixParam]> = ts.iter().chain(ts2.iter()).cloned().collect();
+                *x = self.heap.mk_concatenate(combined, (**pspec).clone());
             }
             let (callable, kind) = match x {
                 Type::Callable(c) => (Some(&mut **c), None),
@@ -696,12 +734,12 @@ impl Solver {
                 ret: _,
             }) = callable
             {
-                // When a VarArg has a concrete unpacked tuple, expand it to positional-only params
+                // When a Varargs has a concrete unpacked tuple, expand it to positional-only params
                 // e.g., (*args: Unpack[tuple[int, str]]) -> (int, str, /)
                 let mut new_params = Vec::new();
                 for param in mem::take(param_list).into_items() {
                     match param {
-                        Param::VarArg(_, Type::Unpack(box Type::Tuple(Tuple::Concrete(elts)))) => {
+                        Param::Varargs(_, Type::Unpack(box Type::Tuple(Tuple::Concrete(elts)))) => {
                             for elt in elts {
                                 new_params.push(Param::PosOnly(None, elt, Required::Required));
                             }
@@ -789,7 +827,7 @@ impl Solver {
         let v = Var::new(uniques);
         self.variables
             .lock()
-            .insert_fresh(v, Variable::Unwrap(Vec::new()));
+            .insert_fresh(v, Variable::Unwrap(Bounds::new()));
         v
     }
 
@@ -805,7 +843,7 @@ impl Solver {
                 *v,
                 Variable::Quantified {
                     quantified: (*q).clone(),
-                    lower_bounds: Vec::new(),
+                    bounds: Bounds::new(),
                 },
             );
         }
@@ -897,12 +935,14 @@ impl Solver {
         }
     }
 
-    /// Add a lower bound to the variable if it is a Quantified or Unwrap
-    pub fn add_lower_bound(
+    /// Add a bound to the variable if it is a Quantified or Unwrap
+    fn add_bound(
         &self,
         v: Var,
         bound: Type,
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
+        get: &dyn Fn(&Bounds) -> &Vec<Type>,
+        get_mut: &dyn Fn(&mut Bounds) -> &mut Vec<Type>,
     ) {
         let lock = self.variables.lock();
         let e = lock.get(v);
@@ -910,10 +950,10 @@ impl Solver {
         match &*e {
             Variable::Quantified {
                 quantified: _,
-                lower_bounds,
+                bounds,
             }
-            | Variable::Unwrap(lower_bounds) => {
-                if let Some(first) = lower_bounds.first() {
+            | Variable::Unwrap(bounds) => {
+                if let Some(first) = get(bounds).first() {
                     first_bound = Some(first.clone());
                 }
             }
@@ -921,11 +961,11 @@ impl Solver {
         }
         drop(e);
         drop(lock);
-        // Check if the new lower bound can absorb or be absorbed into the first bound.
+        // Check if the new bound can absorb or be absorbed into the first bound.
         // Examples: `float` absorbs `int`, `list[Any]` absorbs `list[int]`.
         // TODO(https://github.com/facebook/pyrefly/issues/105): there are a few fishy things:
         // * We're only checking against the first bound.
-        // * We're keeping `Any` separate so it can be filtered out in `solve_lower_bounds`.
+        // * We're keeping `Any` separate so it can be filtered out in `solve_one_bounds`.
         // * We're relying on `is_subset` to pin vars.
         let new_first_bound = first_bound.and_then(|first| {
             let can_absorb = |t: &Type| !t.is_any() && t.collect_all_vars().is_empty();
@@ -944,28 +984,72 @@ impl Solver {
         match &mut *lock.get_mut(v) {
             Variable::Quantified {
                 quantified: _,
-                lower_bounds,
+                bounds,
             }
-            | Variable::Unwrap(lower_bounds) => {
+            | Variable::Unwrap(bounds) => {
                 if let Some(new_first) = new_first_bound
-                    && let Some(old_first) = lower_bounds.first_mut()
+                    && let Some(old_first) = get_mut(bounds).first_mut()
                 {
                     *old_first = new_first;
                 } else {
-                    lower_bounds.push(bound);
+                    get_mut(bounds).push(bound);
                 }
             }
             _ => {}
         }
     }
 
-    fn solve_lower_bounds(&self, mut lower_bounds: Vec<Type>) -> Type {
+    pub fn add_lower_bound(
+        &self,
+        v: Var,
+        bound: Type,
+        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
+    ) {
+        self.add_bound(v, bound, is_subset, &|bounds| &bounds.lower, &|bounds| {
+            &mut bounds.lower
+        })
+    }
+
+    pub fn add_upper_bound(
+        &self,
+        v: Var,
+        bound: Type,
+        is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
+    ) {
+        self.add_bound(v, bound, is_subset, &|bounds| &bounds.upper, &|bounds| {
+            &mut bounds.upper
+        })
+    }
+
+    /// Get current bound from a set of bounds of an unfinished variable.
+    fn get_current_bound(&self, bounds: Vec<Type>) -> Option<Type> {
+        if bounds.is_empty() {
+            return None;
+        }
+        Some(unions(bounds, &self.heap))
+    }
+
+    /// Solve one set of bounds (upper or lower)
+    fn solve_one_bounds(&self, mut bounds: Vec<Type>) -> Option<Type> {
+        if bounds.is_empty() {
+            return None;
+        }
         // Keeping `Any` bounds causes `Any` to propagate to too many places,
         // so we filter them out unless `Any` is the only solution.
-        if lower_bounds.iter().any(|t| !t.is_any()) {
-            lower_bounds.retain(|t| !t.is_any());
+        if bounds.iter().any(|t| !t.is_any()) {
+            bounds.retain(|t| !t.is_any());
         }
-        unions(lower_bounds, &self.heap)
+        Some(unions(bounds, &self.heap))
+    }
+
+    fn solve_bounds(&self, bounds: Bounds) -> Option<Type> {
+        // Prefer non-Any bound > Any bound > no bound
+        let lower_bound = self.solve_one_bounds(bounds.lower);
+        if lower_bound.as_ref().is_none_or(|b| b.is_any()) {
+            self.solve_one_bounds(bounds.upper).or(lower_bound)
+        } else {
+            lower_bound
+        }
     }
 
     /// Called after a quantified function has been called. Given `def f[T](x: int): list[T]`,
@@ -991,19 +1075,15 @@ impl Solver {
                     }
                 }
                 Variable::Quantified {
-                    quantified: _,
-                    lower_bounds,
-                } if !lower_bounds.is_empty() => {
+                    quantified: q,
+                    bounds,
+                } => {
                     if let Some(e) = self.instantiation_errors.read().get(&v) {
                         err.push(e.clone());
                     }
-                    *e = Variable::Answer(self.solve_lower_bounds(mem::take(lower_bounds)));
-                }
-                Variable::Quantified {
-                    quantified: q,
-                    lower_bounds: _,
-                } => {
-                    *e = if infer_with_first_use {
+                    *e = if let Some(bound) = self.solve_bounds(mem::take(bounds)) {
+                        Variable::Answer(bound)
+                    } else if infer_with_first_use {
                         Variable::finished(q)
                     } else {
                         Variable::Answer(q.as_gradual_type())
@@ -1044,7 +1124,7 @@ impl Solver {
                     v,
                     Variable::Quantified {
                         quantified: param.clone(),
-                        lower_bounds: Vec::new(),
+                        bounds: Bounds::new(),
                     },
                 );
             }
@@ -1063,16 +1143,24 @@ impl Solver {
             .for_each(|t| self.expand_vars_mut(t));
         let lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
-            if let Type::Var(v) = t
-                && let Variable::Quantified {
+            if let Type::Var(v) = t {
+                let mut e = lock.get_mut(*v);
+                if let Variable::Quantified {
                     quantified: q,
-                    lower_bounds,
-                } = &*lock.get(*v)
-                // If the variable has already been solved, do not generalize it.
-                && lower_bounds.is_empty()
-                && *q == *param
-            {
-                *t = param.clone().to_type(&self.heap);
+                    bounds,
+                } = &mut *e
+                    && *q == *param
+                {
+                    if bounds.is_empty() {
+                        *t = param.clone().to_type(&self.heap);
+                    } else {
+                        // If the variable has already been solved, finalize its type now.
+                        *e = Variable::Answer(
+                            self.solve_bounds(mem::take(bounds))
+                                .unwrap_or_else(|| q.as_gradual_type()),
+                        );
+                    }
+                }
             }
         })
     }
@@ -1172,12 +1260,23 @@ impl Solver {
         if let Some(subset_error_msg) = subset_error.to_error_msg() {
             msg_lines.push(subset_error_msg);
         }
+        let extra_annotations = tcc.annotations;
         match tcc.context {
             Some(ctx) => {
-                errors.add(loc, ErrorInfo::Context(&|| ctx.clone()), msg_lines);
+                errors.add_with_annotations(
+                    loc,
+                    ErrorInfo::Context(&|| ctx.clone()),
+                    msg_lines,
+                    extra_annotations,
+                );
             }
             None => {
-                errors.add(loc, ErrorInfo::Kind(tcc.kind.as_error_kind()), msg_lines);
+                errors.add_with_annotations(
+                    loc,
+                    ErrorInfo::Kind(tcc.kind.as_error_kind()),
+                    msg_lines,
+                    extra_annotations,
+                );
             }
         }
     }
@@ -1360,6 +1459,7 @@ impl Solver {
             gas: INITIAL_GAS,
             subset_cache: SmallMap::new(),
             class_protocol_assumptions: SmallSet::new(),
+            coinductive_assumptions_used: false,
         }
     }
 }
@@ -1609,6 +1709,10 @@ pub struct Subset<'a, Ans: LookupAnswer> {
     /// pairs to detect cycles. This enables coinductive reasoning for recursive protocols
     /// like Functor/Maybe without falsely assuming success for unrelated protocol checks.
     pub class_protocol_assumptions: SmallSet<(Class, Class)>,
+    /// Tracks whether a coinductive assumption (InProgress → Ok) was used during
+    /// the current computation. Used to avoid caching protocol results in the
+    /// persistent cross-call cache when they depend on coinductive assumptions.
+    pub coinductive_assumptions_used: bool,
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
@@ -1671,6 +1775,75 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         Some(best)
     }
 
+    /// is_subset_eq_var(t1, Quantified)
+    fn is_subset_eq_quantified(
+        &mut self,
+        t1: &Type,
+        q: &Quantified,
+        upper_bound: Option<&Type>,
+    ) -> (Type, Option<TypeVarSpecializationError>) {
+        let t1_p = {
+            let t1_p = t1
+                .clone()
+                .promote_implicit_literals(self.type_order.stdlib());
+            if let Some(upper_bound) = upper_bound {
+                // Don't promote literals if doing so would violate a literal upper bound.
+                if self.is_subset_eq(&t1_p, upper_bound).is_ok() {
+                    t1_p
+                } else {
+                    t1.clone()
+                }
+            } else {
+                t1_p
+            }
+        };
+        let bound = q.bound_type(self.type_order.stdlib(), &self.solver.heap);
+        // For constrained TypeVars, promote to the matching constraint type.
+        if let Restriction::Constraints(ref constraints) = q.restriction {
+            // Try promoted type first, then fall back to original (for literal bounds).
+            if let Some(constraint) = self.find_matching_constraint(&t1_p, constraints) {
+                (constraint.clone(), None)
+            } else if let Some(constraint) = self.find_matching_constraint(t1, constraints) {
+                (constraint.clone(), None)
+            } else if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
+                // No individual constraint matched, but the type may still
+                // be assignable to the constraint union (e.g. an abstract
+                // `AnyStr` satisfies `str | bytes`). Fall back to bound
+                // checking, mirroring the non-constraint code path.
+                if self.is_subset_eq(t1, &bound).is_err() {
+                    let specialization_error = TypeVarSpecializationError {
+                        name: q.name().clone(),
+                        got: t1_p.clone(),
+                        want: bound,
+                        error: err_p,
+                    };
+                    (t1_p.clone(), Some(specialization_error))
+                } else {
+                    (t1.clone(), None)
+                }
+            } else {
+                (t1_p.clone(), None)
+            }
+        } else if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
+            // If the promoted type fails, try again with the original type, in case the bound itself is literal.
+            // This could be more optimized, but errors are rare, so this code path should not be hot.
+            if self.is_subset_eq(t1, &bound).is_err() {
+                // If the original type is also an error, use the promoted type.
+                let specialization_error = TypeVarSpecializationError {
+                    name: q.name().clone(),
+                    got: t1_p.clone(),
+                    want: bound,
+                    error: err_p,
+                };
+                (t1_p.clone(), Some(specialization_error))
+            } else {
+                (t1.clone(), None)
+            }
+        } else {
+            (t1_p.clone(), None)
+        }
+    }
+
     /// Implementation of Var subset cases, calling onward to solve non-Var cases.
     ///
     /// This function does two things: it checks that got <: want, and it solves free variables assuming that
@@ -1686,7 +1859,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             _ if got == want => Ok(()),
             (Type::Var(v1), Type::Var(v2)) => {
                 let variables = self.solver.variables.lock();
-                // Variable unification is destructive, so we have to copy lower bounds first.
+                // Variable unification is destructive, so we have to copy bounds first.
                 let root1 = variables.get_root(*v1);
                 let root2 = variables.get_root(*v2);
                 if root1 == root2 {
@@ -1698,12 +1871,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         (
                             Variable::Quantified {
                                 quantified: _,
-                                lower_bounds: v1_bounds,
+                                bounds: v1_bounds,
                             }
                             | Variable::Unwrap(v1_bounds),
                             Variable::Quantified {
                                 quantified: _,
-                                lower_bounds: v2_bounds,
+                                bounds: v2_bounds,
                             }
                             | Variable::Unwrap(v2_bounds),
                         ) => {
@@ -1747,20 +1920,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     (
                         Variable::Quantified {
                             quantified: q1,
-                            lower_bounds: _,
+                            bounds: _,
                         },
                         Variable::Quantified {
                             quantified: q2,
-                            lower_bounds: _,
+                            bounds: _,
                         },
                     )
                     | (Variable::PartialQuantified(q1), Variable::PartialQuantified(q2)) => {
-                        let r1 = q1.restriction().clone();
-                        let r2 = q2.restriction().clone();
+                        let r1_restricted = q1.restriction().is_restricted();
+                        let r2_restricted = q2.restriction().is_restricted();
+                        let b1 = q1.bound_type(self.type_order.stdlib(), &self.solver.heap);
+                        let b2 = q2.bound_type(self.type_order.stdlib(), &self.solver.heap);
                         drop(variable1);
                         drop(variable2);
 
-                        match (r1.is_restricted(), r2.is_restricted()) {
+                        match (r1_restricted, r2_restricted) {
                             (false, false) => {
                                 // Neither has a restriction, order doesn't matter
                                 variables.unify(*v1, *v2);
@@ -1775,8 +1950,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             }
                             (true, true) => {
                                 // Both have restrictions, need to compare bounds
-                                let b1 = r1.as_type(self.type_order.stdlib(), &self.solver.heap);
-                                let b2 = r2.as_type(self.type_order.stdlib(), &self.solver.heap);
                                 drop(variables);
 
                                 let b1_subtype_of_b2 = self.is_subset_eq(&b1, &b2).is_ok();
@@ -1805,7 +1978,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         _,
                         Variable::Quantified {
                             quantified: _,
-                            lower_bounds: _,
+                            bounds: _,
                         },
                     ) => {
                         drop(variable1);
@@ -1835,23 +2008,40 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         self.is_subset_eq(&t1, t2)
                     }
                     Variable::Quantified {
-                        quantified: _,
-                        lower_bounds,
-                    }
-                    | Variable::Unwrap(lower_bounds)
-                        if !lower_bounds.is_empty() =>
-                    {
-                        let lower_bound = self.solver.solve_lower_bounds(lower_bounds.clone());
+                        quantified: q,
+                        bounds: _,
+                    } if q.kind() != QuantifiedKind::TypeVar => {
+                        // TODO(https://github.com/facebook/pyrefly/issues/105): figure out what to
+                        // do with ParamSpec and TypeVarTuple.
                         drop(v1_ref);
-                        drop(variables);
-                        self.is_subset_eq(&lower_bound, t2)
+                        variables.update(*v1, Variable::Answer(t2.clone()));
+                        Ok(())
                     }
                     Variable::Quantified {
-                        quantified: q,
-                        lower_bounds: _,
+                        quantified: _,
+                        bounds,
                     }
-                    | Variable::PartialQuantified(q) => {
-                        let is_partial = matches!(&*v1_ref, Variable::PartialQuantified(_));
+                    | Variable::Unwrap(bounds) => {
+                        let lower_bound = self.solver.get_current_bound(bounds.lower.clone());
+                        drop(v1_ref);
+                        drop(variables);
+                        let res = if let Some(lower_bound) = lower_bound {
+                            self.is_subset_eq(&lower_bound, t2)
+                        } else {
+                            Ok(())
+                        };
+                        self.solver.add_upper_bound(
+                            *v1,
+                            if res.is_ok() {
+                                t2.clone()
+                            } else {
+                                Type::any_error()
+                            },
+                            &mut |got, want| self.is_subset_eq(got, want).is_ok(),
+                        );
+                        res
+                    }
+                    Variable::PartialQuantified(q) => {
                         let name = q.name.clone();
                         let restriction = q.restriction().clone();
                         let bound = q.bound_type(self.type_order.stdlib(), &self.solver.heap);
@@ -1901,19 +2091,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                         // Widen None to None | Any for PartialQuantified, matching
                         // the PartialContained behavior (see comment there).
-                        if is_partial {
-                            let variables = self.solver.variables.lock();
-                            let v1_current = variables.get(*v1);
-                            if let Variable::Answer(t) = &*v1_current
-                                && t.is_none()
-                            {
-                                let widened = self
-                                    .solver
-                                    .heap
-                                    .mk_union(vec![t.clone(), Type::any_implicit()]);
-                                drop(v1_current);
-                                variables.update(*v1, Variable::Answer(widened));
-                            }
+                        let variables = self.solver.variables.lock();
+                        let v1_current = variables.get(*v1);
+                        if let Variable::Answer(t) = &*v1_current
+                            && t.is_none()
+                        {
+                            let widened = self
+                                .solver
+                                .heap
+                                .mk_union(vec![t.clone(), Type::any_implicit()]);
+                            drop(v1_current);
+                            variables.update(*v1, Variable::Answer(widened));
                         }
                         Ok(())
                     }
@@ -1933,7 +2121,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         variables.update(*v1, Variable::Answer(answer));
                         Ok(())
                     }
-                    Variable::Unwrap(_) | Variable::Recursive => {
+                    Variable::Recursive => {
                         drop(v1_ref);
                         variables.update(*v1, Variable::Answer(t2.clone()));
                         Ok(())
@@ -1952,90 +2140,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                     Variable::Quantified {
                         quantified: q,
-                        lower_bounds: _,
-                    }
-                    | Variable::PartialQuantified(q) => {
-                        let is_partial = matches!(&*v2_ref, Variable::PartialQuantified(_));
-                        let t1_p = t1
-                            .clone()
-                            .promote_implicit_literals(self.type_order.stdlib());
-                        let name = q.name.clone();
-                        let kind = q.kind();
-                        let restriction = q.restriction().clone();
-                        let bound = q.bound_type(self.type_order.stdlib(), &self.solver.heap);
+                        bounds,
+                    } => {
+                        let q = q.clone();
+                        let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
                         drop(v2_ref);
                         drop(variables);
-
-                        // For constrained TypeVars, promote to the matching constraint type.
-                        let answer = if let Restriction::Constraints(ref constraints) = restriction
-                        {
-                            // Try promoted type first, then fall back to original (for literal bounds).
-                            if let Some(constraint) =
-                                self.find_matching_constraint(&t1_p, constraints)
-                            {
-                                constraint.clone()
-                            } else if let Some(constraint) =
-                                self.find_matching_constraint(t1, constraints)
-                            {
-                                constraint.clone()
-                            } else if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
-                                // No individual constraint matched, but the type may still
-                                // be assignable to the constraint union (e.g. an abstract
-                                // `AnyStr` satisfies `str | bytes`). Fall back to bound
-                                // checking, mirroring the non-constraint code path.
-                                if self.is_subset_eq(t1, &bound).is_err() {
-                                    self.solver.instantiation_errors.write().insert(
-                                        *v2,
-                                        TypeVarSpecializationError {
-                                            name,
-                                            got: t1_p.clone(),
-                                            want: bound,
-                                            error: err_p,
-                                        },
-                                    );
-                                    t1_p.clone()
-                                } else {
-                                    t1.clone()
-                                }
-                            } else {
-                                t1_p.clone()
-                            }
-                        } else if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
-                            // If the promoted type fails, try again with the original type, in case the bound itself is literal.
-                            // This could be more optimized, but errors are rare, so this code path should not be hot.
-                            if self.is_subset_eq(t1, &bound).is_err() {
-                                // If the original type is also an error, use the promoted type.
-                                self.solver.instantiation_errors.write().insert(
-                                    *v2,
-                                    TypeVarSpecializationError {
-                                        name,
-                                        got: t1_p.clone(),
-                                        want: bound,
-                                        error: err_p,
-                                    },
-                                );
-                                t1_p.clone()
-                            } else {
-                                t1.clone()
-                            }
-                        } else {
-                            t1_p.clone()
-                        };
-                        // Widen None to None | Any for PartialQuantified, matching
-                        // the PartialContained behavior (see comment there).
-                        if is_partial {
-                            let variables = self.solver.variables.lock();
-                            if answer.is_none() {
-                                let widened = self
-                                    .solver
-                                    .heap
-                                    .mk_union(vec![answer.clone(), Type::any_implicit()]);
-                                variables.update(*v2, Variable::Answer(widened));
-                            } else {
-                                variables.update(*v2, Variable::Answer(answer));
-                            }
-                        } else if kind != QuantifiedKind::TypeVar
-                            || matches!(restriction, Restriction::Constraints(_))
+                        let (answer, specialization_error) =
+                            self.is_subset_eq_quantified(t1, &q, upper_bound.as_ref());
+                        if let Some(specialization_error) = specialization_error {
+                            self.solver
+                                .instantiation_errors
+                                .write()
+                                .insert(*v2, specialization_error);
+                        }
+                        if q.kind() != QuantifiedKind::TypeVar
+                            || matches!(q.restriction(), Restriction::Constraints(_))
                         {
                             // If the TypeVar has constraints, we write the answer immediately to
                             // enforce that we always match the same constraint.
@@ -2046,10 +2166,48 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                                 .variables
                                 .lock()
                                 .update(*v2, Variable::Answer(answer));
+                            Ok(())
                         } else {
-                            self.solver.add_lower_bound(*v2, answer, &mut |got, want| {
-                                self.is_subset_eq(got, want).is_ok()
-                            });
+                            let res = if let Some(upper_bound) = upper_bound {
+                                self.is_subset_eq(&answer, &upper_bound)
+                            } else {
+                                Ok(())
+                            };
+                            self.solver.add_lower_bound(
+                                *v2,
+                                if res.is_ok() {
+                                    answer
+                                } else {
+                                    Type::any_error()
+                                },
+                                &mut |got, want| self.is_subset_eq(got, want).is_ok(),
+                            );
+                            res
+                        }
+                    }
+                    Variable::PartialQuantified(q) => {
+                        let q = q.clone();
+                        drop(v2_ref);
+                        drop(variables);
+                        let (answer, specialization_error) =
+                            self.is_subset_eq_quantified(t1, &q, None);
+                        if let Some(specialization_error) = specialization_error {
+                            self.solver
+                                .instantiation_errors
+                                .write()
+                                .insert(*v2, specialization_error);
+                        }
+                        // Widen None to None | Any for PartialQuantified, matching
+                        // the PartialContained behavior (see comment there).
+                        let variables = self.solver.variables.lock();
+                        if answer.is_none() {
+                            let widened = self
+                                .solver
+                                .heap
+                                .mk_union(vec![answer.clone(), Type::any_implicit()]);
+                            variables.update(*v2, Variable::Answer(widened));
+                        } else {
+                            variables.update(*v2, Variable::Answer(answer));
                         }
                         Ok(())
                     }
@@ -2068,14 +2226,25 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         variables.update(*v2, Variable::Answer(answer));
                         Ok(())
                     }
-                    Variable::Unwrap(_) => {
+                    Variable::Unwrap(bounds) => {
+                        let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
                         drop(v2_ref);
                         drop(variables);
-                        self.solver
-                            .add_lower_bound(*v2, t1.clone(), &mut |got, want| {
-                                self.is_subset_eq(got, want).is_ok()
-                            });
-                        Ok(())
+                        let res = if let Some(upper_bound) = upper_bound {
+                            self.is_subset_eq(t1, &upper_bound)
+                        } else {
+                            Ok(())
+                        };
+                        self.solver.add_lower_bound(
+                            *v2,
+                            if res.is_ok() {
+                                t1.clone()
+                            } else {
+                                Type::any_error()
+                            },
+                            &mut |got, want| self.is_subset_eq(got, want).is_ok(),
+                        );
+                        res
                     }
                     Variable::Recursive => {
                         drop(v2_ref);

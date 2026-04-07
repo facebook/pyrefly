@@ -71,6 +71,7 @@ pub enum SpecialExport {
     Deprecated,
     Final,
     TypingMapping,
+    TypeForm,
 }
 
 impl SpecialExport {
@@ -133,6 +134,7 @@ impl SpecialExport {
             "deprecated" => Some(Self::Deprecated),
             "Final" => Some(Self::Final),
             "Mapping" => Some(Self::TypingMapping),
+            "TypeForm" => Some(Self::TypeForm),
             _ => None,
         }
     }
@@ -165,7 +167,8 @@ impl SpecialExport {
             | Self::TypingList
             | Self::TypingTuple
             | Self::Final
-            | Self::TypingMapping => {
+            | Self::TypingMapping
+            | Self::TypeForm => {
                 matches!(m.as_str(), "typing" | "typing_extensions")
             }
             Self::CollectionsNamedTuple => matches!(m.as_str(), "collections"),

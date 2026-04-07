@@ -21,6 +21,7 @@ use vec1::vec1;
 
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
+use crate::config::config::FallbackSearchPath;
 use crate::config::config::ImportLookupPathPart;
 use crate::error::context::ErrorContext;
 use crate::module::finder::find_import;
@@ -30,23 +31,23 @@ use crate::module::finder::suggest_stdlib_import;
 #[derive(Debug, Clone, Dupe, PartialEq, Eq)]
 pub enum FindError {
     /// This module could not be found, and we should emit an error
-    NotFound(ModuleName, Arc<Vec1<String>>),
+    MissingImport(ModuleName, Arc<Vec1<String>>),
     /// This import could not be found, but the user configured it to be ignored
     Ignored,
     /// We found stubs, but no source files were found. This means it's likely stubs
     /// are installed for a project, but the library is not actually importable
-    NoSource(ModuleName),
+    MissingSource(ModuleName),
     /// We have the source files, but do not have the stubs. In this case we should send
     /// a message to the user which will allow them to install the stubs for the package.
     /// The string will hold the name of the pip package that we will tell the user to install.
-    MissingStubs(ModuleName, Arc<String>),
+    UntypedImport(ModuleName, Arc<String>),
     /// This is the condition where we are using stubs but we do not have the source files
-    NoSourceForStubs(ModuleName),
+    MissingSourceForStubs(ModuleName),
 }
 
 impl FindError {
-    pub fn not_found(err: anyhow::Error, module: ModuleName) -> Self {
-        Self::NotFound(module, Arc::new(vec1![format!("{err:#}")]))
+    pub fn missing_import(err: anyhow::Error, module: ModuleName) -> Self {
+        Self::MissingImport(module, Arc::new(vec1![format!("{err:#}")]))
     }
 
     pub fn import_lookup_path(
@@ -59,6 +60,12 @@ impl FindError {
             ConfigSource::PythonToolMarker(p) | ConfigSource::Marker(p) => {
                 format!(
                     " (from default config for project root marked by `{}`)",
+                    p.display()
+                )
+            }
+            ConfigSource::FailedParse(p) => {
+                format!(
+                    " (from default config for `{}` which failed to parse)",
                     p.display()
                 )
             }
@@ -80,12 +87,12 @@ impl FindError {
             format!("Looked in these locations{config_suffix}:")
         }];
         explanation.extend(nonempty_paths);
-        FindError::NotFound(module, Arc::new(explanation))
+        FindError::MissingImport(module, Arc::new(explanation))
     }
 
     pub fn display(&self) -> (Option<Box<dyn Fn() -> ErrorContext + '_>>, Vec1<String>) {
         match self {
-            Self::NotFound(module, err) => {
+            Self::MissingImport(module, err) => {
                 let mut lines = (**err).clone();
                 // Compute suggestion lazily at display time, using global cache
                 if let Some(suggested) = suggest_stdlib_import(*module) {
@@ -97,20 +104,20 @@ impl FindError {
                 )
             }
             Self::Ignored => (None, vec1!["Ignored import".to_owned()]),
-            Self::NoSource(module) => (
+            Self::MissingSource(module) => (
                 None,
                 vec1![format!(
                     "Found stubs for `{module}`, but no source. This means it's likely not \
                     installed/unimportable."
                 )],
             ),
-            Self::NoSourceForStubs(module) => (
+            Self::MissingSourceForStubs(module) => (
                 None,
                 vec1![format!(
                     "Stubs for `{module}` are bundled with Pyrefly but the source files for the package are not found."
                 )],
             ),
-            Self::MissingStubs(source_package, stubs_package) => (
+            Self::UntypedImport(source_package, stubs_package) => (
                 Some(Box::new(|| ErrorContext::ImportNotTyped(*source_package))),
                 vec1![format!("Hint: install the `{stubs_package}` package")],
             ),
@@ -119,10 +126,10 @@ impl FindError {
 
     pub fn kind(&self) -> Option<ErrorKind> {
         match self {
-            Self::NotFound(..) => Some(ErrorKind::MissingImport),
-            Self::NoSource(..) => Some(ErrorKind::MissingSource),
-            Self::NoSourceForStubs(..) => Some(ErrorKind::MissingSourceForStubs),
-            Self::MissingStubs(..) => Some(ErrorKind::UntypedImport),
+            Self::MissingImport(..) => Some(ErrorKind::MissingImport),
+            Self::MissingSource(..) => Some(ErrorKind::MissingSource),
+            Self::MissingSourceForStubs(..) => Some(ErrorKind::MissingSourceForStubs),
+            Self::UntypedImport(..) => Some(ErrorKind::UntypedImport),
             Self::Ignored => None,
         }
     }
@@ -189,6 +196,11 @@ impl<T> FindingOrError<T> {
 #[derive(Debug)]
 pub struct LoaderFindCache {
     config: ArcId<ConfigFile>,
+    /// When true, all import resolution steps are origin-independent: no
+    /// source_db, no sub_configs, and fallback_search_path is not
+    /// DirectoryRelative. This lets us cache every module by ModuleName
+    /// alone instead of (ModuleName, Option<ModulePath>).
+    is_origin_independent: bool,
     cache: LockedMap<
         (ModuleName, Option<ModulePath>),
         (FindingOrError<ModulePath>, Arc<Vec<PathBuf>>),
@@ -199,8 +211,19 @@ pub struct LoaderFindCache {
 
 impl LoaderFindCache {
     pub fn new(config: ArcId<ConfigFile>) -> Self {
+        // When no config feature uses origin, all import resolutions produce
+        // the same result regardless of which file is importing. We can then
+        // cache by ModuleName alone, reducing millions of cache entries
+        // (112K files × thousands of modules) to just thousands.
+        let is_origin_independent = config.source_db.is_none()
+            && config.sub_configs.is_empty()
+            && !matches!(
+                config.fallback_search_path,
+                FallbackSearchPath::DirectoryRelative(_)
+            );
         Self {
             config,
+            is_origin_independent,
             cache: Default::default(),
             executable_cache: Default::default(),
         }
@@ -241,15 +264,45 @@ impl LoaderFindCache {
         module: ModuleName,
         origin: Option<&ModulePath>,
     ) -> FindingOrError<ModulePath> {
-        self.cache
-            .ensure(&(module.dupe(), origin.cloned()), || {
+        // When all resolution steps are origin-independent, use None as the
+        // cache key. This reduces entries from O(files × modules) to O(modules).
+        let effective_origin = if self.is_origin_independent {
+            None
+        } else {
+            origin.cloned()
+        };
+
+        // Fast path: if origin is Some, check (module, None) first for
+        // previously-promoted bundled results that resolve identically
+        // regardless of origin.
+        if effective_origin.is_some()
+            && let Some(cached) = self.cache.get(&(module.dupe(), None))
+        {
+            return cached.0.dupe();
+        }
+
+        let result = self
+            .cache
+            .ensure(&(module.dupe(), effective_origin.clone()), || {
                 let phantom_paths = Vec::new();
                 let result = find_import(&self.config, module, origin, None);
                 (result, Arc::new(phantom_paths))
             })
             .0
             .0
-            .dupe()
+            .dupe();
+
+        // Promote bundled modules to (module, None) so future lookups from
+        // other origins hit the cache without redundant resolution.
+        if effective_origin.is_some()
+            && let FindingOrError::Finding(ref import) = result
+            && import.finding.is_bundled()
+        {
+            self.cache
+                .insert((module, None), (result.dupe(), Arc::new(Vec::new())));
+        }
+
+        result
     }
 
     #[allow(unused)] // will be used soon

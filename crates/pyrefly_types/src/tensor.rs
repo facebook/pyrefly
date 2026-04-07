@@ -986,15 +986,34 @@ fn apply_index_op(op: &IndexOp, dim: &Type) -> Option<Type> {
 
 /// Apply a sequence of `IndexOp`s to a slice of dimensions.
 /// `NewAxis` ops insert a dim of size 1 without consuming a shape dimension.
+/// `TensorIndex` ops broadcast together: the first emits the index dims,
+/// subsequent ones with the same shape consume a dim without emitting.
 /// Other ops consume one shape dimension each.
 /// Returns (result_dims, number_of_shape_dims_consumed).
 fn apply_ops_to_dims(ops: &[IndexOp], dims: &[Type]) -> Result<(Vec<Type>, usize), ShapeError> {
     let mut new_dims = Vec::new();
     let mut dim_idx = 0;
+    let mut tensor_index_emitted = false;
     for op in ops {
         match op {
             IndexOp::NewAxis => {
                 new_dims.push(Type::Size(SizeExpr::Literal(1)));
+            }
+            IndexOp::TensorIndex(idx_dims) => {
+                if dim_idx >= dims.len() {
+                    return Err(ShapeError::TooManyIndices {
+                        got: dim_idx + 1,
+                        max: dims.len(),
+                    });
+                }
+                // First tensor index in a group emits the broadcast shape.
+                // Subsequent tensor indices consume a dim without emitting
+                // (they participate in the same broadcast group).
+                if !tensor_index_emitted {
+                    new_dims.extend(idx_dims.iter().cloned());
+                    tensor_index_emitted = true;
+                }
+                dim_idx += 1;
             }
             _ => {
                 if dim_idx >= dims.len() {

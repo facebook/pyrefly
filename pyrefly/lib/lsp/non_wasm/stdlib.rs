@@ -9,6 +9,7 @@ use std::path::Path;
 
 use pyrefly_config::config::ConfigFile;
 use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_config::error_kind::Severity;
 use pyrefly_util::arc_id::ArcId;
 // Re-export from pyrefly_util for use in the LSP server.
 pub use pyrefly_util::stdlib::is_python_stdlib_file;
@@ -55,8 +56,37 @@ pub fn should_show_error_for_display_mode(
             if matches!(display_status, TypeErrorDisplayStatus::NoConfigFile) =>
         {
             let error_kind = error.error_kind();
-            matches!(error_kind, ErrorKind::ParseError | ErrorKind::InvalidSyntax)
+            matches!(
+                error_kind,
+                ErrorKind::ParseError
+                    | ErrorKind::InvalidSyntax
+                    | ErrorKind::InvalidAnnotation
+                    | ErrorKind::MissingImport
+                    | ErrorKind::UnknownName
+            )
         }
         DisplayTypeErrors::Default | DisplayTypeErrors::ForceOn => true,
+    }
+}
+
+/// Returns the severity override for errors shown in NoConfigFile mode.
+/// Errors that would normally be hidden (or shown as Error) are downgraded
+/// to Warn so users without a config file still see critical issues without
+/// being overwhelmed by error-level diagnostics.
+pub fn no_config_severity_override(
+    error: &Error,
+    display_status: TypeErrorDisplayStatus,
+) -> Option<Severity> {
+    if !matches!(display_status, TypeErrorDisplayStatus::NoConfigFile) {
+        return None;
+    }
+    let error_kind = error.error_kind();
+    if matches!(
+        error_kind,
+        ErrorKind::InvalidAnnotation | ErrorKind::MissingImport | ErrorKind::UnknownName
+    ) {
+        Some(Severity::Warn)
+    } else {
+        None
     }
 }

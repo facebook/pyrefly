@@ -14,11 +14,13 @@ use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::types::Type;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::get_all_classes;
+use crate::report::pysa::class::get_class_field_declaration;
 use crate::report::pysa::class::get_class_fields;
 use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::function::FunctionNode;
@@ -31,9 +33,9 @@ use crate::state::lsp::FindDefinitionItemWithDocstring;
 // Intentionally refer to decorators by names instead of uniquely identifying them. Some special handling
 // (i.e., see the usage of `GRAPHQL_DECORATORS`) are triggered when decorators are matched by names.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GraphQLDecoratorRef {
-    pub(crate) module: &'static str,
-    pub(crate) name: &'static str,
+pub struct GraphQLDecoratorRef {
+    pub module: &'static str,
+    pub name: &'static str,
 }
 
 impl GraphQLDecoratorRef {
@@ -97,7 +99,7 @@ fn decorator_matches_graphql_ref(ty: &Type, graphql_ref: &GraphQLDecoratorRef) -
     };
     match func_metadata {
         Some(pyrefly_types::callable::FuncMetadata {
-            kind: FunctionKind::Def(box func_id),
+            kind: FunctionKind::Def(func_id),
             ..
         }) => graphql_ref.matches_decorator_id(func_id.module.name(), &func_id.name),
         _ => false,
@@ -121,6 +123,12 @@ pub struct PysaModuleIndex {
 
     /// (ClassId, Name) → FunctionRef for class callable fields (own fields only).
     class_field_to_function_ref: HashMap<(ClassId, Name), FunctionRef>,
+
+    /// For properties defined via assignment (e.g., `foo = property(get_foo)`),
+    /// maps the field's declaration range to the getter's FunctionRef.
+    /// Keyed by TextRange so that inherited property accesses can be resolved
+    /// via go-to-definition (which returns the defining class's module and range).
+    property_range_to_getter_ref: HashMap<TextRange, FunctionRef>,
 
     /// Per ClassId, per field_name: matched graphql method decorators.
     /// Only populated for class fields whose decorators match a method decorator
@@ -189,6 +197,7 @@ impl PysaModuleIndex {
 
         // Step 3: Build class field mappings.
         let mut class_field_to_function_ref = HashMap::new();
+        let mut property_range_to_getter_ref = HashMap::new();
         let mut class_field_graphql_decorator_ids: HashMap<
             ClassId,
             HashMap<Name, Vec<&'static GraphQLDecoratorRef>>,
@@ -198,10 +207,13 @@ impl PysaModuleIndex {
             let class_id = ClassId::from_class(&class);
 
             for (name, field) in get_class_fields(&class, context) {
-                if !is_callable_like(&field.ty()) {
+                let field_ty = field.ty();
+                if !is_callable_like(&field_ty) {
                     continue;
                 }
+
                 let field_name = name.into_owned();
+                let is_property = field.is_property();
 
                 if let Some(function_node) = FunctionNode::exported_function_from_class_field(
                     &class,
@@ -232,9 +244,32 @@ impl PysaModuleIndex {
                             class_field_graphql_decorator_ids
                                 .entry(class_id)
                                 .or_default()
-                                .insert(field_name, matching_refs);
+                                .insert(field_name.clone(), matching_refs);
                         }
                     }
+                }
+
+                // For properties defined via assignment (e.g., `foo = property(get_foo)`),
+                // the class-level type is a Function with property metadata whose function
+                // name is the getter (e.g., `get_foo`). Use the getter's FuncDefIndex to
+                // look up its FunctionRef directly.
+                if is_property
+                    && let Type::Function(function) = &field_ty
+                    && function
+                        .metadata
+                        .flags
+                        .property_metadata
+                        .as_ref()
+                        .is_some_and(|m| m.role == PropertyRole::Getter)
+                    && let FunctionKind::Def(func_id) = &function.metadata.kind
+                    && func_id.name != field_name
+                    && func_id.module == context.module_info
+                    && let Some(def_index) = func_id.def_index
+                    && let Some(getter_ref) = func_def_to_function_ref.get(&def_index)
+                    && let Some(declaration) =
+                        get_class_field_declaration(&class, &field_name, context)
+                {
+                    property_range_to_getter_ref.insert(declaration.range, getter_ref.clone());
                 }
             }
         }
@@ -244,6 +279,7 @@ impl PysaModuleIndex {
             short_identifier_to_function_ref,
             short_identifier_to_setter_ref,
             class_field_to_function_ref,
+            property_range_to_getter_ref,
             class_field_graphql_decorator_ids,
         }
     }
@@ -286,6 +322,13 @@ impl PysaModuleIndex {
         self.class_field_to_function_ref
             .get(&(class_id, field_name.clone()))
             .cloned()
+    }
+
+    /// For a property defined via assignment (e.g., `foo = property(get_foo)`),
+    /// returns the getter's FunctionRef. The `field_range` is the declaration
+    /// range of the class field (as returned by go-to-definition).
+    pub fn get_property_getter_ref(&self, field_range: TextRange) -> Option<&FunctionRef> {
+        self.property_range_to_getter_ref.get(&field_range)
     }
 
     /// Return all FunctionRefs for class fields that have a matching graphql decorator.

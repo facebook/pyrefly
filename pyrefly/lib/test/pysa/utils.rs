@@ -16,7 +16,6 @@ use pyrefly_util::lined_buffer::LineNumber;
 use ruff_python_ast::name::Name;
 
 use crate::binding::binding::KeyClass;
-use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
@@ -64,13 +63,7 @@ pub fn get_class(module_name: &str, class_name: &str, context: &ModuleContext) -
 
 pub fn get_class_ref(module_name: &str, class_name: &str, context: &ModuleContext) -> ClassRef {
     let class = get_class(module_name, class_name, context);
-    let module_id = context.module_ids().get_from_module(class.module());
-
-    ClassRef {
-        class_id: ClassId::from_class(&class),
-        module_id,
-        class,
-    }
+    ClassRef::from_class(&class, context)
 }
 
 pub fn get_function_ref(

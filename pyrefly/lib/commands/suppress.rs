@@ -9,12 +9,14 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use pyrefly_config::args::ConfigOverrideArgs;
+use pyrefly_util::thread_pool::ThreadCount;
 
 use crate::commands::check::CheckArgs;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
 use crate::error::suppress;
+use crate::error::suppress::CommentLocation;
 use crate::error::suppress::SerializedError;
 
 /// Suppress type errors by adding ignore comments to source files.
@@ -36,12 +38,18 @@ pub struct SuppressArgs {
     /// Remove unused ignore comments instead of adding suppressions.
     #[arg(long)]
     remove_unused: bool,
+
+    /// Where to place suppression comments: on the line before the error
+    /// (`line-before`, the default) or on the same line (`same-line`).
+    #[arg(long, default_value = "line-before")]
+    comment_location: CommentLocation,
 }
 
 impl SuppressArgs {
     pub fn run(
         &self,
         wrapper: Option<ConfigConfigurerWrapper>,
+        thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
         if self.remove_unused {
             // Remove unused ignores mode
@@ -63,7 +71,7 @@ impl SuppressArgs {
 
                 let check_args = CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
                 let (_, errors, _check_result) =
-                    check_args.run_once(files_to_check, config_finder)?;
+                    check_args.run_once(files_to_check, config_finder, thread_count)?;
 
                 // Convert to SerializedErrors, filtering for UnusedIgnore only
                 errors
@@ -95,7 +103,7 @@ impl SuppressArgs {
 
                 let check_args = CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
                 let (_, errors, _check_result) =
-                    check_args.run_once(files_to_check, config_finder)?;
+                    check_args.run_once(files_to_check, config_finder, thread_count)?;
 
                 // Convert to SerializedErrors for all user-visible errors,
                 // excluding directives (e.g. reveal_type) and UnusedIgnore
@@ -108,7 +116,7 @@ impl SuppressArgs {
             };
 
             // Apply suppressions
-            suppress::suppress_errors(serialized_errors);
+            suppress::suppress_errors(serialized_errors, self.comment_location);
         }
 
         Ok(CommandExitStatus::Success)

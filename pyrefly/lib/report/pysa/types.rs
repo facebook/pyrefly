@@ -38,7 +38,7 @@ pub enum TypeModifier {
 }
 
 /// A class reference along with the modifiers that were stripped to extract it.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ClassWithModifiers {
     pub class: ClassRef,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -55,34 +55,33 @@ impl ClassWithModifiers {
 }
 
 // List of class names that a type refers to, after stripping Optional and Awaitable.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
 pub struct ClassNamesFromType {
-    classes: Vec<ClassWithModifiers>,
+    pub classes: Vec<ClassWithModifiers>,
     // Is there an element (after stripping) that isn't a class name?
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_exhaustive: bool,
+    pub is_exhaustive: bool,
 }
 
 /// Information needed from Pysa about a type.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
 pub struct PysaType {
     // Pretty string representation of the type. Usually meant for the user.
-    string: String,
+    pub string: String,
 
     // Whether the type is a bool/int/float/enum, after stripping Optional and Awaitable.
     #[serde(flatten)]
-    scalar_type_properties: ScalarTypeProperties,
+    pub scalar_type_properties: ScalarTypeProperties,
 
     #[serde(skip_serializing_if = "ClassNamesFromType::skip_serializing")]
-    class_names: ClassNamesFromType,
+    pub class_names: ClassNamesFromType,
 }
 
 impl ClassNamesFromType {
     pub fn from_class(class: &Class, context: &ModuleContext) -> ClassNamesFromType {
         ClassNamesFromType {
             classes: vec![ClassWithModifiers::new(ClassRef::from_class(
-                class,
-                context.module_ids(),
+                class, context,
             ))],
             is_exhaustive: true,
         }
@@ -423,13 +422,13 @@ impl PysaType {
 pub struct ScalarTypeProperties {
     // Whether the type is a bool/int/float/enum, after stripping Optional and Awaitable.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_bool: bool,
+    pub is_bool: bool,
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_int: bool,
+    pub is_int: bool,
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_float: bool,
+    pub is_float: bool,
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_enum: bool,
+    pub is_enum: bool,
 }
 
 impl ScalarTypeProperties {

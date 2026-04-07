@@ -17,6 +17,7 @@ use pyrefly_config::migration::run::config_migration;
 use pyrefly_config::pyproject::PyProject;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::fs_anyhow;
+use pyrefly_util::thread_pool::ThreadCount;
 use tracing::error;
 use tracing::info;
 
@@ -89,6 +90,7 @@ impl InitArgs {
     pub fn run(
         &self,
         wrapper: Option<ConfigConfigurerWrapper>,
+        thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
         // 1. Create Pyrefly Config
         let create_config_result = self.create_config();
@@ -98,7 +100,8 @@ impl InitArgs {
             Ok((status, _)) if status != CommandExitStatus::Success => Ok(status),
             Ok((_, config_path)) => {
                 // 2. Run pyrefly check
-                let check_result = self.run_check(config_path.clone(), wrapper.clone());
+                let check_result =
+                    self.run_check(config_path.clone(), wrapper.clone(), thread_count);
 
                 // Check if there are errors and if there are fewer than 100
                 if let Ok((_, errors)) = check_result {
@@ -108,7 +111,12 @@ impl InitArgs {
                     }
                     // 3a. Prompt error suppression if there are less than the maximum number of errors
                     else if error_count <= MAX_ERRORS_TO_PROMPT_SUPPRESSION {
-                        return self.prompt_error_suppression(config_path, error_count, wrapper);
+                        return self.prompt_error_suppression(
+                            config_path,
+                            error_count,
+                            wrapper,
+                            thread_count,
+                        );
                     }
                 }
                 Ok(CommandExitStatus::Success)
@@ -120,6 +128,7 @@ impl InitArgs {
         &self,
         config_path: Option<PathBuf>,
         wrapper: Option<ConfigConfigurerWrapper>,
+        thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, Vec<CheckError>)> {
         info!("Running pyrefly check...");
 
@@ -135,7 +144,7 @@ impl InitArgs {
         )?;
 
         // Run the check directly
-        let res = check_args.run_once(filtered_globs, config_finder);
+        let res = check_args.run_once(filtered_globs, config_finder, thread_count);
         if let Err(e) = &res {
             error!("Failed to run pyrefly check: {}", e);
         }
@@ -147,6 +156,7 @@ impl InitArgs {
         config_path: Option<PathBuf>,
         error_count: usize,
         wrapper: Option<ConfigConfigurerWrapper>,
+        thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
         let prompt = format!(
             "Found {error_count} errors. We can add suppression comments (e.g., `pyrefly: ignore`) to silence them for you. Would you like to suppress them? (y/N): "
@@ -173,7 +183,7 @@ impl InitArgs {
             )?;
 
             // Run the check with suppress-errors flag
-            match suppress_args.run_once(suppress_globs, suppress_config_finder) {
+            match suppress_args.run_once(suppress_globs, suppress_config_finder, thread_count) {
                 Ok(_) => return Ok(CommandExitStatus::Success),
                 Err(e) => {
                     error!("Failed to run pyrefly check with suppress-errors: {}", e);
@@ -275,6 +285,7 @@ mod test {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::test::util::TEST_THREAD_COUNT;
 
     // helper function for ConfigFile::from_file
     fn from_file(path: &Path) -> anyhow::Result<()> {
@@ -295,13 +306,13 @@ mod test {
     fn run_init_on_dir(dir: &TempDir) -> anyhow::Result<CommandExitStatus> {
         let mut args = InitArgs::new(dir.path().to_path_buf());
         args.non_interactive = true;
-        args.run(None)
+        args.run(None, TEST_THREAD_COUNT)
     }
 
     fn run_init_on_file(dir: &TempDir, file: &str) -> anyhow::Result<CommandExitStatus> {
         let mut args = InitArgs::new(dir.path().join(file));
         args.non_interactive = true;
-        args.run(None)
+        args.run(None, TEST_THREAD_COUNT)
     }
 
     fn run_init_non_interactive(dir: &TempDir) -> anyhow::Result<CommandExitStatus> {
@@ -310,7 +321,7 @@ mod test {
             non_interactive: true,
             migrate_from: MigrationSource::Auto,
         };
-        args.run(None)
+        args.run(None, TEST_THREAD_COUNT)
     }
 
     fn assert_success(status: CommandExitStatus) {
@@ -686,7 +697,7 @@ files = [\"from_mypy.py\"]
             non_interactive: true,
             migrate_from: MigrationSource::Pyright,
         };
-        let status = args.run(None)?;
+        let status = args.run(None, TEST_THREAD_COUNT)?;
         assert_success(status);
         check_file_in(
             tmp.path(),

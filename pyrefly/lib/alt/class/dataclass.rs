@@ -659,7 +659,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | Param::KwOnly(name, ty, Required::Required) => (name, ty, None),
                     Param::Pos(name, ty, Required::Optional(default))
                     | Param::KwOnly(name, ty, Required::Optional(default)) => {
-                        (name, ty, default.as_ref())
+                        (name, ty, default.as_ref().map(|d| &d.ty))
                     }
                     _ => continue,
                 };

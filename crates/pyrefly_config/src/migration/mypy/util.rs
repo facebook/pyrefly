@@ -180,6 +180,7 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig>
                 add(severity, ErrorKind::RedundantCondition)
             }
             "deprecated" => add(severity, ErrorKind::Deprecated),
+            "name-match" => add(severity, ErrorKind::NameMismatch),
             _ => {}
         }
     }

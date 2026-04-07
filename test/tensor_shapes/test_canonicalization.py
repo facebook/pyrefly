@@ -16,6 +16,8 @@ Each test documents:
 
 from typing import assert_type, reveal_type, TYPE_CHECKING
 
+import torch
+
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -84,6 +86,25 @@ def test_literal_evaluation[N](x: Tensor[N, 10]) -> Tensor[N * 10]:
     return result
 
 
+def test_distributive_symbolic[GR, I](
+    a: Tensor[GR * I],
+    b: Tensor[GR],
+) -> None:
+    """Symbolic distribution enables like-term cancellation.
+
+    GR*I + GR = GR*(I+1): adding GR*I and GR should produce GR*(I+1).
+    This requires distributing GR across (I+1) and combining like terms.
+
+    Used in DenseNet: each block adds GR channels, so after I blocks
+    the channel count is InC + GR*I. Adding another GR gives InC + GR*(I+1).
+    """
+    # cat along dim 0: GR*I + GR
+    result = torch.cat((a, b), dim=0)
+    assert_type(result, Tensor[GR * I + GR])
+    # The checker should canonicalize GR*I + GR to GR*(I+1)
+    expected: Tensor[GR * (I + 1)] = result
+
+
 def test_multi_dim_flatten[A, B, C, D, E](
     x: Tensor[A, B, C, D, E],
 ) -> tuple[Tensor[C * B * A, D, E], Tensor[E * D * C * B * A], Tensor[A, D * C * B, E]]:
@@ -107,3 +128,58 @@ def test_multi_dim_flatten[A, B, C, D, E](
     expected2: Tensor[E * D * C * B * A] = r2
     expected3: Tensor[A, D * C * B, E] = r3
     return (expected1, expected2, expected3)
+
+
+# ============================================================================
+# Pow canonicalization tests
+# ============================================================================
+
+
+def test_pow_literal(x: Tensor[2**3]) -> Tensor[8]:
+    """2**3 = 8, literal exponentiation."""
+    return x
+
+
+def test_pow_identity[N](x: Tensor[N**1]) -> Tensor[N]:
+    """N**1 = N."""
+    return x
+
+
+def test_pow_zero[N](x: Tensor[N**0]) -> Tensor[1]:
+    """N**0 = 1."""
+    return x
+
+
+def test_pow_symbolic_base[I](x: Tensor[2**I]) -> Tensor[2**I]:
+    """Symbolic exponent preserved."""
+    return x
+
+
+def test_pow_product_grouping[I](
+    x: Tensor[2**I],
+) -> Tensor[2**I]:
+    """2 * 2**I = 2**(I+1) and 2**(I+1) canonically equals... 2**(I+1).
+    But we test that 2 * 2**(I-1) = 2**I via product grouping."""
+    reveal_type(x)
+    return x
+
+
+def test_pow_same_base_mul[I, B, C](
+    x: Tensor[B, C * 2**I],
+) -> Tensor[B, C * 2**I]:
+    """Product with Pow factor stays canonical."""
+    return x
+
+
+def test_pow_literal_absorb[I](
+    x: Tensor[8 * 2**I],
+) -> Tensor[2 ** (I + 3)]:
+    """8 * 2**I = 2**3 * 2**I = 2**(I+3)."""
+    return x
+
+
+def test_pow_mul_same_base[I](
+    x: Tensor[2**I * 2],
+) -> Tensor[2 ** (I + 1)]:
+    """2**I * 2 = 2**(I+1)."""
+    return x

@@ -1,36 +1,11 @@
 {
-  "variables": [
-    {
-      "name": "test.x",
-      "annotation": null,
-      "location": {
-        "line": 6,
-        "column": 1
-      }
-    },
-    {
-      "name": "test.y",
-      "annotation": null,
-      "location": {
-        "line": 7,
-        "column": 1
-      }
-    },
-    {
-      "name": "test.z",
-      "annotation": null,
-      "location": {
-        "line": 8,
-        "column": 1
-      }
-    }
-  ],
+  "name": "test",
+  "names": [],
   "line_count": 9,
-  "functions": [],
-  "classes": [],
-  "suppressions": [
+  "symbol_reports": [],
+  "type_ignores": [
     {
-      "kind": "ignore",
+      "kind": "pyrefly",
       "codes": [
         "error-code"
       ],
@@ -40,7 +15,7 @@
       }
     },
     {
-      "kind": "ignore",
+      "kind": "pyrefly",
       "codes": [
         "code1",
         "code2"
@@ -51,6 +26,18 @@
       }
     }
   ],
-  "annotation_completeness": 100.0,
-  "type_completeness": 100.0
+  "n_typable": 0,
+  "n_typed": 0,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 0,
+  "n_methods": 0,
+  "n_function_params": 0,
+  "n_method_params": 0,
+  "n_classes": 0,
+  "n_attrs": 0,
+  "n_properties": 0,
+  "n_type_ignores": 2
 }

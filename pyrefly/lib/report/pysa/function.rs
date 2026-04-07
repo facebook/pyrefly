@@ -72,7 +72,7 @@ pub enum FunctionId {
 }
 
 impl FunctionId {
-    fn serialize_to_string(&self) -> String {
+    pub fn serialize_to_string(&self) -> String {
         match self {
             FunctionId::Function { location } => format!("F:{}", location.as_key()),
             FunctionId::ModuleTopLevel => "MTL".to_owned(),
@@ -307,6 +307,10 @@ impl<GenericFunctionDefinition> ModuleFunctionDefinitions<GenericFunctionDefinit
         self.0.get(function_id)
     }
 
+    pub fn as_map(&self) -> &HashMap<FunctionId, GenericFunctionDefinition> {
+        &self.0
+    }
+
     #[cfg(test)]
     pub fn iter(&self) -> impl Iterator<Item = (&FunctionId, &GenericFunctionDefinition)> {
         self.0.iter()
@@ -325,7 +329,7 @@ fn export_function_parameter(param: &Param, context: &ModuleContext) -> Function
             annotation: PysaType::from_type(ty, context),
             required: matches!(required, pyrefly_types::callable::Required::Required),
         },
-        Param::VarArg(name, ty) => FunctionParameter::VarArg {
+        Param::Varargs(name, ty) => FunctionParameter::VarArg {
             name: name.clone(),
             annotation: PysaType::from_type(ty, context),
         },
@@ -697,7 +701,16 @@ impl FunctionNode {
                 .property_metadata
                 .as_ref()
                 .map(|metadata| metadata.role.clone()),
-            FunctionNode::ClassField { .. } => None,
+            FunctionNode::ClassField { field, .. } => {
+                let ty = field.ty();
+                if ty.is_property_getter() {
+                    Some(PropertyRole::Getter)
+                } else if ty.is_property_setter_with_getter().is_some() {
+                    Some(PropertyRole::Setter)
+                } else {
+                    None
+                }
+            }
         }
     }
 

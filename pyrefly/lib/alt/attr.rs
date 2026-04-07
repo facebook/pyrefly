@@ -24,11 +24,9 @@ use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_types::types::Var;
 use pyrefly_util::suggest::best_suggestion;
-use ruff_python_ast::Expr;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
-use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 use vec1::vec1;
@@ -38,9 +36,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::expr::TypeOrExpr;
-use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
-use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyExport;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -1097,16 +1093,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ty = match &got {
             TypeOrExpr::Expr(got) => self.expr(
                 got,
-                Some((&attr_ty, &|| TypeCheckContext {
-                    kind: TypeCheckKind::Attribute(attr_name.clone()),
-                    context: context.map(|ctx| ctx()),
+                Some((&attr_ty, &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::Attribute(attr_name.clone()))
+                        .with_context(context.map(|ctx| ctx()))
                 })),
                 errors,
             ),
             TypeOrExpr::Type(got, _) => {
-                self.check_type(got, &attr_ty, range, errors, &|| TypeCheckContext {
-                    kind: TypeCheckKind::Attribute(attr_name.clone()),
-                    context: context.map(|ctx| ctx()),
+                self.check_type(got, &attr_ty, range, errors, &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::Attribute(attr_name.clone()))
+                        .with_context(context.map(|ctx| ctx()))
                 });
                 (*got).clone()
             }
@@ -1132,45 +1128,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             return Some((names, has_dict));
         }
-
-        let key = KeyClassField(cls.index(), dunder::SLOTS.clone());
-        let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
-        let binding = self.bindings().get::<KeyClassField>(idx);
-        let ClassFieldDefinition::AssignedInBody { value, .. } = &binding.definition else {
-            return None;
-        };
-        let ExprOrBinding::Expr(expr) = value.as_ref() else {
-            return None;
-        };
-
-        fn extract_names_from_elts(elts: &[Expr]) -> Option<(SmallSet<Name>, bool)> {
-            let mut names = SmallSet::new();
-            let mut has_dict = false;
-            for elt in elts {
-                let Expr::StringLiteral(s) = elt else {
-                    return None;
-                };
-                let name = Name::new(s.value.to_str());
-                if name == dunder::DICT {
-                    has_dict = true;
-                }
-                names.insert(name);
-            }
-            Some((names, has_dict))
-        }
-
-        match expr {
-            Expr::Tuple(t) => extract_names_from_elts(&t.elts),
-            Expr::List(l) => extract_names_from_elts(&l.elts),
-            Expr::StringLiteral(s) => {
-                let mut names = SmallSet::new();
-                let name = Name::new(s.value.to_str());
-                let has_dict = name == dunder::DICT;
-                names.insert(name);
-                Some((names, has_dict))
-            }
-            _ => None,
-        }
+        let slots = metadata.slots_info()?;
+        Some((slots.names.clone(), slots.has_dict))
     }
 
     /// Compute the effective slots policy for a class instance write.
@@ -1698,6 +1657,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ => self.get_class_attribute(class, attr_name),
                 };
                 match attr {
+                    Some(
+                        no_access @ ClassAttribute::NoAccess(
+                            NoAccessReason::ClassUseOfInstanceAttribute(_),
+                        ),
+                    ) => {
+                        // Instance-only attributes from `__slots__` produce slot descriptors.
+                        // The order of precedence is: data descriptors > slot descriptors > non-descriptor attributes
+                        // All attributes on `type` like `__name__` are considered data descriptors, despite not being annotated as such.
+                        let metadata = self.get_metadata_for_class(class.class_object());
+                        let metaclass = metadata.metaclass(self.stdlib);
+                        let metaclass_attr =
+                            self.get_metaclass_attribute(class, metaclass, attr_name);
+                        match metaclass_attr {
+                            Some(meta_attr)
+                                if meta_attr.is_data_descriptor()
+                                    || metaclass.class_object().is_builtin("type") =>
+                            {
+                                acc.found_class_attribute(meta_attr, base)
+                            }
+                            _ => acc.found_class_attribute(no_access, base),
+                        }
+                    }
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None => {
                         // Classes are instances of their metaclass, which defaults to `builtins.type`.
@@ -2475,12 +2456,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             // At runtime, `Annotated[T, ...]` is an instance of `typing._AnnotatedAlias`,
             // which inherits from `typing._GenericAlias`. We model it as `GenericAlias`.
-            Type::Annotated(_) => acc.push(AttributeBase1::ClassInstance(
+            Type::Annotated(_, _) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.generic_alias().clone(),
             )),
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
             | Type::Type(_)
+            | Type::TypeForm(_)
             | Type::Unpack(_)
             | Type::Concatenate(_, _)
             | Type::ParamSpecValue(_)

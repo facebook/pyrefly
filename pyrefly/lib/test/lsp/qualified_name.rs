@@ -8,6 +8,7 @@
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use crate::lsp::non_wasm::external_provider::compute_qualified_name;
 use crate::state::lsp::FindPreference;
@@ -16,7 +17,10 @@ use crate::test::util::get_batched_lsp_operations_report;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let transaction = state.transaction();
-    let defs = transaction.find_definition(handle, position, FindPreference::default());
+    let defs = transaction
+        .find_definition(handle, position, FindPreference::default())
+        .map(Vec1::into_vec)
+        .unwrap_or_default();
     let Some(definition) = defs.into_iter().next() else {
         return "Qualified Name: no definition found".to_owned();
     };

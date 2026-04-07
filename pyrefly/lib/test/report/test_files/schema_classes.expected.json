@@ -1,0 +1,75 @@
+{
+  "name": "test",
+  "names": [
+    "test.Color",
+    "test.Config",
+    "test.Coord",
+    "test.Point"
+  ],
+  "line_count": 34,
+  "symbol_reports": [
+    {
+      "kind": "class",
+      "name": "test.Color",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 21,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Config",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 26,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Coord",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 31,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Point",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 15,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 0,
+  "n_typed": 0,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 0,
+  "n_methods": 0,
+  "n_function_params": 0,
+  "n_method_params": 0,
+  "n_classes": 4,
+  "n_attrs": 0,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

@@ -103,6 +103,7 @@ class AggregateStats(TypedDict, total=False):
     max_execution_time_s: float
     total_execution_time_s: float
     avg_peak_memory_mb: float
+    p50_peak_memory_mb: float
     p90_peak_memory_mb: float
     p95_peak_memory_mb: float
     max_peak_memory_mb: float
@@ -486,6 +487,8 @@ def _write_dummy_mypy_config(
         f.write("[mypy]\n")
         if check_paths:
             f.write(f"files = {', '.join(check_paths)}\n")
+        # Check bodies of untyped functions (other checkers do this by default)
+        f.write("check_untyped_defs = True\n")
         # Exclude test dirs to avoid duplicate module / syntax errors
         # that cause mypy to bail out without checking anything
         f.write("exclude = (?x)(\n    /tests/\n    | /test_\n    | /testing/\n  )\n")
@@ -516,19 +519,6 @@ def _write_dummy_pyrefly_config(
         if check_paths:
             paths_toml = ", ".join(f'"{p}"' for p in check_paths)
             f.write(f"project_includes = [{paths_toml}]\n")
-    return config_path
-
-
-def _write_dummy_zuban_config(
-    package_path: Path,
-    check_paths: list[str] | None = None,
-) -> Path:
-    """Write minimal mypy-style config for zuban benchmarking."""
-    config_path = package_path / "zuban.benchmark.ini"
-    with open(config_path, "w", encoding="utf-8") as f:
-        f.write("[mypy]\n")
-        if check_paths:
-            f.write(f"files = {', '.join(check_paths)}\n")
     return config_path
 
 
@@ -710,6 +700,7 @@ def compute_aggregate_stats(
             "avg_peak_memory_mb": round(sum(memories) / len(memories), 1)
             if memories
             else 0.0,
+            "p50_peak_memory_mb": round(compute_percentile(memories, 50), 1),
             "p90_peak_memory_mb": round(compute_percentile(memories, 90), 1),
             "p95_peak_memory_mb": round(compute_percentile(memories, 95), 1),
             "max_peak_memory_mb": round(max(memories), 1) if memories else 0.0,
@@ -1035,22 +1026,25 @@ def _print_summary(
 ) -> None:
     """Print a summary table."""
     print(
-        f"\n{'Checker':<12} {'Pkgs':>5} {'Avg Time':>9} {'P95 Time':>9} {'Max Time':>9} {'Avg Mem':>8} {'Max Mem':>8}"
+        f"\n{'Checker':<12} {'Pkgs':>5} {'P50 Time':>9} {'Avg Time':>9} {'P95 Time':>9} {'Max Time':>9} {'P50 Mem':>8} {'Avg Mem':>8} {'Max Mem':>8}"
     )
-    print("-" * 70)
+    print("-" * 88)
     for checker in type_checkers:
         s = stats.get(checker, {})
         if s.get("packages_tested", 0) == 0:
             print(f"{checker:<12} {'N/A':>5}")
             continue
+        p50_mem = s.get("p50_peak_memory_mb", 0)
         avg_mem = s.get("avg_peak_memory_mb", 0)
         max_mem = s.get("max_peak_memory_mb", 0)
         print(
             f"{checker:<12} "
             f"{s.get('packages_tested', 0):>5} "
+            f"{s.get('p50_execution_time_s', 0):>8.1f}s "
             f"{s.get('avg_execution_time_s', 0):>8.1f}s "
             f"{s.get('p95_execution_time_s', 0):>8.1f}s "
             f"{s.get('max_execution_time_s', 0):>8.1f}s "
+            f"{p50_mem:>7.0f}M "
             f"{avg_mem:>7.0f}M "
             f"{max_mem:>7.0f}M"
         )

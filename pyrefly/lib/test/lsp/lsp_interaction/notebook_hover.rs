@@ -63,7 +63,9 @@ fn test_notebook_hover_import() {
                 && let lsp_types::HoverContents::Markup(content) = &hover.contents
             {
                 let value = &content.value;
-                return value.contains("(class) List: type[list]")
+                return value.contains("(class) List:")
+                    && value.contains("def __init__")
+                    && value.contains("list[Unknown]")
                     && value.contains("Go to [list](")
                     && value.contains("builtins.pyi#L");
             }

@@ -100,6 +100,12 @@ impl<T> ArcId<T> {
     pub fn new(id: T) -> Self {
         Self(Arc::new(id))
     }
+
+    /// Unwrap the inner value if this is the only reference.
+    /// Returns `None` if there are other references.
+    pub fn into_inner(self) -> Option<T> {
+        Arc::into_inner(self.0)
+    }
 }
 
 impl<T: ?Sized> ArcId<T> {

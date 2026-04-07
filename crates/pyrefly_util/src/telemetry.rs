@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fmt;
 use std::fmt::Display;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -20,12 +21,20 @@ use uuid::Uuid;
 pub trait Telemetry: Send + Sync {
     fn record_event(&self, event: TelemetryEvent, process: Duration, error: Option<&Error>);
     fn surface(&self) -> Option<String>;
+    fn agent_session_id(&self) -> Option<String>;
+    fn agent_invocation_id(&self) -> Option<String>;
 }
 pub struct NoTelemetry;
 
 impl Telemetry for NoTelemetry {
     fn record_event(&self, _event: TelemetryEvent, _process: Duration, _error: Option<&Error>) {}
     fn surface(&self) -> Option<String> {
+        None
+    }
+    fn agent_session_id(&self) -> Option<String> {
+        None
+    }
+    fn agent_invocation_id(&self) -> Option<String> {
         None
     }
 }
@@ -58,7 +67,7 @@ impl QueueName {
 pub enum TelemetryEventKind {
     LspEvent(String),
     CodeAction(&'static str),
-    AdHocSolve(String),
+    AdHocSolve(&'static str),
     SetMemory,
     InvalidateDisk,
     InvalidateFind,
@@ -73,6 +82,7 @@ pub enum TelemetryEventKind {
     FindFromDefinition,
     ExternalReferences,
     ExternalWorkspaceSymbols,
+    LspStartup,
 }
 
 pub struct TelemetryEvent {
@@ -94,6 +104,10 @@ pub struct TelemetryEvent {
     pub external_workspace_symbols_stats: Option<TelemetryExternalWorkspaceSymbolsStats>,
     pub activity_key: Option<ActivityKey>,
     pub canceled: bool,
+    pub empty_response_reason: Option<EmptyResponseReason>,
+    /// The LSP request ID, used to correlate CancelRequest notifications with
+    /// the requests they cancel.
+    pub request_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -109,6 +123,8 @@ pub struct TelemetryServerState {
     /// The surface/entrypoint for the language server
     pub surface: Option<String>,
     pub server_start_time: Instant,
+    pub agent_session_id: Option<String>,
+    pub agent_invocation_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -167,6 +183,7 @@ pub struct TelemetrySourceDbRebuildInstanceStats {
     pub parse_time: Option<Duration>,
     pub process_time: Option<Duration>,
     pub raw_size: Option<usize>,
+    pub exit_reason: Option<String>,
 }
 
 #[derive(Default)]
@@ -210,6 +227,155 @@ pub struct ActivityKey {
     pub name: String,
 }
 
+/// Why an LSP handler returned an empty/null response. Used for telemetry
+/// to distinguish expected cases (whitespace, comments) from unexpected
+/// failures (module not found, internal bugs).
+#[derive(Debug, Clone)]
+pub enum EmptyResponseReason {
+    /// `path_for_uri` returned None — URI couldn't be resolved to a
+    /// filesystem path (e.g., unsupported URI scheme, malformed URI).
+    NoFilePath,
+    /// Workspace has `disable_language_services = true`.
+    LanguageServicesDisabled,
+    /// Specific LSP method is disabled via config.
+    MethodDisabled,
+    /// Notebook cell not supported for this operation.
+    NotebookNotSupported,
+
+    /// `get_module_info` returned None — file may not belong to any
+    /// workspace or hasn't been loaded yet.
+    ModuleInfoNotFound,
+    /// `get_ast` returned None — module is in the graph but AST hasn't
+    /// been computed yet (startup/initial load).
+    AstNotFound,
+    /// `get_answers` returned None — answers haven't been computed yet
+    /// for this module (should only happen during startup/initial load).
+    AnswersNotFound,
+    /// `get_bindings` returned None — bindings haven't been computed yet
+    /// for this module (should only happen during startup/initial load).
+    BindingsNotFound,
+    /// `get_type_trace` returned None — the expression at the cursor
+    /// doesn't have a traced type (e.g., operator on an unresolved expr).
+    TypeTraceNotFound,
+    /// Import resolution couldn't find the module (e.g., `import foo`
+    /// where `foo` doesn't exist or isn't in the search path).
+    ModuleNotFound,
+
+    /// Cursor is on something that isn't an identifier or navigable symbol
+    /// (whitespace, comments, keywords, string literals, etc.).
+    NotAnIdentifier {
+        /// Context about what's at the cursor, e.g. "ExprStringLiteral",
+        /// "StmtIf", "operator:not", "none".
+        found: String,
+    },
+
+    /// We identified the symbol but couldn't resolve its definition.
+    DefinitionNotFound {
+        /// The identifier text that was being looked up.
+        name: String,
+        /// What kind of symbol was at the cursor.
+        context: DefinitionContext,
+    },
+
+    /// Definition targets found but `to_lsp_location` filtered them all
+    /// out (e.g., bundled typeshed modules whose paths can't be materialized).
+    BundledModuleNotMaterialized {
+        /// Number of targets that were found but couldn't be materialized.
+        target_count: usize,
+    },
+}
+
+impl EmptyResponseReason {
+    /// Snake_case variant name for the telemetry `empty_response_reason` column.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NoFilePath => "no_file_path",
+            Self::LanguageServicesDisabled => "language_services_disabled",
+            Self::MethodDisabled => "method_disabled",
+            Self::NotebookNotSupported => "notebook_not_supported",
+            Self::ModuleInfoNotFound => "module_info_not_found",
+            Self::AstNotFound => "ast_not_found",
+            Self::AnswersNotFound => "answers_not_found",
+            Self::BindingsNotFound => "bindings_not_found",
+            Self::TypeTraceNotFound => "type_trace_not_found",
+            Self::ModuleNotFound => "module_not_found",
+            Self::NotAnIdentifier { .. } => "not_an_identifier",
+            Self::DefinitionNotFound { .. } => "definition_not_found",
+            Self::BundledModuleNotMaterialized { .. } => "bundled_module_not_materialized",
+        }
+    }
+
+    /// Detail string for the telemetry `empty_response_detail` column.
+    pub fn detail(&self) -> String {
+        match self {
+            Self::NotAnIdentifier { found } => found.clone(),
+            Self::DefinitionNotFound { name, context } => {
+                format!("{name}:{context}")
+            }
+            Self::BundledModuleNotMaterialized { target_count } => target_count.to_string(),
+            _ => String::new(),
+        }
+    }
+}
+
+/// What kind of symbol the cursor was on when a definition lookup failed.
+#[derive(Debug, Clone)]
+pub enum DefinitionContext {
+    /// Name used in an expression (e.g., `x` in `x + 1`).
+    NameUse,
+    /// Name being defined/assigned (e.g., `x` in `x = 1`).
+    NameDef,
+    /// Attribute access (e.g., `bar` in `foo.bar`).
+    Attribute,
+    /// Keyword argument (e.g., `key` in `f(key=val)`).
+    KeywordArgument,
+    /// Module in an import statement (e.g., `foo` in `import foo`).
+    ImportedModule,
+    /// Name in a from-import (e.g., `bar` in `from foo import bar`).
+    ImportedName,
+    /// Function/method/class definition name.
+    Definition,
+    /// Parameter, type parameter, exception handler, or pattern match binding.
+    LocalBinding,
+    /// `global`/`nonlocal` capture.
+    MutableCapture,
+    /// Operator with a dunder (e.g., `+` → `__add__`), but the dunder
+    /// method couldn't be found on the operand type.
+    Operator {
+        /// The dunder name that was looked up.
+        dunder: String,
+    },
+    /// `None` literal — couldn't resolve `NoneType` definition.
+    NoneLiteral,
+}
+
+impl DefinitionContext {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NameUse => "name_use",
+            Self::NameDef => "name_def",
+            Self::Attribute => "attribute",
+            Self::KeywordArgument => "keyword_argument",
+            Self::ImportedModule => "imported_module",
+            Self::ImportedName => "imported_name",
+            Self::Definition => "definition",
+            Self::LocalBinding => "local_binding",
+            Self::MutableCapture => "mutable_capture",
+            Self::Operator { .. } => "operator",
+            Self::NoneLiteral => "none_literal",
+        }
+    }
+}
+
+impl fmt::Display for DefinitionContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Operator { dunder } => write!(f, "operator:{dunder}"),
+            other => write!(f, "{}", other.as_str()),
+        }
+    }
+}
+
 impl TelemetryEvent {
     pub fn new_dequeued(
         kind: TelemetryEventKind,
@@ -240,6 +406,8 @@ impl TelemetryEvent {
                 external_workspace_symbols_stats: None,
                 activity_key: None,
                 canceled: false,
+                empty_response_reason: None,
+                request_id: None,
             },
             queue,
         )
@@ -271,6 +439,8 @@ impl TelemetryEvent {
             external_workspace_symbols_stats: None,
             activity_key: None,
             canceled: false,
+            empty_response_reason: None,
+            request_id: None,
         }
     }
 
@@ -325,6 +495,10 @@ impl TelemetryEvent {
         stats: TelemetryExternalWorkspaceSymbolsStats,
     ) {
         self.external_workspace_symbols_stats = Some(stats);
+    }
+
+    pub fn set_empty_response_reason(&mut self, reason: EmptyResponseReason) {
+        self.empty_response_reason = Some(reason);
     }
 
     pub fn finish_and_record(self, telemetry: &dyn Telemetry, error: Option<&Error>) -> Duration {

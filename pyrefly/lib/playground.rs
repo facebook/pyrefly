@@ -34,6 +34,7 @@ use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
+use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::TextSize;
 use serde::Deserialize;
@@ -248,7 +249,7 @@ impl Playground {
         let config = ArcId::new(config);
         let config_finder = ConfigFinder::new_constant(config.dupe());
 
-        let state = State::new(config_finder);
+        let state = State::new(config_finder, ThreadCount::default());
         let config_finder_for_self = ConfigFinder::new_constant(config.dupe());
 
         Ok(Self {
@@ -348,7 +349,7 @@ impl Playground {
         let config = ArcId::new(config);
         let new_config_finder = ConfigFinder::new_constant(config.dupe());
 
-        self.state = State::new(new_config_finder);
+        self.state = State::new(new_config_finder, ThreadCount::default());
         self.config_finder = ConfigFinder::new_constant(config.dupe());
 
         if self.handles.contains_key("sandbox.py") {
@@ -419,9 +420,10 @@ impl Playground {
         for (filename, handle) in &self.handles {
             let errors = transaction.get_errors([handle]);
             let collected = errors.collect_errors();
+            let unused = errors.collect_unused_ignore_errors_for_display(&collected);
             let mut output_errors = collected.ordinary;
             output_errors.extend(collected.directives);
-            output_errors.extend(errors.collect_unused_ignore_errors_for_display().ordinary);
+            output_errors.extend(unused.ordinary);
             let file_errors = output_errors.into_map(|e| {
                 let range = e.display_range();
                 Diagnostic {
@@ -597,6 +599,7 @@ impl Playground {
         };
         transaction
             .goto_definition(handle, position)
+            .unwrap_or_default()
             .into_iter()
             .map(|r| Range::new(r.module.display_range(r.range)))
             .collect()

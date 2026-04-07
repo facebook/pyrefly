@@ -8,6 +8,7 @@
 use std::cell::LazyCell;
 use std::fmt;
 use std::fmt::Display;
+use std::slice;
 
 use dupe::Dupe;
 use itertools::Either;
@@ -72,10 +73,12 @@ use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::Hint;
 use crate::alt::unwrap::HintRef;
+use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LambdaParamId;
+use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::int_from_slice;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -88,7 +91,6 @@ use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::facet::FacetKind;
-use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::param_spec::ParamSpec;
 use crate::types::quantified::Quantified;
@@ -218,9 +220,18 @@ impl Display for ConditionRedundantReason {
     }
 }
 
-static MAX_TUPLE_LENGTH: usize = 256;
+pub(crate) const MAX_TUPLE_LENGTH: usize = 256;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn synthesized_functional_class_type(&self, call: &ExprCall) -> Option<Type> {
+        let anon_key = Key::Anon(call.range);
+        let idx = self
+            .bindings()
+            .key_to_idx_hashed_opt(Hashed::new(&anon_key))?;
+        matches!(self.bindings().get(idx), Binding::ClassDef(..))
+            .then(|| self.get_hashed(Hashed::new(&anon_key)).ty().clone())
+    }
+
     /// Infer a type for an expression, with an optional type hint that influences the inferred type.
     /// The inferred type is also checked against the hint.
     pub fn expr(
@@ -276,8 +287,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if Ast::is_synthesized_empty_name(x) {
                     TypeInfo::of_ty(self.heap.mk_any_error())
                 } else {
-                    self.get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                        .arc_clone()
+                    let result = self
+                        .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
+                        .arc_clone();
+                    // Complements PromoteForward for seeded captures.
+                    if self.bindings().should_promote_at_range(x.range) {
+                        result.map_ty(|ty| ty.promote_shallow_implicit_literals(self.stdlib))
+                    } else {
+                        result
+                    }
                 }
             }
             Expr::Attribute(x) => {
@@ -426,7 +444,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.bindings().get_lambda_param_id(&x.name),
                             var,
                         );
-                        Param::VarArg(Some(x.name.id.clone()), self.solver().force_var(var))
+                        Param::Varargs(Some(x.name.id.clone()), self.solver().force_var(var))
                     }));
                     params.extend(parameters.kwarg.iter().map(|x| {
                         let var = self.solver().fresh_unwrap(self.uniques);
@@ -578,6 +596,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::YieldFrom(x) => self.get(&KeyYieldFrom(x.range)).return_ty.clone(),
             Expr::Compare(x) => self.compare_infer(x, errors),
             Expr::Call(x) => {
+                if let Some(ty) = self.synthesized_functional_class_type(x) {
+                    return ty;
+                }
                 let callee_ty = self.expr_infer(&x.func, errors);
                 if let Some(d) = self.call_to_dict(&callee_ty, &x.arguments) {
                     self.dict_infer(&d, hint, x.range, errors)
@@ -802,7 +823,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 _ => {
-                    let ty = self.expr_infer_type_no_trace(
+                    let ty = self.expr_infer_with_hint(
                         elt,
                         if unbounded.is_empty() {
                             hint_ts_iter.next().or(default_hint)
@@ -1214,9 +1235,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
-        let target = match op {
-            BoolOp::And => false,
-            BoolOp::Or => true,
+        // `target` is the truthiness that causes short-circuiting: `and` short-circuits on
+        // falsy values, `or` on truthy values.
+        //
+        // `result_narrow` is used to narrow all but the last operand to values that could actually be
+        // returned as the result — for `and` that means the falsy subset, and vice versa for `or`.
+        // For example: `X and Y` only returns `X` if it is falsy, so the returned type is `IsFalsy(X) | Y`
+        let (target, result_narrow) = match op {
+            BoolOp::And => (false, AtomicNarrowOp::IsFalsy),
+            BoolOp::Or => (true, AtomicNarrowOp::IsTruthy),
         };
         let should_shortcircuit =
             |t: &Type, r: TextRange| self.as_bool(t, r, errors) == Some(target);
@@ -1251,21 +1278,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None => t.clone(),
                         Some(acc) => self.union(acc, t.clone()),
                     });
-                    // Narrow the type for the result of the boolop
-                    let t = if i != last_index
-                        && t == self.heap.mk_class_type(self.stdlib.bool().clone())
-                    {
-                        Lit::Bool(target).to_implicit_type()
-                    } else if i != last_index
-                        && t == self.heap.mk_class_type(self.stdlib.int().clone())
-                        && !target
-                    {
-                        LitInt::new(0).to_implicit_type()
-                    } else if i != last_index
-                        && t == self.heap.mk_class_type(self.stdlib.str().clone())
-                        && !target
-                    {
-                        Lit::Str(Default::default()).to_implicit_type()
+                    let t = if i != last_index {
+                        self.atomic_narrow(&t, &result_narrow, value.range(), errors)
                     } else {
                         t
                     };
@@ -1946,20 +1960,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Note that we have to check for `builtins.type` by name here because this code runs
                 // when we're bootstrapping the stdlib and don't have access to class objects yet.
                 Type::ClassDef(cls) if cls.is_builtin("type") => {
-                    let targ = match xs.len() {
-                        // This causes us to treat `type[list]` as equivalent to `type[list[Any]]`,
-                        // which may or may not be what we want.
-                        1 => self.expr_untype(&xs[0], TypeFormContext::TypeArgumentForType, errors),
-                        _ => self.error(
-                            errors,
-                            range,
-                            ErrorInfo::Kind(ErrorKind::BadSpecialization),
-                            format!("Expected 1 type argument for `type`, got {}", xs.len()),
-                        ),
+                    let (arguments, _) = match slice {
+                            Expr::Tuple(x) => (x.elts.as_slice(), x.parenthesized),
+                            _ => (slice::from_ref(slice), false),
                     };
-                    // TODO: Validate that `targ` refers to a "valid in-scope class or TypeVar"
-                    // (https://typing.readthedocs.io/en/latest/spec/annotations.html#type-and-annotation-expressions)
-                    self.heap.mk_type_form(self.heap.mk_type_form(targ))
+                    self.apply_unary_special_form("type".to_owned(), arguments, range, TypeFormContext::TypeArgumentForType, errors, |arg| self.heap.mk_type_form(arg))
                 }
                 // TODO: pyre_extensions.PyreReadOnly is a non-standard type system extension that marks read-only
                 // objects. We don't support it yet.
@@ -2223,7 +2228,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Type::ClassType(ref cls) | Type::SelfType(ref cls)
-                    if let Some(tuple) = self.as_tuple(cls) =>
+                    if let Some(tuple) = self.as_tuple(cls)
+                        && !self.class_overrides_tuple_getitem(cls) =>
                 {
                     self.infer_tuple_subscript(
                         tuple,
@@ -2415,6 +2421,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // None type (e.g. from a variable typed as None)
             if matches!(&idx_ty, Type::None) {
                 return Some(IndexOp::NewAxis);
+            }
+            if let Type::Tensor(ref idx_tensor) = idx_ty {
+                if let TensorShape::Concrete(dims) = &idx_tensor.shape {
+                    return Some(IndexOp::TensorIndex(dims.clone()));
+                }
+                return None; // shapeless index tensor → bail
             }
             if let Type::Tuple(ref tuple) = idx_ty {
                 return match tuple {
@@ -2685,6 +2697,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Operator::FloorDiv => {
                         Some(self.heap.mk_size(SizeExpr::floor_div(left_dim, right_dim)))
                     }
+                    Operator::Pow => Some(self.heap.mk_size(SizeExpr::pow(left_dim, right_dim))),
                     _ => {
                         self.error(
                             errors,

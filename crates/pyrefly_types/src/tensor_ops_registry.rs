@@ -159,6 +159,22 @@ impl TensorOpsRegistry {
             dsl_fn(&fn_lookup, "tuple_reduce_ir"),
         );
 
+        // Repeat interleave
+        registry.register(
+            "torch.Tensor.repeat_interleave",
+            dsl_fn(&fn_lookup, "repeat_interleave_ir"),
+        );
+        registry.register(
+            "torch.repeat_interleave",
+            dsl_fn(&fn_lookup, "repeat_interleave_ir"),
+        );
+
+        // Cosine similarity (reduces one dim)
+        registry.register(
+            "torch.nn.functional.cosine_similarity",
+            dsl_fn(&fn_lookup, "cosine_similarity_ir"),
+        );
+
         // Indexing/slicing
         registry.register("torch.select", dsl_fn(&fn_lookup, "select_ir"));
         registry.register("torch.narrow", dsl_fn(&fn_lookup, "narrow_ir"));
@@ -450,13 +466,31 @@ impl TensorOpsRegistry {
             &fn_lookup,
             "torch.nn.LSTM",
             "nn_lstm_forward_ir",
-            &["input_size", "hidden_size", "num_layers", "num_directions"],
+            &["input_size", "hidden_size", "num_layers", "bidirectional"],
         );
         registry.register_init_forward(
             &fn_lookup,
             "torch.nn.Upsample",
             "nn_upsample_forward_ir",
             &["size", "scale_factor"],
+        );
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.LSTMCell",
+            "nn_lstmcell_forward_ir",
+            &["input_size", "hidden_size"],
+        );
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.ReflectionPad2d",
+            "nn_reflectionpad2d_forward_ir",
+            &["padding"],
+        );
+        registry.register_init_forward(
+            &fn_lookup,
+            "torch.nn.ReplicationPad2d",
+            "nn_reflectionpad2d_forward_ir",
+            &["padding"],
         );
 
         // Random sampling
@@ -749,6 +783,16 @@ def topk_ir(self: Tensor, k: int | symint, dim: int = -1) -> [Tensor, Tensor]:
     s = replace_dim(self.shape, normalize_dim(len(self.shape), dim), k)
     return [Tensor(shape=s), Tensor(shape=s)]
 
+def repeat_interleave_ir(self: Tensor, repeats: int | symint, dim: int | None = None) -> Tensor:
+    if dim == None:
+        return Tensor(shape=[torch_shapes.prod(self.shape) * repeats])
+    d = normalize_dim(len(self.shape), dim)
+    return Tensor(shape=replace_dim(self.shape, d, self.shape[d] * repeats))
+
+def cosine_similarity_ir(x1: Tensor, x2: Tensor, dim: int = 1) -> Tensor:
+    s = broadcast(x1.shape, x2.shape)
+    return Tensor(shape=reduce_single(s, normalize_dim(len(s), dim), False))
+
 def randn_ir(size: list[int | symint]) -> Tensor:
     return Tensor(shape=size)
 
@@ -885,7 +929,7 @@ def adaptive_pool_ir(self: Tensor, output_size: int | symint | list[int | symint
     out_sizes = broadcast_int(output_size, len(self.shape) - 2)
     return Tensor(shape=[self.shape[0], self.shape[1]] + out_sizes)
 
-def interpolate_ir(self: Tensor, size: int | list[int] | None = None, scale_factor: int | symint | None = None) -> Tensor:
+def interpolate_ir(self: Tensor, size: int | symint | list[int | symint] | None = None, scale_factor: int | symint | None = None) -> Tensor:
     if size != None:
         return Tensor(shape=[self.shape[0], self.shape[1]] + broadcast_int(size, len(self.shape) - 2))
     if scale_factor != None:
@@ -964,9 +1008,18 @@ def nn_glu_forward_ir(input: Tensor, dim: symint = 1) -> Tensor:
     d = normalize_dim(rank, dim)
     return Tensor(shape=replace_dim(input.shape, d, input.shape[d] // 2))
 
-def nn_lstm_forward_ir(input: Tensor, input_size: symint, hidden_size: symint, num_layers: symint = 1, num_directions: symint = 1) -> [Tensor, Tensor, Tensor]:
-    output = Tensor(shape=[input.shape[0], input.shape[1], hidden_size * num_directions])
-    h_n = Tensor(shape=[num_layers * num_directions, input.shape[0], hidden_size])
-    c_n = Tensor(shape=[num_layers * num_directions, input.shape[0], hidden_size])
+def nn_lstm_forward_ir(input: Tensor, input_size: symint, hidden_size: symint, num_layers: symint = 1, bidirectional: bool = False) -> [Tensor, Tensor, Tensor]:
+    nd = 2 if bidirectional else 1
+    output = Tensor(shape=[input.shape[0], input.shape[1], hidden_size * nd])
+    h_n = Tensor(shape=[num_layers * nd, input.shape[0], hidden_size])
+    c_n = Tensor(shape=[num_layers * nd, input.shape[0], hidden_size])
     return [output, h_n, c_n]
+
+def nn_lstmcell_forward_ir(input: Tensor, input_size: symint, hidden_size: symint) -> [Tensor, Tensor]:
+    h = Tensor(shape=[input.shape[0], hidden_size])
+    c = Tensor(shape=[input.shape[0], hidden_size])
+    return [h, c]
+
+def nn_reflectionpad2d_forward_ir(input: Tensor, padding: symint) -> Tensor:
+    return Tensor(shape=[input.shape[0], input.shape[1], input.shape[2] + 2 * padding, input.shape[3] + 2 * padding])
 "#;

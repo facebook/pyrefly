@@ -2043,6 +2043,86 @@ class Permission(Enum):
 );
 
 call_graph_testcase!(
+    test_property_defined_with_property_builtin,
+    TEST_MODULE_NAME,
+    r#"
+class C:
+  def get_bar(self) -> int: return source()
+  bar = property(get_bar)
+def foo(c: C):
+  c.bar
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "6:3-6:8",
+                property_getter_callees(vec![
+                    create_call_target("test.C.get_bar", TargetType::Overrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("test.C", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_property_defined_with_property_builtin_self_access,
+    TEST_MODULE_NAME,
+    r#"
+class C:
+  def get_bar(self) -> int: return source()
+  bar = property(get_bar)
+  def uses_bar(self):
+    return self.bar
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.C.uses_bar",
+            vec![(
+                "6:12-6:20",
+                property_getter_callees(vec![
+                    create_call_target("test.C.get_bar", TargetType::Overrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("test.C", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_property_defined_with_property_builtin_inherited,
+    TEST_MODULE_NAME,
+    r#"
+class A:
+  def get_bar(self) -> int: return source()
+  bar = property(get_bar)
+class B(A):
+  pass
+def foo(b: B):
+  b.bar
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "8:3-8:8",
+                property_getter_callees(vec![
+                    create_call_target("test.A.get_bar", TargetType::Overrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("test.B", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
     test_builder_pattern_method_chaining,
     TEST_MODULE_NAME,
     r#"

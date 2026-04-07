@@ -48,6 +48,7 @@ use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
+use crate::types::callable::PrefixParam;
 use crate::types::callable::Required;
 use crate::types::class::ClassType;
 use crate::types::quantified::QuantifiedKind;
@@ -82,7 +83,7 @@ fn ok_or(b: bool, e: SubsetError) -> Result<(), SubsetError> {
 fn has_any_args_and_kwargs(args: &[Param]) -> bool {
     let has_vararg_any = args
         .iter()
-        .any(|p| matches!(p, Param::VarArg(_, Type::Any(_))));
+        .any(|p| matches!(p, Param::Varargs(_, Type::Any(_))));
     let has_kwargs_any = args
         .iter()
         .any(|p| matches!(p, Param::Kwargs(_, Type::Any(_))));
@@ -190,11 +191,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
-                (Some(Param::VarArg(_, Type::Unpack(l))), None) => {
+                (Some(Param::Varargs(_, Type::Unpack(l))), None) => {
                     self.is_subset_eq(&self.solver.heap.mk_concrete_tuple(Vec::new()), l)?;
                     l_arg = l_args.next();
                 }
-                (None, Some(Param::VarArg(_, Type::Unpack(u)))) => {
+                (None, Some(Param::Varargs(_, Type::Unpack(u)))) => {
                     self.is_subset_eq(&self.solver.heap.mk_concrete_tuple(Vec::new()), u)?;
                     u_arg = u_args.next();
                 }
@@ -202,7 +203,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Some(
                         Param::PosOnly(_, _, Required::Optional(_))
                         | Param::Pos(_, _, Required::Optional(_))
-                        | Param::VarArg(_, _),
+                        | Param::Varargs(_, _),
                     ),
                     None,
                 ) => {
@@ -218,7 +219,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                 }
                 (
-                    Some(Param::VarArg(_, Type::Unpack(l))),
+                    Some(Param::Varargs(_, Type::Unpack(l))),
                     Some(Param::PosOnly(_, _, Required::Required)),
                 ) => {
                     let mut u_types = Vec::new();
@@ -226,7 +227,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         if let Some(Param::PosOnly(_, u, Required::Required)) = u_arg {
                             u_types.push(u.clone());
                             u_arg = u_args.next();
-                        } else if let Some(Param::VarArg(_, Type::Unpack(u))) = u_arg {
+                        } else if let Some(Param::Varargs(_, Type::Unpack(u))) = u_arg {
                             self.is_subset_eq(
                                 &self.solver.heap.mk_unpacked_tuple(
                                     u_types,
@@ -238,7 +239,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             l_arg = l_args.next();
                             u_arg = u_args.next();
                             break;
-                        } else if let Some(Param::VarArg(_, u)) = u_arg {
+                        } else if let Some(Param::Varargs(_, u)) = u_arg {
                             self.is_subset_eq(
                                 &self.solver.heap.mk_unpacked_tuple(
                                     u_types,
@@ -259,14 +260,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
                 (
                     Some(Param::PosOnly(_, _, _) | Param::Pos(_, _, _)),
-                    Some(Param::VarArg(_, Type::Unpack(u))),
+                    Some(Param::Varargs(_, Type::Unpack(u))),
                 ) => {
                     let mut l_types = Vec::new();
                     loop {
                         if let Some(Param::PosOnly(_, l, _) | Param::Pos(_, l, _)) = l_arg {
                             l_types.push(l.clone());
                             l_arg = l_args.next();
-                        } else if let Some(Param::VarArg(_, Type::Unpack(l))) = l_arg {
+                        } else if let Some(Param::Varargs(_, Type::Unpack(l))) = l_arg {
                             self.is_subset_eq(
                                 u,
                                 &self.solver.heap.mk_unpacked_tuple(
@@ -278,7 +279,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             l_arg = l_args.next();
                             u_arg = u_args.next();
                             break;
-                        } else if let Some(Param::VarArg(_, l)) = l_arg {
+                        } else if let Some(Param::Varargs(_, l)) = l_arg {
                             self.is_subset_eq(
                                 u,
                                 &self.solver.heap.mk_unpacked_tuple(
@@ -297,11 +298,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                     }
                 }
-                (Some(Param::VarArg(_, l)), Some(Param::PosOnly(_, u, _))) => {
+                (Some(Param::Varargs(_, l)), Some(Param::PosOnly(_, u, _))) => {
                     self.is_subset_eq(u, l)?;
                     u_arg = u_args.next();
                 }
-                (Some(Param::VarArg(_, l)), Some(Param::Pos(name, u, _))) => {
+                (Some(Param::Varargs(_, l)), Some(Param::Pos(name, u, _))) => {
                     // Param::Pos can be passed positionally or by name, so if it matches *args
                     // we need to make sure it matches an optional kw-only argument or *kwargs
                     self.is_subset_eq(u, l)?;
@@ -309,28 +310,31 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     u_arg = u_args.next();
                 }
                 (
-                    Some(Param::VarArg(_, Type::Unpack(l))),
-                    Some(Param::VarArg(_, Type::Unpack(u))),
+                    Some(Param::Varargs(_, Type::Unpack(l))),
+                    Some(Param::Varargs(_, Type::Unpack(u))),
                 ) => {
                     self.is_subset_eq(u, l)?;
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
-                (Some(Param::VarArg(_, Type::Any(_))), Some(Param::VarArg(_, Type::Unpack(_)))) => {
+                (
+                    Some(Param::Varargs(_, Type::Any(_))),
+                    Some(Param::Varargs(_, Type::Unpack(_))),
+                ) => {
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
-                (Some(Param::VarArg(_, l)), Some(Param::VarArg(_, Type::Unpack(u)))) => {
+                (Some(Param::Varargs(_, l)), Some(Param::Varargs(_, Type::Unpack(u)))) => {
                     self.is_subset_eq(u, &self.solver.heap.mk_unbounded_tuple(l.clone()))?;
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
-                (Some(Param::VarArg(_, Type::Unpack(l))), Some(Param::VarArg(_, u))) => {
+                (Some(Param::Varargs(_, Type::Unpack(l))), Some(Param::Varargs(_, u))) => {
                     self.is_subset_eq(&self.solver.heap.mk_unbounded_tuple(u.clone()), l)?;
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
-                (Some(Param::VarArg(_, l)), Some(Param::VarArg(_, u))) => {
+                (Some(Param::Varargs(_, l)), Some(Param::Varargs(_, u))) => {
                     self.is_subset_eq(u, l)?;
                     l_arg = l_args.next();
                     u_arg = u_args.next();
@@ -487,6 +491,19 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> Result<(), SubsetError> {
+        let want = Type::ClassType(protocol.clone());
+        let has_no_vars = got.collect_all_vars().is_empty() && want.collect_all_vars().is_empty();
+
+        // Check cross-call protocol cache for types without Vars.
+        if has_no_vars && let Some(result) = self.solver.check_protocol_cache(&got, &want) {
+            return result;
+        }
+
+        // Save coinductive state so we can detect if any coinductive assumptions
+        // were used during this protocol check.
+        let prev_coinductive = self.coinductive_assumptions_used;
+        self.coinductive_assumptions_used = false;
+
         // For class-level coinductive reasoning: if the `got` type's type arguments
         // contain Vars, we're likely in a recursive pattern (e.g., checking method return
         // types that reference the same classes). Use (Class, Class) matching to detect
@@ -499,18 +516,35 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 protocol.class_object().clone(),
             );
             if !self.class_protocol_assumptions.insert(key.clone()) {
-                // Coinductive: assume this recursive class-level check succeeds
+                // Coinductive: assume this recursive class-level check succeeds.
+                // Mark that a coinductive assumption was used so callers don't
+                // cache results that depend on this optimistic assumption.
+                self.coinductive_assumptions_used = true;
                 return Ok(());
             }
             Some(key)
         } else {
             None
         };
-        let res = self.is_subset_protocol_inner(got, protocol);
+        let res = self.is_subset_protocol_inner(got.clone(), protocol);
         // Clean up assumptions
         if let Some(key) = class_check {
             self.class_protocol_assumptions.shift_remove(&key);
         }
+
+        // Only cache in the persistent cross-call cache when:
+        // 1. Neither type contains Vars (so the result is context-independent)
+        // 2. No coinductive assumptions were used during this check
+        //    (otherwise the result may be contingent on an assumption
+        //    that could be invalidated by rollback)
+        let used_coinductive = self.coinductive_assumptions_used;
+        if has_no_vars && !used_coinductive {
+            self.solver.store_protocol_cache(got, want, res.clone());
+        }
+
+        // Restore: propagate any coinductive usage upward
+        self.coinductive_assumptions_used = prev_coinductive || used_coinductive;
+
         res
     }
 
@@ -674,21 +708,33 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 l_after.reverse();
                 u_after.reverse();
 
-                self.is_subset_eq(
-                    &self
-                        .solver
-                        .heap
-                        .mk_unpacked_tuple(l_before, l_middle.clone(), l_after),
-                    u_middle,
-                )?;
-                self.is_subset_eq(
-                    l_middle,
-                    &self
-                        .solver
-                        .heap
-                        .mk_unpacked_tuple(u_before, u_middle.clone(), u_after),
-                )?;
-                Ok(())
+                let has_l_extras = !l_before.is_empty() || !l_after.is_empty();
+                let has_u_extras = !u_before.is_empty() || !u_after.is_empty();
+
+                match (has_l_extras, has_u_extras) {
+                    // No extras: just compare middles directly.
+                    (false, false) => self.is_subset_eq(l_middle, u_middle),
+                    // Got has extras: fold into got side, bind want middle.
+                    // tuple[A, *Bs, C] <: tuple[*Qs] → tuple[A, *Bs, C] <: Qs
+                    (true, false) => self.is_subset_eq(
+                        &self
+                            .solver
+                            .heap
+                            .mk_unpacked_tuple(l_before, l_middle.clone(), l_after),
+                        u_middle,
+                    ),
+                    // Want has extras: fold into want side, bind got middle.
+                    // tuple[*Bs] <: tuple[P, *Qs, R] → Bs <: tuple[P, *Qs, R]
+                    (false, true) => self.is_subset_eq(
+                        l_middle,
+                        &self
+                            .solver
+                            .heap
+                            .mk_unpacked_tuple(u_before, u_middle.clone(), u_after),
+                    ),
+                    // Both have extras: cross-structural, can't reason about it.
+                    (true, true) => Err(SubsetError::Other),
+                }
             }
             // Resolve Vars inside Unbounded tuples and re-dispatch.
             (Tuple::Unbounded(box Type::Var(v)), Tuple::Concrete(_)) => {
@@ -706,15 +752,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     fn is_paramlist_subset_of_paramspec(
         &mut self,
         got: &ParamList,
-        want_ts: &[(Type, Required)],
+        want_ts: &[PrefixParam],
         want_pspec: &Type,
     ) -> Result<(), SubsetError> {
         if got.len() < want_ts.len() {
             return Err(SubsetError::Other);
         }
-        let args = ParamList::new_types(want_ts.to_owned());
+        // Preserve Pos vs PosOnly so that the subset checker can reject name mismatches
+        // (e.g. Pos("a", int) vs Pos("self", K) fails, but PosOnly matches any name).
+        let args: Vec<Param> = want_ts.iter().map(|p| p.to_subset_param()).collect();
         let (pre, post) = got.items().split_at(args.len());
-        self.is_subset_param_list(pre, args.items())?;
+        self.is_subset_param_list(pre, &args)?;
         self.is_subset_eq(
             &self
                 .solver
@@ -726,16 +774,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
     fn is_paramspec_subset_of_paramlist(
         &mut self,
-        got_ts: &[(Type, Required)],
+        got_ts: &[PrefixParam],
         got_pspec: &Type,
         want: &ParamList,
     ) -> Result<(), SubsetError> {
         if want.len() < got_ts.len() {
             return Err(SubsetError::Other);
         }
-        let args = ParamList::new_types(got_ts.to_owned());
+        let args: Vec<Param> = got_ts.iter().map(|p| p.to_subset_param()).collect();
         let (pre, post) = want.items().split_at(args.len());
-        self.is_subset_param_list(args.items(), pre)?;
+        self.is_subset_param_list(&args, pre)?;
         self.is_subset_eq(
             got_pspec,
             &self
@@ -747,9 +795,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
     fn is_paramspec_subset_of_paramspec(
         &mut self,
-        got_ts: &[(Type, Required)],
+        got_ts: &[PrefixParam],
         got_pspec: &Type,
-        want_ts: &[(Type, Required)],
+        want_ts: &[PrefixParam],
         want_pspec: &Type,
     ) -> Result<(), SubsetError> {
         // TODO: consider required-ness in prepended params
@@ -757,34 +805,32 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             Ordering::Greater => {
                 let (got_ts_pre, got_ts_post) = got_ts.split_at(want_ts.len());
                 for (l, u) in got_ts_pre.iter().zip(want_ts.iter()) {
-                    self.is_subset_eq(&u.0, &l.0)?;
+                    self.is_subset_eq(u.ty(), l.ty())?;
                 }
-                let got_ts_post = got_ts_post.to_vec().into_boxed_slice();
                 self.is_subset_eq(
                     want_pspec,
                     &self
                         .solver
                         .heap
-                        .mk_concatenate(got_ts_post, got_pspec.clone()),
+                        .mk_concatenate(got_ts_post.to_vec().into_boxed_slice(), got_pspec.clone()),
                 )
             }
             Ordering::Less => {
                 let (want_ts_pre, want_ts_post) = want_ts.split_at(got_ts.len());
                 for (l, u) in got_ts.iter().zip(want_ts_pre.iter()) {
-                    self.is_subset_eq(&u.0, &l.0)?;
+                    self.is_subset_eq(u.ty(), l.ty())?;
                 }
-                let want_ts_post = want_ts_post.to_vec().into_boxed_slice();
                 self.is_subset_eq(
-                    &self
-                        .solver
-                        .heap
-                        .mk_concatenate(want_ts_post, want_pspec.clone()),
+                    &self.solver.heap.mk_concatenate(
+                        want_ts_post.to_vec().into_boxed_slice(),
+                        want_pspec.clone(),
+                    ),
                     got_pspec,
                 )
             }
             Ordering::Equal => {
                 for (l, u) in got_ts.iter().zip(want_ts.iter()) {
-                    self.is_subset_eq(&u.0, &l.0)?;
+                    self.is_subset_eq(u.ty(), l.ty())?;
                 }
                 self.is_subset_eq(want_pspec, got_pspec)
             }
@@ -1111,7 +1157,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         .zip(requiredness.iter())
                         .map(|(arg, required)| match arg {
                             CallArg::Arg(TypeOrExpr::Type(t, _)) => {
-                                ((**t).clone(), (**required).clone())
+                                PrefixParam::new((**t).clone(), (**required).clone())
                             }
                             // We manually constructed the callargs above, so we know their exact shape.
                             _ => unreachable!(),
@@ -1156,7 +1202,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             let key = (got.clone(), want.clone());
             if let Some(entry) = self.subset_cache.get(&key) {
                 return match entry {
-                    SubsetCacheEntry::InProgress | SubsetCacheEntry::Ok => Ok(()),
+                    SubsetCacheEntry::InProgress => {
+                        self.coinductive_assumptions_used = true;
+                        Ok(())
+                    }
+                    SubsetCacheEntry::Ok => Ok(()),
                     SubsetCacheEntry::Err(err) => Err(err.clone()),
                 };
             }
@@ -1211,7 +1261,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
                 Ok(())
             }
-            (_, Type::Any(_)) => Ok(()),
+            (_, Type::Any(_)) => {
+                for var in got.collect_maybe_quantified_vars() {
+                    // Variables in `got` now have `Any` as an upper bound.
+                    self.solver
+                        .add_upper_bound(var, want.clone(), &mut |got, want| {
+                            self.is_subset_eq(got, want).is_ok()
+                        });
+                }
+                Ok(())
+            }
             (Type::Never(_), _) => Ok(()),
             (_, Type::ClassType(want)) if want.is_builtin("object") => {
                 Ok(()) // everything is an instance of `object`
@@ -1670,7 +1729,46 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 SubsetError::Other,
             ),
             // Annotated[T, ...] is not a class object; it cannot be assigned to type[T].
-            (Type::Annotated(_), Type::Type(_)) => Err(SubsetError::Other),
+            (Type::Annotated(_, _), Type::Type(_)) => Err(SubsetError::Other),
+            // type[X | Y] <: types.UnionType — union expressions create UnionType at runtime.
+            (Type::Type(box Type::Union(_)), Type::ClassType(want))
+                if want.has_qname("types", "UnionType") =>
+            {
+                Ok(())
+            }
+            // TypeForm covariance: TypeForm[S] <: TypeForm[T] when S <: T
+            (Type::TypeForm(l), Type::TypeForm(u)) => self.is_subset_eq(l, u),
+            // type[T] <: TypeForm[T] — class objects are valid type forms.
+            // Reject types that are not valid standalone type expressions (PEP 747).
+            (Type::Type(box Type::Unpack(_)), Type::TypeForm(_)) => Err(SubsetError::Other),
+            (Type::Type(box Type::SpecialForm(sf)), Type::TypeForm(_))
+                if !sf.is_valid_bare_type_expression() =>
+            {
+                Err(SubsetError::Other)
+            }
+            (Type::Type(l), Type::TypeForm(u)) => self.is_subset_eq(l, u),
+            // The class representation of Any is compatible with any TypeForm.
+            (Type::ClassDef(got), Type::TypeForm(_)) if got.has_toplevel_qname("typing", "Any") => {
+                Ok(())
+            }
+            // ClassDef <: TypeForm[T] — bare class names are valid type forms.
+            (Type::ClassDef(got), Type::TypeForm(want)) => {
+                self.is_subset_eq(&self.type_order.promote_silently(got), want)
+            }
+            // Annotated[T, meta] <: TypeForm[T]
+            (Type::Annotated(inner, _), Type::TypeForm(u)) => self.is_subset_eq(inner, u),
+            // None <: TypeForm[T] when None <: T — None is a valid type form (represents NoneType)
+            (Type::None, Type::TypeForm(u)) => self.is_subset_eq(&Type::None, u),
+            // TypeForm[T] is not a subtype of type[U]
+            (Type::TypeForm(_), Type::Type(_)) => Err(SubsetError::Other),
+            // TypeForm falls back to object for other subtype checks
+            (Type::TypeForm(_), _) => self.is_subset_eq(
+                &self
+                    .solver
+                    .heap
+                    .mk_class_type(self.type_order.stdlib().object().clone()),
+                want,
+            ),
             // Although the object created by a NewType call behaves like a class for type-checking
             // purposes, it isn't one at runtime, so don't allow it to match `type`.
             (Type::ClassDef(got), Type::Type(_)) if self.type_order.is_new_type(got) => {
@@ -1846,6 +1944,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 SubsetError::TypeCannotAcceptSpecialForms(SpecialForm::Callable),
             ),
             (Type::Type(l), Type::Type(u)) => self.is_subset_eq(l, u),
+            // type[A | B] <: X if type[A] <: X and type[B] <: X.
+            (Type::Type(box Type::Union(box Union { members, .. })), _) => {
+                all(members.iter(), |m| {
+                    self.is_subset_eq(&Type::type_form(m.clone()), want)
+                })
+            }
             (Type::Type(_), _) => self.is_subset_eq(
                 &self
                     .solver

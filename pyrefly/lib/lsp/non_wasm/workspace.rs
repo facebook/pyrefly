@@ -25,11 +25,13 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::commands::config_finder::ConfigConfigurer;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::config_finder::standard_config_finder;
 use crate::config::config::ConfigFile;
+use crate::config::config::ConfigSource;
 use crate::config::environment::environment::PythonEnvironment;
 use crate::config::finder::ConfigFinder;
 use crate::state::lsp::DisplayTypeErrors;
@@ -66,10 +68,12 @@ pub struct Workspace {
     search_path: Option<Vec<PathBuf>>,
     pub disable_language_services: bool,
     pub disabled_language_services: Option<DisabledLanguageServices>,
+    pub runnable_code_lens: bool,
     pub display_type_errors: Option<DisplayTypeErrors>,
     pub lsp_analysis_config: Option<LspAnalysisConfig>,
     pub stream_diagnostics: Option<bool>,
     pub diagnostic_mode: Option<DiagnosticMode>,
+    pub workspace_config: Option<PathBuf>,
 }
 
 impl Workspace {
@@ -89,6 +93,23 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
     ) -> (ArcId<ConfigFile>, Vec<pyrefly_config::finder::ConfigError>) {
         if let Some(dir) = root {
             self.0.get_with(dir.to_owned(), |(workspace_root, w)| {
+                if let Some(workspace_config_path) = &w.workspace_config {
+                    let (new_config, new_errors) = ConfigFile::from_file(workspace_config_path);
+                    if matches!(new_config.source, ConfigSource::File(_)) {
+                        // Config was parsed successfully (possibly with non-fatal
+                        // warnings like extra keys). Use it.
+                        config = new_config;
+                        errors = new_errors;
+                    } else {
+                        // Config file couldn't be read or parsed. Fall back to
+                        // auto-discovered config but still report the errors.
+                        warn!(
+                            "Failed to load workspace config at `{}`, falling back to auto-discovered config",
+                            workspace_config_path.display()
+                        );
+                        errors = new_errors;
+                    }
+                }
                 if let Some(search_path) = w.search_path.clone() {
                     config.search_path_from_args = search_path;
                 }
@@ -177,12 +198,14 @@ struct PyreflyClientConfig {
     display_type_errors: Option<DisplayTypeErrors>,
     disable_language_services: Option<bool>,
     extra_paths: Option<Vec<PathBuf>>,
+    runnable_code_lens: Option<bool>,
     diagnostic_mode: Option<DiagnosticMode>,
     #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
     #[serde(default)]
     disabled_language_services: Option<DisabledLanguageServices>,
     stream_diagnostics: Option<bool>,
+    config_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -225,6 +248,8 @@ pub struct DisabledLanguageServices {
     #[serde(default)]
     pub document_symbol: bool,
     #[serde(default)]
+    pub code_lens: bool,
+    #[serde(default)]
     pub semantic_tokens: bool,
     #[serde(default)]
     pub implementation: bool,
@@ -247,6 +272,7 @@ impl DisabledLanguageServices {
             "textDocument/hover" => self.hover,
             "textDocument/inlayHint" => self.inlay_hint,
             "textDocument/documentSymbol" => self.document_symbol,
+            "textDocument/codeLens" => self.code_lens,
             "textDocument/semanticTokens/full" | "textDocument/semanticTokens/range" => {
                 self.semantic_tokens
             }
@@ -397,6 +423,9 @@ impl Workspaces {
             if let Some(disabled_language_services) = pyrefly.disabled_language_services {
                 self.update_disabled_language_services(scope_uri, disabled_language_services);
             }
+            if let Some(runnable_code_lens) = pyrefly.runnable_code_lens {
+                self.update_runnable_code_lens(scope_uri, runnable_code_lens);
+            }
             if let Some(stream_diagnostics) = pyrefly.stream_diagnostics {
                 self.update_stream_diagnostics(scope_uri, stream_diagnostics);
             }
@@ -407,6 +436,9 @@ impl Workspaces {
             // Handle analysis config nested under pyrefly (e.g., pyrefly.analysis)
             if let Some(analysis) = pyrefly.analysis {
                 self.update_ide_settings(modified, scope_uri, analysis);
+            }
+            if let Some(config_path) = pyrefly.config_path {
+                self.update_workspace_config(modified, scope_uri, config_path);
             }
         }
         // Always handle analysis at top level (no longer conditional on analysis_handled)
@@ -452,6 +484,20 @@ impl Workspaces {
             None => {
                 self.default.write().disabled_language_services = Some(disabled_language_services);
             }
+        }
+    }
+
+    fn update_runnable_code_lens(&self, scope_uri: &Option<Url>, runnable_code_lens: bool) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
+                    workspace.runnable_code_lens = runnable_code_lens;
+                }
+            }
+            None => self.default.write().runnable_code_lens = runnable_code_lens,
         }
     }
 
@@ -574,6 +620,36 @@ impl Workspaces {
             None => {
                 *modified = true;
                 self.default.write().search_path = Some(search_paths);
+            }
+        }
+    }
+
+    /// Update workspace config path for scope_uri, None if default workspace.
+    /// An empty path clears the workspace config (reverts to auto-discovery).
+    fn update_workspace_config(
+        &self,
+        modified: &mut bool,
+        scope_uri: &Option<Url>,
+        config_path: PathBuf,
+    ) {
+        let workspace_config = if config_path.as_os_str().is_empty() {
+            None
+        } else {
+            Some(config_path)
+        };
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(workspace_path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&workspace_path)
+                {
+                    *modified = true;
+                    workspace.workspace_config = workspace_config;
+                }
+            }
+            None => {
+                *modified = true;
+                self.default.write().workspace_config = workspace_config;
             }
         }
     }

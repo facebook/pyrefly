@@ -20,10 +20,6 @@
     "predicate": "python.ImportStarLocation.4"
   },
   {
-    "facts": [],
-    "predicate": "python.XRefsViaNameByTarget.4"
-  },
-  {
     "facts": [
       {
         "id": 0,
@@ -282,11 +278,20 @@
             "id": 0,
             "key": "try_except.py"
           },
-          "xrefs": []
+          "spans": [
+            {
+              "length": 9,
+              "start": 21
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "Exception"
+          }
         }
       }
     ],
-    "predicate": "python.XRefsViaNameByFile.4"
+    "predicate": "python.XRefsViaNameByTarget.4"
   },
   {
     "facts": [
@@ -297,11 +302,54 @@
             "id": 0,
             "key": "try_except.py"
           },
-          "xrefs": []
+          "xrefs": [
+            {
+              "source": {
+                "length": 9,
+                "start": 21
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "Exception"
+                }
+              }
+            }
+          ]
         }
       }
     ],
     "predicate": "python.xrefs.XRefsByFile.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "try_except.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 9,
+                "start": 21
+              },
+              "target": {
+                "id": 0,
+                "key": "Exception"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByFile.4"
   },
   {
     "facts": [

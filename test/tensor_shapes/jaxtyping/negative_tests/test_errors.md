@@ -15,6 +15,8 @@ ERROR Cannot mix native tensor syntax (Tensor[N, M]) and jaxtyping syntax (Float
 ERROR Returned type `Shaped[Tensor, "batch 3"]` is not assignable to declared return type `Tensor[3]` [bad-return]
   --> *test_mixed_syntax.py:18:12 (glob)
    |
+17 | ) -> Tensor[3]:
+   |      --------- declared return type
 18 |     return x
    |            ^
    |
@@ -29,6 +31,9 @@ $ $PYREFLY check "$JAXTYPING_TEST_ROOT/jaxtyping/negative_tests/test_matmul_mism
 ERROR Returned type `Tensor[batch, 3, 5]` is not assignable to declared return type `Shaped[Tensor, "batch 3 99"]` [bad-return]
   --> *test_matmul_mismatch.py:22:12 (glob)
    |
+20 | ) -> Shaped[Tensor, "batch 3 99"]:
+   |      ---------------------------- declared return type
+21 |     """Matmul produces batch×3×5, but return says batch×3×99."""
 22 |     return torch.matmul(a, b)
    |            ^^^^^^^^^^^^^^^^^^
    |
@@ -56,6 +61,9 @@ $ $PYREFLY check "$JAXTYPING_TEST_ROOT/jaxtyping/negative_tests/test_shape_misma
 ERROR Returned type `Shaped[Tensor, "batch 3"]` is not assignable to declared return type `Shaped[Tensor, "batch 4"]` [bad-return]
   --> *test_shape_mismatch.py:14:12 (glob)
    |
+12 | def wrong_return_size(x: Shaped[Tensor, "batch 3"]) -> Shaped[Tensor, "batch 4"]:
+   |                                                        ------------------------- declared return type
+13 |     """Return type has size 4 but input has size 3 in last dim."""
 14 |     return x
    |            ^
    |
@@ -70,6 +78,9 @@ $ $PYREFLY check "$JAXTYPING_TEST_ROOT/jaxtyping/negative_tests/test_rank_mismat
 ERROR Returned type `Shaped[Tensor, "batch 3"]` is not assignable to declared return type `Shaped[Tensor, "batch 3 4"]` [bad-return]
   --> *test_rank_mismatch.py:14:12 (glob)
    |
+12 | def wrong_rank(x: Shaped[Tensor, "batch 3"]) -> Shaped[Tensor, "batch 3 4"]:
+   |                                                 --------------------------- declared return type
+13 |     """Return type has rank 3 but input has rank 2."""
 14 |     return x
    |            ^
    |

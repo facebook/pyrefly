@@ -392,7 +392,7 @@ impl Transaction<'_> {
                             Param::Pos(name, ty, _)
                             | Param::PosOnly(Some(name), ty, _)
                             | Param::KwOnly(name, ty, _)
-                            | Param::VarArg(Some(name), ty) => {
+                            | Param::Varargs(Some(name), ty) => {
                                 let label = format!("{}=", name.as_str());
                                 let detail = ty.to_string();
                                 if name.as_str() != "self"
@@ -406,7 +406,7 @@ impl Transaction<'_> {
                                     }));
                                 }
                             }
-                            Param::VarArg(None, _)
+                            Param::Varargs(None, _)
                             | Param::Kwargs(_, _)
                             | Param::PosOnly(None, _, _) => {}
                         }
@@ -892,17 +892,18 @@ impl Transaction<'_> {
                     }
                     let exports = self.get_exports(&handle);
                     for (name, export) in exports.iter() {
-                        let is_deprecated = match export {
-                            ExportLocation::ThisModule(export) => export.deprecation.is_some(),
-                            ExportLocation::OtherModule(_, _) => false,
-                        };
-                        let kind = match export {
-                            ExportLocation::ThisModule(export) => export
-                                .symbol_kind
-                                .map_or(CompletionItemKind::VARIABLE, |k| {
-                                    k.to_lsp_completion_item_kind()
-                                }),
-                            ExportLocation::OtherModule(_, _) => CompletionItemKind::VARIABLE,
+                        let (is_deprecated, kind) = match export {
+                            ExportLocation::ThisModule(export) => (
+                                export.deprecation.is_some(),
+                                export
+                                    .symbol_kind
+                                    .map_or(CompletionItemKind::VARIABLE, |k| {
+                                        k.to_lsp_completion_item_kind()
+                                    }),
+                            ),
+                            ExportLocation::OtherModule(_, _) => {
+                                (false, CompletionItemKind::VARIABLE)
+                            }
                         };
                         result.push(RankedCompletion::new(CompletionItem {
                             label: name.to_string(),

@@ -285,6 +285,19 @@ impl ModulePath {
         }
     }
 
+    /// Returns true if this module comes from stubs bundled with Pyrefly
+    /// (typeshed stdlib, typeshed third-party, or custom third-party stubs).
+    /// Bundled modules resolve identically regardless of the importing file's
+    /// origin, so their results can be cached origin-agnostically.
+    pub fn is_bundled(&self) -> bool {
+        matches!(
+            self.0,
+            ModulePathDetails::BundledTypeshed(_)
+                | ModulePathDetails::BundledTypeshedThirdParty(_)
+                | ModulePathDetails::BundledThirdParty(_)
+        )
+    }
+
     pub fn details(&self) -> &ModulePathDetails {
         &self.0
     }

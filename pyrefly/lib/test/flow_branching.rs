@@ -573,7 +573,7 @@ def fun(x: A | B | C) -> None:
 testcase!(
     test_match_class,
     r#"
-from typing import assert_type
+from typing import assert_type, assert_never
 
 class Foo:
     x: int
@@ -596,21 +596,36 @@ def fun(foo: Foo, bar: Bar, baz: Baz) -> None:
         case Foo(a, b):
             assert_type(a, int)
             assert_type(b, str)
+        case _:
+            assert_never(foo)
+    match foo:
         case Foo(x = b, y = a):
             assert_type(a, str)
             assert_type(b, int)
+        case _:
+            assert_never(foo)
+    match foo:
         case Foo(a, b, c):  # E: Cannot match positional sub-patterns in `Foo`\n  Index 2 out of range for `__match_args__`
             pass
+        case _:
+            assert_never(foo)
     match bar:
         case Bar(1):  # E: Object of class `Bar` has no attribute `__match_args__`
             pass
         case Bar(a):  # E: Object of class `Bar` has no attribute `__match_args__`
             pass
+        case _:
+            assert_never(bar)
+    match bar:
         case Bar(x = a):
             assert_type(a, int)
+        case _:
+            assert_never(bar)
     match baz:
         case Baz(1):  # E: Expected literal string in `__match_args__`
             pass
+        case _:
+            assert_never(baz)  # E: Argument `Baz` is not assignable to parameter `arg` with type `Never`
 "#,
 );
 
@@ -645,7 +660,7 @@ testcase!(
     bug = "we don't narrow attributes in a positional pattern",
     test_match_class_union,
     r#"
-from typing import assert_type, Literal
+from typing import assert_type, assert_never, Literal
 
 class Foo:
     x: int
@@ -663,14 +678,6 @@ def test(x: Foo | Bar) -> None:
             assert_type(x, Foo)
             assert_type(x.x, int)
             assert_type(x.y, str)
-        case Foo(a, b):
-            assert_type(x, Foo)
-            assert_type(a, int)
-            assert_type(b, str)
-        case Foo(x = b, y = a):
-            assert_type(x, Foo)
-            assert_type(a, str)
-            assert_type(b, int)
         case Foo(x = 1, y = ""):
             assert_type(x, Foo)
             assert_type(x.x, Literal[1])
@@ -678,11 +685,29 @@ def test(x: Foo | Bar) -> None:
         case Bar("bar"):
             assert_type(x, Bar)
             assert_type(x.x, str)  # we want to narrow this to Literal["bar"]
+
+def test_keyword_irrefutable(x: Foo | Bar) -> None:
+    match x:
+        case Foo(x = b, y = a):
+            assert_type(x, Foo)
+            assert_type(a, str)
+            assert_type(b, int)
         case Bar(a) as b:
             assert_type(x, Bar)
             assert_type(b, Bar)
             assert_type(a, str)
             assert_type(b, Bar)
+        case _:
+            assert_never(x)
+
+def test_positional(x: Foo | Bar) -> None:
+    match x:
+        case Foo(1, "a"):
+            pass
+        case Foo(a, b):
+            assert_type(x, Foo)
+            assert_type(a, int)
+            assert_type(b, str)
 "#,
 );
 
@@ -1350,6 +1375,108 @@ def f() -> bool:
     "#,
 );
 
+// When the `if` branch raises, the elif condition must execute before
+// reaching code after the if/elif block, so the walrus is always assigned.
+testcase!(
+    test_walrus_in_elif_with_raise,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if not foo():
+        raise AssertionError()
+    elif (_bar := bar()) > 1:
+        raise AssertionError()
+    print(_bar)
+    "#,
+);
+
+// The walrus assignment should propagate to the base flow so the
+// merge does not falsely report "may be uninitialized".
+testcase!(
+    test_walrus_in_elif_targeting_declared_local,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    x: int
+    if not foo():
+        raise AssertionError()
+    elif (x := bar()) > 1:
+        raise AssertionError()
+    print(x)
+    "#,
+);
+
+testcase!(
+    test_walrus_multiple_elif,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if not foo():
+        raise AssertionError()
+    elif (x := bar()) > 1:
+        raise AssertionError()
+    elif (y := bar()) > 2:
+        raise AssertionError()
+    print(x)
+    print(y)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_elif_with_else,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if not foo():
+        raise AssertionError()
+    elif (x := bar()) > 1:
+        pass
+    else:
+        pass
+    print(x)
+    "#,
+);
+
+// the walrus may not execute, so x should be possibly-uninitialized.
+testcase!(
+    bug = "Should report x as possibly uninitialized since the if branch does not terminate",
+    test_walrus_in_elif_preceding_if_no_terminate,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if foo():
+        pass
+    elif (x := bar()) > 1:
+        pass
+    print(x)  # should be an error: x may be uninitialized
+    "#,
+);
+
 testcase!(
     test_walrus_in_if_no_else,
     r#"
@@ -1948,6 +2075,30 @@ def go(mdl:A|B):
             print('B')
         case _:
             assert_never(mdl)
+    "#,
+);
+
+testcase!(
+    test_match_keyword_wildcard_pattern_is_irrefutable,
+    r#"
+from dataclasses import dataclass
+from typing import assert_never
+
+@dataclass
+class A: ...
+
+@dataclass
+class B:
+    x: int
+
+T = A | B
+
+def test(x: T):
+    match x:
+        case A(): ...
+        case B(x=_): ...
+        case _:
+            assert_never(x)
     "#,
 );
 

@@ -204,7 +204,9 @@ impl<'a> CapturedVariableVisitor<'a> {
             .key_to_idx_hashed_opt(Hashed::new(&key))?;
         let binding = self.module_context.answers_context.bindings.get(idx);
         match binding {
-            Binding::Forward(definition_idx) | Binding::ForwardToFirstUse(definition_idx) => {
+            Binding::Forward(definition_idx)
+            | Binding::PromoteForward(definition_idx)
+            | Binding::ForwardToFirstUse(definition_idx) => {
                 self.get_definition_from_idx(
                     *definition_idx,
                     /* seen */ SmallSet::new(),
@@ -240,6 +242,7 @@ impl<'a> CapturedVariableVisitor<'a> {
         let binding = self.module_context.answers_context.bindings.get(idx);
         match binding {
             Binding::Forward(idx)
+            | Binding::PromoteForward(idx)
             | Binding::ForwardToFirstUse(idx)
             | Binding::Narrow(idx, _, _) => self.get_definition_from_idx(*idx, seen, depth),
             Binding::Phi(_, branches) => {

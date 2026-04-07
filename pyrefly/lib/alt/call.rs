@@ -12,6 +12,7 @@ use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tensor_ops_registry::TensorOpsRegistry;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
@@ -698,6 +699,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let hint = None; // discard hint
         let class_metadata = self.get_metadata_for_class(cls.class_object());
+        // Tracks whether we've already recorded a trace for IDE features.
+        // Priority: metaclass __call__ > overridden __new__ > __init__.
+        let mut recorded_trace = false;
         if let Some(ret) =
             self.call_metaclass(&cls, arguments_range, args, keywords, errors, context, hint)
         {
@@ -712,6 +716,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 self.record_resolved_trace(arguments_range, metaclass_dunder_call);
+                recorded_trace = true;
             }
             // Enum construction is routed through EnumMeta.__call__, which performs
             // member lookup by value. A custom enum __new__ is used for member creation
@@ -737,9 +742,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         let mut dunder_new_ret = None;
+        let preserve_self = constructor_kind == ConstructorKind::TypeOfSelf;
         let (overrides_new, dunder_new_has_errors) =
-            if let Some(new_method) = self.get_dunder_new(&cls) {
-                let cls_ty = self.heap.mk_type_form(self.heap.mk_class_type(cls.clone()));
+            if let Some(new_method) = self.get_dunder_new(&cls, preserve_self) {
+                let cls_ty = if preserve_self {
+                    self.heap.mk_type_form(self.heap.mk_self_type(cls.clone()))
+                } else {
+                    self.heap.mk_type_form(self.heap.mk_class_type(cls.clone()))
+                };
                 let full_args = iter::once(CallArg::ty(&cls_ty, arguments_range))
                     .chain(args.iter().cloned())
                     .collect::<Vec<_>>();
@@ -769,7 +779,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         callee_range,
                     );
                 }
-                self.record_resolved_trace(arguments_range, new_method);
+                if !recorded_trace {
+                    self.record_resolved_trace(arguments_range, new_method);
+                    recorded_trace = true;
+                }
                 if self.is_compatible_constructor_return(&ret, cls.class_object()) {
                     dunder_new_ret = Some(ret);
                 } else if !matches!(ret, Type::Any(AnyStyle::Error | AnyStyle::Implicit)) {
@@ -824,7 +837,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     callee_range,
                 );
             }
-            self.record_resolved_trace(arguments_range, init_method);
+            if !recorded_trace {
+                self.record_resolved_trace(arguments_range, init_method);
+            }
         }
         if class_metadata.is_pydantic_model()
             && let Some(dataclass) = class_metadata.dataclass_metadata()
@@ -1311,7 +1326,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             *targs = chosen_targs;
         }
-        let (ty, specialization_errors) = chosen_res;
+        let (ty, specialization_errors, _expected_types) = chosen_res;
         if let Ok(errors) = Vec1::try_from_vec(specialization_errors) {
             self.add_specialization_errors(errors, arguments_range, call_errors, context);
         }
@@ -1396,7 +1411,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_class_def(classtype.class_object().dupe()),
                 self.heap.mk_class_type(classtype),
             ),
-            DescriptorBase::ClassDef(class) => (self.heap.mk_class_def(class), self.heap.mk_none()),
+            DescriptorBase::SelfInstance(classtype) => (
+                self.heap
+                    .mk_type_form(self.heap.mk_self_type(classtype.clone())),
+                self.heap.mk_self_type(classtype),
+            ),
+            DescriptorBase::ClassDef(class_base) => {
+                (class_base.to_type(self.heap), self.heap.mk_none())
+            }
         };
         let args = [CallArg::ty(&obj, range), CallArg::ty(&objtype, range)];
         let call_target = self.as_call_target_or_error(
@@ -1413,16 +1435,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn call_descriptor_setter(
         &self,
         setter_method: Type,
-        class_type: ClassType,
+        base: DescriptorBase,
         got: CallArg,
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Type {
-        // When a descriptor is set on an instance, it gets the instance `class_type` and the value `got` as arguments.
+        // When a descriptor is set on an instance, it gets the instance and the value `got` as arguments.
         // Descriptor setters cannot be called on a class (an attempt to assign will overwrite the
         // descriptor itself rather than call the setter).
-        let instance = self.heap.mk_class_type(class_type);
+        let instance = match base {
+            DescriptorBase::Instance(ct) => self.heap.mk_class_type(ct),
+            DescriptorBase::SelfInstance(ct) => self.heap.mk_self_type(ct),
+            DescriptorBase::ClassDef(_) => {
+                unreachable!("descriptor setter is never called on a class")
+            }
+        };
         let args = [CallArg::ty(&instance, range), got];
         let call_target = self.as_call_target_or_error(
             setter_method,
@@ -1507,7 +1535,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         // Check the __new__ method and whether it comes from object or has been overridden
         let (new_attr_ty, overrides_new) = if let Some(t) = self
-            .get_dunder_new(cls)
+            .get_dunder_new(cls, false)
             .and_then(|t| self.bind_dunder_new(&t, cls.clone()))
         {
             if t.callable_return_type(self.heap)
@@ -1640,6 +1668,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         x.func.range(),
                         x.arguments.range,
                         hint,
+                        errors,
+                    )
+                }
+                None if matches!(
+                    ty,
+                    Type::Type(box Type::SpecialForm(SpecialForm::TypeForm))
+                ) =>
+                {
+                    self.call_typeform(
+                        &x.arguments.args,
+                        &x.arguments.keywords,
+                        x.arguments.range,
                         errors,
                     )
                 }

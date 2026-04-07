@@ -58,9 +58,12 @@ pub struct Context<'a, Lookup> {
     pub infer_with_first_use: bool,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
+    pub spec_compliant_overloads: bool,
     pub recursion_limit_config: Option<RecursionLimitConfig>,
     /// Pysa context for building PysaSolutions during the Solutions step.
     pub pysa_context: Option<PysaContext<'a>>,
+    /// Build compact CinderX solutions during the Solutions step.
+    pub cinderx_enabled: bool,
 }
 
 #[derive(Debug, Default, Dupe, Clone)]
@@ -215,7 +218,7 @@ pub struct StepsMut {
     // Pre-rebuild data for diffing at the Solutions step.
     // Populated by `reset_for_rebuild()`, consumed by `ComputeGuard::take_old_*()`.
     // May remain unconsumed for modules that never reach Solutions (e.g.,
-    // require=Exports); cleared by `take_and_freeze()` at commit time.
+    // require=Exports); dropped when `take_and_freeze()` consumes `self`.
     pub old_exports: ArcSwapOption<Exports>,
     pub old_answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
     pub old_solutions: ArcSwapOption<Solutions>,
@@ -338,33 +341,17 @@ impl StepsMut {
         self.current_step.store(new_last_step, Ordering::Relaxed);
     }
 
-    /// Drain all step data into a frozen `Steps`. The `StepsMut` should not be
-    /// reused after this call (it becomes empty).
-    pub fn take_and_freeze(&self) -> Steps {
-        // Drop any unconsumed old data (modules that never reached Solutions).
-        self.clear_old_data();
-
-        let last_step = self.current_step.load();
-        let load = self.load.swap(None);
-        let ast = self.ast.swap(None);
-        let exports_arc = self.exports.swap(None);
-        let answers = self.answers.swap(None);
-        let solutions = self.solutions.swap(None);
+    /// Consume and produce a frozen `Steps`.
+    pub fn take_and_freeze(self) -> Steps {
+        // old_exports/old_answers/old_solutions are dropped with `self`.
         Steps {
-            last_step,
-            load,
-            ast,
-            exports: exports_arc,
-            answers,
-            solutions,
+            last_step: self.current_step.load(),
+            load: self.load.into_inner(),
+            ast: self.ast.into_inner(),
+            exports: self.exports.into_inner(),
+            answers: self.answers.into_inner(),
+            solutions: self.solutions.into_inner(),
         }
-    }
-
-    /// Drop any unconsumed old data.
-    pub fn clear_old_data(&self) {
-        self.old_exports.swap(None);
-        self.old_answers.swap(None);
-        self.old_solutions.swap(None);
     }
 }
 
@@ -430,9 +417,11 @@ impl Step {
             ctx.infer_with_first_use,
             ctx.tensor_shapes,
             ctx.strict_callable_subtyping,
+            ctx.spec_compliant_overloads,
         );
         let enable_index = ctx.require.keep_index();
-        let enable_trace = ctx.require.keep_answers_trace() || ctx.pysa_context.is_some();
+        let enable_trace =
+            ctx.require.keep_answers_trace() || ctx.pysa_context.is_some() || ctx.cinderx_enabled;
         let bindings = Bindings::new(
             Arc::unwrap_or_clone(ast),
             load.module_info.dupe(),
@@ -444,6 +433,7 @@ impl Step {
             ctx.uniques,
             enable_trace,
             ctx.check_unannotated_defs,
+            ctx.require.keep_index(),
             ctx.infer_return_types,
         );
         let answers = Answers::new(&bindings, solver, enable_index, enable_trace);
@@ -479,9 +469,11 @@ impl Step {
             ctx.require.compute_errors()
                 || ctx.require.keep_answers_trace()
                 || ctx.require.keep_answers()
-                || ctx.pysa_context.is_some(),
+                || ctx.pysa_context.is_some()
+                || ctx.cinderx_enabled,
             ctx.recursion_limit_config,
             pysa_context.as_ref(),
+            ctx.cinderx_enabled,
         );
 
         Arc::new(solutions)

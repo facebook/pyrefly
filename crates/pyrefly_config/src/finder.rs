@@ -171,7 +171,12 @@ impl ConfigFinder {
                             .iter()
                             .map(OsString::from)
                             .collect(),
-                        |c: &ArcId<ConfigFile>| matches!(c.source, ConfigSource::File(_)),
+                        |c: &ArcId<ConfigFile>| {
+                            matches!(
+                                c.source,
+                                ConfigSource::File(_) | ConfigSource::FailedParse(_)
+                            )
+                        },
                     ),
                     // Group 2: pyproject.toml files with Python tool sections
                     // (e.g. [tool.ruff], [tool.mypy], [tool.pyright]) are a strong

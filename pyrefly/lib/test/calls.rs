@@ -405,3 +405,29 @@ def get_flow_version(run_id: str | None) -> str | None:
     assert_type(flow, Flow)
     "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/2918
+testcase!(
+    bug = "Should error when calling NotImplemented (a constant, not a class)",
+    test_call_not_implemented_constant,
+    r#"
+# NotImplemented is a singleton constant, not a callable class.
+# Using NotImplemented() is always a mistake; they mean NotImplementedError().
+def broken():
+    raise NotImplemented()
+
+def also_broken():
+    raise NotImplemented("not yet done")
+"#,
+);
+
+testcase!(
+    test_call_instance_with_non_callable_dunder_call,
+    r#"
+class Uncallable:
+    __call__ = 42
+
+obj = Uncallable()
+obj()  # E: Expected a callable, got `Uncallable`
+"#,
+);

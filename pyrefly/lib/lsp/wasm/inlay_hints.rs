@@ -79,7 +79,7 @@ pub fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<
     if let Params::List(params_list) = callable.params {
         if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
             params_list.items().first()
-            && (name.as_str() == "self" || name.as_str() == "cls")
+            && (name.as_str() == "self" || name.as_str() == "cls" || name.as_str() == "_cls")
         {
             let mut params = params_list.into_items();
             params.remove(0);
@@ -342,6 +342,7 @@ impl<'a> Transaction<'a> {
                                 && !param_match.is_vararg_repeat
                                 && param_match.name.as_str() != "self"
                                 && param_match.name.as_str() != "cls"
+                                && param_match.name.as_str() != "_cls"
                             {
                                 param_hints.push((
                                     arg.range().start(),
@@ -379,7 +380,7 @@ impl<'a> Transaction<'a> {
                     }
                     positional_params_seen += 1;
                 }
-                Param::VarArg(name, ..) => {
+                Param::Varargs(name, ..) => {
                     if positional_arg_index >= positional_params_seen {
                         return name.as_ref().map(|name| {
                             ParamNameMatch::new(name, positional_arg_index > positional_params_seen)
@@ -398,7 +399,10 @@ impl<'a> Transaction<'a> {
         param_with_default: ParameterWithDefault,
         handle: &Handle,
     ) -> Option<ParameterAnnotation> {
-        if param_with_default.name() == "self" || param_with_default.name() == "cls" {
+        if param_with_default.name() == "self"
+            || param_with_default.name() == "cls"
+            || param_with_default.name() == "_cls"
+        {
             return None;
         }
         let ty = match param_with_default.default() {
@@ -656,7 +660,7 @@ mod tests {
     fn param_name_for_positional_argument_marks_vararg_repeats() {
         let params = vec![
             Param::Pos(Name::new_static("x"), any_type(), Required::Required),
-            Param::VarArg(Some(Name::new_static("columns")), any_type()),
+            Param::Varargs(Some(Name::new_static("columns")), any_type()),
             Param::KwOnly(Name::new_static("kw"), any_type(), Required::Required),
         ];
 
@@ -669,7 +673,7 @@ mod tests {
     fn param_name_for_positional_argument_handles_missing_names() {
         let params = vec![
             Param::PosOnly(None, any_type(), Required::Required),
-            Param::VarArg(None, any_type()),
+            Param::Varargs(None, any_type()),
         ];
 
         assert!(Transaction::<'static>::param_name_for_positional_argument(&params, 0).is_none());
@@ -681,7 +685,7 @@ mod tests {
     fn duplicate_vararg_hints_are_not_emitted() {
         let params = vec![
             Param::Pos(Name::new_static("s"), any_type(), Required::Required),
-            Param::VarArg(Some(Name::new_static("args")), any_type()),
+            Param::Varargs(Some(Name::new_static("args")), any_type()),
             Param::KwOnly(Name::new_static("a"), any_type(), Required::Required),
         ];
 

@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use clap::Subcommand;
 use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::thread_pool::ThreadCount;
 
 use crate::commands::buck_check::BuckCheckArgs;
 use crate::commands::check::CheckResult;
@@ -67,28 +68,41 @@ impl Command {
         version: &str,
         telemetry: &impl Telemetry,
         config_configurer_wrapper: Option<ConfigConfigurerWrapper>,
+        thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
         match self {
-            Command::Check(args) => args.run(config_configurer_wrapper).await,
-            Command::Snippet(args) => args.run(config_configurer_wrapper).await,
-            Command::BuckCheck(args) => Ok((args.run()?, None)),
+            Command::Check(args) => args.run(config_configurer_wrapper, thread_count).await,
+            Command::Snippet(args) => args.run(config_configurer_wrapper, thread_count).await,
+            Command::BuckCheck(args) => Ok((args.run(thread_count)?, None)),
             Command::Lsp(args) => Ok((
                 args.run(
                     version,
                     None,
+                    None,
                     telemetry,
                     Arc::new(NoExternalProvider),
                     config_configurer_wrapper,
+                    thread_count,
                 )?,
                 None,
             )),
-            Command::Tsp(args) => Ok((args.run(telemetry, config_configurer_wrapper)?, None)),
-            Command::Init(args) => Ok((args.run(config_configurer_wrapper.clone())?, None)),
-            Command::Infer(args) => Ok((args.run(config_configurer_wrapper)?, None)),
+            Command::Tsp(args) => Ok((
+                args.run(telemetry, config_configurer_wrapper, thread_count)?,
+                None,
+            )),
+            Command::Init(args) => Ok((
+                args.run(config_configurer_wrapper.clone(), thread_count)?,
+                None,
+            )),
+            Command::Infer(args) => Ok((args.run(config_configurer_wrapper, thread_count)?, None)),
             Command::DumpConfig(args) => Ok((args.run(config_configurer_wrapper)?, None)),
-            Command::Report(args) => Ok((args.run(config_configurer_wrapper)?, None)),
-            Command::Suppress(args) => Ok((args.run(config_configurer_wrapper)?, None)),
-            Command::Stubgen(args) => Ok((args.run(config_configurer_wrapper)?, None)),
+            Command::Report(args) => Ok((args.run(config_configurer_wrapper, thread_count)?, None)),
+            Command::Suppress(args) => {
+                Ok((args.run(config_configurer_wrapper, thread_count)?, None))
+            }
+            Command::Stubgen(args) => {
+                Ok((args.run(config_configurer_wrapper, thread_count)?, None))
+            }
         }
     }
 }

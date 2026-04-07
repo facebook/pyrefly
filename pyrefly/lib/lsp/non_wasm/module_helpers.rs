@@ -55,7 +55,7 @@ pub(in crate::lsp) fn handle_from_module_path(state: &State, path: ModulePath) -
     match path.details() {
         ModulePathDetails::BundledTypeshed(_) => {
             let module_name = to_real_path(&path)
-                .and_then(|path| ModuleName::from_path(&path, config.search_path()))
+                .and_then(|path| ModuleName::from_path(&path, config.search_path(), &[]))
                 .unwrap_or(unknown);
             Handle::new(module_name, path, config.get_sys_info())
         }

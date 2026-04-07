@@ -19,10 +19,10 @@ impl ErrorContext {
             Self::BadContextManager(cm) => {
                 format!("Cannot use `{cm}` as a context manager")
             }
-            Self::UnaryOp(op, target) => {
+            Self::UnaryOp(op, target, _range) => {
                 format!("Unary `{op}` is not supported on `{target}`")
             }
-            Self::BinaryOp(op, left, right) => {
+            Self::BinaryOp(op, left, right, _left_range, _right_range) => {
                 let ctx = TypeDisplayContext::new(&[left, right]);
                 format!(
                     "`{}` is not supported between `{}` and `{}`",
@@ -31,7 +31,7 @@ impl ErrorContext {
                     ctx.display(right)
                 )
             }
-            Self::InplaceBinaryOp(op, left, right) => {
+            Self::InplaceBinaryOp(op, left, right, _left_range, _right_range) => {
                 let ctx = TypeDisplayContext::new(&[left, right]);
                 format!(
                     "`{}=` is not supported between `{}` and `{}`",

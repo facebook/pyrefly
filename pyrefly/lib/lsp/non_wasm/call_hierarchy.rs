@@ -33,6 +33,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use tracing::debug;
+use vec1::Vec1;
 
 use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
@@ -450,9 +451,11 @@ impl CancellableTransaction<'_> {
         position: TextSize,
     ) -> Result<Vec<(Module, Vec<(TextRange, TextRange)>)>, Cancelled> {
         // Resolve cursor position to function definition (handles both definitions and call sites)
-        let definitions =
-            self.as_ref()
-                .find_definition(handle, position, FindPreference::default());
+        let definitions = self
+            .as_ref()
+            .find_definition(handle, position, FindPreference::default())
+            .map(Vec1::into_vec)
+            .unwrap_or_default();
         let Some(target_def) = definitions.into_iter().next() else {
             return Ok(Vec::new());
         };
@@ -489,11 +492,11 @@ impl CancellableTransaction<'_> {
                         .checked_sub(TextSize::from(1))
                         .unwrap_or(call.func.range().start());
 
-                    let definitions = self.as_ref().find_definition(
-                        &target_handle,
-                        call_pos,
-                        FindPreference::default(),
-                    );
+                    let definitions = self
+                        .as_ref()
+                        .find_definition(&target_handle, call_pos, FindPreference::default())
+                        .map(Vec1::into_vec)
+                        .unwrap_or_default();
 
                     for def in definitions {
                         let module_path = def.module.path().dupe();

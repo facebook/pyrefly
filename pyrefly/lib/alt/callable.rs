@@ -354,13 +354,13 @@ impl CallArgPreEval<'_> {
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Option<Type> {
-        let tcc = &|| TypeCheckContext {
-            kind: if vararg {
+        let tcc = &|| {
+            TypeCheckContext::of_kind(if vararg {
                 TypeCheckKind::CallVarArgs(false, param_name.cloned(), callable_name.cloned())
             } else {
                 TypeCheckKind::CallArgument(param_name.cloned(), callable_name.cloned())
-            },
-            context: context.map(|ctx| ctx()),
+            })
+            .with_context(context.map(|ctx| ctx()))
         };
         match self {
             Self::Type(ty, done) => {
@@ -458,12 +458,12 @@ impl<'a> PosParam<'a> {
                 name: Some(name),
                 kind: PosParamKind::Positional,
             }),
-            Param::VarArg(name, Type::Unpack(ty)) => Some(Self {
+            Param::Varargs(name, Type::Unpack(ty)) => Some(Self {
                 ty: &**ty,
                 name: name.as_ref(),
                 kind: PosParamKind::Unpacked,
             }),
-            Param::VarArg(name, ty) => Some(Self {
+            Param::Varargs(name, ty) => Some(Self {
                 ty,
                 name: name.as_ref(),
                 kind: PosParamKind::Variadic,
@@ -506,7 +506,57 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )
     }
 
+    /// Validate that a quantified ParamSpec forwarding pattern has the expected
+    /// `*P.args` / `**P.kwargs` as the last positional and keyword arguments.
+    /// Called when `var_to_rparams` returns `Err(q)` (the Var resolved to a
+    /// still-quantified ParamSpec `q`).
+    ///
+    /// `current_arg` is the arg that triggered ParamSpec expansion (first call
+    /// site only). When present, we check that it is `*P.args` — this catches
+    /// extra args *before* `*P.args`. We also always check that `args.last()`
+    /// is `*P.args` — this catches extra args *after* it and the case where
+    /// `*P.args` is missing entirely. On success, return the remaining
+    /// arguments after stripping the trailing `*P.args` / `**P.kwargs` pair.
+    fn paramspec_forwarding<'b>(
+        &self,
+        q: &Quantified,
+        current_arg: Option<&CallArg<'b>>,
+        args: &'b [CallArg<'b>],
+        keywords: &'b [CallKeyword<'b>],
+        arguments_range: TextRange,
+        arg_errors: &ErrorCollector,
+        call_errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> Option<(&'b [CallArg<'b>], &'b [CallKeyword<'b>])> {
+        let current_ok = current_arg.is_none_or(|x| self.is_param_spec_args(x, q, arg_errors));
+        let last_ok = args
+            .last()
+            .is_some_and(|x| self.is_param_spec_args(x, q, arg_errors));
+        let args_ok = current_ok && last_ok;
+        let kwargs_ok = keywords
+            .last()
+            .is_some_and(|x| self.is_param_spec_kwargs(x, q, arg_errors));
+        if !args_ok || !kwargs_ok {
+            self.error(
+                call_errors,
+                arguments_range,
+                ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
+                format!(
+                    "Expected *-unpacked {}.args and **-unpacked {}.kwargs",
+                    q.name(),
+                    q.name()
+                ),
+            );
+            None
+        } else {
+            Some((&args[..args.len() - 1], &keywords[..keywords.len() - 1]))
+        }
+    }
+
     // See comment on `callable_infer` about `arg_errors` and `call_errors`.
+    /// Match arguments against parameters, type-check each argument, and return
+    /// a map from each argument's source range to the parameter type it was
+    /// matched against.
     fn callable_infer_params(
         &self,
         callable_name: Option<&FunctionKind>,
@@ -524,12 +574,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         // If Some, records parameter-name → argument-type bindings (for meta-shape inference).
         bound_args: &mut Option<HashMap<String, Type>>,
-    ) {
+    ) -> HashMap<TextRange, Type> {
         fn record(bound: &mut Option<HashMap<String, Type>>, name: &Name, ty: Type) {
             if let Some(map) = bound.as_mut() {
                 map.insert(name.to_string(), ty);
             }
         }
+        let mut expected_types: HashMap<TextRange, Type> = HashMap::new();
         // We want to work mostly with references, but some things are taken from elsewhere,
         // so have some owners to capture them.
         let param_list_owner = Owner::new();
@@ -566,7 +617,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut variadic_name: Option<&Name> = None;
         let mut variadic_collected: Vec<Type> = Vec::new();
 
-        let var_to_rparams = |var| {
+        // Resolve a deferred ParamSpec Var into additional parameters.
+        // Returns `Err(q)` when the Var resolved to a quantified ParamSpec `q`
+        // (forwarding case), meaning the caller should validate that the
+        // remaining args are `*P.args` / `**P.kwargs` and stop matching.
+        let var_to_rparams = |var| -> Result<Vec<&Param>, Box<Quantified>> {
             let ps = match self.solver().force_var(var) {
                 Type::ParamSpecValue(ps) => ps,
                 Type::Any(_) | Type::Ellipsis => ParamList::everything(),
@@ -575,6 +630,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let ps = ParamList::everything();
                     ps.prepend_types(&prefix).into_owned()
                 }
+                // The ParamSpec Var resolved to another quantified ParamSpec (e.g.,
+                // one generic helper forwarding `*args: P.args, **kwargs: P.kwargs`
+                // to another). There are no concrete parameters to contribute;
+                // the caller must validate the forwarding pattern.
+                Type::Quantified(q) if q.is_param_spec() => return Err(q),
                 t => {
                     error(
                         call_errors,
@@ -585,7 +645,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ParamList::everything()
                 }
             };
-            param_list_owner.push(ps).items().iter().rev().collect()
+            Ok(param_list_owner.push(ps).items().iter().rev().collect())
         };
         for arg in self_arg.iter().chain(args.iter()) {
             let mut arg_pre = arg.pre_eval(self, arg_errors);
@@ -596,7 +656,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // We've run out of parameters but haven't finished matching arguments. If we
                     // have a ParamSpec Var, it may contribute more parameters; force it and tack
                     // the result onto the parameter list.
-                    rparams = var_to_rparams(var);
+                    match var_to_rparams(var) {
+                        Ok(new_rparams) => rparams = new_rparams,
+                        Err(q) => {
+                            // Quantified ParamSpec forwarding: validate that the
+                            // current arg is `*P.args`, it is the last positional
+                            // arg, and the last keyword is `**P.kwargs`.
+                            let _ = self.paramspec_forwarding(
+                                &q,
+                                Some(arg),
+                                args,
+                                keywords,
+                                arguments_range,
+                                arg_errors,
+                                call_errors,
+                                context,
+                            );
+                            return expected_types;
+                        }
+                    }
                     paramspec = None;
                     continue;
                 } else {
@@ -627,6 +705,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             // We ignore positional-only parameters because they can't be passed in by name.
                             seen_names.insert(name, ty);
                         }
+                        expected_types.insert(arg.range(), ty.clone());
                         let arg_ty = arg_pre.post_check(
                             self,
                             callable_name,
@@ -651,6 +730,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }) => {
                         // Store args that get matched to an unpacked *args param
                         // Matched args are typechecked separately later
+                        expected_types.insert(arg.range(), ty.clone());
                         unpacked_vararg = Some((name, ty));
                         unpacked_vararg_matched_args.push(arg_pre.clone());
                         arg_pre.post_skip();
@@ -660,6 +740,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         name,
                         kind: PosParamKind::Variadic,
                     }) => {
+                        expected_types.insert(arg.range(), ty.clone());
                         let arg_ty = arg_pre.post_check(
                             self,
                             callable_name,
@@ -781,18 +862,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
             };
+            // The args side (unpacked_args_ty) is always a tuple built from call
+            // arguments, e.g., tuple[*Cs] or tuple[int, str]. The param side
+            // (unpacked_param_ty) is the raw Ts from stripping * off the type
+            // annotation *Ts. Wrap it in a tuple so both sides have the same
+            // structure: tuple[*Cs] ⊆ tuple[*Ts] or tuple[int, str] ⊆ tuple[*Ts].
+            let unpacked_param_tuple =
+                self.heap
+                    .mk_unpacked_tuple(Vec::new(), unpacked_param_ty.clone(), Vec::new());
             self.check_type(
                 &unpacked_args_ty,
-                unpacked_param_ty,
+                &unpacked_param_tuple,
                 arguments_range,
                 arg_errors,
-                &|| TypeCheckContext {
-                    kind: TypeCheckKind::CallVarArgs(
+                &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
                         true,
                         unpacked_name.cloned(),
                         callable_name.cloned(),
-                    ),
-                    context: context.map(|ctx| ctx()),
+                    ))
+                    .with_context(context.map(|ctx| ctx()))
                 },
             );
         }
@@ -809,7 +898,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(p) => p,
                 None if let Some(var) = paramspec => {
                     // We've reached the end of our regular parameter list. Now check if we have more parameters from a ParamSpec.
-                    rparams = var_to_rparams(var);
+                    match var_to_rparams(var) {
+                        Ok(new_rparams) => rparams = new_rparams,
+                        Err(q) => {
+                            // Quantified ParamSpec forwarding: no current
+                            // positional arg triggered expansion; check that
+                            // `*P.args` is the last positional arg and
+                            // `**P.kwargs` is the last keyword.
+                            let _ = self.paramspec_forwarding(
+                                &q,
+                                None,
+                                args,
+                                keywords,
+                                arguments_range,
+                                arg_errors,
+                                call_errors,
+                                context,
+                            );
+                            return expected_types;
+                        }
+                    }
                     paramspec = None;
                     continue;
                 }
@@ -827,11 +935,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 }
-                Param::VarArg(_, Type::Unpack(box unpacked)) => {
+                Param::Varargs(_, Type::Unpack(box unpacked)) => {
                     // If we have a TypeVarTuple *args with no matched arguments, resolve it to empty tuple
                     self.is_subset_eq(unpacked, &self.heap.mk_concrete_tuple(Vec::new()));
                 }
-                Param::VarArg(..) => {}
+                Param::Varargs(..) => {}
                 Param::Pos(name, ty, required) | Param::KwOnly(name, ty, required) => {
                     kwparams.insert(name, (ty, required == &Required::Required));
                 }
@@ -896,13 +1004,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                             if let Some(want) = &hint {
                                 self.check_type(&field.ty, want, kw.range, call_errors, &|| {
-                                    TypeCheckContext {
-                                        kind: TypeCheckKind::CallArgument(
-                                            Some(name.clone()),
-                                            callable_name.cloned(),
-                                        ),
-                                        context: context.map(|ctx| ctx()),
-                                    }
+                                    TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
+                                        Some(name.clone()),
+                                        callable_name.cloned(),
+                                    ))
+                                    .with_context(context.map(|ctx| ctx()))
                                 });
                             }
                         }
@@ -919,13 +1025,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                             want,
                                             kw.range,
                                             call_errors,
-                                            &|| TypeCheckContext {
-                                                kind: TypeCheckKind::CallKwArgs(
-                                                    None,
-                                                    name.cloned(),
-                                                    callable_name.cloned(),
-                                                ),
-                                                context: context.map(|ctx| ctx()),
+                                            &|| {
+                                                TypeCheckContext::of_kind(
+                                                    TypeCheckKind::CallKwArgs(
+                                                        None,
+                                                        name.cloned(),
+                                                        callable_name.cloned(),
+                                                    ),
+                                                )
+                                                .with_context(context.map(|ctx| ctx()))
                                             },
                                         );
                                     };
@@ -975,8 +1083,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else if kwargs.is_none() {
                         unexpected_keyword_error(&id.id, id.range);
                     }
-                    let tcc: &dyn Fn() -> TypeCheckContext = &|| TypeCheckContext {
-                        kind: if has_matching_param {
+                    if let Some(expected) = hint {
+                        expected_types.insert(kw.range, expected.clone());
+                    }
+                    let tcc: &dyn Fn() -> TypeCheckContext = &|| {
+                        TypeCheckContext::of_kind(if has_matching_param {
                             TypeCheckKind::CallArgument(Some(id.id.clone()), callable_name.cloned())
                         } else {
                             TypeCheckKind::CallKwArgs(
@@ -984,8 +1095,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 kwargs.as_ref().and_then(|(name, _)| name.cloned()),
                                 callable_name.cloned(),
                             )
-                        },
-                        context: context.map(|ctx| ctx()),
+                        })
+                        .with_context(context.map(|ctx| ctx()))
                     };
                     let arg_ty = match kw.value {
                         TypeOrExpr::Expr(x) => self.expr_with_separate_check_errors(
@@ -1057,12 +1168,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 for (ty, range) in &splat_kwargs {
-                    self.check_type(ty, want, *range, call_errors, &|| TypeCheckContext {
-                        kind: TypeCheckKind::CallUnpackKwArg(
+                    self.check_type(ty, want, *range, call_errors, &|| {
+                        TypeCheckContext::of_kind(TypeCheckKind::CallUnpackKwArg(
                             (*name).clone(),
                             callable_name.cloned(),
-                        ),
-                        context: context.map(|ctx| ctx()),
+                        ))
+                        .with_context(context.map(|ctx| ctx()))
                     });
                 }
             }
@@ -1091,6 +1202,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!("Expected {expected}, got {actual}"),
             );
         }
+        expected_types
     }
 
     // Call a function with the given arguments. The arguments are contextually typed, if possible.
@@ -1103,6 +1215,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     //   error collector.
     // Callers can pass the same error collector for both, and most callers do. We use two collectors
     // for overload matching.
+    //
+    // Returns: (return_type, specialization_errors, expected_types) where expected_types maps each
+    // argument's source range to the parameter type it was matched against.
     pub fn callable_infer(
         &self,
         callable: Callable,
@@ -1117,7 +1232,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         mut ctor_targs: Option<&mut TArgs>,
-    ) -> (Type, Vec<TypeVarSpecializationError>) {
+    ) -> (
+        Type,
+        Vec<TypeVarSpecializationError>,
+        HashMap<TextRange, Type>,
+    ) {
         // Look up meta-shape early so we can conditionally collect bound args.
         // Only consult the registry when tensor_shapes is enabled to avoid
         // unnecessary DSL parsing and per-call HashMap lookups.
@@ -1185,28 +1304,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             QuantifiedHandle::empty()
         };
         let self_arg = self_obj.as_ref().map(|ty| CallArg::ty(ty, arguments_range));
-        match callable.params {
-            Params::List(params) => {
-                self.callable_infer_params(
-                    callable_name,
-                    &params,
-                    None,
-                    self_arg,
-                    self_qs,
-                    args,
-                    keywords,
-                    arguments_range,
-                    arg_errors,
-                    call_errors,
-                    context,
-                    &mut bound_args,
-                );
-            }
+        let expected_types = match callable.params {
+            Params::List(params) => self.callable_infer_params(
+                callable_name,
+                &params,
+                None,
+                self_arg,
+                self_qs,
+                args,
+                keywords,
+                arguments_range,
+                arg_errors,
+                call_errors,
+                context,
+                &mut bound_args,
+            ),
             Params::Ellipsis | Params::Materialization => {
                 // Deal with Callable[..., R]
                 for arg in self_arg.iter().chain(args.iter()) {
                     arg.pre_eval(self, arg_errors).post_infer(self, arg_errors)
                 }
+                HashMap::new()
             }
             Params::ParamSpec(concatenate, p) => {
                 let p = self.solver().expand_vars(p);
@@ -1242,41 +1360,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &mut bound_args,
                     ),
                     Type::Quantified(q) => {
-                        if !args
-                            .last()
-                            .is_some_and(|x| self.is_param_spec_args(x, &q, arg_errors))
-                            || !keywords
-                                .last()
-                                .is_some_and(|x| self.is_param_spec_kwargs(x, &q, arg_errors))
-                        {
-                            self.error(
-                                call_errors,
-                                arguments_range,
-                                ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
-                                format!(
-                                    "Expected *-unpacked {}.args and **-unpacked {}.kwargs",
-                                    q.name(),
-                                    q.name()
-                                ),
-                            );
-                        } else {
+                        if let Some((args, keywords)) = self.paramspec_forwarding(
+                            &q,
+                            None,
+                            args,
+                            keywords,
+                            arguments_range,
+                            arg_errors,
+                            call_errors,
+                            context,
+                        ) {
                             self.callable_infer_params(
                                 callable_name,
                                 &ParamList::new_types(concatenate.into_vec()),
                                 None,
                                 self_arg,
                                 self_qs,
-                                &args[0..args.len() - 1],
-                                &keywords[0..keywords.len() - 1],
+                                args,
+                                keywords,
                                 arguments_range,
                                 arg_errors,
                                 call_errors,
                                 context,
                                 &mut bound_args,
-                            );
+                            )
+                        } else {
+                            HashMap::new()
                         }
                     }
-                    Type::Any(_) | Type::Ellipsis => {}
+                    Type::Any(_) | Type::Ellipsis => HashMap::new(),
                     _ => {
                         // This could well be our error, but not really sure
                         self.error(
@@ -1285,6 +1397,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
                             format!("Unexpected ParamSpec type: `{}`", self.for_display(p)),
                         );
+                        HashMap::new()
                     }
                 }
             }
@@ -1332,7 +1445,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             callable.ret.clone()
         };
 
-        (self.solver().finish_function_return(ret), errors)
+        (
+            self.solver().finish_function_return(ret),
+            errors,
+            expected_types,
+        )
     }
 
     /// Look up whether a callable has a registered meta-shape function.

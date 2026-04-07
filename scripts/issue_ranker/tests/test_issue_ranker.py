@@ -47,8 +47,8 @@ from relationship_resolver import (
 from report_formatter import format_json, format_markdown
 from status_classifier import _format_errors, _heuristic_classify
 from v1_analysis import (
-    _cleanup_managed_labels,
     _ensure_labels_exist,
+    _get_current_managed_labels,
     _github_api,
     apply_labels,
     format_v1_report,
@@ -1185,11 +1185,11 @@ class TestEnsureLabelsExist(unittest.TestCase):
         self.assertEqual(len(post_calls), 0)
 
 
-class TestCleanupManagedLabels(unittest.TestCase):
-    """Test _cleanup_managed_labels only removes our labels."""
+class TestGetCurrentManagedLabels(unittest.TestCase):
+    """Test _get_current_managed_labels fetches current label state."""
 
     @patch("v1_analysis._github_api")
-    def test_removes_labels_from_issues(self, mock_api):
+    def test_fetches_labels_from_issues(self, mock_api):
         def side_effect(method, url, token, body=None):
             if method == "GET" and "v1-verified" in url and "page=1" in url:
                 return [{"number": 10}, {"number": 20}]
@@ -1198,21 +1198,16 @@ class TestCleanupManagedLabels(unittest.TestCase):
             return None
 
         mock_api.side_effect = side_effect
-        removed = _cleanup_managed_labels("facebook/pyrefly", "tok")
+        result = _get_current_managed_labels("facebook/pyrefly", "tok")
 
-        # 2 issues had v1-verified, so 2 DELETEs for that label
-        delete_calls = [c for c in mock_api.call_args_list if c[0][0] == "DELETE"]
-        self.assertEqual(len(delete_calls), 2)
-        self.assertEqual(removed, 2)
-        # Verify DELETE URLs target only managed labels
-        for call in delete_calls:
-            self.assertIn("v1-verified", call[0][1])
+        self.assertEqual(result[10], {"v1-verified"})
+        self.assertEqual(result[20], {"v1-verified"})
 
     @patch("v1_analysis._github_api")
-    def test_no_issues_to_clean(self, mock_api):
+    def test_no_issues(self, mock_api):
         mock_api.return_value = []
-        removed = _cleanup_managed_labels("facebook/pyrefly", "tok")
-        self.assertEqual(removed, 0)
+        result = _get_current_managed_labels("facebook/pyrefly", "tok")
+        self.assertEqual(result, {})
 
     @patch("v1_analysis._github_api")
     def test_paginates(self, mock_api):
@@ -1220,15 +1215,11 @@ class TestCleanupManagedLabels(unittest.TestCase):
         page1 = [{"number": i} for i in range(100)]
         page2 = [{"number": 100}]
 
-        # Track which page we're on for v1-verified GET requests
         verified_gets = {"count": 0}
 
         def side_effect(method, url, token, body=None):
-            if method == "DELETE":
-                return None
             if method != "GET":
                 return None
-            # Only v1-verified has issues; other labels return empty
             if "v1-verified" not in url:
                 return []
             verified_gets["count"] += 1
@@ -1239,18 +1230,18 @@ class TestCleanupManagedLabels(unittest.TestCase):
             return []
 
         mock_api.side_effect = side_effect
-        removed = _cleanup_managed_labels("facebook/pyrefly", "tok")
-        # 100 from page 1 + 1 from page 2
-        self.assertEqual(removed, 101)
+        result = _get_current_managed_labels("facebook/pyrefly", "tok")
+        # 100 from page 1 + 1 from page 2 = 101 issues
+        self.assertEqual(len(result), 101)
 
 
 class TestApplyLabels(unittest.TestCase):
-    """Test apply_labels orchestration."""
+    """Test apply_labels diff-based orchestration."""
 
-    @patch("v1_analysis._cleanup_managed_labels", return_value=0)
+    @patch("v1_analysis._get_current_managed_labels", return_value={})
     @patch("v1_analysis._ensure_labels_exist")
     @patch("v1_analysis._github_api")
-    def test_applies_correct_labels(self, mock_api, mock_ensure, mock_cleanup):
+    def test_adds_labels_when_none_exist(self, mock_api, mock_ensure, mock_get):
         analysis = {
             "overlap_issues": [1, 2],
             "in_v1_not_top_ranked": [3],
@@ -1258,20 +1249,45 @@ class TestApplyLabels(unittest.TestCase):
         }
         result = apply_labels("facebook/pyrefly", analysis, "tok")
 
-        self.assertEqual(result["verified"], 2)
-        self.assertEqual(result["consider_removing"], 1)
-        self.assertEqual(result["consider_adding"], 2)
-        # Total POST calls: 2 + 1 + 2 = 5
-        self.assertEqual(mock_api.call_count, 5)
+        self.assertEqual(result["added"], 5)
+        self.assertEqual(result["removed"], 0)
+        self.assertEqual(result["unchanged"], 0)
 
-    @patch("v1_analysis._cleanup_managed_labels", return_value=5)
+    @patch("v1_analysis._get_current_managed_labels")
     @patch("v1_analysis._ensure_labels_exist")
     @patch("v1_analysis._github_api")
-    def test_cleans_before_applying(self, mock_api, mock_ensure, mock_cleanup):
-        apply_labels("facebook/pyrefly", {}, "tok")
-        # Ensure + cleanup called before any label application
-        mock_ensure.assert_called_once()
-        mock_cleanup.assert_called_once()
+    def test_skips_already_correct_labels(self, mock_api, mock_ensure, mock_get):
+        # Issue 1 already has v1-verified — should not be touched
+        mock_get.return_value = {1: {"v1-verified"}}
+        analysis = {
+            "overlap_issues": [1],
+            "in_v1_not_top_ranked": [],
+            "in_top_ranked_not_v1": [],
+        }
+        result = apply_labels("facebook/pyrefly", analysis, "tok")
+
+        self.assertEqual(result["added"], 0)
+        self.assertEqual(result["removed"], 0)
+        self.assertEqual(result["unchanged"], 1)
+        # No API calls for label changes
+        self.assertEqual(mock_api.call_count, 0)
+
+    @patch("v1_analysis._get_current_managed_labels")
+    @patch("v1_analysis._ensure_labels_exist")
+    @patch("v1_analysis._github_api")
+    def test_removes_stale_and_adds_new(self, mock_api, mock_ensure, mock_get):
+        # Issue 1 had v1-verified but should now have v1-consider-removing
+        mock_get.return_value = {1: {"v1-verified"}}
+        analysis = {
+            "overlap_issues": [],
+            "in_v1_not_top_ranked": [1],
+            "in_top_ranked_not_v1": [],
+        }
+        result = apply_labels("facebook/pyrefly", analysis, "tok")
+
+        self.assertEqual(result["added"], 1)
+        self.assertEqual(result["removed"], 1)
+        self.assertEqual(result["unchanged"], 0)
 
 
 class TestGenerateReasons(unittest.TestCase):
@@ -1369,7 +1385,10 @@ class TestRunV1Analysis(unittest.TestCase):
         finally:
             os.unlink(ranking_file.name)
 
-    @patch("v1_analysis.apply_labels", return_value={"verified": 1})
+    @patch(
+        "v1_analysis.apply_labels",
+        return_value={"added": 1, "removed": 0, "unchanged": 0},
+    )
     @patch("v1_analysis.generate_reasons")
     def test_applies_labels_with_token(self, mock_reasons, mock_labels):
         mock_reasons.return_value = {"q2_reasons": {}, "q3_reasons": {}}
@@ -1390,7 +1409,10 @@ class TestRunV1Analysis(unittest.TestCase):
                 apply=True,
             )
             mock_labels.assert_called_once()
-            self.assertEqual(result["labels_applied"], {"verified": 1})
+            self.assertEqual(
+                result["labels_applied"],
+                {"added": 1, "removed": 0, "unchanged": 0},
+            )
         finally:
             os.unlink(ranking_file.name)
 

@@ -10,10 +10,12 @@ use std::mem;
 
 use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_python::ignore::Tool;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
 use crate::config::error::ErrorConfig;
@@ -133,17 +135,48 @@ impl ErrorCollector {
         if self.style == ErrorStyle::Never {
             return;
         }
-        let (kind, ctx) = match info {
+        let (kind, annotations) = match info {
             ErrorInfo::Context(ctx) => {
                 let ctx = ctx();
-                (ctx.as_error_kind(), Some(ctx))
+                let kind = ctx.as_error_kind();
+                let annotations = ctx.annotations();
+                msg.insert(0, ctx.format());
+                (kind, annotations)
             }
-            ErrorInfo::Kind(kind) => (kind, None),
+            ErrorInfo::Kind(kind) => (kind, Vec::new()),
         };
-        if let Some(ctx) = ctx {
-            msg.insert(0, ctx.format());
+        let mut err = Error::new(self.module_info.dupe(), range, msg, kind);
+        for (range, label) in annotations {
+            err = err.with_annotation(range, label);
         }
-        let err = Error::new(self.module_info.dupe(), range, msg, kind);
+        self.errors.lock().push(err);
+    }
+
+    /// Add an error with secondary annotations for richer diagnostics.
+    pub fn add_with_annotations(
+        &self,
+        range: TextRange,
+        info: ErrorInfo,
+        mut msg: Vec1<String>,
+        annotations: Vec<(TextRange, String)>,
+    ) {
+        if self.style == ErrorStyle::Never {
+            return;
+        }
+        let (kind, ctx_annotations) = match info {
+            ErrorInfo::Context(ctx) => {
+                let ctx = ctx();
+                let kind = ctx.as_error_kind();
+                let ctx_annotations = ctx.annotations();
+                msg.insert(0, ctx.format());
+                (kind, ctx_annotations)
+            }
+            ErrorInfo::Kind(kind) => (kind, Vec::new()),
+        };
+        let mut err = Error::new(self.module_info.dupe(), range, msg, kind);
+        for (range, label) in ctx_annotations.into_iter().chain(annotations) {
+            err = err.with_annotation(range, label);
+        }
         self.errors.lock().push(err);
     }
 
@@ -179,14 +212,25 @@ impl ErrorCollector {
         self.errors.lock().len()
     }
 
-    /// Checks whether an error is suppressed, considering both the error's own
-    /// line and, if it falls inside a multi-line f/t-string, the f-string's
-    /// start and end lines.
+    /// Checks whether an error is suppressed, considering ignore-all directives,
+    /// per-line suppressions, and (for errors inside multi-line f/t-strings)
+    /// suppressions on the f-string's start or end lines.
     fn is_error_suppressed(
         err: &Error,
         fstring_ranges: &[(LineNumber, LineNumber)],
+        ignore_all: &SmallMap<Tool, LineNumber>,
         error_config: &ErrorConfig,
     ) -> bool {
+        // Check whole-file ignore-all directives first.
+        // UnusedIgnore errors cannot be suppressed to prevent infinite loops.
+        if err.error_kind() != ErrorKind::UnusedIgnore
+            && error_config
+                .enabled_ignores
+                .iter()
+                .any(|tool| ignore_all.contains_key(tool))
+        {
+            return true;
+        }
         if err.is_ignored(&error_config.enabled_ignores) {
             return true;
         }
@@ -211,6 +255,7 @@ impl ErrorCollector {
         &self,
         error_config: &ErrorConfig,
         fstring_ranges: &[(LineNumber, LineNumber)],
+        ignore_all: &SmallMap<Tool, LineNumber>,
         result: &mut CollectedErrors,
     ) {
         let mut errors = self.errors.lock();
@@ -226,7 +271,7 @@ impl ErrorCollector {
                     } else {
                         result.directives.push(err.with_severity(severity));
                     }
-                } else if Self::is_error_suppressed(err, fstring_ranges, error_config) {
+                } else if Self::is_error_suppressed(err, fstring_ranges, ignore_all, error_config) {
                     result.suppressed.push(err.clone());
                 } else {
                     match error_config.display_config.severity(err.error_kind()) {
@@ -242,7 +287,7 @@ impl ErrorCollector {
 
     pub fn collect(&self, error_config: &ErrorConfig) -> CollectedErrors {
         let mut result = CollectedErrors::default();
-        self.collect_into(error_config, &[], &mut result);
+        self.collect_into(error_config, &[], &SmallMap::new(), &mut result);
         result
     }
 }

@@ -49,7 +49,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-05
+          toolchain: nightly-2026-01-18
 
       - name: Install type checkers
         run: pip install pyright mypy

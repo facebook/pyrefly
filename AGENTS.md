@@ -76,6 +76,16 @@ Coding style: All code must be clean, documented and minimal. That means:
   not `crate::foo::Bar` inline). The only exception is when there is a name
   collision between two imports, which is rare.
 
+## Commit Messages
+
+Do not write a laundry list of implementation changes. Focus on:
+
+- **Why**: what problem or design gap motivated the change
+- **What** (high level): the approach or solution, not individual file edits
+- **Why it works**: how the code changes realize the solution
+
+A reader should be able to understand the intent and rationale from the commit message, without following all the code changes in details.
+
 ## Development environments
 
 There are three possible development environments:
@@ -129,7 +139,7 @@ Running `buck test pyrefly:pyrefly` triggers both test targets.
   You can override this with `--mode buck` or `--mode cargo`.
 - For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
-  `./test.py --no-test --no-conformance`
+  `./test.py --no-test --no-conformance --no-jsonschema`
 
 ### After modifying BUCK files (internal only)
 
@@ -139,7 +149,7 @@ Running `buck test pyrefly:pyrefly` triggers both test targets.
 
 **Always run formatting and linting before committing, updating a commit, or
 handing code off to a human for review:**
-`./test.py --no-test --no-conformance`
+`./test.py --no-test --no-conformance --no-jsonschema`
 
 This applies whether you are committing autonomously or preparing code for a
 human to commit. Do not skip this step during human-in-the-loop iteration.

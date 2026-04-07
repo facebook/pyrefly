@@ -99,6 +99,10 @@ fn is_annotated<T>(returns: &Option<T>, params: &Parameters) -> bool {
     }
     false
 }
+
+/// Simple visitor to find `self.<attr>` assignments in unannotated methods.
+/// Used by `unchecked_function_body_scope` to discover instance attributes
+/// without fully analyzing the function body.
 struct SelfAttrNames<'a> {
     self_name: &'a Name,
     names: SmallMap<Name, TextRange>,
@@ -194,6 +198,7 @@ impl<'a> BindingsBuilder<'a> {
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
         method_self_kind: MethodSelfKind,
+        ignore_annotations: bool,
     ) {
         let mut self_name = None;
         for x in x.iter_non_variadic_params() {
@@ -206,6 +211,7 @@ impl<'a> BindingsBuilder<'a> {
                 undecorated_idx,
                 class_key,
                 false,
+                ignore_annotations,
             );
         }
         if let Some(args) = &x.vararg {
@@ -215,6 +221,7 @@ impl<'a> BindingsBuilder<'a> {
                 undecorated_idx,
                 class_key,
                 true,
+                ignore_annotations,
             );
         }
         if let Some(kwargs) = &x.kwarg {
@@ -224,6 +231,7 @@ impl<'a> BindingsBuilder<'a> {
                 undecorated_idx,
                 class_key,
                 true,
+                ignore_annotations,
             );
         }
         self.scopes
@@ -257,14 +265,15 @@ impl<'a> BindingsBuilder<'a> {
         func_name: &Identifier,
         class_key: Option<Idx<KeyClass>>,
         usage: &mut Usage,
+        parent: &NestingContext,
     ) -> (
         Option<(TextRange, Idx<KeyAnnotation>)>,
         Vec<Idx<KeyLegacyTypeParam>>,
     ) {
-        let tparams = x
-            .type_params
-            .as_mut()
-            .map(|tparams| self.type_params(tparams));
+        let tparams = x.type_params.as_mut().map(|tparams| {
+            let owner = parent.owner_path(&self.module_info, func_name.id.as_str());
+            self.type_params_with_owner(tparams, owner)
+        });
 
         let mut legacy = Some(LegacyTParamCollector::new(tparams.is_some()));
 
@@ -309,7 +318,13 @@ impl<'a> BindingsBuilder<'a> {
     ) {
         self.scopes
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
-        self.parameters(parameters, undecorated_idx, class_key, method_self_kind);
+        self.parameters(
+            parameters,
+            undecorated_idx,
+            class_key,
+            method_self_kind,
+            false,
+        );
         self.init_static_scope(&body, false);
         self.seed_captured_variables();
         if class_key.is_some() && !self.scopes.current_static_contains(&dunder::CLASS) {
@@ -338,6 +353,10 @@ impl<'a> BindingsBuilder<'a> {
         )
     }
 
+    /// Lightweight alternative to `function_body_scope`: creates parameter
+    /// bindings but does not analyze the body statements.  Used when
+    /// `check_unannotated_defs = false` (in CLI/batch mode) or
+    /// `@no_type_check` to avoid wasted work.
     fn unchecked_function_body_scope(
         &mut self,
         parameters: &mut Box<Parameters>,
@@ -348,11 +367,18 @@ impl<'a> BindingsBuilder<'a> {
         class_key: Option<Idx<KeyClass>>,
         is_async: bool,
         method_self_kind: MethodSelfKind,
+        ignore_annotations: bool,
     ) -> Option<SelfAssignments> {
         // Push a scope to create the parameter keys (but do nothing else with it).
         self.scopes
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
-        self.parameters(parameters, undecorated_idx, class_key, method_self_kind);
+        self.parameters(
+            parameters,
+            undecorated_idx,
+            class_key,
+            method_self_kind,
+            ignore_annotations,
+        );
         self.scopes.pop();
         // If we are in a class, use a simple visitor to find `self.<attr>` assignments.
         if class_key.is_some() {
@@ -611,8 +637,10 @@ impl<'a> BindingsBuilder<'a> {
             MethodSelfKind::Instance
         };
 
+        let is_unannotated =
+            !self.check_unannotated_defs && !is_annotated(&return_ann_with_range, parameters);
         let self_assignments = if decorators.has_no_type_check
-            || (!self.check_unannotated_defs && !is_annotated(&return_ann_with_range, parameters))
+            || (is_unannotated && !self.analyze_unannotated_for_ide)
         {
             self.mark_as_returns_any(func_name);
             self.unchecked_function_body_scope(
@@ -624,7 +652,31 @@ impl<'a> BindingsBuilder<'a> {
                 class_key,
                 is_async,
                 method_self_kind,
+                decorators.has_no_type_check,
             )
+        } else if is_unannotated {
+            let implicit_return = Some(self.implicit_return(&body, func_name));
+            let (yields_and_returns, self_assignments, _, _) = self.function_body_scope(
+                parameters,
+                body,
+                range,
+                func_name,
+                parent,
+                undecorated_idx,
+                class_key,
+                is_async,
+                method_self_kind,
+            );
+            self.analyze_return_type(
+                func_name,
+                is_async,
+                yields_and_returns,
+                return_ann_with_range,
+                implicit_return,
+                false,
+                stub_or_impl,
+            );
+            self_assignments
         } else {
             // Compute implicit_return: in this branch the body is always fully analyzed,
             // so we can always determine whether there's an implicit return.
@@ -691,7 +743,7 @@ impl<'a> BindingsBuilder<'a> {
 
         self.scopes.push(Scope::annotation(x.range));
         let (return_ann_with_range, legacy_tparams) =
-            self.function_header(&mut x, &func_name, class_key, def_idx.usage());
+            self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
 
         let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
 
@@ -714,6 +766,7 @@ impl<'a> BindingsBuilder<'a> {
         self.scopes.pop();
         self.scopes
             .record_self_assignments_if_applicable(self_assignments);
+        let outer_funcs = parent.ancestor_function_path(&self.module_info);
         let undecorated_idx = self.insert_binding_idx(
             undecorated_idx,
             BindingUndecoratedFunction {
@@ -724,6 +777,7 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: decorators.decorators,
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
                 module_style: self.module_info.path().style(),
+                outer_funcs,
             },
         );
 
@@ -783,15 +837,19 @@ fn function_last_expressions<'a>(
                 f(sys_info, &x.body, res)?;
             }
             Stmt::While(x) => {
-                // Infinite loops with no breaks cannot fall through
-                if sys_info.evaluate_bool(&x.test) != Some(true) {
-                    return None;
-                }
+                let test_value = sys_info.evaluate_bool(&x.test);
+                // Only scan for breaks when the body is reachable.
                 let mut has_break = false;
-                x.body
-                    .visit(&mut |stmt| loop_body_has_break_statement(stmt, &mut has_break));
-                if has_break {
+                if test_value != Some(false) {
+                    x.body
+                        .visit(&mut |stmt| loop_body_has_break_statement(stmt, &mut has_break));
+                }
+                if test_value == Some(true) && !has_break {
+                    // Infinite loop with no break never falls through.
+                } else if has_break || x.orelse.is_empty() {
                     return None;
+                } else {
+                    f(sys_info, &x.orelse, res)?;
                 }
             }
             Stmt::For(x) => {

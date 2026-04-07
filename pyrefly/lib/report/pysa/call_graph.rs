@@ -94,6 +94,7 @@ use crate::report::pysa::module_index::GRAPHQL_DECORATORS;
 use crate::report::pysa::module_index::GraphQLDecoratorRef;
 use crate::report::pysa::types::ScalarTypeProperties;
 use crate::report::pysa::types::string_for_type;
+use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Hash, PartialOrd, Ord)]
@@ -307,28 +308,28 @@ impl<Function: FunctionTrait> Target<Function> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Hash, PartialOrd, Ord)]
 pub struct PysaCallTarget<Function: FunctionTrait> {
-    pub(crate) target: Target<Function>,
+    pub target: Target<Function>,
     // `TrueWithClassReceiver` or `TrueWithObjectReceiver` if the call has an implicit receiver,
     // such as calling an instance or a class method.
     // For instance, `x.foo(0)` should be treated as `C.foo(x, 0)`. As another example, `C.foo(0)`
     // should be treated as `C.foo(C, 0)`.
     #[serde(skip_serializing_if = "ImplicitReceiver::is_false")]
-    pub(crate) implicit_receiver: ImplicitReceiver,
+    pub implicit_receiver: ImplicitReceiver,
     // True if this is an implicit call to the `__call__` method.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    pub(crate) implicit_dunder_call: bool,
+    pub implicit_dunder_call: bool,
     // The class of the receiver object at this call site, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) receiver_class: Option<ClassRef>,
+    pub receiver_class: Option<ClassRef>,
     // True if calling a class method.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    pub(crate) is_class_method: bool,
+    pub is_class_method: bool,
     // True if calling a static method.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    pub(crate) is_static_method: bool,
+    pub is_static_method: bool,
     // The return type of the call expression.
     #[serde(skip_serializing_if = "ScalarTypeProperties::is_none")]
-    pub(crate) return_type: ScalarTypeProperties,
+    pub return_type: ScalarTypeProperties,
 }
 
 impl<Function: FunctionTrait> PysaCallTarget<Function> {
@@ -550,10 +551,10 @@ impl MaybeResolved<Vec1<PysaCallTarget<FunctionRef>>> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HigherOrderParameter<Function: FunctionTrait> {
-    pub(crate) index: u32,
-    pub(crate) call_targets: Vec<PysaCallTarget<Function>>,
+    pub index: u32,
+    pub call_targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Unresolved::is_resolved")]
-    pub(crate) unresolved: Unresolved,
+    pub unresolved: Unresolved,
 }
 
 impl<Function: FunctionTrait> HigherOrderParameter<Function> {
@@ -591,15 +592,15 @@ impl<Function: FunctionTrait> HigherOrderParameter<Function> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CallCallees<Function: FunctionTrait> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) call_targets: Vec<PysaCallTarget<Function>>,
+    pub call_targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) init_targets: Vec<PysaCallTarget<Function>>,
+    pub init_targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) new_targets: Vec<PysaCallTarget<Function>>,
+    pub new_targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub(crate) higher_order_parameters: HashMap<u32, HigherOrderParameter<Function>>,
+    pub higher_order_parameters: HashMap<u32, HigherOrderParameter<Function>>,
     #[serde(skip_serializing_if = "Unresolved::is_resolved")]
-    pub(crate) unresolved: Unresolved,
+    pub unresolved: Unresolved,
 }
 
 impl<Function: FunctionTrait> CallCallees<Function> {
@@ -736,17 +737,17 @@ impl<Function: FunctionTrait> CallCallees<Function> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AttributeAccessCallees<Function: FunctionTrait> {
     /// When the attribute access is called, the callees it may resolve to
-    pub(crate) if_called: CallCallees<Function>,
+    pub if_called: CallCallees<Function>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) property_setters: Vec<PysaCallTarget<Function>>,
+    pub property_setters: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) property_getters: Vec<PysaCallTarget<Function>>,
+    pub property_getters: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) global_targets: Vec<GlobalVariableRef>,
+    pub global_targets: Vec<GlobalVariableRef>,
     /// True if that there is at least one case (i.e., execution flow) where this is a regular
     /// attribute access. For instance, if the object has type `Union[A, B]` where only `A` defines a property.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    pub(crate) is_attribute: bool,
+    pub is_attribute: bool,
 }
 
 impl<Function: FunctionTrait> AttributeAccessCallees<Function> {
@@ -811,10 +812,10 @@ impl<Function: FunctionTrait> AttributeAccessCallees<Function> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct IdentifierCallees<Function: FunctionTrait> {
     /// When the attribute access is called, the callees it may resolve to
-    pub(crate) if_called: CallCallees<Function>,
+    pub if_called: CallCallees<Function>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) global_targets: Vec<GlobalVariableRef>,
-    pub(crate) captured_variables: Vec<CapturedVariableRef<Function>>,
+    pub global_targets: Vec<GlobalVariableRef>,
+    pub captured_variables: Vec<CapturedVariableRef<Function>>,
 }
 
 impl<Function: FunctionTrait> IdentifierCallees<Function> {
@@ -866,7 +867,7 @@ impl<Function: FunctionTrait> IdentifierCallees<Function> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DefineCallees<Function: FunctionTrait> {
-    pub(crate) define_targets: Vec<PysaCallTarget<Function>>,
+    pub define_targets: Vec<PysaCallTarget<Function>>,
 }
 
 impl<Function: FunctionTrait> DefineCallees<Function> {
@@ -904,7 +905,7 @@ impl<Function: FunctionTrait> DefineCallees<Function> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FormatStringArtificialCallees<Function: FunctionTrait> {
-    pub(crate) targets: Vec<PysaCallTarget<Function>>,
+    pub targets: Vec<PysaCallTarget<Function>>,
 }
 
 impl<Function: FunctionTrait> FormatStringArtificialCallees<Function> {
@@ -943,9 +944,9 @@ impl<Function: FunctionTrait> FormatStringArtificialCallees<Function> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FormatStringStringifyCallees<Function: FunctionTrait> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) targets: Vec<PysaCallTarget<Function>>,
+    pub targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Unresolved::is_resolved")]
-    pub(crate) unresolved: Unresolved,
+    pub unresolved: Unresolved,
 }
 
 impl<Function: FunctionTrait> FormatStringStringifyCallees<Function> {
@@ -991,9 +992,9 @@ pub enum ReturnShimArgumentMapping {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReturnShimCallees<Function: FunctionTrait> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) targets: Vec<PysaCallTarget<Function>>,
+    pub targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) arguments: Vec<ReturnShimArgumentMapping>,
+    pub arguments: Vec<ReturnShimArgumentMapping>,
 }
 
 impl<Function: FunctionTrait> ReturnShimCallees<Function> {
@@ -1149,6 +1150,10 @@ impl<ExpressionId: ExpressionIdTrait, Function: FunctionTrait> CallGraph<Express
     #[cfg(test)]
     pub fn into_iter(self) -> impl Iterator<Item = (ExpressionId, ExpressionCallees<Function>)> {
         self.0.into_iter()
+    }
+
+    pub fn as_map(&self) -> &HashMap<ExpressionId, ExpressionCallees<Function>> {
+        &self.0
     }
 
     fn dedup_and_sort(&mut self) {
@@ -1536,7 +1541,7 @@ impl<'a> CallGraphVisitor<'a> {
             | Type::SuperInstance(box (_, SuperObj::Instance(class_type))) => ReceiverClassResult {
                 class: Some(ClassRef::from_class(
                     class_type.class_object(),
-                    self.module_context.module_ids(),
+                    self.module_context,
                 )),
                 is_class_def: false,
             },
@@ -1545,10 +1550,7 @@ impl<'a> CallGraphVisitor<'a> {
                 // However, we strip away the `type` part since it is implied by the `is_class_method` flag.
                 ReceiverClassResult {
                     class: if is_class_method {
-                        Some(ClassRef::from_class(
-                            &class_def,
-                            self.module_context.module_ids(),
-                        ))
+                        Some(ClassRef::from_class(&class_def, self.module_context))
                     } else {
                         None
                     },
@@ -1562,7 +1564,7 @@ impl<'a> CallGraphVisitor<'a> {
                 ReceiverClassResult {
                     class: Some(ClassRef::from_class(
                         class_type.class_object(),
-                        self.module_context.module_ids(),
+                        self.module_context,
                     )),
                     is_class_def: false,
                 }
@@ -1570,14 +1572,14 @@ impl<'a> CallGraphVisitor<'a> {
             Type::TypedDict(TypedDict::Anonymous(_)) => ReceiverClassResult {
                 class: Some(ClassRef::from_class(
                     self.module_answers_context.stdlib.dict_object(),
-                    self.module_context.module_ids(),
+                    self.module_context,
                 )),
                 is_class_def: false,
             },
             Type::TypedDict(TypedDict::TypedDict(typed_dict)) => ReceiverClassResult {
                 class: Some(ClassRef::from_class(
                     typed_dict.class_object(),
-                    self.module_context.module_ids(),
+                    self.module_context,
                 )),
                 is_class_def: false,
             },
@@ -1728,12 +1730,9 @@ impl<'a> CallGraphVisitor<'a> {
         // `fromstring = XML` in `xml.etree.ElementTree`) where the type carries the
         // original definition's index.
         let (module, def_index) = match &function.metadata.kind {
-            FunctionKind::Def(box pyrefly_types::callable::FuncId {
-                module,
-                cls: None, // Only handle module-level functions, not methods.
-                def_index: Some(def_index),
-                ..
-            }) => (module, *def_index),
+            FunctionKind::Def(func_id) if func_id.cls.is_none() && func_id.def_index.is_some() => {
+                (&func_id.module, func_id.def_index.unwrap())
+            }
             _ => return None,
         };
 
@@ -2210,7 +2209,7 @@ impl<'a> CallGraphVisitor<'a> {
                     .module_context
                     .resolver
                     .with_solver("call_graph_constructor", |solver| {
-                        let new_method = solver.get_dunder_new(&class_type);
+                        let new_method = solver.get_dunder_new(&class_type, false);
                         let overrides_new = new_method.is_some();
                         let init_method = solver.get_dunder_init(
                             &class_type,
@@ -2640,7 +2639,7 @@ impl<'a> CallGraphVisitor<'a> {
                 })
         });
 
-        let (functions_from_go_to_def, unused_go_to_definitions): (Vec<_>, Vec<_>) =
+        let (functions_from_go_to_def, mut unused_go_to_definitions): (Vec<_>, Vec<_>) =
             go_to_definitions.into_iter().partition_map(|definition| {
                 let short_identifier =
                     ShortIdentifier::from_text_range(definition.definition_range);
@@ -2658,7 +2657,6 @@ impl<'a> CallGraphVisitor<'a> {
                     None => Either::Right(definition),
                 }
             });
-        let has_non_function_definitions = !unused_go_to_definitions.is_empty();
 
         let (property_callees, non_property_callees): (Vec<FunctionRef>, Vec<FunctionRef>) =
             functions_from_go_to_def
@@ -2668,12 +2666,45 @@ impl<'a> CallGraphVisitor<'a> {
                     definition.is_property_getter || definition.is_property_setter
                 });
 
-        let has_property_callees = !property_callees.is_empty();
-        let (property_setters, property_getters) = if is_assignment_lhs {
+        let (property_setters, mut property_getters) = if is_assignment_lhs {
             (property_callees, vec![])
         } else {
             (vec![], property_callees)
         };
+
+        // For a single unused Attribute go-to definition referencing a property
+        // defined via assignment (e.g., `bar = property(get_bar)`), resolve the
+        // property getter using the definition's module and range. This works
+        // for both direct and inherited properties because go-to-definition
+        // already resolves to the defining class's module and field range.
+        if unused_go_to_definitions.len() == 1
+            && matches!(
+                unused_go_to_definitions[0].metadata,
+                DefinitionMetadata::Attribute
+            )
+        {
+            let definition = &unused_go_to_definitions[0];
+            if let Some(getter_ref) = self
+                .module_context
+                .resolver
+                .resolve_pysa_solutions(&definition.module)
+                .module_index
+                .get_property_getter_ref(definition.definition_range)
+                .cloned()
+            {
+                debug_println!(
+                    self.debug,
+                    "Found property getter for attribute at {:?}: {:?}",
+                    definition.definition_range,
+                    getter_ref,
+                );
+                property_getters.push(getter_ref);
+                unused_go_to_definitions.clear();
+            }
+        }
+
+        let has_non_function_definitions = !unused_go_to_definitions.is_empty();
+        let has_property_callees = !property_getters.is_empty() || !property_setters.is_empty();
 
         let unknown_callee_as_direct_call = true;
         let if_called = if non_property_callees.is_empty() {
@@ -3642,7 +3673,7 @@ impl<'a> CallGraphVisitor<'a> {
             .module_context
             .resolver
             .with_solver("call_graph_slice_constructor", |solver| {
-                let new_method = solver.get_dunder_new(&slice_class_type);
+                let new_method = solver.get_dunder_new(&slice_class_type, false);
                 let overrides_new = new_method.is_some();
                 let init_method = solver
                     .get_dunder_init(&slice_class_type, /* get_object_init */ !overrides_new);

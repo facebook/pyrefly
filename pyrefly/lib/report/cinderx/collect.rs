@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -80,7 +81,8 @@ pub(crate) fn collect_module_types(
     let answers = transaction.get_answers(handle)?;
     let bindings = transaction.get_bindings(handle)?;
 
-    let mut contextual_types = build_contextual_types(&ast, &answers, &bindings);
+    let mut contextual_types =
+        build_contextual_types(&ast, &answers, &bindings, transaction, handle);
     collect_call_contextual_types(&ast, &answers, &bindings, &mut contextual_types);
 
     let mut collector = ExpressionCollector {
@@ -137,17 +139,28 @@ fn is_static_primitive(ty: &Type) -> bool {
 /// Given an `ExprAttribute` (e.g. `self.x`), looks up the type of the base
 /// expression from the trace, extracts the class, and resolves the attribute
 /// via `KeyClassField`. Returns `None` if any step fails (e.g. the base is
-/// not a class instance, or the attribute is not a known class field in this
-/// module's bindings).
-fn lookup_attr_type(attr: &ExprAttribute, answers: &Answers, bindings: &Bindings) -> Option<Type> {
+/// not a class instance, or the attribute is not a known class field).
+fn lookup_attr_type(
+    attr: &ExprAttribute,
+    answers: &Answers,
+    transaction: &Transaction,
+    handle: &Handle,
+) -> Option<Type> {
     let base_ty = answers.get_type_trace(attr.value.range())?;
-    let class_def_index = match &base_ty {
-        Type::ClassType(ct) | Type::SelfType(ct) => ct.class_object().index(),
+    let class = match &base_ty {
+        Type::ClassType(ct) | Type::SelfType(ct) => ct.class_object(),
         _ => return None,
     };
-    let key = KeyClassField(class_def_index, attr.attr.id.clone());
-    let idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
-    let class_field = answers.get_idx(idx)?;
+    let class_handle = Handle::new(
+        class.module_name(),
+        class.module_path().dupe(),
+        handle.sys_info().dupe(),
+    );
+    let class_bindings = transaction.get_bindings(&class_handle)?;
+    let class_answers = transaction.get_answers(&class_handle)?;
+    let key = KeyClassField(class.index(), attr.attr.id.clone());
+    let idx = class_bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+    let class_field = class_answers.get_idx(idx)?;
     Some(class_field.ty())
 }
 
@@ -157,6 +170,8 @@ fn lookup_attr_type(attr: &ExprAttribute, answers: &Answers, bindings: &Bindings
 struct ContextualTypeCollector<'a> {
     answers: &'a Answers,
     bindings: &'a Bindings,
+    transaction: &'a Transaction<'a>,
+    handle: &'a Handle,
     contextual_types: HashMap<TextRange, Type>,
 }
 
@@ -174,7 +189,9 @@ impl<'a> StatementVisitor<'a> for ContextualTypeCollector<'a> {
                         None
                     }
                 }
-                Expr::Attribute(attr) => lookup_attr_type(attr, self.answers, self.bindings),
+                Expr::Attribute(attr) => {
+                    lookup_attr_type(attr, self.answers, self.transaction, self.handle)
+                }
                 _ => None,
             };
             if let Some(ty) = target_type
@@ -202,7 +219,9 @@ impl<'a> StatementVisitor<'a> for ContextualTypeCollector<'a> {
                             self.answers.get_type_at(self.bindings.key_to_idx(&key))
                         })
                     }
-                    Expr::Attribute(attr) => lookup_attr_type(attr, self.answers, self.bindings),
+                    Expr::Attribute(attr) => {
+                        lookup_attr_type(attr, self.answers, self.transaction, self.handle)
+                    }
                     _ => None,
                 };
                 if let Some(ty) = target_type
@@ -218,14 +237,18 @@ impl<'a> StatementVisitor<'a> for ContextualTypeCollector<'a> {
 
 /// Build a map from RHS expression ranges to contextual types for qualifying
 /// `AnnAssign` and `Assign` statements (those targeting `__static__` primitive types).
-fn build_contextual_types(
+fn build_contextual_types<'a>(
     ast: &Arc<ModModule>,
-    answers: &Answers,
-    bindings: &Bindings,
+    answers: &'a Answers,
+    bindings: &'a Bindings,
+    transaction: &'a Transaction<'a>,
+    handle: &'a Handle,
 ) -> HashMap<TextRange, Type> {
     let mut collector = ContextualTypeCollector {
         answers,
         bindings,
+        transaction,
+        handle,
         contextual_types: HashMap::new(),
     };
     collector.visit_body(&ast.body);
@@ -306,7 +329,7 @@ fn collect_call_contextual_types(
                 let param = &items[param_idx];
 
                 // Break if we hit a variadic argument - matching past that is complicated.
-                if matches!(param, Param::VarArg(_, _) | Param::Kwargs(_, _)) {
+                if matches!(param, Param::Varargs(_, _) | Param::Kwargs(_, _)) {
                     break;
                 }
                 if is_static_primitive(param.as_type()) {

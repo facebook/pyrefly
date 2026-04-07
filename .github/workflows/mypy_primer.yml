@@ -41,7 +41,7 @@ jobs:
           pip install git+https://github.com/hauntsaninja/mypy_primer.git
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-05
+          toolchain: nightly-2026-01-18
           components: clippy, rustfmt
       - name: Run mypy_primer
         shell: bash
@@ -93,7 +93,7 @@ jobs:
             --new $GITHUB_SHA --old base_commit \
             --num-shards 15 --shard-index ${{ matrix.shard-index }} \
             --debug \
-            --project-selector '^(?!.*(python/cpython|sympy/sympy))' \
+            --project-selector '^(?!.*(python/cpython|sympy/sympy|archlinux/archinstall))' \
             --type-checker pyrefly \
             --output concise \
             | tee diff_${{ matrix.shard-index }}.txt

@@ -24,6 +24,30 @@ assert_type(Data, type[Data])
 );
 
 testcase!(
+    test_enum_dataclass_rejected,
+    r#"
+from dataclasses import dataclass
+import dataclasses
+from enum import Enum
+
+class Good(Enum):
+    RED = 1
+
+@dataclass
+class Bad1(Enum):  # E: Cannot apply `@dataclass` to Enum `Bad1`
+    RED = 1
+
+@dataclasses.dataclass
+class Bad2(Enum):  # E: Cannot apply `@dataclass` to Enum `Bad2`
+    RED = 1
+
+@dataclass()
+class Bad3(Enum):  # E: Cannot apply `@dataclass` to Enum `Bad3`
+    RED = 1
+    "#,
+);
+
+testcase!(
     test_kw_only_sentinel_deep_inheritance,
     r#"
 from dataclasses import dataclass, KW_ONLY
@@ -1783,5 +1807,73 @@ class C(P):
     x: int
 
 C(42)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2923
+testcase!(
+    bug = "Should reject @dataclass applied to NamedTuple subclass",
+    test_dataclass_on_named_tuple,
+    r#"
+from dataclasses import dataclass
+from typing import NamedTuple
+
+class Coord(NamedTuple):
+    x: int
+    y: int
+
+dataclass(Coord)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2921
+testcase!(
+    bug = "Should reject @dataclass applied to Protocol subclass",
+    test_dataclass_on_protocol,
+    r#"
+from dataclasses import dataclass
+from typing import Protocol
+
+class Printable(Protocol):
+    def display(self) -> str: ...
+
+dataclass(Printable)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2921
+testcase!(
+    test_dataclass_decorator_on_protocol,
+    r#"
+from dataclasses import dataclass
+from typing import Protocol
+
+@dataclass
+class MyProto(Protocol):  # E: `@dataclass` cannot be applied to Protocol
+    x: int
+    def display(self) -> str: ...
+
+@dataclass
+class DC:
+    x: int
+
+class DC2(Protocol, DC):  # E: If `Protocol` is included as a base class, all other bases must be protocols
+    y: int
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2920
+testcase!(
+    bug = "Should reject overriding __setattr__ and __delattr__ in frozen dataclass",
+    test_frozen_dataclass_override_setattr_delattr,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Immutable:
+    value: int
+
+    def __setattr__(self, name: str, val: object) -> None: ...
+    def __delattr__(self, name: str) -> None: ...
 "#,
 );

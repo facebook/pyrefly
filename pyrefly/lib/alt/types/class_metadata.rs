@@ -39,6 +39,14 @@ use crate::types::stdlib::Stdlib;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
 
+/// Slot names declared directly on a class via `__slots__`.
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+pub struct SlotsInfo {
+    pub names: SmallSet<Name>,
+    /// Whether `__dict__` appears among the slot names, which disables enforcement.
+    pub has_dict: bool,
+}
+
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct ClassMetadata {
     metaclass: Metaclass,
@@ -66,6 +74,7 @@ pub struct ClassMetadata {
     is_marshmallow_schema: bool,
     /// Whether this class is a metaclass (i.e., a subclass of `type`).
     is_metaclass: bool,
+    slots_info: Option<SlotsInfo>,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -105,6 +114,7 @@ impl ClassMetadata {
         django_model_metadata: Option<DjangoModelMetadata>,
         is_marshmallow_schema: bool,
         is_metaclass: bool,
+        slots_info: Option<SlotsInfo>,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass,
@@ -129,6 +139,7 @@ impl ClassMetadata {
             django_model_metadata,
             is_marshmallow_schema,
             is_metaclass,
+            slots_info,
         }
     }
 
@@ -156,6 +167,7 @@ impl ClassMetadata {
             django_model_metadata: None,
             is_marshmallow_schema: false,
             is_metaclass: false,
+            slots_info: None,
         }
     }
 
@@ -298,6 +310,10 @@ impl ClassMetadata {
 
     pub fn dataclass_metadata(&self) -> Option<&DataclassMetadata> {
         self.dataclass_metadata.as_ref()
+    }
+
+    pub fn slots_info(&self) -> Option<&SlotsInfo> {
+        self.slots_info.as_ref()
     }
 
     pub fn dataclass_transform_metadata(&self) -> Option<&DataclassTransformMetadata> {

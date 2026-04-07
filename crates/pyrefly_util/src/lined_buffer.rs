@@ -267,6 +267,9 @@ impl LinedBuffer {
     /// Translates an LSP position to a text size.
     /// For notebooks, the input position is relative to a notebook cell and the output
     /// position is relative to the concatenated contents of the notebook.
+    ///
+    /// Per the LSP spec, if the character value is greater than the line length,
+    /// it defaults back to the line length.
     pub fn from_lsp_position(
         &self,
         position: lsp_types::Position,
@@ -282,14 +285,34 @@ impl LinedBuffer {
         } else {
             OneIndexed::from_zero_indexed(position.line as usize)
         };
-        self.lines.offset(
+        // Clamp character offset to the line length per the LSP specification:
+        // "If the character value is greater than the line length it defaults
+        // back to the line length."
+        let line_start = self.lines.line_start(line, &self.buffer);
+        let line_end = self.lines.line_end(line, &self.buffer);
+        let requested = self.lines.offset(
             SourceLocation {
                 line,
                 character_offset: OneIndexed::from_zero_indexed(position.character as usize),
             },
             &self.buffer,
             PositionEncoding::Utf16,
-        )
+        );
+        // line_end includes the trailing newline. Clamp to the content end
+        // (excluding the newline) so that out-of-bounds positions land on the
+        // last real character rather than spilling into the next line.
+        let content_end = if line_end > line_start
+            && self
+                .buffer
+                .as_bytes()
+                .get(line_end.to_usize().saturating_sub(1))
+                == Some(&b'\n')
+        {
+            line_end - TextSize::from(1)
+        } else {
+            line_end
+        };
+        std::cmp::min(requested, content_end)
     }
 
     /// Translates an LSP position to a text range.

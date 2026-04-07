@@ -258,9 +258,8 @@ impl ModuleStateMut {
         dirty_require
     }
 
-    /// Drain into a read-only snapshot for committed state.
-    /// The `ModuleStateMut` should not be reused after this call.
-    pub fn take_and_freeze(&self) -> ModuleState {
+    /// Consume and produce a frozen `ModuleState`.
+    pub fn take_and_freeze(self) -> ModuleState {
         let (computed, dirty) = self.computed_dirty.load();
         ModuleState {
             require: self.require(),

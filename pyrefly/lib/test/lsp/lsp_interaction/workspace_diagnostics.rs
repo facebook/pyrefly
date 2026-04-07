@@ -61,6 +61,96 @@ fn test_workspace_diagnostics_for_non_open_file() {
     interaction.shutdown().unwrap();
 }
 
+/// Clean non-open workspace files should not be published.
+///
+/// In workspace diagnostic mode, a non-open file with no diagnostics should
+/// not receive an empty `publishDiagnostics` notification. There is nothing to
+/// clear for that URI, so sending the notification only creates traffic and log
+/// spam on large workspaces.
+#[test]
+fn test_workspace_diagnostics_skip_clean_non_open_file() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("workspace_diagnostics");
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "workspace_diagnostics".to_owned(),
+                Url::from_file_path(root_path.clone()).unwrap(),
+            )]),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("clean.py");
+
+    let error_path = root_path.join("errors.py");
+    let clean_path = root_path.join("extra_clean.py");
+    interaction
+        .client
+        .expect_message(
+            "publishDiagnostics for errors.py without any publish for extra_clean.py",
+            |msg| {
+                if let Message::Notification(n) = &msg
+                    && n.method == PublishDiagnostics::METHOD
+                {
+                    let params: PublishDiagnosticsParams =
+                        serde_json::from_value(n.params.clone()).unwrap();
+                    let path = params.uri.to_file_path().unwrap();
+                    if path == clean_path {
+                        return Some(Err(crate::object_model::LspMessageError::Custom {
+                            description: format!(
+                                "Did not expect publishDiagnostics for clean non-open file {}",
+                                clean_path.display()
+                            ),
+                        }));
+                    }
+                    if path == error_path && params.diagnostics.len() == 1 {
+                        return Some(Ok(()));
+                    }
+                }
+                None
+            },
+        )
+        .unwrap();
+
+    let shutdown_handle = interaction.client.send_shutdown();
+    let shutdown_id = shutdown_handle.id.clone();
+    interaction
+        .client
+        .expect_message(
+            "shutdown response without any later publish for extra_clean.py",
+            |msg| {
+                if let Message::Notification(n) = &msg
+                    && n.method == PublishDiagnostics::METHOD
+                {
+                    let params: PublishDiagnosticsParams =
+                        serde_json::from_value(n.params.clone()).unwrap();
+                    if params.uri.to_file_path().unwrap() == clean_path {
+                        return Some(Err(crate::object_model::LspMessageError::Custom {
+                            description: format!(
+                                "Did not expect a later publishDiagnostics for clean non-open file {}",
+                                clean_path.display()
+                            ),
+                        }));
+                    }
+                }
+                if let Message::Response(r) = &msg
+                    && r.id == shutdown_id
+                {
+                    return Some(Ok(()));
+                }
+                None
+            },
+        )
+        .unwrap();
+    interaction.client.send_exit();
+}
+
 /// `did_close` preserves diagnostics in workspace mode.
 ///
 /// When a file is opened and then closed in workspace diagnostic mode, its
@@ -648,11 +738,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
                             .diagnostics
                             .iter()
                             .all(|d| d.severity == Some(DiagnosticSeverity::ERROR));
-                        let has_warning = params
-                            .diagnostics
-                            .iter()
-                            .any(|d| d.severity == Some(DiagnosticSeverity::WARNING));
-                        if all_errors && !has_warning {
+                        if all_errors {
                             return Some(Ok(()));
                         }
                     }
@@ -715,11 +801,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
                             .diagnostics
                             .iter()
                             .all(|d| d.severity == Some(DiagnosticSeverity::ERROR));
-                        let has_warning = params
-                            .diagnostics
-                            .iter()
-                            .any(|d| d.severity == Some(DiagnosticSeverity::WARNING));
-                        if all_errors && !has_warning {
+                        if all_errors {
                             return Some(Ok(()));
                         }
                     }

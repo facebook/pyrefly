@@ -1,0 +1,8 @@
+  6:0-1: builtins.list[builtins.int]
+  6:3-12: typing.Type[builtins.list[builtins.int]]
+  6:3-7: typing.Type[builtins.list]
+  6:8-11: typing.Type[builtins.int]
+  6:15-24: builtins.list[builtins.int]
+  6:16-17: Literal[1] -> builtins.int
+  6:19-20: Literal[2] -> builtins.int
+  6:22-23: Literal[3] -> builtins.int

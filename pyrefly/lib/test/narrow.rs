@@ -728,6 +728,25 @@ def f(x: str | int | None):
 );
 
 testcase!(
+    test_isinstance_union_with_type,
+    r#"
+from typing import assert_type
+def f(x: object):
+    if isinstance(x, type | int):
+        assert_type(x, type | int)
+    isinstance(x, type | int)
+    "#,
+);
+
+testcase!(
+    test_issubclass_union_with_type,
+    r#"
+def f(cls: type):
+    issubclass(cls, type | int)
+    "#,
+);
+
+testcase!(
     test_isinstance_of_tuple,
     r#"
 from typing import assert_type
@@ -1897,6 +1916,32 @@ def test_type_objects_mixed_with_literals(x: type[int] | type[float] | None, y: 
         assert_type(y, Literal[1] | type[int])
     else:
         assert_type(y, type[int] | type[str])
+"#,
+);
+
+testcase!(
+    test_narrow_in_with_metaclass,
+    r#"
+class FruitMeta(type):
+    ...
+
+class Fruit(metaclass=FruitMeta):
+    ...
+
+class Banana(Fruit):
+    ...
+
+class Grape(Fruit):
+    ...
+
+def foo(_a: FruitMeta) -> None:
+    return None
+
+def main(a: type[Fruit]) -> None:
+    if a in (Banana,):
+        foo(a)
+    if a in (Grape, Banana):
+        foo(a)
 "#,
 );
 

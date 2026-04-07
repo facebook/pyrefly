@@ -29,6 +29,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::visit_keyword_arguments_until_match;
@@ -69,7 +70,7 @@ pub(crate) fn override_constructor_return_type(constructor_type: Type) -> Option
     if let Params::List(ref params_list) = callable.params
         && let Some(Param::Pos(name, self_type, _) | Param::PosOnly(Some(name), self_type, _)) =
             params_list.items().first()
-        && (name.as_str() == "self" || name.as_str() == "cls")
+        && (name.as_str() == "self" || name.as_str() == "cls" || name.as_str() == "_cls")
     {
         callable.ret = self_type.clone();
         Some(Type::Callable(Box::new(callable)))
@@ -339,6 +340,8 @@ impl Transaction<'_> {
         preference: FindPreference,
     ) -> Option<(TextRange, Module)> {
         self.find_definition(handle, pos, preference)
+            .map(Vec1::into_vec)
+            .unwrap_or_default()
             .into_iter()
             .find_map(|item| {
                 item.docstring_range
@@ -394,7 +397,7 @@ impl Transaction<'_> {
         if let Params::List(params_list) = callable.params {
             if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
                 params_list.items().first()
-                && (name.as_str() == "self" || name.as_str() == "cls")
+                && (name.as_str() == "self" || name.as_str() == "cls" || name.as_str() == "_cls")
             {
                 let mut params = params_list.into_items();
                 params.remove(0);

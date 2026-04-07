@@ -11,6 +11,7 @@ use dupe::Dupe;
 use itertools::Either;
 use itertools::Itertools;
 use pyrefly_graph::index::Idx;
+use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::annotation::Annotation;
@@ -28,12 +29,14 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use starlark_map::ordered_map::OrderedMap;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::class::django::is_django_choices_subclass;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_metadata::ClassMetadata;
@@ -45,6 +48,7 @@ use crate::alt::types::class_metadata::InitDefaults;
 use crate::alt::types::class_metadata::Metaclass;
 use crate::alt::types::class_metadata::NamedTupleMetadata;
 use crate::alt::types::class_metadata::ProtocolMetadata;
+use crate::alt::types::class_metadata::SlotsInfo;
 use crate::alt::types::class_metadata::TotalOrderingMetadata;
 use crate::alt::types::class_metadata::TypedDictMetadata;
 use crate::alt::types::decorated_function::Decorator;
@@ -53,7 +57,10 @@ use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassExpr;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::base_class::BaseClassGenericKind;
+use crate::binding::binding::ClassFieldDefinition;
+use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::django::DjangoFieldInfo;
 use crate::binding::pydantic::PydanticConfigDict;
@@ -377,6 +384,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             dataclass_from_dataclass_transform,
             pydantic_config.as_ref(),
             is_attrs_class,
+            protocol_metadata.is_some(),
+            enum_metadata.is_some(),
+            is_typed_dict,
+            errors,
         );
         if let Some(dm) = dataclass_metadata.as_ref()
             && pydantic_config.is_none()
@@ -390,6 +401,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         let extends_abc = self.extends_abc(&bases_with_metadata, metaclass);
+
+        // Check for __slots__ layout conflict: if two or more base classes
+        // define non-empty __slots__, CPython raises TypeError at runtime
+        // ("multiple bases have instance lay-out conflict").
+        {
+            let bases_with_nonempty_slots: Vec<&Class> = bases_with_metadata
+                .iter()
+                .filter(|(_, metadata)| {
+                    metadata.slots_info().is_some_and(|si| !si.names.is_empty())
+                })
+                .map(|(base, _)| base)
+                .collect();
+            if bases_with_nonempty_slots.len() > 1 {
+                let names: Vec<String> = bases_with_nonempty_slots
+                    .iter()
+                    .map(|b| format!("`{}`", b.name()))
+                    .collect();
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                    format!(
+                        "Class `{}` has multiple base classes with non-empty `__slots__` ({}), which causes a TypeError at runtime",
+                        cls.name(),
+                        names.join(", "),
+                    ),
+                );
+            }
+        }
 
         // Compute final base class list.
         let bases = if is_typed_dict && bases_with_metadata.is_empty() {
@@ -419,6 +459,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .as_ref()
             .map(|m| m.pydantic_model_kind.clone());
 
+        // Extract __slots__ info from the binding. This must happen here (in
+        // the class's own module) because ClassDefIndex is per-file, so looking
+        // up a cross-module class's __slots__ in the wrong module's bindings
+        // could match a completely different class.
+        let slots_info = self.extract_slots_info(cls);
+
         ClassMetadata::new(
             bases,
             calculated_metaclass,
@@ -442,7 +488,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             django_model_metadata,
             is_marshmallow_schema,
             is_metaclass,
+            slots_info,
         )
+    }
+
+    fn extract_slots_info(&self, cls: &Class) -> Option<SlotsInfo> {
+        let key = KeyClassField(cls.index(), dunder::SLOTS.clone());
+        let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        let binding = self.bindings().get::<KeyClassField>(idx);
+        let ClassFieldDefinition::AssignedInBody { value, .. } = &binding.definition else {
+            return None;
+        };
+        let ExprOrBinding::Expr(expr) = value.as_ref() else {
+            return None;
+        };
+
+        fn extract_names_from_elts(elts: &[Expr]) -> Option<SlotsInfo> {
+            let mut names = SmallSet::new();
+            let mut has_dict = false;
+            for elt in elts {
+                let Expr::StringLiteral(s) = elt else {
+                    return None;
+                };
+                let name = Name::new(s.value.to_str());
+                if name == dunder::DICT {
+                    has_dict = true;
+                }
+                names.insert(name);
+            }
+            Some(SlotsInfo { names, has_dict })
+        }
+
+        match expr {
+            Expr::Tuple(t) => extract_names_from_elts(&t.elts),
+            Expr::List(l) => extract_names_from_elts(&l.elts),
+            Expr::StringLiteral(s) => {
+                let mut names = SmallSet::new();
+                let name = Name::new(s.value.to_str());
+                let has_dict = name == dunder::DICT;
+                names.insert(name);
+                Some(SlotsInfo { names, has_dict })
+            }
+            _ => None,
+        }
     }
 
     fn initial_protocol_metadata(
@@ -714,13 +802,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         errors: &ErrorCollector,
     ) -> Option<EnumMetadata> {
-        let is_django = bases_with_metadata.iter().any(|(base, base_meta)| {
-            base.has_toplevel_qname(ModuleName::django_models_enums().as_str(), "Choices")
-                || base_meta
-                    .enum_metadata()
-                    .as_ref()
-                    .is_some_and(|meta| meta.is_django)
-        });
+        let is_django = is_django_choices_subclass(bases_with_metadata);
 
         if let Some(metaclass) = metaclass
             && self
@@ -882,6 +964,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         dataclass_from_dataclass_transform: Option<(DataclassKeywords, Vec<CalleeKind>)>,
         pydantic_config: Option<&PydanticConfig>,
         is_attrs_class: bool,
+        is_protocol: bool,
+        is_enum: bool,
+        is_typed_dict: bool,
+        errors: &ErrorCollector,
     ) -> Option<DataclassMetadata> {
         // If we inherit from a dataclass, inherit its metadata. Note that if this class is
         // itself decorated with @dataclass, we'll compute new metadata and overwrite this.
@@ -904,10 +990,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if pydantic_config.is_some() {
             alias_keyword = VALIDATION_ALIAS;
         }
+        let mut has_dataclass_decorator = false;
         for (decorator, _) in decorators {
             match decorator.ty.callee_kind() {
                 // `@dataclass`
                 Some(CalleeKind::Function(FunctionKind::Dataclass)) => {
+                    has_dataclass_decorator = true;
                     let dataclass_fields = self.get_dataclass_fields(cls, bases_with_metadata);
                     dataclass_metadata = Some(DataclassMetadata {
                         fields: dataclass_fields,
@@ -925,6 +1013,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ if let Type::KwCall(call) = &decorator.ty
                     && call.has_function_kind(FunctionKind::Dataclass) =>
                 {
+                    has_dataclass_decorator = true;
                     let dataclass_fields = self.get_dataclass_fields(cls, bases_with_metadata);
                     dataclass_metadata = Some(DataclassMetadata {
                         fields: dataclass_fields,
@@ -943,6 +1032,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     });
                 }
                 _ => {}
+            }
+        }
+        // @dataclass cannot be applied to Protocol, Enum, or TypedDict classes.
+        // Emit the error and return None so the class is not treated as a dataclass.
+        if has_dataclass_decorator {
+            if is_protocol {
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorInfo::Kind(ErrorKind::InvalidDecorator),
+                    format!(
+                        "`@dataclass` cannot be applied to Protocol `{}`",
+                        cls.name()
+                    ),
+                );
+                return None;
+            }
+            if is_enum {
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                    format!("Cannot apply `@dataclass` to Enum `{}`", cls.name()),
+                );
+                return None;
+            }
+            if is_typed_dict {
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                    format!("Cannot apply `@dataclass` to TypedDict `{}`", cls.name()),
+                );
+                return None;
             }
         }
         if let Some((kws, field_specifiers)) = dataclass_from_dataclass_transform {
@@ -991,7 +1114,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             && let Forallable::TypeAlias(type_alias) = &forall.body
                             && let quantified = match self.get_type_alias(type_alias).as_type() {
                                 Type::Type(box Type::Quantified(q))
-                                | Type::Annotated(box Type::Quantified(q)) => Some(q),
+                                | Type::Annotated(box Type::Quantified(q), _) => Some(q),
                                 _ => None,
                             }
                             && let Some(quantified) = quantified

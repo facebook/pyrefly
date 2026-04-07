@@ -14,7 +14,7 @@ use crate::test::util::get_batched_lsp_operations_report_no_cursor_allow_error;
 
 fn get_test_report(state: &State, handle: &Handle) -> String {
     let transaction = state.transaction();
-    if let Some(symbols) = transaction.symbols(handle) {
+    if let Some(symbols) = transaction.symbols(handle, None) {
         serde_json::to_string_pretty(&symbols).unwrap()
     } else {
         "No document symbols found".to_owned()

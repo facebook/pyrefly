@@ -7,6 +7,7 @@
 
 pub mod ast_visitor;
 pub mod call_graph;
+pub mod capnp_writer;
 pub mod captured_variable;
 pub mod class;
 pub mod collect;
@@ -18,6 +19,8 @@ pub mod location;
 pub mod module;
 pub mod module_index;
 pub mod override_graph;
+#[allow(clippy::all)]
+pub mod pysa_report_capnp;
 pub mod scope;
 pub mod step_logger;
 pub mod type_of_expression;
@@ -34,10 +37,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe;
-use itertools::Itertools;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePathDetails;
+use pyrefly_python::sys_info::PythonPlatform;
+use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::fs_anyhow;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -55,6 +59,7 @@ use crate::report::pysa::captured_variable::collect_captured_variables_for_modul
 use crate::report::pysa::captured_variable::export_captured_variables_for_module;
 use crate::report::pysa::class::ClassDefinition;
 use crate::report::pysa::class::ClassId;
+use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::class::export_all_classes;
 use crate::report::pysa::collect::CollectNoDuplicateKeys;
 use crate::report::pysa::context::ModuleAnswersContext;
@@ -82,66 +87,87 @@ use crate::report::pysa::type_of_expression::export_type_of_expressions;
 use crate::report::pysa::types::PysaType;
 use crate::state::state::Transaction;
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum PysaFormat {
+    Capnp,
+    Json,
+}
+
 #[derive(Debug, Clone, Serialize)]
-struct PysaProjectModule {
-    module_id: ModuleId,
-    module_name: ModuleName,        // e.g, `foo.bar`
-    source_path: ModulePathDetails, // Path to the source code
+pub struct PysaProjectModule {
+    pub module_id: ModuleId,
+    pub module_name: ModuleName,        // e.g, `foo.bar`
+    pub source_path: ModulePathDetails, // Path to the source code
     #[serde(skip_serializing_if = "Option::is_none")]
-    relative_source_path: Option<PathBuf>, // Path relative to a root or search path
-    info_filename: Option<PathBuf>, // Filename for info files
+    pub relative_source_path: Option<PathBuf>, // Path relative to a root or search path
+    pub info_filename: Option<PathBuf>, // Filename for info files
+    pub python_version: PythonVersion,
+    pub platform: PythonPlatform,
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_test: bool, // Uses a set of heuristics to determine if the module is a test file.
+    pub is_test: bool, // Uses a set of heuristics to determine if the module is a test file.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_interface: bool, // Is this a .pyi file?
+    pub is_interface: bool, // Is this a .pyi file?
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_init: bool, // Is this a __init__.py(i) file?
+    pub is_init: bool, // Is this a __init__.py(i) file?
     #[serde(skip_serializing_if = "<&bool>::not")]
-    is_internal: bool, // Is this a module from the project (as opposed to a dependency)?
+    pub is_internal: bool, // Is this a module from the project (as opposed to a dependency)?
 }
 
 /// Format of the index file `pyrefly.pysa.json`
 #[derive(Debug, Clone, Serialize)]
-struct PysaProjectFile {
-    format_version: u32,
-    modules: HashMap<ModuleId, PysaProjectModule>,
-    builtin_module_id: ModuleId,
-    object_class_id: ClassId,
-    dict_class_id: ClassId,
-    typing_module_id: ModuleId,
-    typing_mapping_class_id: ClassId,
+pub struct PysaProjectFile {
+    pub format_version: u32,
+    pub modules: HashMap<ModuleId, PysaProjectModule>,
+    pub builtin_module_ids: Vec<ModuleId>,
+    pub object_class_refs: Vec<ClassRef>,
+    pub dict_class_refs: Vec<ClassRef>,
+    pub typing_module_ids: Vec<ModuleId>,
+    pub typing_mapping_class_refs: Vec<ClassRef>,
 }
 
 /// Format of the file `definitions/my.module:id.json` containing all definitions
 #[derive(Debug, Clone, Serialize)]
 pub struct PysaModuleDefinitions {
-    format_version: u32,
-    module_id: ModuleId,
-    module_name: ModuleName,
-    source_path: ModulePathDetails,
-    function_definitions: ModuleFunctionDefinitions<FunctionDefinition>,
-    class_definitions: HashMap<PysaLocation, ClassDefinition>,
-    global_variables: HashMap<Name, GlobalVariable>,
+    pub format_version: u32,
+    pub module_id: ModuleId,
+    pub module_name: ModuleName,
+    pub source_path: ModulePathDetails,
+    pub function_definitions: ModuleFunctionDefinitions<FunctionDefinition>,
+    pub class_definitions: HashMap<PysaLocation, ClassDefinition>,
+    pub global_variables: HashMap<Name, GlobalVariable>,
+}
+
+/// Type identifier within a function's deduplicated type table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub struct LocalTypeId(pub u32);
+
+/// Per-function type-of-expression data, with deduplicated types.
+#[derive(Debug, Clone, Serialize)]
+pub struct FunctionTypeOfExpressions {
+    /// Deduplicated type table. `LocalTypeId(n)` refers to `type_table[n]`.
+    pub type_table: Vec<PysaType>,
+    /// Map from expression location to its LocalTypeId in the type table.
+    pub locations: HashMap<PysaLocation, LocalTypeId>,
 }
 
 /// Format of the file `type_of_expressions/my.module:id.json` containing type of expressions
 #[derive(Debug, Clone, Serialize)]
 pub struct PysaModuleTypeOfExpressions {
-    format_version: u32,
-    module_id: ModuleId,
-    module_name: ModuleName,
-    source_path: ModulePathDetails,
-    type_of_expression: HashMap<PysaLocation, PysaType>,
+    pub format_version: u32,
+    pub module_id: ModuleId,
+    pub module_name: ModuleName,
+    pub source_path: ModulePathDetails,
+    pub functions: HashMap<FunctionId, FunctionTypeOfExpressions>,
 }
 
 /// Format of the file `call_graphs/my.module:id.json` containing module call graphs
 #[derive(Debug, Clone, Serialize)]
 pub struct PysaModuleCallGraphs {
-    format_version: u32,
-    module_id: ModuleId,
-    module_name: ModuleName,
-    source_path: ModulePathDetails,
-    call_graphs: HashMap<FunctionId, CallGraph<ExpressionIdentifier, FunctionRef>>,
+    pub format_version: u32,
+    pub module_id: ModuleId,
+    pub module_name: ModuleName,
+    pub source_path: ModulePathDetails,
+    pub call_graphs: HashMap<FunctionId, CallGraph<ExpressionIdentifier, FunctionRef>>,
 }
 
 /// Per-module intermediate information required by Pysa for its report step.
@@ -189,11 +215,16 @@ pub struct PysaReporter {
     pub definitions_directory: PathBuf,
     pub type_of_expressions_directory: PathBuf,
     pub call_graphs_directory: PathBuf,
+    pub format: PysaFormat,
 }
 
 impl PysaReporter {
     /// Create a new PysaReporter, setting up report directories.
-    pub fn new(pysa_directory: &Path, handles: &[Handle]) -> anyhow::Result<Box<Self>> {
+    pub fn new(
+        pysa_directory: &Path,
+        handles: &[Handle],
+        format: PysaFormat,
+    ) -> anyhow::Result<Box<Self>> {
         tracing::info!("Writing pysa results to `{}`", pysa_directory.display());
 
         pyrefly_util::fs_anyhow::create_dir_all(pysa_directory)?;
@@ -212,17 +243,25 @@ impl PysaReporter {
             definitions_directory,
             type_of_expressions_directory,
             call_graphs_directory,
+            format,
         }))
     }
 
-    /// Write JSON files about the current module/handle.
+    fn file_extension(&self) -> &str {
+        match self.format {
+            PysaFormat::Json => "json",
+            PysaFormat::Capnp => "capnp.bin",
+        }
+    }
+
+    /// Write output files about the current module/handle.
     ///
     /// This can perform cross-module lookups using the `transaction` (wrapped in `PysaResolver`).
     pub fn report_module(&self, handle: &Handle, transaction: &Transaction) {
         let info_filename = match handle.path().details() {
             ModulePathDetails::Namespace(_) => None,
             _ => Some(PathBuf::from(format!(
-                "{}:{}.json",
+                "{}:{}.{}",
                 String::from_iter(
                     handle
                         .module()
@@ -231,7 +270,8 @@ impl PysaReporter {
                         .filter(|c| c.is_ascii())
                         .take(220)
                 ),
-                self.module_ids.get_from_handle(handle).to_int()
+                self.module_ids.get_from_handle(handle).to_int(),
+                self.file_extension()
             ))),
         };
 
@@ -255,24 +295,38 @@ impl PysaReporter {
                 File::create(self.definitions_directory.join(info_filename))
                     .expect("Failed to create definitions file"),
             );
-            serde_json::to_writer(writer, &module_definitions)
-                .expect("Failed to write definitions file");
+            match self.format {
+                PysaFormat::Json => serde_json::to_writer(writer, &module_definitions)
+                    .expect("Failed to write definitions file"),
+                PysaFormat::Capnp => capnp_writer::write_definitions(writer, &module_definitions)
+                    .expect("Failed to write definitions file"),
+            }
 
             let module_type_of_expressions = export_module_type_of_expressions(&context);
             let writer = BufWriter::new(
                 File::create(self.type_of_expressions_directory.join(info_filename))
                     .expect("Failed to create type_of_expressions file"),
             );
-            serde_json::to_writer(writer, &module_type_of_expressions)
-                .expect("Failed to write type_of_expressions file");
+            match self.format {
+                PysaFormat::Json => serde_json::to_writer(writer, &module_type_of_expressions)
+                    .expect("Failed to write type_of_expressions file"),
+                PysaFormat::Capnp => {
+                    capnp_writer::write_type_of_expressions(writer, &module_type_of_expressions)
+                        .expect("Failed to write type_of_expressions file")
+                }
+            }
 
             let module_call_graphs = export_module_call_graphs(&context, &captured_variables);
             let writer = BufWriter::new(
                 File::create(self.call_graphs_directory.join(info_filename))
                     .expect("Failed to create call_graphs file"),
             );
-            serde_json::to_writer(writer, &module_call_graphs)
-                .expect("Failed to write call_graphs file");
+            match self.format {
+                PysaFormat::Json => serde_json::to_writer(writer, &module_call_graphs)
+                    .expect("Failed to write call_graphs file"),
+                PysaFormat::Capnp => capnp_writer::write_call_graphs(writer, &module_call_graphs)
+                    .expect("Failed to write call_graphs file"),
+            }
         }
     }
 }
@@ -302,13 +356,13 @@ pub fn export_module_definitions(
 }
 
 pub fn export_module_type_of_expressions(context: &ModuleContext) -> PysaModuleTypeOfExpressions {
-    let type_of_expression = export_type_of_expressions(context);
+    let functions = export_type_of_expressions(context);
     PysaModuleTypeOfExpressions {
         format_version: 1,
         module_id: context.answers_context.module_id,
         module_name: context.answers_context.module_info.name(),
         source_path: context.answers_context.module_info.path().details().clone(),
-        type_of_expression,
+        functions,
     }
 }
 
@@ -335,6 +389,7 @@ fn build_module_mapping(
     project_handles: &[Handle],
     module_ids: &ModuleIds,
     transaction: &Transaction,
+    file_extension: &str,
 ) -> HashMap<ModuleId, PysaProjectModule> {
     let step = StepLogger::start("Building module list", "Built module list");
 
@@ -353,7 +408,7 @@ fn build_module_mapping(
             }
             _ => {
                 Some(PathBuf::from(format!(
-                    "{}:{}.json",
+                    "{}:{}.{}",
                     // Filename must be less than 255 bytes
                     String::from_iter(
                         handle
@@ -363,7 +418,8 @@ fn build_module_mapping(
                             .filter(|c| c.is_ascii())
                             .take(220)
                     ),
-                    module_id.to_int()
+                    module_id.to_int(),
+                    file_extension
                 )))
             }
         };
@@ -384,6 +440,10 @@ fn build_module_mapping(
         };
 
         assert!(
+            handle.sys_info().type_checking(),
+            "Expected type_checking to be true for handle"
+        );
+        assert!(
             project_modules
                 .insert(
                     module_id,
@@ -402,6 +462,8 @@ fn build_module_mapping(
                         is_interface: handle.path().is_interface(),
                         is_init: handle.path().is_init(),
                         is_internal: project_handles.contains(handle),
+                        python_version: handle.sys_info().version(),
+                        platform: handle.sys_info().platform().clone(),
                     }
                 )
                 .is_none(),
@@ -449,42 +511,51 @@ fn write_typeshed_files(results_directory: &Path) -> anyhow::Result<()> {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct PysaTypeError {
-    module_id: ModuleId,
-    location: PysaLocation,
-    kind: pyrefly_config::error_kind::ErrorKind,
-    message: String,
+pub struct PysaTypeError {
+    pub module_name: ModuleName,
+    pub module_path: ModulePathDetails,
+    pub location: PysaLocation,
+    pub kind: pyrefly_config::error_kind::ErrorKind,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct PysaTypeErrorsFile {
-    format_version: u32,
-    errors: Vec<PysaTypeError>,
+pub struct PysaTypeErrorsFile {
+    pub format_version: u32,
+    pub errors: Vec<PysaTypeError>,
 }
 
 fn write_errors_file(
     results_directory: &Path,
     errors: &[TypeError],
-    module_ids: &ModuleIds,
+    format: PysaFormat,
 ) -> anyhow::Result<()> {
     let step = StepLogger::start("Exporting type errors", "Exported type errors");
 
-    let writer = BufWriter::new(File::create(results_directory.join("errors.json"))?);
-    serde_json::to_writer(
-        writer,
-        &PysaTypeErrorsFile {
-            format_version: 1,
-            errors: errors
-                .iter()
-                .map(|error| PysaTypeError {
-                    module_id: module_ids.get_from_module(error.module()),
-                    location: PysaLocation::from_text_range(error.range(), error.module()),
-                    kind: error.error_kind(),
-                    message: error.msg(),
-                })
-                .collect::<Vec<_>>(),
-        },
-    )?;
+    let errors = PysaTypeErrorsFile {
+        format_version: 1,
+        errors: errors
+            .iter()
+            .map(|error| PysaTypeError {
+                module_name: error.module().name(),
+                module_path: error.module().path().details().clone(),
+                location: PysaLocation::from_text_range(error.range(), error.module()),
+                kind: error.error_kind(),
+                message: error.msg(),
+            })
+            .collect::<Vec<_>>(),
+    };
+
+    match format {
+        PysaFormat::Json => {
+            let writer = BufWriter::new(File::create(results_directory.join("errors.json"))?);
+            serde_json::to_writer(writer, &errors)?;
+        }
+        PysaFormat::Capnp => {
+            let writer = BufWriter::new(File::create(results_directory.join("errors.capnp.bin"))?);
+            capnp_writer::write_errors(writer, &errors)?;
+        }
+    }
 
     step.finish();
     Ok(())
@@ -504,18 +575,17 @@ pub fn write_project_file(
 ) -> anyhow::Result<()> {
     let results_directory = &pysa_reporter.pysa_directory;
 
-    write_typeshed_files(results_directory)?;
-    write_errors_file(results_directory, errors, &pysa_reporter.module_ids)?;
+    let format = pysa_reporter.format;
+    let file_extension = pysa_reporter.file_extension();
 
+    write_typeshed_files(results_directory)?;
+    write_errors_file(results_directory, errors, format)?;
+
+    let project_filename = format!("pyrefly.pysa.{file_extension}");
+    let project_filepath = results_directory.join(&project_filename);
     let step = StepLogger::start(
-        &format!(
-            "Writing `{}`",
-            results_directory.join("pyrefly.pysa.json").display()
-        ),
-        &format!(
-            "Wrote `{}`",
-            results_directory.join("pyrefly.pysa.json").display()
-        ),
+        &format!("Writing `{}`", project_filepath.display(),),
+        &format!("Wrote `{}`", project_filepath.display(),),
     );
 
     let handles = transaction.handles();
@@ -524,41 +594,82 @@ pub fn write_project_file(
         project_handles,
         &pysa_reporter.module_ids,
         transaction,
+        file_extension,
     );
 
-    let builtin_module = handles
+    let builtin_modules = handles
         .iter()
         .filter(|handle| handle.module().as_str() == "builtins")
-        .exactly_one()
-        .expect("expected exactly one builtins module");
-    let typing_module = handles
+        .collect::<Vec<_>>();
+    let typing_modules = handles
         .iter()
         .filter(|handle| handle.module().as_str() == "typing")
-        .exactly_one()
-        .expect("expected exactly one typing module");
-    let object_class_id = ClassId::from_class(
-        transaction
-            .get_stdlib(builtin_module)
-            .object()
-            .class_object(),
-    );
-    let dict_class_id = ClassId::from_class(transaction.get_stdlib(builtin_module).dict_object());
-    let typing_mapping_class_id =
-        ClassId::from_class(transaction.get_stdlib(typing_module).mapping_object());
+        .collect::<Vec<_>>();
+    let builtin_module_ids = builtin_modules
+        .iter()
+        .map(|handle| pysa_reporter.module_ids.get_from_handle(handle))
+        .collect::<Vec<_>>();
+    let object_class_refs = builtin_modules
+        .iter()
+        .map(|handle| {
+            let stdlib = transaction.get_stdlib(handle);
+            let class = stdlib.object().class_object();
+            ClassRef {
+                module_id: pysa_reporter.module_ids.get_from_handle(handle),
+                class_id: ClassId::from_class(class),
+                class: class.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let dict_class_refs = builtin_modules
+        .iter()
+        .map(|handle| {
+            let stdlib = transaction.get_stdlib(handle);
+            let class = stdlib.dict_object();
+            ClassRef {
+                module_id: pysa_reporter.module_ids.get_from_handle(handle),
+                class_id: ClassId::from_class(class),
+                class: class.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let typing_module_ids = typing_modules
+        .iter()
+        .map(|handle| pysa_reporter.module_ids.get_from_handle(handle))
+        .collect::<Vec<_>>();
+    let typing_mapping_class_refs = typing_modules
+        .iter()
+        .map(|handle| {
+            let stdlib = transaction.get_stdlib(handle);
+            let class = stdlib.mapping_object();
+            ClassRef {
+                module_id: pysa_reporter.module_ids.get_from_handle(handle),
+                class_id: ClassId::from_class(class),
+                class: class.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
 
-    let writer = BufWriter::new(File::create(results_directory.join("pyrefly.pysa.json"))?);
-    serde_json::to_writer(
-        writer,
-        &PysaProjectFile {
-            format_version: 1,
-            modules: project_modules,
-            builtin_module_id: pysa_reporter.module_ids.get_from_handle(builtin_module),
-            object_class_id,
-            dict_class_id,
-            typing_module_id: pysa_reporter.module_ids.get_from_handle(typing_module),
-            typing_mapping_class_id,
-        },
-    )?;
+    let project_file = PysaProjectFile {
+        format_version: 1,
+        modules: project_modules,
+        builtin_module_ids,
+        object_class_refs,
+        dict_class_refs,
+        typing_module_ids,
+        typing_mapping_class_refs,
+    };
+
+    match format {
+        PysaFormat::Json => {
+            let writer = BufWriter::new(File::create(project_filepath)?);
+            serde_json::to_writer(writer, &project_file)?;
+        }
+        PysaFormat::Capnp => {
+            let writer = BufWriter::new(File::create(project_filepath)?);
+            capnp_writer::write_project_file(writer, &project_file)?;
+        }
+    }
 
     step.finish();
     Ok(())

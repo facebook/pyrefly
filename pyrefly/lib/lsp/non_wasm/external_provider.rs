@@ -187,6 +187,7 @@ mod tests {
 
     use super::*;
     use crate::state::state::State;
+    use crate::test::util::TEST_THREAD_COUNT;
     use crate::test::util::TestEnv;
 
     fn parse_and_qname(code: &str, module: &str, position: TextSize, name: &str) -> String {
@@ -237,7 +238,7 @@ mod tests {
         // transaction.get_ast() returns None for any handle, exercising
         // the re-parse fallback inside compute_qualified_name.
         let env = TestEnv::one("unrelated", "");
-        let state = State::new(env.config_finder());
+        let state = State::new(env.config_finder(), TEST_THREAD_COUNT);
         let transaction = state.transaction();
 
         let handle = Handle::new(module_name, module_path, env.sys_info());
@@ -263,7 +264,7 @@ mod tests {
         let module = Module::new(module_name, module_path.dupe(), Arc::new(code.to_owned()));
 
         let env = TestEnv::one("unrelated", "");
-        let state = State::new(env.config_finder());
+        let state = State::new(env.config_finder(), TEST_THREAD_COUNT);
         let transaction = state.transaction();
 
         let handle = Handle::new(module_name, module_path, env.sys_info());

@@ -35,6 +35,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
+use crate::alt::expr::MAX_TUPLE_LENGTH;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::KeyAnnotation;
 use crate::config::error_kind::ErrorKind;
@@ -94,9 +95,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
 
-        // Check if at least one operand is a symbolic dimension type
+        // Check if at least one operand is a symbolic dimension type or literal int
         let is_dim_operand = |ty: &Type| match ty {
             Type::Dim(_) | Type::Size(_) => true,
+            Type::Literal(box Literal {
+                value: Lit::Int(_), ..
+            }) => true,
             Type::QuantifiedValue(q) => {
                 matches!(q.kind, QuantifiedKind::TypeVar)
             }
@@ -147,10 +151,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => unreachable!(),
         };
 
-        // If either operand is Dim, return Dim-wrapped result
-        // Otherwise (e.g., Dim-bounded type parameters), return unwrapped dimension type
+        // If either operand is Dim, return Dim-wrapped result.
+        // If both operands are Literal[int], convert result back to Literal[int].
+        // Otherwise (e.g., Dim-bounded type parameters), return unwrapped dimension type.
         if matches!(lhs, Type::Dim(_)) || matches!(rhs, Type::Dim(_)) {
             Some(self.heap.mk_dim(result_ty))
+        } else if matches!(
+            lhs,
+            Type::Literal(box Literal {
+                value: Lit::Int(_), ..
+            })
+        ) && matches!(
+            rhs,
+            Type::Literal(box Literal {
+                value: Lit::Int(_), ..
+            })
+        ) {
+            // Both operands are Literal[int], so convert SizeExpr::Literal back to Literal[int]
+            if let Type::Size(SizeExpr::Literal(n)) = &result_ty {
+                Some(Lit::Int(LitInt::new(*n)).to_implicit_type())
+            } else {
+                Some(result_ty)
+            }
         } else {
             Some(result_ty)
         }
@@ -294,6 +316,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn try_tuple_repeat(&self, lhs: &Type, rhs: &Type) -> Option<Type> {
+        let (elements, repeats) = match (lhs, rhs) {
+            (
+                Type::Tuple(Tuple::Concrete(elts)),
+                Type::Literal(box Literal {
+                    value: Lit::Int(n), ..
+                }),
+            ) => (elts, n.as_i64()?),
+            (
+                Type::Literal(box Literal {
+                    value: Lit::Int(n), ..
+                }),
+                Type::Tuple(Tuple::Concrete(elts)),
+            ) => (elts, n.as_i64()?),
+            _ => return None,
+        };
+        if repeats <= 0 {
+            return Some(self.heap.mk_concrete_tuple(Vec::new()));
+        }
+        if repeats == 1 {
+            return Some(self.heap.mk_concrete_tuple(elements.clone()));
+        }
+        let repeats = usize::try_from(repeats).ok()?;
+        let total_len = elements.len().checked_mul(repeats)?;
+        if total_len > MAX_TUPLE_LENGTH {
+            return None;
+        }
+        let mut repeated = Vec::with_capacity(total_len);
+        for _ in 0..repeats {
+            repeated.extend(elements.iter().cloned());
+        }
+        Some(self.heap.mk_concrete_tuple(repeated))
+    }
+
     pub fn binop_infer(
         &self,
         x: &ExprBinOp,
@@ -338,12 +394,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn binop_types(&self, x: &ExprBinOp, lhs: &Type, rhs: &Type, errors: &ErrorCollector) -> Type {
+        let left_range = x.left.range();
+        let right_range = x.right.range();
         let binop_call = |op: Operator, lhs: &Type, rhs: &Type, range: TextRange| -> Type {
             let context = || {
                 ErrorContext::BinaryOp(
                     op.as_str().to_owned(),
                     self.for_display(lhs.clone()),
                     self.for_display(rhs.clone()),
+                    left_range,
+                    right_range,
                 )
             };
             // Reflected operator implementation: This deviates from the runtime semantics by calling the reflected dunder if the regular dunder call errors.
@@ -380,6 +440,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Type::Tuple(r) = rhs
                 {
                     self.tuple_concat(l, r)
+                } else if x.op == Operator::Mult
+                    && let Some(result) = self.try_tuple_repeat(lhs, rhs)
+                {
+                    result
                 } else if matches!(
                     x.op,
                     Operator::Add
@@ -402,13 +466,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     match rhs {
                         // Special case int ** int
+                        // if the exponent is 0, return Literal[1] (x ** 0 = 1)
                         // if the exponent is a positive int, return int
-                        // if the exponent is a negative int, retturn float
+                        // if the exponent is a negative int, return float
                         // if the exponent is unknown, call the `__pow__` method like normal
                         Type::Literal(box Literal {
                             value: Lit::Int(n), ..
                         }) => {
-                            if *n < LitInt::new(0) {
+                            if *n == LitInt::new(0) {
+                                LitInt::new(1).to_implicit_type()
+                            } else if *n < LitInt::new(0) {
                                 self.heap.mk_class_type(self.stdlib.float().clone())
                             } else {
                                 self.heap.mk_class_type(self.stdlib.int().clone())
@@ -420,6 +487,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     x.op.as_str().to_owned(),
                                     self.for_display(lhs.clone()),
                                     self.for_display(rhs.clone()),
+                                    left_range,
+                                    right_range,
                                 )
                             };
                             let calls = [
@@ -464,12 +533,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         x: &StmtAugAssign,
         errors: &ErrorCollector,
     ) -> Type {
+        let target_range = x.target.range();
+        let value_range = x.value.range();
         let binop_call = |op: Operator, lhs: &Type, rhs: &Type, range: TextRange| -> Type {
             let context = || {
                 ErrorContext::InplaceBinaryOp(
                     op.as_str().to_owned(),
                     self.for_display(lhs.clone()),
                     self.for_display(rhs.clone()),
+                    target_range,
+                    value_range,
                 )
             };
             let calls_to_try = [
@@ -485,7 +558,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &|| TypeCheckContext::of_kind(TypeCheckKind::AugmentedAssignment);
         let result = self.distribute_over_union(&base, |lhs| {
             self.distribute_over_union(&rhs, |rhs| {
-                if let Type::Any(style) = &base {
+                if let Type::Any(style) = &lhs {
+                    style.propagate()
+                } else if let Type::Any(style) = &rhs {
                     style.propagate()
                 } else if x.op == Operator::Add
                     && base.is_literal_string()
@@ -508,6 +583,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(ann) = ann.map(|k| self.get_idx(k)) {
             self.check_final_reassignment(&ann, x.range(), errors);
             if let Some(ann_ty) = ann.ty(self.heap, self.stdlib) {
+                if result.is_any() {
+                    // Any provides no useful narrowing information, so preserve
+                    // the declared type rather than letting Any leak through.
+                    return ann_ty;
+                }
                 return self.check_and_return_type(result, &ann_ty, x.range(), errors, tcc);
             }
         }
@@ -533,8 +613,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             );
 
-            let result =
-                self.compare_types(x, *op, &current_left, &right, current_left_range, errors);
+            let right_range = comparator.range();
+            let result = self.compare_types(
+                x,
+                *op,
+                &current_left,
+                &right,
+                current_left_range,
+                right_range,
+                errors,
+            );
             results.push(result);
             // For next comparison, the current right becomes the new left
             current_left = right;
@@ -560,6 +648,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         left: &Type,
         right: &Type,
         current_left_range: TextRange,
+        current_right_range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
         self.distribute_over_union(left, |left| {
@@ -580,6 +669,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 constraint,
                                 constraint,
                                 current_left_range,
+                                current_right_range,
                                 errors,
                             )
                         }))
@@ -594,6 +684,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             &left_restriction,
                             right,
                             current_left_range,
+                            current_right_range,
                             errors,
                         )
                     }
@@ -606,6 +697,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             left,
                             &right_restriction,
                             current_left_range,
+                            current_right_range,
                             errors,
                         )
                     }
@@ -615,6 +707,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 op.as_str().to_owned(),
                                 self.for_display(left.clone()),
                                 self.for_display(right.clone()),
+                                current_left_range,
+                                current_right_range,
                             )
                         };
                         match op {
@@ -651,9 +745,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                             &self.get_produced_type(iterables),
                                             x.range,
                                             errors,
-                                            &|| TypeCheckContext {
-                                                kind: TypeCheckKind::Container,
-                                                context: Some(context()),
+                                            &|| {
+                                                TypeCheckContext::of_kind(TypeCheckKind::Container)
+                                                    .with_context(Some(context()))
                                             },
                                         );
                                     } else {
@@ -687,8 +781,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn unop_infer(&self, x: &ExprUnaryOp, errors: &ErrorCollector) -> Type {
         let t = self.expr_infer(&x.operand, errors);
         let unop = |t: &Type, f: &dyn Fn(&Lit) -> Option<Type>, method: &Name| {
-            let context =
-                || ErrorContext::UnaryOp(x.op.as_str().to_owned(), self.for_display(t.clone()));
+            let operand_range = x.operand.range();
+            let context = || {
+                ErrorContext::UnaryOp(
+                    x.op.as_str().to_owned(),
+                    self.for_display(t.clone()),
+                    operand_range,
+                )
+            };
             match t {
                 Type::Literal(lit) if let Some(ret) = f(&lit.value) => ret,
                 Type::ClassType(_)

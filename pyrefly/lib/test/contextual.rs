@@ -407,7 +407,6 @@ f(g(0)) # OK
 );
 
 testcase!(
-    bug = "Propagating the hint should still allow for a narrower inferred type",
     test_context_return_narrow,
     r#"
 from typing import assert_type
@@ -417,7 +416,7 @@ def f[T](x: T) -> T:
 
 def test(x: int | str):
     x = f(0)
-    assert_type(x, int) # E: assert_type(int | str, int) failed
+    assert_type(x, int)
 "#,
 );
 
@@ -701,5 +700,23 @@ class TD(TypedDict):
 def f[T: TD](x: tuple[T, ...]) -> T:
     return x[0]
 f(({"x": 0},))  # E: `dict[str, int]` is not assignable to upper bound `TD`
+    "#,
+);
+
+testcase!(
+    test_concat_custom_vecs,
+    r#"
+class Vec[T]:  # invariant in T
+    def _items(self) -> list[T]: ...
+    def _append(self, item: T) -> None: ...
+
+def concat_vecs[T1, T2](left: Vec[T1], right: Vec[T2]) -> Vec[T1 | T2]:
+    return Vec()
+
+class A: ...
+class B: ...
+
+def test_vec_concat(left: Vec[A], right: Vec[B]) -> None:
+    _0: Vec[A | B] = concat_vecs(left, right)
     "#,
 );

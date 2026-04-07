@@ -17,6 +17,7 @@ mod tests {
     use pyrefly_util::fs_anyhow;
     use pyrefly_util::globs::FilteredGlobs;
     use pyrefly_util::globs::Globs;
+    use pyrefly_util::globs::HiddenDirFilter;
     use pyrefly_util::includes::Includes;
 
     use super::emit::emit_stub;
@@ -24,6 +25,7 @@ mod tests {
     use super::extract::extract_module_stub;
     use crate::state::require::Require;
     use crate::state::state::State;
+    use crate::test::util::TEST_THREAD_COUNT;
     use crate::test::util::TestEnv;
 
     fn run_stubgen(input: &str) -> String {
@@ -43,11 +45,16 @@ mod tests {
         let mut t = TestEnv::new();
         t.add(&path.display().to_string(), input);
         let includes = Globs::new(vec![format!("{}/**/*", tdir.path().display())]).unwrap();
-        let f_globs = Box::new(FilteredGlobs::new(includes, Globs::empty(), None));
+        let f_globs = Box::new(FilteredGlobs::new(
+            includes,
+            Globs::empty(),
+            None,
+            HiddenDirFilter::Disabled,
+        ));
         let config_finder = t.config_finder();
 
         let expanded = config_finder.checkpoint(f_globs.files()).unwrap();
-        let state = State::new(config_finder);
+        let state = State::new(config_finder, TEST_THREAD_COUNT);
         let holder = Forgetter::new(state, false);
 
         let handles_obj = crate::commands::check::Handles::new(expanded);
@@ -169,6 +176,11 @@ mod tests {
     #[test]
     fn test_stubgen_generics() {
         assert_stubgen_snapshot("generics");
+    }
+
+    #[test]
+    fn test_stubgen_dunder_all() {
+        assert_stubgen_snapshot("dunder_all");
     }
 
     #[test]

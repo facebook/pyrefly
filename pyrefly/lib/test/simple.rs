@@ -644,11 +644,11 @@ testcase!(
     r#"
 from typing import Callable, Optional, Type, TypeGuard, TypeIs
 
-def test0() -> Type[int, int]: ...  # E: requires exactly one argument
-def test1() -> TypeGuard[int, int]: ...  # E: requires exactly one argument
-def test2() -> TypeIs[int, int]: ...  # E: requires exactly one argument
-def test3() -> Optional[int, int]: ...  # E: requires exactly one argument
-def test4() -> Callable[[], int, int]: ...  # E: requires exactly two arguments
+def test0() -> Type[int, int]: ...  # E: Expected 1 type argument
+def test1() -> TypeGuard[int, int]: ...  # E: Expected 1 type argument
+def test2() -> TypeIs[int, int]: ...  # E: Expected 1 type argument
+def test3() -> Optional[int, int]: ...  # E: Expected 1 type argument
+def test4() -> Callable[[], int, int]: ...  # E: Expected 2 arguments
 "#,
 );
 
@@ -1093,7 +1093,8 @@ testcase!(
 from typing import assert_type, Literal
 x = 1
 def foo():
-    assert_type(x, Literal['test', 1])
+    # Cross-barrier read promotes Literal[1, 'test'] → int | str
+    assert_type(x, int | str)
 foo()
 x = "test"
 "#,
@@ -1735,6 +1736,22 @@ def g(f: Callable[[Any], int], inputs: Any) -> None:
 );
 
 testcase!(
+    test_map_str_method_with_splitlines,
+    r#"
+def main(a: str) -> None:
+    _ = map(str.strip, a.splitlines())
+    "#,
+);
+
+testcase!(
+    test_str_maketrans_with_dict,
+    r#"
+def main() -> None:
+    _ = str.maketrans({"a": "b", "c": None})
+    "#,
+);
+
+testcase!(
     test_union_function_exponential,
     r#"
 # This used to take an exponential amount of time to type check
@@ -2269,5 +2286,54 @@ def f(x: float):
     # so producing the union would cause spurious downstream errors.
     reveal_type(min(0, x))  # E: revealed type: float
     reveal_type(max(0, x))  # E: revealed type: float
+    "#,
+);
+
+testcase!(
+    test_open_return_type,
+    r#"
+from io import BufferedReader, TextIOWrapper
+from typing import Any, assert_type, BinaryIO, IO
+def f(fi: Any, buffering1: int, buffering2: Any):
+    with open(fi, "r") as f:
+        assert_type(f, TextIOWrapper)
+    with open(fi, "rb") as f:
+        assert_type(f, BufferedReader)
+    with open(fi, "rb", 1) as f:
+        assert_type(f, BufferedReader)
+    with open(fi, "rb", buffering1) as f:
+        assert_type(f, BinaryIO)
+    with open(fi, "rb", buffering2) as f:
+        assert_type(f, IO[Any])
+    "#,
+);
+
+testcase!(
+    test_index_into_sequence_of_str,
+    r#"
+from typing import assert_type, Sequence
+def f(x: Sequence[str], idx):
+    # idx may be a slice
+    assert_type(x[idx], Sequence[str])
+    "#,
+);
+
+testcase!(
+    test_subscript_with_union_type,
+    r#"
+d: dict[type[bool] | type[float] | type[int], bool | float | int] = {}
+k: type[bool | float | int] = bool
+d[k]
+    "#,
+);
+
+testcase!(
+    test_bool_and_unknown,
+    r#"
+from typing import Any, assert_type
+def f(x):
+    y = True
+    y &= x
+    assert_type(y, Any)
     "#,
 );

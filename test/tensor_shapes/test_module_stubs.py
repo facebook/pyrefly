@@ -374,7 +374,7 @@ def test_lstm_unidirectional():
 
 def test_lstm_bidirectional():
     """Bidirectional LSTM: [B, T, 256] → [B, T, 1024]."""
-    lstm = nn.LSTM(256, 512, num_directions=2, batch_first=True)
+    lstm = nn.LSTM(256, 512, bidirectional=True, batch_first=True)
     x: Tensor[4, 10, 256] = torch.randn(4, 10, 256)
     output, h_n, c_n = lstm(x)
     assert_type(output, Tensor[4, 10, 1024])

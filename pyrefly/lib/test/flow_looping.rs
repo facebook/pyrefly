@@ -676,7 +676,7 @@ assert_type(good, list[int])
 bad = [1]
 while condition():
     if condition():
-        bad = [f(bad)]  # E: Argument `list[int | str] | list[int] | list[str]` is not assignable to parameter `x` with type `list[int | str]` in function `f`
+        bad = [f(bad)]  # E: Argument `list[int] | list[str]` is not assignable to parameter `x` with type `list[int]` in function `f`
     else:
         bad = [""]
 "#,
@@ -916,5 +916,15 @@ testcase!(
 def process(value: int | float):
     for i in range(2):
         (v, value) = divmod(value, 7)
+"#,
+);
+
+testcase!(
+    test_possibly_unresolved_after_loop,
+    r#"
+items: list[int] = []
+for item in items:
+    last = item
+last  # E: `last` may be uninitialized
 "#,
 );

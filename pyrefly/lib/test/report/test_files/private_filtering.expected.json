@@ -1,0 +1,140 @@
+{
+  "name": "test",
+  "names": [
+    "test.public_var",
+    "test.__version__",
+    "test.MyClass.public_attr",
+    "test.public_func",
+    "test.__dunder_func__",
+    "test.MyClass.__init__",
+    "test.MyClass.public_method",
+    "test.MyClass.__dunder_method__",
+    "test.MyClass"
+  ],
+  "line_count": 50,
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.public_var",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 26,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.__version__",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 34,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.MyClass.public_attr",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 39,
+        "column": 14
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.public_func",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 14,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.__dunder_func__",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 22,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.MyClass.__init__",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 38,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.MyClass.public_method",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 42,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.MyClass.__dunder_method__",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 48,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.MyClass",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 37,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 9,
+  "n_typed": 9,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 2,
+  "n_methods": 3,
+  "n_function_params": 2,
+  "n_method_params": 0,
+  "n_classes": 1,
+  "n_attrs": 3,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

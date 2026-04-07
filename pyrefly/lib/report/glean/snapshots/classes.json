@@ -895,15 +895,6 @@
                     "key": {
                       "name": {
                         "id": 0,
-                        "key": "classes.typing.Generic"
-                      }
-                    }
-                  },
-                  {
-                    "id": 0,
-                    "key": {
-                      "name": {
-                        "id": 0,
                         "key": "typing.Generic"
                       }
                     }

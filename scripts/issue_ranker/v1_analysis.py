@@ -195,17 +195,11 @@ def _ensure_labels_exist(repo: str, token: str) -> None:
             logging.debug(f"Label '{name}' already exists")
 
 
-def _cleanup_managed_labels(repo: str, token: str) -> int:
-    """Remove all managed labels from all issues. Returns count of labels removed.
-
-    IMPORTANT: This ONLY removes labels that our workflow introduced
-    (v1-verified, v1-consider-adding, v1-consider-removing). No other
-    labels on any issue are ever touched.
-    """
+def _get_current_managed_labels(repo: str, token: str) -> dict[int, set[str]]:
+    """Fetch current managed labels for all open issues. Returns {issue_num: {label_names}}."""
     api = f"https://api.github.com/repos/{repo}"
-    removed = 0
+    current: dict[int, set[str]] = {}
     for label_name in _MANAGED_LABELS:
-        # Fetch all issues that have this specific managed label
         page = 1
         while True:
             url = (
@@ -217,85 +211,77 @@ def _cleanup_managed_labels(repo: str, token: str) -> int:
                 break
             for issue in issues:
                 num = issue["number"]
-                # Remove ONLY this specific managed label from the issue
-                delete_url = (
-                    f"{api}/issues/{num}/labels/{urllib.parse.quote(label_name)}"
-                )
-                _github_api("DELETE", delete_url, token)
-                removed += 1
-                logging.debug(f"Removed '{label_name}' from #{num}")
+                current.setdefault(num, set()).add(label_name)
             if len(issues) < 100:
                 break
             page += 1
-    return removed
+    return current
 
 
 def apply_labels(repo: str, analysis: dict, github_token: str) -> dict:
-    """Apply V1 analysis labels to GitHub issues.
+    """Apply V1 analysis labels to GitHub issues using diff-based updates.
 
     IMPORTANT: Only manages labels introduced by this workflow:
     v1-verified, v1-consider-adding, v1-consider-removing.
     No other labels are ever created, modified, or removed.
 
-    Steps:
-    1. Ensure the three managed labels exist on the repo
-    2. Remove managed labels from all issues (clean slate)
-    3. Apply fresh labels based on current analysis
+    Computes the difference between current and desired label state,
+    then only adds/removes labels that actually changed. This avoids
+    generating redundant timeline events on issues.
     """
     logging.info("Ensuring managed labels exist on repo")
     _ensure_labels_exist(repo, github_token)
 
+    # Build desired label state: {issue_num: {label_names}}
+    desired: dict[int, set[str]] = {}
+    for num in analysis.get("overlap_issues", []):
+        desired.setdefault(num, set()).add(LABEL_VERIFIED)
+    for num in analysis.get("in_v1_not_top_ranked", []):
+        desired.setdefault(num, set()).add(LABEL_CONSIDER_REMOVING)
+    for num in analysis.get("in_top_ranked_not_v1", []):
+        desired.setdefault(num, set()).add(LABEL_CONSIDER_ADDING)
+
+    # Fetch current label state
+    current = _get_current_managed_labels(repo, github_token)
     logging.info(
-        "Cleaning up old managed labels (only v1-verified/consider-adding/removing)"
+        f"Current state: {sum(len(v) for v in current.values())} managed labels "
+        f"across {len(current)} issues"
     )
-    removed = _cleanup_managed_labels(repo, github_token)
-    logging.info(f"Removed {removed} stale managed labels")
 
     api = f"https://api.github.com/repos/{repo}/issues"
-    applied = {"verified": 0, "consider_adding": 0, "consider_removing": 0}
+    added = 0
+    removed = 0
 
-    # Apply v1-verified to overlap issues
-    for num in analysis.get("overlap_issues", []):
-        _github_api(
-            "POST",
-            f"{api}/{num}/labels",
-            github_token,
-            {
-                "labels": [LABEL_VERIFIED],
-            },
-        )
-        applied["verified"] += 1
+    # All issues that have or should have managed labels
+    all_issues = set(current.keys()) | set(desired.keys())
 
-    # Apply v1-consider-removing to Q2 issues
-    for num in analysis.get("in_v1_not_top_ranked", []):
-        _github_api(
-            "POST",
-            f"{api}/{num}/labels",
-            github_token,
-            {
-                "labels": [LABEL_CONSIDER_REMOVING],
-            },
-        )
-        applied["consider_removing"] += 1
+    for num in all_issues:
+        current_labels = current.get(num, set())
+        desired_labels = desired.get(num, set())
 
-    # Apply v1-consider-adding to Q3 issues
-    for num in analysis.get("in_top_ranked_not_v1", []):
-        _github_api(
-            "POST",
-            f"{api}/{num}/labels",
-            github_token,
-            {
-                "labels": [LABEL_CONSIDER_ADDING],
-            },
-        )
-        applied["consider_adding"] += 1
+        # Remove labels that should no longer be present
+        for label in current_labels - desired_labels:
+            delete_url = f"{api}/{num}/labels/{urllib.parse.quote(label)}"
+            _github_api("DELETE", delete_url, github_token)
+            removed += 1
+            logging.debug(f"Removed '{label}' from #{num}")
 
-    logging.info(
-        f"Applied labels: {applied['verified']} verified, "
-        f"{applied['consider_adding']} consider-adding, "
-        f"{applied['consider_removing']} consider-removing"
+        # Add labels that are missing
+        for label in desired_labels - current_labels:
+            _github_api(
+                "POST",
+                f"{api}/{num}/labels",
+                github_token,
+                {"labels": [label]},
+            )
+            added += 1
+            logging.debug(f"Added '{label}' to #{num}")
+
+    skipped = sum(
+        len(current.get(num, set()) & desired.get(num, set())) for num in all_issues
     )
-    return applied
+    logging.info(f"Label sync: {added} added, {removed} removed, {skipped} unchanged")
+    return {"added": added, "removed": removed, "unchanged": skipped}
 
 
 def _escape_md_table(text: str) -> str:

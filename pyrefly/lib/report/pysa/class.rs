@@ -40,15 +40,14 @@ use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyClassSynthesizedFields;
-use crate::report::pysa::ModuleContext;
 use crate::report::pysa::call_graph::Target;
 use crate::report::pysa::call_graph::resolve_decorator_callees;
 use crate::report::pysa::collect::CollectNoDuplicateKeys;
 use crate::report::pysa::context::ModuleAnswersContext;
+use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleId;
-use crate::report::pysa::module::ModuleIds;
 use crate::report::pysa::scope::ScopeParent;
 use crate::report::pysa::scope::get_scope_parent;
 use crate::report::pysa::types::PysaType;
@@ -81,9 +80,12 @@ pub struct ClassRef {
 }
 
 impl ClassRef {
-    pub fn from_class(class: &Class, module_ids: &ModuleIds) -> ClassRef {
+    pub fn from_class(class: &Class, context: &ModuleContext) -> ClassRef {
         ClassRef {
-            module_id: module_ids.get_from_module(class.module()),
+            module_id: context.module_ids().get_from_module(
+                class.module(),
+                context.answers_context.handle.sys_info().dupe(),
+            ),
             class_id: ClassId::from_class(class),
             class: class.clone(),
         }
@@ -531,15 +533,13 @@ pub fn export_all_classes(context: &ModuleContext) -> HashMap<PysaLocation, Clas
         let bases = metadata
             .base_class_objects()
             .iter()
-            .map(|base_class| ClassRef::from_class(base_class, context.module_ids()))
+            .map(|base_class| ClassRef::from_class(base_class, context))
             .collect::<Vec<_>>();
 
         let mro = match &*get_class_mro(&class, &context.answers_context) {
             ClassMro::Resolved(mro) => PysaClassMro::Resolved(
                 mro.iter()
-                    .map(|class_type| {
-                        ClassRef::from_class(class_type.class_object(), context.module_ids())
-                    })
+                    .map(|class_type| ClassRef::from_class(class_type.class_object(), context))
                     .collect::<Vec<_>>(),
             ),
             ClassMro::Cyclic => PysaClassMro::Cyclic,

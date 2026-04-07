@@ -17,7 +17,10 @@ For operations handled by meta-shapes, see pyrefly_types/src/meta_shape.rs:
 """
 
 import builtins
-from typing import Any, overload, Self
+from typing import Any, overload, Self, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from torch_shapes import Dim as _Dim
 
 __all__ = ["Tensor"]
 
@@ -28,6 +31,18 @@ __all__ = ["Tensor"]
 class device:
     """Represents the device on which a Tensor is or will be allocated."""
     def __init__(self, type: str, index: int = 0) -> None: ...
+
+# Dtype constants
+qint8: Any
+quint8: Any
+float16: Any
+float32: Any
+float64: Any
+int8: Any
+int16: Any
+int32: Any
+int64: Any
+bool: Any
 
 # ============================================================================
 # Tensor Class
@@ -187,6 +202,18 @@ class Tensor[*Shape]:
         """Expand tensor to match the shape of `other`."""
         ...
 
+    def repeat_interleave(
+        self: Tensor, repeats: int | Tensor, dim: int | None = None
+    ) -> Tensor:
+        """Repeat elements along a dimension.
+
+        Shape inference via DSL (repeat_interleave_ir):
+        - dim=None: 1D output of size numel * repeats.
+        - dim=D, repeats=int: shape[D] *= repeats, others preserved.
+        - repeats=Tensor: DSL not invoked, falls back to unrefined.
+        """
+        ...
+
     def contiguous(self) -> Self:
         """Returns a contiguous tensor. Shape inference via generic fixture signature."""
         ...
@@ -287,6 +314,22 @@ class Tensor[*Shape]:
 
     def cpu(self) -> Self:
         """Move tensor to CPU. Shape-preserving operation."""
+        ...
+
+    data: Self  # Raw data tensor (same shape)
+
+    def copy_(self, src: Tensor, non_blocking: builtins.bool = False) -> Self:
+        """Copy elements from src into self in-place. Shape-preserving."""
+        ...
+
+    def backward(
+        self, gradient: Tensor | None = None, retain_graph: builtins.bool | None = None
+    ) -> None:
+        """Compute gradient of current tensor w.r.t. graph leaves."""
+        ...
+
+    def requires_grad_(self, requires_grad: builtins.bool = True) -> Self:
+        """Enable/disable gradient tracking in-place. Shape-preserving."""
         ...
 
     def item(self: Tensor) -> float | int:
@@ -593,7 +636,9 @@ class Tensor[*Shape]:
         """Element-wise multiplication. Shape inference via generic fixture signature."""
         ...
 
-    def div(self, other: Tensor) -> Self:
+    def div(
+        self, other: Tensor | int | float, *, rounding_mode: str | None = None
+    ) -> Self:
         """Element-wise division. Shape inference via generic fixture signature."""
         ...
 
@@ -787,7 +832,7 @@ class Tensor[*Shape]:
         """Element-wise modulo. Shape inference via generic fixture signature."""
         ...
 
-    def remainder(self, other: Tensor) -> Self:
+    def remainder(self, other: Tensor | int | float) -> Self:
         """Element-wise remainder. Shape inference via generic fixture signature."""
         ...
 
@@ -1127,6 +1172,11 @@ def min(self: Tensor) -> Tensor:
 @overload
 def min(self: Tensor, dim: int, keepdim: bool = False) -> tuple[Tensor, Tensor]:
     """Min along dimension. Returns (values, indices). Shape inference via meta-shape: torch.min"""
+    ...
+
+@overload
+def min[*S](input: Tensor[*S], other: Tensor) -> Tensor[*S]:
+    """Element-wise minimum of two tensors."""
     ...
 
 def prod(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
@@ -1527,7 +1577,12 @@ def mul[*Shape](input: Tensor[*Shape], other: Tensor) -> Tensor[*Shape]:
     """Element-wise multiplication. Shape inference via generic fixture signature."""
     ...
 
-def div[*Shape](input: Tensor[*Shape], other: Tensor) -> Tensor[*Shape]:
+def div[*Shape](
+    input: Tensor[*Shape],
+    other: Tensor | int | float,
+    *,
+    rounding_mode: str | None = None,
+) -> Tensor[*Shape]:
     """Element-wise division. Shape inference via generic fixture signature."""
     ...
 
@@ -1661,7 +1716,9 @@ def fmod[*Shape](input: Tensor[*Shape], other: Tensor) -> Tensor[*Shape]:
     """Element-wise modulo. Shape inference via generic fixture signature."""
     ...
 
-def remainder[*Shape](input: Tensor[*Shape], other: Tensor) -> Tensor[*Shape]:
+def remainder[*Shape](
+    input: Tensor[*Shape], other: Tensor | int | float
+) -> Tensor[*Shape]:
     """Element-wise remainder. Shape inference via generic fixture signature."""
     ...
 
@@ -2025,6 +2082,45 @@ def outer(self: Tensor, vec2: Tensor) -> Tensor:
 
 def polar[*Shape](abs: Tensor[*Shape], angle: Tensor[*Shape]) -> Tensor[*Shape]:
     """Construct complex tensor from polar coordinates. Shape-preserving operation."""
+    ...
+
+def view_as_complex[*S](input: Tensor[*S, 2]) -> Tensor[*S]:
+    """View a real tensor as complex. Last dim of size 2 is consumed."""
+    ...
+
+def view_as_real[*S](input: Tensor[*S]) -> Tensor[*S, 2]:
+    """View a complex tensor as real. Appends trailing dim of size 2."""
+    ...
+
+def hann_window[N](
+    window_length: _Dim[N],
+    periodic: bool = True,
+    *,
+    dtype: Any = None,
+    device: Any = None,
+) -> Tensor[N]:
+    """Create a Hann window tensor of size (window_length,)."""
+    ...
+
+def stft[*Batch, F](
+    input: Tensor[*Batch],
+    n_fft: _Dim[F],
+    hop_length: int | None = None,
+    win_length: int | None = None,
+    window: Tensor | None = None,
+    center: bool = True,
+    pad_mode: str = "reflect",
+    normalized: bool = False,
+    onesided: bool | None = None,
+    return_complex: bool | None = None,
+) -> Tensor[*Batch, F // 2 + 1, int]:
+    """Short-time Fourier transform.
+
+    Input: (*Batch, L) — signal (1D or batched).
+    Output: (*Batch, n_fft // 2 + 1, n_frames).
+    Frequency bins = n_fft // 2 + 1 (deterministic from n_fft).
+    Time frames depends on input length, hop_length, center — not tracked.
+    """
     ...
 
 def addmm[N, K, M](

@@ -374,25 +374,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn decompose_generator(&self, ty: &Type) -> Option<(Type, Type, Type)> {
-        let yield_ty = self.fresh_var();
-        let send_ty = self.fresh_var();
-        let return_ty = self.fresh_var();
-        let generator_ty = self.heap.mk_class_type(self.stdlib.generator(
-            yield_ty.to_type(self.heap),
-            send_ty.to_type(self.heap),
-            return_ty.to_type(self.heap),
-        ));
-        if self.is_subset_eq(&generator_ty, ty) {
-            let yield_ty: Type = self.resolve_var_opt(ty, yield_ty)?;
-            let send_ty = self
-                .resolve_var_opt(ty, send_ty)
-                .unwrap_or_else(|| self.heap.mk_none());
-            let return_ty = self
-                .resolve_var_opt(ty, return_ty)
-                .unwrap_or_else(|| self.heap.mk_none());
-            Some((yield_ty, send_ty, return_ty))
-        } else {
-            None
+        match ty {
+            Type::Union(u) => {
+                let mut yield_tys = Vec::new();
+                let mut send_tys = Vec::new();
+                let mut return_tys = Vec::new();
+                for member in &u.members {
+                    let (y, s, r) = self.decompose_generator(member)?;
+                    yield_tys.push(y);
+                    send_tys.push(s);
+                    return_tys.push(r);
+                }
+                Some((
+                    self.unions(yield_tys),
+                    self.unions(send_tys),
+                    self.unions(return_tys),
+                ))
+            }
+            _ => {
+                let yield_ty = self.fresh_var();
+                let send_ty = self.fresh_var();
+                let return_ty = self.fresh_var();
+                let generator_ty = self.heap.mk_class_type(self.stdlib.generator(
+                    yield_ty.to_type(self.heap),
+                    send_ty.to_type(self.heap),
+                    return_ty.to_type(self.heap),
+                ));
+                if self.is_subset_eq(&generator_ty, ty) {
+                    let yield_ty: Type = self.resolve_var_opt(ty, yield_ty)?;
+                    let send_ty = self
+                        .resolve_var_opt(ty, send_ty)
+                        .unwrap_or_else(|| self.heap.mk_none());
+                    let return_ty = self
+                        .resolve_var_opt(ty, return_ty)
+                        .unwrap_or_else(|| self.heap.mk_none());
+                    Some((yield_ty, send_ty, return_ty))
+                } else {
+                    None
+                }
+            }
         }
     }
 

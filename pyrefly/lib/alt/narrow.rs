@@ -885,7 +885,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn atomic_narrow(
+    pub(crate) fn atomic_narrow(
         &self,
         ty: &Type,
         op: &AtomicNarrowOp,
@@ -1195,8 +1195,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     });
                     self.check_type_is_class_object(
-                        right.clone(),
                         Some(ty.clone()),
+                        right.clone(),
                         contains_subscript,
                         v.range(),
                         &FunctionKind::IsInstance,

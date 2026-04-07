@@ -70,6 +70,7 @@ use crate::binding::django::DjangoFieldInfo;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowingSubject;
 use crate::binding::pydantic::PydanticConfigDict;
+use crate::binding::scope::is_constant_name;
 use crate::binding::table::TableKeyed;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
@@ -124,7 +125,7 @@ assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 10);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 15);
+assert_words!(BindingUndecoratedFunction, 18);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -1766,6 +1767,9 @@ pub struct BindingUndecoratedFunction {
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
     pub decorators: Box<[Idx<KeyDecorator>]>,
     pub module_style: ModuleStyle,
+    /// Dot-separated path of enclosing function names (e.g. `"f1"` for `f2` defined inside `f1`,
+    /// or `"f1.g1"` for two levels deep). `None` for top-level or class-method functions.
+    pub outer_funcs: Option<Name>,
 }
 
 impl DisplayWith<Bindings> for BindingUndecoratedFunction {
@@ -1888,9 +1892,13 @@ pub enum SuperStyle {
 
 #[derive(Clone, Debug, Copy, Dupe, PartialEq, Eq)]
 pub enum AnnotationStyle {
-    /// Annotated assignment, x: MyType = my_value
+    /// Annotated assignment: `x: MyType = my_value`
     Direct,
-    /// Forwarded annotation, x: MyType; x = my_value
+    /// First assignment after a bare annotation: `x: MyType` then `x = value`.
+    /// Annotation takes precedence (the variable had no prior value).
+    ForwardedInitial,
+    /// Reassignment of an already-initialized annotated variable.
+    /// Expression type takes precedence; annotation is an upper-bound hint.
     Forwarded,
 }
 
@@ -1902,6 +1910,7 @@ pub struct TypeParameter {
     pub bound: Option<Expr>,
     pub default: Option<Expr>,
     pub constraints: Option<(Vec<Expr>, TextRange)>,
+    pub owner: Option<Name>,
 }
 
 /// Represents an `Idx<K>` for some `K: Keyed` other than `Key`
@@ -2081,6 +2090,8 @@ pub enum Binding {
     ClassDef(Idx<KeyClass>, Box<[Idx<KeyDecorator>]>),
     /// A forward reference to another binding.
     Forward(Idx<Key>),
+    /// Like Forward, but widens implicit literals.
+    PromoteForward(Idx<Key>),
     /// A forward reference produced during first-use resolution of a partial type.
     /// Behaves identically to `Forward` but marks that this indirection came from
     /// the partial-type / first-use machinery.
@@ -2251,6 +2262,7 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::ClassDef(x, _) => write!(f, "ClassDef({})", ctx.display(*x)),
             Self::Forward(k) => write!(f, "Forward({})", ctx.display(*k)),
+            Self::PromoteForward(k) => write!(f, "PromoteForward({})", ctx.display(*k)),
             Self::ForwardToFirstUse(k) => {
                 write!(f, "ForwardToFirstUse({})", ctx.display(*k))
             }
@@ -2505,6 +2517,7 @@ impl Binding {
             | Binding::None
             | Binding::Any(_)
             | Binding::Forward(_)
+            | Binding::PromoteForward(_)
             | Binding::ForwardToFirstUse(_)
             | Binding::Phi(_, _)
             | Binding::LoopPhi(_, _)
@@ -2530,14 +2543,23 @@ impl Binding {
 #[derive(Clone, Debug)]
 pub enum BindingExport {
     Forward(Idx<Key>),
+    PromoteForward(Idx<Key>),
     AnnotatedForward(Idx<KeyAnnotation>, Idx<Key>),
 }
 
 impl BindingExport {
+    pub fn forward_maybe_promote(idx: Idx<Key>, name: &Name) -> Self {
+        if is_constant_name(name) {
+            Self::Forward(idx)
+        } else {
+            Self::PromoteForward(idx)
+        }
+    }
+
     /// The forwarded key index that this export points to.
     pub fn key_idx(&self) -> Idx<Key> {
         match self {
-            Self::Forward(idx) | Self::AnnotatedForward(_, idx) => *idx,
+            Self::Forward(idx) | Self::PromoteForward(idx) | Self::AnnotatedForward(_, idx) => *idx,
         }
     }
 }
@@ -2546,6 +2568,9 @@ impl DisplayWith<Bindings> for BindingExport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         match self {
             Self::Forward(idx) => write!(f, "BindingExport::Forward({})", ctx.display(*idx)),
+            Self::PromoteForward(idx) => {
+                write!(f, "BindingExport::PromoteForward({})", ctx.display(*idx))
+            }
             Self::AnnotatedForward(ann, idx) => {
                 write!(
                     f,

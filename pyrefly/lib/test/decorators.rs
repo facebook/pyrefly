@@ -679,6 +679,32 @@ reveal_type(my_func)  # E: revealed type: (object) -> None
 "#,
 );
 
+testcase!(
+    bug = "FP in Dual-use decorators https://github.com/facebook/pyrefly/issues/2621",
+    test_dual_use_decorator,
+    r#"
+from typing import assert_type
+from functools import wraps
+
+def optional_debug(func_or_flag=None):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+        return wrapper
+    if callable(func_or_flag):
+        return decorator(func_or_flag)
+    return decorator
+
+@optional_debug
+def compute(x: int, y: int, z: int) -> int:
+    return x + y + z
+
+r1 = compute(1, 2, 3)  # E: Expected 1 positional argument, got 3 in function `decorator`
+assert_type(r1, int)  # E: assert_type(((*args: Unknown, **kwargs: Unknown) -> Unknown) | Unknown, int) failed
+    "#,
+);
+
 fn env_numba() -> TestEnv {
     let mut env = TestEnv::one_with_path(
         "numba",
