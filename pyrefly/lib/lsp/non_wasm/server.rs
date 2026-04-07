@@ -4174,9 +4174,7 @@ impl Server {
         let allow_fix_all = only_kinds.is_none_or(|kinds| {
             kinds.iter().any(|kind| {
                 kind == &CodeActionKind::SOURCE_FIX_ALL
-                    || kind
-                        .as_str()
-                        .starts_with(CodeActionKind::SOURCE_FIX_ALL.as_str())
+                    || kind.as_str().starts_with(SOURCE_FIX_ALL_PYREFLY)
             })
         });
         let allow_refactor = only_kinds.is_none_or(|kinds| {
