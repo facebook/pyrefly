@@ -1142,7 +1142,7 @@ pub fn capabilities(
                 CodeActionKind::new("refactor.delete"),
                 CodeActionKind::new("refactor.move"),
                 CodeActionKind::REFACTOR_INLINE,
-                CodeActionKind::SOURCE_FIX_ALL,
+                CodeActionKind::new(SOURCE_FIX_ALL_PYREFLY),
             ]),
             ..Default::default()
         })),
@@ -1252,6 +1252,7 @@ pub enum ProcessEvent {
 }
 
 const PYTHON_SECTION: &str = "python";
+const SOURCE_FIX_ALL_PYREFLY: &str = "source.fixAll.pyrefly";
 
 struct TypeHierarchyTarget {
     def_index: ClassDefIndex,
@@ -4171,9 +4172,12 @@ impl Server {
         let allow_quickfix = only_kinds
             .is_none_or(|kinds| kinds.iter().any(|kind| kind == &CodeActionKind::QUICKFIX));
         let allow_fix_all = only_kinds.is_none_or(|kinds| {
-            kinds
-                .iter()
-                .any(|kind| kind == &CodeActionKind::SOURCE_FIX_ALL)
+            kinds.iter().any(|kind| {
+                kind == &CodeActionKind::SOURCE_FIX_ALL
+                    || kind
+                        .as_str()
+                        .starts_with(CodeActionKind::SOURCE_FIX_ALL.as_str())
+            })
         });
         let allow_refactor = only_kinds.is_none_or(|kinds| {
             kinds
@@ -4276,7 +4280,7 @@ impl Server {
                 if !changes.is_empty() {
                     actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                         title: "Remove all redundant casts".to_owned(),
-                        kind: Some(CodeActionKind::SOURCE_FIX_ALL),
+                        kind: Some(CodeActionKind::new(SOURCE_FIX_ALL_PYREFLY)),
                         edit: Some(WorkspaceEdit {
                             changes: Some(changes),
                             ..Default::default()
