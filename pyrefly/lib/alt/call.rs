@@ -692,13 +692,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // bind unrelated type variables and over-specialize this constructor.
             // Only pre-specialize from concrete instance branches of the same class.
             let class_hint = hint.ty().clone().into_unions().into_iter().find_map(|ty| {
-                if let Type::ClassType(hint_cls) = ty {
-                    let class_hint = Type::ClassType(hint_cls);
-                    if class_hint.qname() == Some(cls.qname())
-                        && !class_hint.contains_type_variable()
-                        && !class_hint.may_contain_quantified_var()
+                if matches!(ty, Type::ClassType(_)) {
+                    if ty.qname() == Some(cls.qname())
+                        && !ty.contains_type_variable()
+                        && !ty.may_contain_quantified_var()
                     {
-                        return Some(class_hint);
+                        return Some(ty);
                     }
                 }
                 None
