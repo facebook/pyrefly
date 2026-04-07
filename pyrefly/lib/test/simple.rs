@@ -1736,6 +1736,22 @@ def g(f: Callable[[Any], int], inputs: Any) -> None:
 );
 
 testcase!(
+    test_map_str_method_with_splitlines,
+    r#"
+def main(a: str) -> None:
+    _ = map(str.strip, a.splitlines())
+    "#,
+);
+
+testcase!(
+    test_str_maketrans_with_dict,
+    r#"
+def main() -> None:
+    _ = str.maketrans({"a": "b", "c": None})
+    "#,
+);
+
+testcase!(
     test_union_function_exponential,
     r#"
 # This used to take an exponential amount of time to type check
