@@ -691,17 +691,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // (for example `T | Box[T]`). Constraining against the full union can
             // bind unrelated type variables and over-specialize this constructor.
             // Only pre-specialize from concrete instance branches of the same class.
-            let class_hint = hint.ty().clone().into_unions().into_iter().find_map(|ty| {
-                if matches!(ty, Type::ClassType(_)) {
-                    if ty.qname() == Some(cls.qname())
+            // If multiple concrete branches of the same class are present (for
+            // example `Box[int] | Box[str]`), skip pre-specialization entirely so
+            // constructor inference does not depend on union member ordering.
+            let mut matching_class_hints = hint
+                .ty()
+                .clone()
+                .into_unions()
+                .into_iter()
+                .filter(|ty| {
+                    matches!(ty, Type::ClassType(_))
+                        && ty.qname() == Some(cls.qname())
                         && !ty.contains_type_variable()
                         && !ty.may_contain_quantified_var()
-                    {
-                        return Some(ty);
-                    }
-                }
-                None
-            });
+                });
+            let class_hint = match (matching_class_hints.next(), matching_class_hints.next()) {
+                (Some(class_hint), None) => Some(class_hint),
+                _ => None,
+            };
             if let Some(class_hint) = class_hint {
                 let vs = self
                     .solver()

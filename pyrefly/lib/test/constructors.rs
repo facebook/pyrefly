@@ -794,6 +794,51 @@ B([A("oops")])  # E: `str` is not assignable to upper bound `A | int` of type va
 );
 
 testcase!(
+    test_init_overload_inline_constructor_with_union_hint,
+    r#"
+from collections.abc import Iterable, Mapping
+from typing import Generic, Never, SupportsInt, TypeVar, overload
+
+TCo = TypeVar("TCo", covariant=True)
+T = TypeVar("T")
+
+class Box(Generic[TCo]):
+    @overload
+    def __init__(self: "Box[Never]", val: Mapping[Never, SupportsInt], /) -> None: ...
+    @overload
+    def __init__(self: "Box[T]", val: Mapping[T, SupportsInt], /) -> None: ...
+    def __init__(self, val: object, /) -> None:
+        pass
+
+def process(items: Iterable[tuple[T | Box[T], int]]) -> Box[T]: ...
+
+process(((Box({1: 1}), 1),))
+    "#,
+);
+
+testcase!(
+    test_init_overload_inline_constructor_with_multiple_concrete_union_hints,
+    r#"
+from collections.abc import Iterable
+from typing import Generic, TypeVar, overload
+
+T = TypeVar("T")
+
+class Box(Generic[T]):
+    @overload
+    def __init__(self: "Box[int]", val: int, /) -> None: ...
+    @overload
+    def __init__(self: "Box[str]", val: str, /) -> None: ...
+    def __init__(self, val: int | str, /) -> None:
+        pass
+
+def process(items: Iterable[tuple[Box[int] | Box[str], int]]) -> None: ...
+
+process(((Box("x"), 1),))
+    "#,
+);
+
+testcase!(
     test_init_overload_with_self,
     r#"
 from typing import Generic, TypeVar, overload, Callable
