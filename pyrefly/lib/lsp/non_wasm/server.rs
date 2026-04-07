@@ -915,6 +915,7 @@ pub struct Server {
     /// should be mapped through here in case they correspond to a cell.
     open_notebook_cells: RwLock<HashMap<Url, PathBuf>>,
     open_files: RwLock<HashMap<PathBuf, Arc<LspFile>>>,
+    open_files_with_unsaved_changes: Mutex<HashSet<PathBuf>>,
     /// Last published fingerprint for unversioned file-backed workspace diagnostics.
     published_workspace_diagnostics: Mutex<HashMap<Url, u64>>,
     /// Tracks URIs (including virtual/untitled ones) to synthetic on-disk paths so we can
@@ -2586,6 +2587,7 @@ impl Server {
             state: State::new(config_finder, thread_count),
             open_notebook_cells: RwLock::new(HashMap::new()),
             open_files: RwLock::new(HashMap::new()),
+            open_files_with_unsaved_changes: Mutex::new(HashSet::new()),
             published_workspace_diagnostics: Mutex::new(HashMap::new()),
             unsaved_file_tracker: UnsavedFileTracker::new(),
             indexed_configs: Mutex::new(HashSet::new()),
@@ -3488,6 +3490,7 @@ impl Server {
 
     fn did_save(&self, url: Url) {
         if let Some(path) = self.path_for_uri(&url) {
+            self.open_files_with_unsaved_changes.lock().remove(&path);
             self.invalidate(TelemetryEventKind::InvalidateDisk, None, move |t| {
                 t.invalidate_disk(&[path])
             })
@@ -3525,6 +3528,7 @@ impl Server {
         } else {
             None
         };
+        self.open_files_with_unsaved_changes.lock().remove(&path);
         self.version_info.lock().insert(path.clone(), version);
         self.open_files.write().insert(path.clone(), contents);
         self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
@@ -3590,6 +3594,9 @@ impl Server {
             params.content_changes,
         )));
         drop(lock);
+        self.open_files_with_unsaved_changes
+            .lock()
+            .insert(file_path.clone());
         // Update version_info only after the mutation has fully succeeded.
         self.version_info.lock().insert(file_path.clone(), version);
         if !subsequent_mutation {
@@ -3752,6 +3759,9 @@ impl Server {
         let new_notebook = Arc::new(LspNotebook::new(ruff_notebook, notebook_document));
         *original = Arc::new(LspFile::Notebook(new_notebook));
         drop(lock);
+        self.open_files_with_unsaved_changes
+            .lock()
+            .insert(file_path.clone());
         // Update version_info only after the mutation has fully succeeded, so
         // that on error the version stays at the old value and subsequent
         // notifications operate against consistent state.
@@ -3787,6 +3797,28 @@ impl Server {
             !events.created.is_empty() || !events.removed.is_empty() || !events.unknown.is_empty();
 
         config_changed || files_added_or_removed
+    }
+
+    fn refresh_clean_open_files_from_disk(&self, events: &CategorizedEvents) {
+        let unsaved = self.open_files_with_unsaved_changes.lock().clone();
+        let mut open_files = self.open_files.write();
+        for path in events.modified.iter() {
+            if unsaved.contains(path) {
+                continue;
+            }
+            let Some(open_file) = open_files.get_mut(path) else {
+                continue;
+            };
+            let LspFile::Source(current_contents) = open_file.as_ref() else {
+                continue;
+            };
+            let Ok(updated_contents) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            if current_contents.as_str() != updated_contents {
+                *open_file = Arc::new(LspFile::from_source(updated_contents));
+            }
+        }
     }
 
     fn did_change_watched_files(
@@ -3827,6 +3859,8 @@ impl Server {
         });
 
         let should_requery_build_system = should_requery_build_system(&events);
+
+        self.refresh_clean_open_files_from_disk(&events);
 
         // Rewatch files if necessary (config changed, files added/removed, etc.)
         if Self::should_rewatch(&events) {
@@ -3921,6 +3955,7 @@ impl Server {
             },
         }
         drop(open_files);
+        self.open_files_with_unsaved_changes.lock().remove(&path);
         self.unsaved_file_tracker.forget_uri_path(&url);
         self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
         self.recheck_queue.queue_task(
