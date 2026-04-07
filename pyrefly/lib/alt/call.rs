@@ -694,12 +694,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If multiple concrete branches of the same class are present (for
             // example `Box[int] | Box[str]`), skip pre-specialization entirely so
             // constructor inference does not depend on union member ordering.
-            let mut matching_class_hints = hint
-                .ty()
-                .clone()
-                .into_unions()
-                .into_iter()
-                .filter(|ty| {
+            let mut matching_class_hints =
+                hint.ty().clone().into_unions().into_iter().filter(|ty| {
                     matches!(ty, Type::ClassType(_))
                         && ty.qname() == Some(cls.qname())
                         && !ty.contains_type_variable()
