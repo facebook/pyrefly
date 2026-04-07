@@ -32,7 +32,7 @@ U = TypeVar("U")
 V = TypeVar("V")
 W = TypeVar("W")
 
-ComplexCallable = Callable[[List[T], Dict[str, U]], Awaitable[V]]
+ComplexCallable = Callable[[List[T], Dict[str, Any]], Awaitable[V]]
 MergeCallable = Callable[[Sequence[V], Mapping[str, U]], Awaitable[Dict[str, V]]]
 AuditTag = Annotated[str, "benchmark", "utils"]
 Vector = Annotated[List[Annotated[T, "vector-item"]], "vector"]

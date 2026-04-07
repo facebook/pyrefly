@@ -96,8 +96,27 @@ class BaseNode(Generic[T, U, V]):
         """
         output: List[V] = []
         for position, item in enumerate(items):
-            output.append(await callback([item], {"position": position}))
+            # Position metadata is stringified to match common U=str callback bindings.
+            output.append(await callback([item], {"position": str(position)}))
         return tuple(output)
+
+    async def orchestrate(
+        self,
+        payload: Annotated[Mapping[str, T], "payload"],
+        callback: ComplexCallable[T, U, V],
+        merge: MergeCallable[U, V],
+    ) -> Annotated[Dict[str, V], "orchestrated-map"]:
+        """Run async orchestration for a concrete entity implementation.
+
+        Args:
+            payload: Input payload values indexed by key.
+            callback: Async converter callback with generic variance.
+            merge: Async merge callback producing final mapping.
+
+        Returns:
+            Aggregated mapping of orchestrated values.
+        """
+        raise NotImplementedError("Concrete entity classes must implement orchestrate")
 
 
 class Layer1(BaseNode[T, U, V]):
@@ -1993,7 +2012,7 @@ async def execute_api_pipeline(
     result: Dict[str, float] = {}
     for index, entity in enumerate(entities):
         payload: Dict[str, int] = {f"item_{index}": index, "item_extra": index + 10}
-        merged = await entity.orchestrate(payload, callback, merge)  # type: ignore[attr-defined]
+        merged = await entity.orchestrate(payload, callback, merge)
         result.update({f"{entity.module_name}_{k}": v for k, v in merged.items()})
     return result
 

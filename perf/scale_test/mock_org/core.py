@@ -94,7 +94,7 @@ class BaseNode(Generic[T, U, V]):
         """
         output: List[V] = []
         for position, item in enumerate(items):
-            output.append(await callback([item], {"position": position}))
+            output.append(await callback([item], {"position": str(position)}))
         return tuple(output)
 
 

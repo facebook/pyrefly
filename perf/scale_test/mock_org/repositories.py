@@ -38,6 +38,20 @@ AuditTag = Annotated[str, "benchmark", "repositories"]
 Vector = Annotated[List[Annotated[T, "vector-item"]], "vector"]
 
 
+class RepositoryEntityProtocol(Protocol):
+    """Protocol for repository pipeline entities with orchestration support."""
+
+    module_name: AuditTag
+
+    async def orchestrate(
+        self,
+        payload: Dict[str, int],
+        callback: ComplexCallable[int, str, float],
+        merge: MergeCallable[str, float],
+    ) -> Dict[str, float]:
+        """Run orchestration for repository entity payloads."""
+
+
 class Normalizer(Protocol[T, U, V]):
     """Protocol describing heavy generic normalization behavior.
 
@@ -96,7 +110,7 @@ class BaseNode(Generic[T, U, V]):
         """
         output: List[V] = []
         for position, item in enumerate(items):
-            output.append(await callback([item], {"position": position}))
+            output.append(await callback([item], {"position": str(position)}))
         return tuple(output)
 
 
@@ -1976,7 +1990,7 @@ class RepositoriesEntity25(Layer5[T, U, V], Generic[T, U, V]):
 
 
 async def execute_repositories_pipeline(
-    entities: Annotated[Sequence[Layer5[int, str, float]], "entities"],
+    entities: Annotated[Sequence[RepositoryEntityProtocol], "entities"],
     callback: ComplexCallable[int, str, float],
     merge: MergeCallable[str, float],
 ) -> Annotated[Dict[str, float], "pipeline-output"]:
@@ -1993,12 +2007,12 @@ async def execute_repositories_pipeline(
     result: Dict[str, float] = {}
     for index, entity in enumerate(entities):
         payload: Dict[str, int] = {f"item_{index}": index, "item_extra": index + 10}
-        merged = await entity.orchestrate(payload, callback, merge)  # type: ignore[attr-defined]
+        merged = await entity.orchestrate(payload, callback, merge)
         result.update({f"{entity.module_name}_{k}": v for k, v in merged.items()})
     return result
 
 
-def build_repositories_entities() -> Annotated[List[Layer5[int, str, float]], "entity-list"]:
+def build_repositories_entities() -> Annotated[List[RepositoryEntityProtocol], "entity-list"]:
     """Build a typed list of entities for benchmark execution.
 
     Args:
