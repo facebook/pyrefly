@@ -160,6 +160,24 @@ def f2(x: E | int):
 );
 
 testcase!(
+    test_is_not_enum_literal_alias,
+    r#"
+from typing import assert_type, Literal
+import enum
+class E(enum.Enum):
+    X = 1
+    Y = 2
+
+a = E.X
+assert_type(a, Literal[E.X])
+
+def f1(x: Literal[E.X, E.Y]):
+    if x is not a:
+        assert_type(x, Literal[E.Y])
+    "#,
+);
+
+testcase!(
     test_ellipsis_is,
     r#"
 from typing import reveal_type

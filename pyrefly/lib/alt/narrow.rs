@@ -12,6 +12,7 @@ use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::class::Class;
 use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::facet::FacetChain;
@@ -127,6 +128,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
                 .collect::<Vec<_>>(),
         )
+    }
+
+    fn narrow_expr_infer(&self, expr: &Expr, errors: &ErrorCollector) -> Type {
+        match expr {
+            Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => self
+                .get(&Key::BoundName(ShortIdentifier::expr_name(name)))
+                .arc_clone_ty(),
+            _ => self.expr_infer(expr, errors),
+        }
     }
 
     /// Return the most specific disjoint base for a type per PEP 800.
@@ -764,7 +774,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             match op {
                 AtomicNarrowOp::Is(v) | AtomicNarrowOp::Eq(v) => {
-                    let right = self.expr_infer(v, errors);
+                    let right = self.narrow_expr_infer(v, errors);
                     return Some(self.narrow_isinstance(base, &right));
                 }
                 AtomicNarrowOp::IsNot(v) | AtomicNarrowOp::NotEq(v) => {
@@ -775,15 +785,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         match op {
             AtomicNarrowOp::Is(v) => {
-                let right = self.expr_infer(v, errors);
+                let right = self.narrow_expr_infer(v, errors);
                 Some(self.narrow_facet_is(base, &right, facet, range))
             }
             AtomicNarrowOp::IsNot(v) => {
-                let right = self.expr_infer(v, errors);
+                let right = self.narrow_expr_infer(v, errors);
                 Some(self.narrow_facet_is_not(base, &right, facet, range))
             }
             AtomicNarrowOp::Eq(v) => {
-                let right = self.expr_infer(v, errors);
+                let right = self.narrow_expr_infer(v, errors);
                 Some(self.distribute_over_union(base, |t| {
                     let base_info = TypeInfo::of_ty(t.clone());
                     let facet_ty = self.get_facet_chain_type(
@@ -804,7 +814,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }))
             }
             AtomicNarrowOp::NotEq(v) => {
-                let right = self.expr_infer(v, errors);
+                let right = self.narrow_expr_infer(v, errors);
                 Some(self.distribute_over_union(base, |t| {
                     let base_info = TypeInfo::of_ty(t.clone());
                     let facet_ty = self.get_facet_chain_type(
@@ -1175,16 +1185,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ty.clone()
             }
             AtomicNarrowOp::Is(v) => {
-                let right = self.expr_infer(v, errors);
+                let right = self.narrow_expr_infer(v, errors);
                 // Get our best approximation of ty & right.
                 self.intersect(ty, &right)
             }
             AtomicNarrowOp::IsNot(v) => {
-                let right = self.expr_infer(v, errors);
+                let right = self.narrow_expr_infer(v, errors);
                 self.narrow_is_not(ty, &right)
             }
             AtomicNarrowOp::IsInstance(v, source) => {
-                let right = self.expr_infer(v, errors);
+                let right = self.narrow_expr_infer(v, errors);
                 // For patterns, validation happens here since there's no call site.
                 // For calls, validation already happened in special_calls.rs.
                 if matches!(source, NarrowSource::Pattern) {
@@ -1212,14 +1222,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AtomicNarrowOp::TypeEq(v) => {
                 // If type(X) == Y then X has to be exactly Y, not a subclass of Y
                 // We can't model that, so we narrow it exactly like isinstance(X, Y)
-                let right = self.expr_infer(v, errors);
+                let right = self.narrow_expr_infer(v, errors);
                 self.narrow_isinstance(ty, &right)
             }
             // If type(X) != Y, X can still be a subclass of Y so we can't do negative refinement
             // unless Y is final, in which case X cannot be a subclass of Y
             AtomicNarrowOp::TypeNotEq(v) => self.narrow_type_not_eq(ty, v, errors),
             AtomicNarrowOp::IsSubclass(v) => {
-                let right = self.expr_infer(v, errors);
+                let right = self.narrow_expr_infer(v, errors);
                 self.narrow_issubclass(ty, &right, v.range(), errors)
             }
             AtomicNarrowOp::IsNotSubclass(v) => self.narrow_is_not_subclass(ty, v, errors),
@@ -1348,7 +1358,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
             }
             AtomicNarrowOp::Eq(v) => {
-                let right = self.expr_infer(v, errors);
+                let right = self.narrow_expr_infer(v, errors);
                 if matches!(right, Type::Literal(_) | Type::None | Type::Ellipsis) {
                     self.intersect(ty, &right)
                 } else {
@@ -1356,7 +1366,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             AtomicNarrowOp::NotEq(v) => {
-                let right = self.expr_infer(v, errors);
+                let right = self.narrow_expr_infer(v, errors);
                 if matches!(right, Type::Literal(_) | Type::None | Type::Ellipsis) {
                     self.distribute_over_union(ty, |t| match (t, &right) {
                         (_, _) if self.literal_equal(t, &right) => self.heap.mk_never(),
