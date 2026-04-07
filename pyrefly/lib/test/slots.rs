@@ -281,7 +281,6 @@ c.x = 2  # OK: descriptor __set__ handles this, not instance storage
 
 // https://github.com/facebook/pyrefly/issues/2917
 testcase!(
-    bug = "Should detect instance layout conflict when multiple bases have __slots__",
     test_slots_multiple_inheritance_layout_conflict,
     r#"
 class Left:
@@ -292,13 +291,12 @@ class Right:
 
 # Inheriting from two classes that both define non-empty __slots__
 # causes a TypeError at runtime.
-class Combined(Left, Right): ...
+class Combined(Left, Right): ...  # E: multiple base classes with non-empty `__slots__`
 "#,
 );
 
 // https://github.com/facebook/pyrefly/issues/2916
 testcase!(
-    bug = "Should detect instance layout conflict even with identical slot names",
     test_slots_layout_conflict_same_names,
     r#"
 class First:
@@ -308,7 +306,51 @@ class Second:
     __slots__ = ("x",)
 
 # Even though the slot names match, these are different C-level layouts.
-class Both(First, Second): ...
+class Both(First, Second): ...  # E: multiple base classes with non-empty `__slots__`
+"#,
+);
+
+testcase!(
+    test_slots_layout_conflict_empty_slots_ok,
+    r#"
+class A:
+    __slots__ = ("x",)
+
+class B:
+    __slots__ = ()
+
+# One base has non-empty slots, the other has empty slots - this is fine.
+class C(A, B): ...
+"#,
+);
+
+testcase!(
+    test_slots_layout_conflict_both_empty_ok,
+    r#"
+class A:
+    __slots__ = ()
+
+class B:
+    __slots__ = ()
+
+# Both bases have empty slots - no conflict.
+class C(A, B): ...
+"#,
+);
+
+testcase!(
+    test_slots_layout_conflict_three_bases,
+    r#"
+class A:
+    __slots__ = ("x",)
+
+class B:
+    __slots__ = ("y",)
+
+class C:
+    __slots__ = ("z",)
+
+class D(A, B, C): ...  # E: multiple base classes with non-empty `__slots__`
 "#,
 );
 
