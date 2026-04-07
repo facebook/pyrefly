@@ -19,6 +19,7 @@ from typing import (
     Callable,
     ClassVar,
     Concatenate,
+    cast,
     Generic,
     Mapping,
     MutableMapping,
@@ -80,6 +81,14 @@ class RepositoryProtocol(Protocol[T]):
 
     def save(self, key: str, value: T) -> None:
         ...
+
+
+class CallableFallback(Generic[K, V]):
+    def __init__(self, factory: Callable[[K], V]) -> None:
+        self.factory = factory
+
+    def __call__(self, key: K) -> V:
+        return self.factory(key)
 
 
 class GenericEnvelope(Generic[T, U]):
@@ -1549,12 +1558,12 @@ class DataLayerService0(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1563,8 +1572,9 @@ class DataLayerService0(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1602,12 +1612,12 @@ class DataLayerService1(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1616,8 +1626,9 @@ class DataLayerService1(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1655,12 +1666,12 @@ class DataLayerService2(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1669,8 +1680,9 @@ class DataLayerService2(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1708,12 +1720,12 @@ class DataLayerService3(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1722,8 +1734,9 @@ class DataLayerService3(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1761,12 +1774,12 @@ class DataLayerService4(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1775,8 +1788,9 @@ class DataLayerService4(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1814,12 +1828,12 @@ class DataLayerService5(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1828,8 +1842,9 @@ class DataLayerService5(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1867,12 +1882,12 @@ class DataLayerService6(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1881,8 +1896,9 @@ class DataLayerService6(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1920,12 +1936,12 @@ class DataLayerService7(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1934,8 +1950,9 @@ class DataLayerService7(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1973,12 +1990,12 @@ class DataLayerService8(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1987,8 +2004,9 @@ class DataLayerService8(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2026,12 +2044,12 @@ class DataLayerService9(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2040,8 +2058,9 @@ class DataLayerService9(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2079,12 +2098,12 @@ class DataLayerService10(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2093,8 +2112,9 @@ class DataLayerService10(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2132,12 +2152,12 @@ class DataLayerService11(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2146,8 +2166,9 @@ class DataLayerService11(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2185,12 +2206,12 @@ class DataLayerService12(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2199,8 +2220,9 @@ class DataLayerService12(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2238,12 +2260,12 @@ class DataLayerService13(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2252,8 +2274,9 @@ class DataLayerService13(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2291,12 +2314,12 @@ class DataLayerService14(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2305,8 +2328,9 @@ class DataLayerService14(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2344,12 +2368,12 @@ class DataLayerService15(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2358,8 +2382,9 @@ class DataLayerService15(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2397,12 +2422,12 @@ class DataLayerService16(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2411,8 +2436,9 @@ class DataLayerService16(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2450,12 +2476,12 @@ class DataLayerService17(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2464,8 +2490,9 @@ class DataLayerService17(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2503,12 +2530,12 @@ class DataLayerService18(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2517,8 +2544,9 @@ class DataLayerService18(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2556,12 +2584,12 @@ class DataLayerService19(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2570,8 +2598,9 @@ class DataLayerService19(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2609,12 +2638,12 @@ class DataLayerService20(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2623,8 +2652,9 @@ class DataLayerService20(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2662,12 +2692,12 @@ class DataLayerService21(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2676,8 +2706,9 @@ class DataLayerService21(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,

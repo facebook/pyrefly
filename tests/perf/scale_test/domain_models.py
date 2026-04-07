@@ -19,6 +19,7 @@ from typing import (
     Callable,
     ClassVar,
     Concatenate,
+    cast,
     Generic,
     Mapping,
     MutableMapping,
@@ -42,18 +43,8 @@ import tests.perf.scale_test.orchestration as upstream_4
 import tests.perf.scale_test.service_mesh as downstream_4
 
 # Circular import mesh for indexer stress tests.
-_MESH_IMPORTS = (
-    upstream_1,
-    downstream_1,
-    upstream_2,
-    downstream_2,
-    upstream_3,
-    downstream_3,
-    upstream_4,
-    downstream_4,
-)
-_MESH_NAMES = tuple(module.__name__.rsplit('.', maxsplit=1)
-                    [-1] for module in _MESH_IMPORTS)
+_MESH_IMPORTS = (upstream_1, downstream_1, upstream_2, downstream_2, upstream_3, downstream_3, upstream_4, downstream_4,)
+_MESH_NAMES = tuple(module.__name__.rsplit('.', maxsplit=1)[-1] for module in _MESH_IMPORTS)
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -80,6 +71,14 @@ class RepositoryProtocol(Protocol[T]):
 
     def save(self, key: str, value: T) -> None:
         ...
+
+
+class CallableFallback(Generic[K, V]):
+    def __init__(self, factory: Callable[[K], V]) -> None:
+        self.factory = factory
+
+    def __call__(self, key: K) -> V:
+        return self.factory(key)
 
 
 class GenericEnvelope(Generic[T, U]):
@@ -187,7 +186,6 @@ class DomainModelsGenericNode0(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DomainModelsProtocol1(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_1"
 
@@ -236,7 +234,6 @@ class DomainModelsGenericNode1(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DomainModelsProtocol2(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_2"
@@ -287,7 +284,6 @@ class DomainModelsGenericNode2(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DomainModelsProtocol3(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_3"
 
@@ -336,7 +332,6 @@ class DomainModelsGenericNode3(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DomainModelsProtocol4(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_4"
@@ -387,7 +382,6 @@ class DomainModelsGenericNode4(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DomainModelsProtocol5(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_5"
 
@@ -436,7 +430,6 @@ class DomainModelsGenericNode5(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DomainModelsProtocol6(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_6"
@@ -487,7 +480,6 @@ class DomainModelsGenericNode6(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DomainModelsProtocol7(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_7"
 
@@ -536,7 +528,6 @@ class DomainModelsGenericNode7(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DomainModelsProtocol8(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_8"
@@ -587,7 +578,6 @@ class DomainModelsGenericNode8(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DomainModelsProtocol9(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_9"
 
@@ -636,7 +626,6 @@ class DomainModelsGenericNode9(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DomainModelsProtocol10(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_10"
@@ -687,7 +676,6 @@ class DomainModelsGenericNode10(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DomainModelsProtocol11(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_11"
 
@@ -736,7 +724,6 @@ class DomainModelsGenericNode11(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DomainModelsProtocol12(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_12"
@@ -787,7 +774,6 @@ class DomainModelsGenericNode12(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DomainModelsProtocol13(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_13"
 
@@ -836,7 +822,6 @@ class DomainModelsGenericNode13(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DomainModelsProtocol14(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_14"
@@ -887,7 +872,6 @@ class DomainModelsGenericNode14(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DomainModelsProtocol15(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_15"
 
@@ -937,7 +921,6 @@ class DomainModelsGenericNode15(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class DomainModelsProtocol16(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_16"
 
@@ -986,7 +969,6 @@ class DomainModelsGenericNode16(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class DomainModelsProtocol17(Protocol[T, U]):
     label: ClassVar[str] = "domain_models_protocol_17"
@@ -1045,54 +1027,45 @@ class DomainModelsRoot0(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DomainModelsChain0Level1(DomainModelsRoot0[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain0Level2(DomainModelsChain0Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain0Level3(DomainModelsChain0Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain0Level4(DomainModelsChain0Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain0Level5(DomainModelsChain0Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain0Level6(DomainModelsChain0Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain0Level7(DomainModelsChain0Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain0Level8(DomainModelsChain0Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsRoot1(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1101,54 +1074,45 @@ class DomainModelsRoot1(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DomainModelsChain1Level1(DomainModelsRoot1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain1Level2(DomainModelsChain1Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain1Level3(DomainModelsChain1Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain1Level4(DomainModelsChain1Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain1Level5(DomainModelsChain1Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain1Level6(DomainModelsChain1Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain1Level7(DomainModelsChain1Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain1Level8(DomainModelsChain1Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsRoot2(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1157,54 +1121,45 @@ class DomainModelsRoot2(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DomainModelsChain2Level1(DomainModelsRoot2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain2Level2(DomainModelsChain2Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain2Level3(DomainModelsChain2Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain2Level4(DomainModelsChain2Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain2Level5(DomainModelsChain2Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain2Level6(DomainModelsChain2Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain2Level7(DomainModelsChain2Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain2Level8(DomainModelsChain2Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsRoot3(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1213,54 +1168,45 @@ class DomainModelsRoot3(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DomainModelsChain3Level1(DomainModelsRoot3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain3Level2(DomainModelsChain3Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain3Level3(DomainModelsChain3Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain3Level4(DomainModelsChain3Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain3Level5(DomainModelsChain3Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain3Level6(DomainModelsChain3Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain3Level7(DomainModelsChain3Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain3Level8(DomainModelsChain3Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsRoot4(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1269,54 +1215,45 @@ class DomainModelsRoot4(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DomainModelsChain4Level1(DomainModelsRoot4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain4Level2(DomainModelsChain4Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain4Level3(DomainModelsChain4Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain4Level4(DomainModelsChain4Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain4Level5(DomainModelsChain4Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain4Level6(DomainModelsChain4Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain4Level7(DomainModelsChain4Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain4Level8(DomainModelsChain4Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsRoot5(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1325,54 +1262,45 @@ class DomainModelsRoot5(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DomainModelsChain5Level1(DomainModelsRoot5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain5Level2(DomainModelsChain5Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain5Level3(DomainModelsChain5Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain5Level4(DomainModelsChain5Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain5Level5(DomainModelsChain5Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain5Level6(DomainModelsChain5Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain5Level7(DomainModelsChain5Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain5Level8(DomainModelsChain5Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsRoot6(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1381,54 +1309,45 @@ class DomainModelsRoot6(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DomainModelsChain6Level1(DomainModelsRoot6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain6Level2(DomainModelsChain6Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain6Level3(DomainModelsChain6Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain6Level4(DomainModelsChain6Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain6Level5(DomainModelsChain6Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain6Level6(DomainModelsChain6Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain6Level7(DomainModelsChain6Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain6Level8(DomainModelsChain6Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsRoot7(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1437,54 +1356,45 @@ class DomainModelsRoot7(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DomainModelsChain7Level1(DomainModelsRoot7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain7Level2(DomainModelsChain7Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain7Level3(DomainModelsChain7Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain7Level4(DomainModelsChain7Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain7Level5(DomainModelsChain7Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain7Level6(DomainModelsChain7Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain7Level7(DomainModelsChain7Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain7Level8(DomainModelsChain7Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsRoot8(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1493,48 +1403,40 @@ class DomainModelsRoot8(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class DomainModelsChain8Level1(DomainModelsRoot8[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain8Level2(DomainModelsChain8Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain8Level3(DomainModelsChain8Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain8Level4(DomainModelsChain8Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain8Level5(DomainModelsChain8Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain8Level6(DomainModelsChain8Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class DomainModelsChain8Level7(DomainModelsChain8Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class DomainModelsChain8Level8(DomainModelsChain8Level7[T]):
     def project(self) -> T:
@@ -1549,12 +1451,12 @@ class DomainModelsService0(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1563,8 +1465,9 @@ class DomainModelsService0(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1593,7 +1496,6 @@ class DomainModelsService0(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService1(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1602,12 +1504,12 @@ class DomainModelsService1(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1616,8 +1518,9 @@ class DomainModelsService1(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1646,7 +1549,6 @@ class DomainModelsService1(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService2(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1655,12 +1557,12 @@ class DomainModelsService2(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1669,8 +1571,9 @@ class DomainModelsService2(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1699,7 +1602,6 @@ class DomainModelsService2(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService3(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1708,12 +1610,12 @@ class DomainModelsService3(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1722,8 +1624,9 @@ class DomainModelsService3(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1752,7 +1655,6 @@ class DomainModelsService3(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService4(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1761,12 +1663,12 @@ class DomainModelsService4(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1775,8 +1677,9 @@ class DomainModelsService4(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1805,7 +1708,6 @@ class DomainModelsService4(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService5(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1814,12 +1716,12 @@ class DomainModelsService5(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1828,8 +1730,9 @@ class DomainModelsService5(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1858,7 +1761,6 @@ class DomainModelsService5(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService6(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1867,12 +1769,12 @@ class DomainModelsService6(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1881,8 +1783,9 @@ class DomainModelsService6(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1911,7 +1814,6 @@ class DomainModelsService6(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService7(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1920,12 +1822,12 @@ class DomainModelsService7(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1934,8 +1836,9 @@ class DomainModelsService7(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1964,7 +1867,6 @@ class DomainModelsService7(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService8(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1973,12 +1875,12 @@ class DomainModelsService8(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1987,8 +1889,9 @@ class DomainModelsService8(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2017,7 +1920,6 @@ class DomainModelsService8(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService9(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2026,12 +1928,12 @@ class DomainModelsService9(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2040,8 +1942,9 @@ class DomainModelsService9(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2070,7 +1973,6 @@ class DomainModelsService9(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService10(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2079,12 +1981,12 @@ class DomainModelsService10(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2093,8 +1995,9 @@ class DomainModelsService10(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2123,7 +2026,6 @@ class DomainModelsService10(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService11(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2132,12 +2034,12 @@ class DomainModelsService11(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2146,8 +2048,9 @@ class DomainModelsService11(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2176,7 +2079,6 @@ class DomainModelsService11(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService12(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2185,12 +2087,12 @@ class DomainModelsService12(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2199,8 +2101,9 @@ class DomainModelsService12(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2229,7 +2132,6 @@ class DomainModelsService12(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService13(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2238,12 +2140,12 @@ class DomainModelsService13(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2252,8 +2154,9 @@ class DomainModelsService13(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2282,7 +2185,6 @@ class DomainModelsService13(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService14(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2291,12 +2193,12 @@ class DomainModelsService14(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2305,8 +2207,9 @@ class DomainModelsService14(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2335,7 +2238,6 @@ class DomainModelsService14(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService15(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2344,12 +2246,12 @@ class DomainModelsService15(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2358,8 +2260,9 @@ class DomainModelsService15(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2388,7 +2291,6 @@ class DomainModelsService15(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService16(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2397,12 +2299,12 @@ class DomainModelsService16(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2411,8 +2313,9 @@ class DomainModelsService16(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2441,7 +2344,6 @@ class DomainModelsService16(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService17(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2450,12 +2352,12 @@ class DomainModelsService17(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2464,8 +2366,9 @@ class DomainModelsService17(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2494,7 +2397,6 @@ class DomainModelsService17(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService18(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2503,12 +2405,12 @@ class DomainModelsService18(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2517,8 +2419,9 @@ class DomainModelsService18(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2547,7 +2450,6 @@ class DomainModelsService18(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService19(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2556,12 +2458,12 @@ class DomainModelsService19(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2570,8 +2472,9 @@ class DomainModelsService19(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2600,7 +2503,6 @@ class DomainModelsService19(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class DomainModelsService20(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2609,12 +2511,12 @@ class DomainModelsService20(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2623,8 +2525,9 @@ class DomainModelsService20(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2654,7 +2557,6 @@ class DomainModelsService20(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class DomainModelsService21(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2662,12 +2564,12 @@ class DomainModelsService21(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2676,8 +2578,9 @@ class DomainModelsService21(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,

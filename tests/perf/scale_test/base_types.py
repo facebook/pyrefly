@@ -19,6 +19,7 @@ from typing import (
     Callable,
     ClassVar,
     Concatenate,
+    cast,
     Generic,
     Mapping,
     MutableMapping,
@@ -42,18 +43,8 @@ import tests.perf.scale_test.data_layer as upstream_4
 import tests.perf.scale_test.orchestration as downstream_4
 
 # Circular import mesh for indexer stress tests.
-_MESH_IMPORTS = (
-    upstream_1,
-    downstream_1,
-    upstream_2,
-    downstream_2,
-    upstream_3,
-    downstream_3,
-    upstream_4,
-    downstream_4,
-)
-_MESH_NAMES = tuple(module.__name__.rsplit('.', maxsplit=1)
-                    [-1] for module in _MESH_IMPORTS)
+_MESH_IMPORTS = (upstream_1, downstream_1, upstream_2, downstream_2, upstream_3, downstream_3, upstream_4, downstream_4,)
+_MESH_NAMES = tuple(module.__name__.rsplit('.', maxsplit=1)[-1] for module in _MESH_IMPORTS)
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -80,6 +71,14 @@ class RepositoryProtocol(Protocol[T]):
 
     def save(self, key: str, value: T) -> None:
         ...
+
+
+class CallableFallback(Generic[K, V]):
+    def __init__(self, factory: Callable[[K], V]) -> None:
+        self.factory = factory
+
+    def __call__(self, key: K) -> V:
+        return self.factory(key)
 
 
 class GenericEnvelope(Generic[T, U]):
@@ -187,7 +186,6 @@ class BaseTypesGenericNode0(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class BaseTypesProtocol1(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_1"
 
@@ -236,7 +234,6 @@ class BaseTypesGenericNode1(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class BaseTypesProtocol2(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_2"
@@ -287,7 +284,6 @@ class BaseTypesGenericNode2(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class BaseTypesProtocol3(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_3"
 
@@ -336,7 +332,6 @@ class BaseTypesGenericNode3(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class BaseTypesProtocol4(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_4"
@@ -387,7 +382,6 @@ class BaseTypesGenericNode4(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class BaseTypesProtocol5(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_5"
 
@@ -436,7 +430,6 @@ class BaseTypesGenericNode5(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class BaseTypesProtocol6(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_6"
@@ -487,7 +480,6 @@ class BaseTypesGenericNode6(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class BaseTypesProtocol7(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_7"
 
@@ -536,7 +528,6 @@ class BaseTypesGenericNode7(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class BaseTypesProtocol8(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_8"
@@ -587,7 +578,6 @@ class BaseTypesGenericNode8(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class BaseTypesProtocol9(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_9"
 
@@ -636,7 +626,6 @@ class BaseTypesGenericNode9(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class BaseTypesProtocol10(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_10"
@@ -687,7 +676,6 @@ class BaseTypesGenericNode10(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class BaseTypesProtocol11(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_11"
 
@@ -736,7 +724,6 @@ class BaseTypesGenericNode11(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class BaseTypesProtocol12(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_12"
@@ -787,7 +774,6 @@ class BaseTypesGenericNode12(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class BaseTypesProtocol13(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_13"
 
@@ -836,7 +822,6 @@ class BaseTypesGenericNode13(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class BaseTypesProtocol14(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_14"
@@ -887,7 +872,6 @@ class BaseTypesGenericNode14(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class BaseTypesProtocol15(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_15"
 
@@ -937,7 +921,6 @@ class BaseTypesGenericNode15(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class BaseTypesProtocol16(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_16"
 
@@ -986,7 +969,6 @@ class BaseTypesGenericNode16(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class BaseTypesProtocol17(Protocol[T, U]):
     label: ClassVar[str] = "base_types_protocol_17"
@@ -1045,54 +1027,45 @@ class BaseTypesRoot0(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class BaseTypesChain0Level1(BaseTypesRoot0[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain0Level2(BaseTypesChain0Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain0Level3(BaseTypesChain0Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain0Level4(BaseTypesChain0Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain0Level5(BaseTypesChain0Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain0Level6(BaseTypesChain0Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain0Level7(BaseTypesChain0Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain0Level8(BaseTypesChain0Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesRoot1(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1101,54 +1074,45 @@ class BaseTypesRoot1(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class BaseTypesChain1Level1(BaseTypesRoot1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain1Level2(BaseTypesChain1Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain1Level3(BaseTypesChain1Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain1Level4(BaseTypesChain1Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain1Level5(BaseTypesChain1Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain1Level6(BaseTypesChain1Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain1Level7(BaseTypesChain1Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain1Level8(BaseTypesChain1Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesRoot2(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1157,54 +1121,45 @@ class BaseTypesRoot2(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class BaseTypesChain2Level1(BaseTypesRoot2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain2Level2(BaseTypesChain2Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain2Level3(BaseTypesChain2Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain2Level4(BaseTypesChain2Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain2Level5(BaseTypesChain2Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain2Level6(BaseTypesChain2Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain2Level7(BaseTypesChain2Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain2Level8(BaseTypesChain2Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesRoot3(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1213,54 +1168,45 @@ class BaseTypesRoot3(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class BaseTypesChain3Level1(BaseTypesRoot3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain3Level2(BaseTypesChain3Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain3Level3(BaseTypesChain3Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain3Level4(BaseTypesChain3Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain3Level5(BaseTypesChain3Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain3Level6(BaseTypesChain3Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain3Level7(BaseTypesChain3Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain3Level8(BaseTypesChain3Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesRoot4(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1269,54 +1215,45 @@ class BaseTypesRoot4(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class BaseTypesChain4Level1(BaseTypesRoot4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain4Level2(BaseTypesChain4Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain4Level3(BaseTypesChain4Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain4Level4(BaseTypesChain4Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain4Level5(BaseTypesChain4Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain4Level6(BaseTypesChain4Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain4Level7(BaseTypesChain4Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain4Level8(BaseTypesChain4Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesRoot5(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1325,54 +1262,45 @@ class BaseTypesRoot5(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class BaseTypesChain5Level1(BaseTypesRoot5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain5Level2(BaseTypesChain5Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain5Level3(BaseTypesChain5Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain5Level4(BaseTypesChain5Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain5Level5(BaseTypesChain5Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain5Level6(BaseTypesChain5Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain5Level7(BaseTypesChain5Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain5Level8(BaseTypesChain5Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesRoot6(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1381,54 +1309,45 @@ class BaseTypesRoot6(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class BaseTypesChain6Level1(BaseTypesRoot6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain6Level2(BaseTypesChain6Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain6Level3(BaseTypesChain6Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain6Level4(BaseTypesChain6Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain6Level5(BaseTypesChain6Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain6Level6(BaseTypesChain6Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain6Level7(BaseTypesChain6Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain6Level8(BaseTypesChain6Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesRoot7(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1437,54 +1356,45 @@ class BaseTypesRoot7(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class BaseTypesChain7Level1(BaseTypesRoot7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain7Level2(BaseTypesChain7Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain7Level3(BaseTypesChain7Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain7Level4(BaseTypesChain7Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain7Level5(BaseTypesChain7Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain7Level6(BaseTypesChain7Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain7Level7(BaseTypesChain7Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain7Level8(BaseTypesChain7Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesRoot8(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1493,48 +1403,40 @@ class BaseTypesRoot8(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class BaseTypesChain8Level1(BaseTypesRoot8[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain8Level2(BaseTypesChain8Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain8Level3(BaseTypesChain8Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain8Level4(BaseTypesChain8Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain8Level5(BaseTypesChain8Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain8Level6(BaseTypesChain8Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class BaseTypesChain8Level7(BaseTypesChain8Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class BaseTypesChain8Level8(BaseTypesChain8Level7[T]):
     def project(self) -> T:
@@ -1549,12 +1451,12 @@ class BaseTypesService0(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1563,8 +1465,9 @@ class BaseTypesService0(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1593,7 +1496,6 @@ class BaseTypesService0(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService1(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1602,12 +1504,12 @@ class BaseTypesService1(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1616,8 +1518,9 @@ class BaseTypesService1(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1646,7 +1549,6 @@ class BaseTypesService1(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService2(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1655,12 +1557,12 @@ class BaseTypesService2(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1669,8 +1571,9 @@ class BaseTypesService2(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1699,7 +1602,6 @@ class BaseTypesService2(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService3(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1708,12 +1610,12 @@ class BaseTypesService3(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1722,8 +1624,9 @@ class BaseTypesService3(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1752,7 +1655,6 @@ class BaseTypesService3(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService4(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1761,12 +1663,12 @@ class BaseTypesService4(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1775,8 +1677,9 @@ class BaseTypesService4(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1805,7 +1708,6 @@ class BaseTypesService4(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService5(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1814,12 +1716,12 @@ class BaseTypesService5(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1828,8 +1730,9 @@ class BaseTypesService5(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1858,7 +1761,6 @@ class BaseTypesService5(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService6(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1867,12 +1769,12 @@ class BaseTypesService6(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1881,8 +1783,9 @@ class BaseTypesService6(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1911,7 +1814,6 @@ class BaseTypesService6(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService7(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1920,12 +1822,12 @@ class BaseTypesService7(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1934,8 +1836,9 @@ class BaseTypesService7(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1964,7 +1867,6 @@ class BaseTypesService7(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService8(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1973,12 +1875,12 @@ class BaseTypesService8(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1987,8 +1889,9 @@ class BaseTypesService8(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2017,7 +1920,6 @@ class BaseTypesService8(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService9(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2026,12 +1928,12 @@ class BaseTypesService9(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2040,8 +1942,9 @@ class BaseTypesService9(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2070,7 +1973,6 @@ class BaseTypesService9(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService10(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2079,12 +1981,12 @@ class BaseTypesService10(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2093,8 +1995,9 @@ class BaseTypesService10(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2123,7 +2026,6 @@ class BaseTypesService10(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService11(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2132,12 +2034,12 @@ class BaseTypesService11(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2146,8 +2048,9 @@ class BaseTypesService11(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2176,7 +2079,6 @@ class BaseTypesService11(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService12(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2185,12 +2087,12 @@ class BaseTypesService12(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2199,8 +2101,9 @@ class BaseTypesService12(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2229,7 +2132,6 @@ class BaseTypesService12(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService13(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2238,12 +2140,12 @@ class BaseTypesService13(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2252,8 +2154,9 @@ class BaseTypesService13(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2282,7 +2185,6 @@ class BaseTypesService13(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService14(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2291,12 +2193,12 @@ class BaseTypesService14(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2305,8 +2207,9 @@ class BaseTypesService14(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2335,7 +2238,6 @@ class BaseTypesService14(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService15(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2344,12 +2246,12 @@ class BaseTypesService15(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2358,8 +2260,9 @@ class BaseTypesService15(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2388,7 +2291,6 @@ class BaseTypesService15(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService16(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2397,12 +2299,12 @@ class BaseTypesService16(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2411,8 +2313,9 @@ class BaseTypesService16(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2441,7 +2344,6 @@ class BaseTypesService16(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService17(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2450,12 +2352,12 @@ class BaseTypesService17(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2464,8 +2366,9 @@ class BaseTypesService17(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2494,7 +2397,6 @@ class BaseTypesService17(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService18(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2503,12 +2405,12 @@ class BaseTypesService18(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2517,8 +2419,9 @@ class BaseTypesService18(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2547,7 +2450,6 @@ class BaseTypesService18(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService19(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2556,12 +2458,12 @@ class BaseTypesService19(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2570,8 +2472,9 @@ class BaseTypesService19(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2600,7 +2503,6 @@ class BaseTypesService19(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class BaseTypesService20(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2609,12 +2511,12 @@ class BaseTypesService20(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2623,8 +2525,9 @@ class BaseTypesService20(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2654,7 +2557,6 @@ class BaseTypesService20(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class BaseTypesService21(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2662,12 +2564,12 @@ class BaseTypesService21(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2676,8 +2578,9 @@ class BaseTypesService21(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,

@@ -51,6 +51,7 @@ from typing import (
     Callable,
     ClassVar,
     Concatenate,
+    cast,
     Generic,
     Mapping,
     MutableMapping,
@@ -91,6 +92,14 @@ class RepositoryProtocol(Protocol[T]):
 
     def save(self, key: str, value: T) -> None:
         ...
+
+
+class CallableFallback(Generic[K, V]):
+    def __init__(self, factory: Callable[[K], V]) -> None:
+        self.factory = factory
+
+    def __call__(self, key: K) -> V:
+        return self.factory(key)
 
 
 class GenericEnvelope(Generic[T, U]):
@@ -297,12 +306,12 @@ def _services_section(module_name: str, section_size: int) -> str:
                     def transact(
                         self,
                         key: K,
-                        fallback: Union[V, Callable[[K], V]],
+                        fallback: Union[V, CallableFallback[K, V]],
                         mutator: Callable[[Union[V, K]], Union[V, K]],
                     ) -> V:
                         if key in self.storage:
                             current: Union[V, K] = self.storage[key]
-                        elif callable(fallback):
+                        elif isinstance(fallback, CallableFallback):
                             current = fallback(key)
                         else:
                             current = fallback
@@ -311,8 +320,9 @@ def _services_section(module_name: str, section_size: int) -> str:
                             raise TypeError(
                                 "Mutator returned key-like value"
                             )
-                        self.storage[key] = next_value
-                        return next_value
+                        resolved_value = cast(V, next_value)
+                        self.storage[key] = resolved_value
+                        return resolved_value
 
                     def compose(
                         self,

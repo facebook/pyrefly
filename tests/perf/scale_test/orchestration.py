@@ -19,6 +19,7 @@ from typing import (
     Callable,
     ClassVar,
     Concatenate,
+    cast,
     Generic,
     Mapping,
     MutableMapping,
@@ -42,18 +43,8 @@ import tests.perf.scale_test.base_types as upstream_4
 import tests.perf.scale_test.domain_models as downstream_4
 
 # Circular import mesh for indexer stress tests.
-_MESH_IMPORTS = (
-    upstream_1,
-    downstream_1,
-    upstream_2,
-    downstream_2,
-    upstream_3,
-    downstream_3,
-    upstream_4,
-    downstream_4,
-)
-_MESH_NAMES = tuple(module.__name__.rsplit('.', maxsplit=1)
-                    [-1] for module in _MESH_IMPORTS)
+_MESH_IMPORTS = (upstream_1, downstream_1, upstream_2, downstream_2, upstream_3, downstream_3, upstream_4, downstream_4,)
+_MESH_NAMES = tuple(module.__name__.rsplit('.', maxsplit=1)[-1] for module in _MESH_IMPORTS)
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -80,6 +71,14 @@ class RepositoryProtocol(Protocol[T]):
 
     def save(self, key: str, value: T) -> None:
         ...
+
+
+class CallableFallback(Generic[K, V]):
+    def __init__(self, factory: Callable[[K], V]) -> None:
+        self.factory = factory
+
+    def __call__(self, key: K) -> V:
+        return self.factory(key)
 
 
 class GenericEnvelope(Generic[T, U]):
@@ -187,7 +186,6 @@ class OrchestrationGenericNode0(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class OrchestrationProtocol1(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_1"
 
@@ -236,7 +234,6 @@ class OrchestrationGenericNode1(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class OrchestrationProtocol2(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_2"
@@ -287,7 +284,6 @@ class OrchestrationGenericNode2(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class OrchestrationProtocol3(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_3"
 
@@ -336,7 +332,6 @@ class OrchestrationGenericNode3(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class OrchestrationProtocol4(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_4"
@@ -387,7 +382,6 @@ class OrchestrationGenericNode4(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class OrchestrationProtocol5(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_5"
 
@@ -436,7 +430,6 @@ class OrchestrationGenericNode5(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class OrchestrationProtocol6(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_6"
@@ -487,7 +480,6 @@ class OrchestrationGenericNode6(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class OrchestrationProtocol7(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_7"
 
@@ -536,7 +528,6 @@ class OrchestrationGenericNode7(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class OrchestrationProtocol8(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_8"
@@ -587,7 +578,6 @@ class OrchestrationGenericNode8(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class OrchestrationProtocol9(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_9"
 
@@ -636,7 +626,6 @@ class OrchestrationGenericNode9(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class OrchestrationProtocol10(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_10"
@@ -687,7 +676,6 @@ class OrchestrationGenericNode10(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class OrchestrationProtocol11(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_11"
 
@@ -736,7 +724,6 @@ class OrchestrationGenericNode11(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class OrchestrationProtocol12(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_12"
@@ -787,7 +774,6 @@ class OrchestrationGenericNode12(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class OrchestrationProtocol13(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_13"
 
@@ -836,7 +822,6 @@ class OrchestrationGenericNode13(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class OrchestrationProtocol14(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_14"
@@ -887,7 +872,6 @@ class OrchestrationGenericNode14(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class OrchestrationProtocol15(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_15"
 
@@ -937,7 +921,6 @@ class OrchestrationGenericNode15(Generic[T, U]):
     ) -> U:
         return callback(self.value, *args, **kwargs)
 
-
 class OrchestrationProtocol16(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_16"
 
@@ -986,7 +969,6 @@ class OrchestrationGenericNode16(Generic[T, U]):
         **kwargs: P.kwargs,
     ) -> U:
         return callback(self.value, *args, **kwargs)
-
 
 class OrchestrationProtocol17(Protocol[T, U]):
     label: ClassVar[str] = "orchestration_protocol_17"
@@ -1045,54 +1027,45 @@ class OrchestrationRoot0(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class OrchestrationChain0Level1(OrchestrationRoot0[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain0Level2(OrchestrationChain0Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain0Level3(OrchestrationChain0Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain0Level4(OrchestrationChain0Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain0Level5(OrchestrationChain0Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain0Level6(OrchestrationChain0Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain0Level7(OrchestrationChain0Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain0Level8(OrchestrationChain0Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationRoot1(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1101,54 +1074,45 @@ class OrchestrationRoot1(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class OrchestrationChain1Level1(OrchestrationRoot1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain1Level2(OrchestrationChain1Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain1Level3(OrchestrationChain1Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain1Level4(OrchestrationChain1Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain1Level5(OrchestrationChain1Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain1Level6(OrchestrationChain1Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain1Level7(OrchestrationChain1Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain1Level8(OrchestrationChain1Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationRoot2(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1157,54 +1121,45 @@ class OrchestrationRoot2(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class OrchestrationChain2Level1(OrchestrationRoot2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain2Level2(OrchestrationChain2Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain2Level3(OrchestrationChain2Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain2Level4(OrchestrationChain2Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain2Level5(OrchestrationChain2Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain2Level6(OrchestrationChain2Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain2Level7(OrchestrationChain2Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain2Level8(OrchestrationChain2Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationRoot3(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1213,54 +1168,45 @@ class OrchestrationRoot3(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class OrchestrationChain3Level1(OrchestrationRoot3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain3Level2(OrchestrationChain3Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain3Level3(OrchestrationChain3Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain3Level4(OrchestrationChain3Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain3Level5(OrchestrationChain3Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain3Level6(OrchestrationChain3Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain3Level7(OrchestrationChain3Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain3Level8(OrchestrationChain3Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationRoot4(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1269,54 +1215,45 @@ class OrchestrationRoot4(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class OrchestrationChain4Level1(OrchestrationRoot4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain4Level2(OrchestrationChain4Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain4Level3(OrchestrationChain4Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain4Level4(OrchestrationChain4Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain4Level5(OrchestrationChain4Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain4Level6(OrchestrationChain4Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain4Level7(OrchestrationChain4Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain4Level8(OrchestrationChain4Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationRoot5(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1325,54 +1262,45 @@ class OrchestrationRoot5(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class OrchestrationChain5Level1(OrchestrationRoot5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain5Level2(OrchestrationChain5Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain5Level3(OrchestrationChain5Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain5Level4(OrchestrationChain5Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain5Level5(OrchestrationChain5Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain5Level6(OrchestrationChain5Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain5Level7(OrchestrationChain5Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain5Level8(OrchestrationChain5Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationRoot6(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1381,54 +1309,45 @@ class OrchestrationRoot6(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class OrchestrationChain6Level1(OrchestrationRoot6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain6Level2(OrchestrationChain6Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain6Level3(OrchestrationChain6Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain6Level4(OrchestrationChain6Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain6Level5(OrchestrationChain6Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain6Level6(OrchestrationChain6Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain6Level7(OrchestrationChain6Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain6Level8(OrchestrationChain6Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationRoot7(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1437,54 +1356,45 @@ class OrchestrationRoot7(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class OrchestrationChain7Level1(OrchestrationRoot7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain7Level2(OrchestrationChain7Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain7Level3(OrchestrationChain7Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain7Level4(OrchestrationChain7Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain7Level5(OrchestrationChain7Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain7Level6(OrchestrationChain7Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain7Level7(OrchestrationChain7Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain7Level8(OrchestrationChain7Level7[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationRoot8(Generic[T]):
     def __init__(self, payload: T) -> None:
@@ -1493,48 +1403,40 @@ class OrchestrationRoot8(Generic[T]):
     def project(self) -> T:
         return self.payload
 
-
 class OrchestrationChain8Level1(OrchestrationRoot8[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain8Level2(OrchestrationChain8Level1[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain8Level3(OrchestrationChain8Level2[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain8Level4(OrchestrationChain8Level3[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain8Level5(OrchestrationChain8Level4[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain8Level6(OrchestrationChain8Level5[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
 
-
 class OrchestrationChain8Level7(OrchestrationChain8Level6[T]):
     def project(self) -> T:
         candidate = super().project()
         return candidate
-
 
 class OrchestrationChain8Level8(OrchestrationChain8Level7[T]):
     def project(self) -> T:
@@ -1549,12 +1451,12 @@ class OrchestrationService0(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1563,8 +1465,9 @@ class OrchestrationService0(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1593,7 +1496,6 @@ class OrchestrationService0(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService1(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1602,12 +1504,12 @@ class OrchestrationService1(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1616,8 +1518,9 @@ class OrchestrationService1(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1646,7 +1549,6 @@ class OrchestrationService1(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService2(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1655,12 +1557,12 @@ class OrchestrationService2(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1669,8 +1571,9 @@ class OrchestrationService2(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1699,7 +1602,6 @@ class OrchestrationService2(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService3(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1708,12 +1610,12 @@ class OrchestrationService3(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1722,8 +1624,9 @@ class OrchestrationService3(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1752,7 +1655,6 @@ class OrchestrationService3(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService4(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1761,12 +1663,12 @@ class OrchestrationService4(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1775,8 +1677,9 @@ class OrchestrationService4(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1805,7 +1708,6 @@ class OrchestrationService4(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService5(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1814,12 +1716,12 @@ class OrchestrationService5(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1828,8 +1730,9 @@ class OrchestrationService5(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1858,7 +1761,6 @@ class OrchestrationService5(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService6(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1867,12 +1769,12 @@ class OrchestrationService6(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1881,8 +1783,9 @@ class OrchestrationService6(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1911,7 +1814,6 @@ class OrchestrationService6(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService7(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1920,12 +1822,12 @@ class OrchestrationService7(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1934,8 +1836,9 @@ class OrchestrationService7(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -1964,7 +1867,6 @@ class OrchestrationService7(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService8(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -1973,12 +1875,12 @@ class OrchestrationService8(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -1987,8 +1889,9 @@ class OrchestrationService8(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2017,7 +1920,6 @@ class OrchestrationService8(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService9(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2026,12 +1928,12 @@ class OrchestrationService9(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2040,8 +1942,9 @@ class OrchestrationService9(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2070,7 +1973,6 @@ class OrchestrationService9(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService10(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2079,12 +1981,12 @@ class OrchestrationService10(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2093,8 +1995,9 @@ class OrchestrationService10(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2123,7 +2026,6 @@ class OrchestrationService10(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService11(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2132,12 +2034,12 @@ class OrchestrationService11(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2146,8 +2048,9 @@ class OrchestrationService11(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2176,7 +2079,6 @@ class OrchestrationService11(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService12(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2185,12 +2087,12 @@ class OrchestrationService12(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2199,8 +2101,9 @@ class OrchestrationService12(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2229,7 +2132,6 @@ class OrchestrationService12(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService13(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2238,12 +2140,12 @@ class OrchestrationService13(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2252,8 +2154,9 @@ class OrchestrationService13(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2282,7 +2185,6 @@ class OrchestrationService13(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService14(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2291,12 +2193,12 @@ class OrchestrationService14(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2305,8 +2207,9 @@ class OrchestrationService14(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2335,7 +2238,6 @@ class OrchestrationService14(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService15(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2344,12 +2246,12 @@ class OrchestrationService15(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2358,8 +2260,9 @@ class OrchestrationService15(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2388,7 +2291,6 @@ class OrchestrationService15(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService16(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2397,12 +2299,12 @@ class OrchestrationService16(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2411,8 +2313,9 @@ class OrchestrationService16(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2441,7 +2344,6 @@ class OrchestrationService16(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService17(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2450,12 +2352,12 @@ class OrchestrationService17(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2464,8 +2366,9 @@ class OrchestrationService17(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2494,7 +2397,6 @@ class OrchestrationService17(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService18(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2503,12 +2405,12 @@ class OrchestrationService18(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2517,8 +2419,9 @@ class OrchestrationService18(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2547,7 +2450,6 @@ class OrchestrationService18(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService19(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2556,12 +2458,12 @@ class OrchestrationService19(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2570,8 +2472,9 @@ class OrchestrationService19(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2600,7 +2503,6 @@ class OrchestrationService19(Generic[K, V]):
         *items: Unpack[Ts],
     ) -> tuple[Unpack[Ts]]:
         return items
-
 
 class OrchestrationService20(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
@@ -2609,12 +2511,12 @@ class OrchestrationService20(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2623,8 +2525,9 @@ class OrchestrationService20(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
@@ -2654,7 +2557,6 @@ class OrchestrationService20(Generic[K, V]):
     ) -> tuple[Unpack[Ts]]:
         return items
 
-
 class OrchestrationService21(Generic[K, V]):
     def __init__(self, storage: MutableMapping[K, V]) -> None:
         self.storage = storage
@@ -2662,12 +2564,12 @@ class OrchestrationService21(Generic[K, V]):
     def transact(
         self,
         key: K,
-        fallback: Union[V, Callable[[K], V]],
+        fallback: Union[V, CallableFallback[K, V]],
         mutator: Callable[[Union[V, K]], Union[V, K]],
     ) -> V:
         if key in self.storage:
             current: Union[V, K] = self.storage[key]
-        elif callable(fallback):
+        elif isinstance(fallback, CallableFallback):
             current = fallback(key)
         else:
             current = fallback
@@ -2676,8 +2578,9 @@ class OrchestrationService21(Generic[K, V]):
             raise TypeError(
                 "Mutator returned key-like value"
             )
-        self.storage[key] = next_value
-        return next_value
+        resolved_value = cast(V, next_value)
+        self.storage[key] = resolved_value
+        return resolved_value
 
     def compose(
         self,
