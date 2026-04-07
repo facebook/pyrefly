@@ -687,13 +687,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         // Based on https://typing.readthedocs.io/en/latest/spec/constructors.html.
         let vs = if let Some(hint) = hint {
-            let vs = self
-                .solver()
-                .freshen_class_targs(cls.targs_mut(), self.uniques);
-
-            self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), hint.ty());
-            self.solver().generalize_class_targs(cls.targs_mut());
-            vs
+            // Constructor hints may be unions that contain non-instance branches
+            // (for example `T | Box[T]`). Constraining against the full union can
+            // bind unrelated type variables and over-specialize this constructor.
+            // Only pre-specialize from concrete instance branches of the same class.
+            let class_hint = hint.ty().clone().into_unions().into_iter().find_map(|ty| {
+                if let Type::ClassType(hint_cls) = ty {
+                    let class_hint = Type::ClassType(hint_cls);
+                    if class_hint.qname() == Some(cls.qname())
+                        && !class_hint.contains_type_variable()
+                        && !class_hint.may_contain_quantified_var()
+                    {
+                        return Some(class_hint);
+                    }
+                }
+                None
+            });
+            if let Some(class_hint) = class_hint {
+                let vs = self
+                    .solver()
+                    .freshen_class_targs(cls.targs_mut(), self.uniques);
+                self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), &class_hint);
+                self.solver().generalize_class_targs(cls.targs_mut());
+                vs
+            } else {
+                QuantifiedHandle::empty()
+            }
         } else {
             QuantifiedHandle::empty()
         };
