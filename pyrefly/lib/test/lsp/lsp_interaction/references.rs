@@ -523,11 +523,11 @@ fn test_references_for_import_with_config() {
         .references("foo.py", 6, 17, true)
         .expect_response(json!([
             {
-                "range": {"start":{"line":8,"character":6},"end":{"character":9,"line":8}},
+                "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
-                "range": {"start":{"line":12,"character":0},"end":{"character":3,"line":12}},
+                "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
