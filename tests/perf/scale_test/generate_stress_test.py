@@ -383,6 +383,7 @@ def _entrypoint_section(module_name: str) -> str:
         __all__ = [
             "PayloadProtocol",
             "RepositoryProtocol",
+            "CallableFallback",
             "GenericEnvelope",
             "ModuleDescriptor",
             "build_{module_name}_descriptor",
