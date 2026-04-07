@@ -580,8 +580,8 @@ impl<'a> BindingsBuilder<'a> {
                 ..
             } = case;
             self.start_branch();
-            let case_is_irrefutable =
-                pattern_is_syntactically_exhaustive_for_subject(&subject_expr, &pattern);
+            let case_is_irrefutable = guard.is_none()
+                && pattern_is_syntactically_exhaustive_for_subject(&subject_expr, &pattern);
             if case_is_irrefutable {
                 exhaustive = true;
             }

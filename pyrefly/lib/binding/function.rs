@@ -975,7 +975,12 @@ fn function_last_expressions<'a>(
                 let mut syntactically_exhaustive = false;
                 for case in x.cases.iter() {
                     f(sys_info, &case.body, res)?;
-                    if pattern_is_syntactically_exhaustive_for_subject(&x.subject, &case.pattern) {
+                    if case.guard.is_none()
+                        && pattern_is_syntactically_exhaustive_for_subject(
+                            &x.subject,
+                            &case.pattern,
+                        )
+                    {
                         syntactically_exhaustive = true;
                         break;
                     }
