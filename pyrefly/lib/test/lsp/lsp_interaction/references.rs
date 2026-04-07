@@ -523,11 +523,11 @@ fn test_references_for_import_with_config() {
         .references("foo.py", 6, 17, true)
         .expect_response(json!([
             {
-                "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
+                "range": {"start":{"line":8,"character":6},"end":{"character":9,"line":8}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
-                "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
+                "range": {"start":{"line":12,"character":0},"end":{"character":3,"line":12}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
@@ -637,11 +637,11 @@ fn test_references_after_file_modification_with_config() {
         .references("foo.py", 6, 17, true)
         .expect_response(json!([
             {
-                "range": {"start":{"line":6,"character":6},"end":{"character":9,"line":6}},
+                "range": {"start":{"line":8,"character":6},"end":{"character":9,"line":8}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
-                "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
+                "range": {"start":{"line":12,"character":0},"end":{"character":3,"line":12}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
             {
@@ -714,6 +714,34 @@ fn test_references_after_file_modification_with_line_offset_with_config() {
             {
                 "range": {"start":{"line":12,"character":0},"end":{"character":3,"line":12}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":6,"character":16},"end":{"line":6, "character":19}},
+                "uri": Url::from_file_path(root_path.join("foo.py")).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":8,"character":0},"end":{"line":8,"character":3}},
+                "uri": Url::from_file_path(root_path.join("foo.py")).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":9,"character":4},"end":{"line":9,"character":7}},
+                "uri": Url::from_file_path(root_path.join("foo.py")).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":5,"character":16},"end":{"line":5,"character":19}},
+                "uri": Url::from_file_path(root_path.join("various_imports.py")).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":5,"character":26},"end":{"line":5,"character":29}},
+                "uri": Url::from_file_path(root_path.join("various_imports.py")).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":5,"character":16},"end":{"character":19,"line":5}},
+                "uri": Url::from_file_path(root_path.join("with_synthetic_bindings.py")).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":10,"character":4},"end":{"character":7,"line":10}},
+                "uri": Url::from_file_path(root_path.join("with_synthetic_bindings.py")).unwrap().to_string()
             },
         ]))
         .unwrap();

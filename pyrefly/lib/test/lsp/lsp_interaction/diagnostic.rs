@@ -403,10 +403,10 @@ fn test_edit_file_during_recheck() {
     let d_contents = std::fs::read_to_string(&d_path).unwrap();
     let edited_d_contents = format!("{}\nY: int = ''\nZ: int = ''", d_contents);
     interaction.client.did_change("d.py", &edited_d_contents);
-    // Streamed errors are replaced w/ diagnostics based on old state + edit
+    // Diagnostics now reflect the already-updated dependency state plus the local edit.
     interaction
         .client
-        .expect_publish_diagnostics_must_have_error_count(d_path.clone(), 2)
+        .expect_publish_diagnostics_must_have_error_count(d_path.clone(), 3)
         .expect("Failed to receive streamed diagnostics for first edit");
     // After recheck completes, error count reflects new state + edit
     interaction.continue_recheck();
