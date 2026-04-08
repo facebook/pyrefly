@@ -1816,6 +1816,31 @@ impl Scopes {
         false
     }
 
+    /// Record an additional write to an already-known `self.<attr>` in the current method.
+    ///
+    /// Unlike `record_self_attr_assign`, this will not invent a new instance attribute for
+    /// augmented assignments like `self.x += 1`; those remain invalid unless a prior write
+    /// in the method established the attribute.
+    pub fn record_known_self_attr_write(
+        &mut self,
+        x: &ExprAttribute,
+        value: ExprOrBinding,
+    ) -> bool {
+        for scope in self.iter_rev_mut() {
+            if let ScopeKind::Method(method_scope) = &mut scope.kind
+                && let Some(self_name) = &method_scope.self_name
+                && matches!(&*x.value, Expr::Name(name) if name.id == self_name.id)
+            {
+                if let Some(attr) = method_scope.instance_attributes.get_mut(&x.attr.id) {
+                    attr.writes.push(value);
+                    return true;
+                }
+                return false;
+            }
+        }
+        false
+    }
+
     pub fn method_that_sets_attr(&self, x: &ExprAttribute) -> Option<MethodThatSetsAttr> {
         let mut method_name: Option<Name> = None;
         let mut receiver_kind = MethodSelfKind::Instance;

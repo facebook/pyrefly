@@ -849,7 +849,7 @@ impl<'a> BindingsBuilder<'a> {
                                 *x_cloned.value = expr.clone();
                                 ExprOrBinding::Binding(Binding::AugAssign(ann, Box::new(x_cloned)))
                             });
-                        self.scopes.record_self_attr_assign(attr, value, None);
+                        self.scopes.record_known_self_attr_write(attr, value);
                     }
                     Expr::Subscript(subscr) => {
                         let mut x_cloned = x.clone();
