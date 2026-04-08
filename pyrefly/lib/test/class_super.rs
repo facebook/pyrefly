@@ -265,6 +265,30 @@ class B(A):
 );
 
 testcase!(
+    test_super_explicit_dynamic_first_arg,
+    r#"
+from typing import Any
+
+class YearMonthDay(list[int]):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super(self.__class__, self).__init__(*args, **kwargs)
+        self.century_specified = False
+
+class Distribution:
+    def fit(self, data: list[float]) -> float:
+        return sum(data) / len(data)
+
+class NormalDist(Distribution):
+    def fit(self, data: list[float]) -> float:
+        return super(type(self), self).fit(data)
+
+class PlatformDispatch:
+    def __new__(cls, *args, **kwargs):
+        return super(cls, PlatformDispatch).__new__(PlatformDispatch)
+    "#,
+);
+
+testcase!(
     test_call_instance_method_from_classmethod,
     r#"
 class A:
