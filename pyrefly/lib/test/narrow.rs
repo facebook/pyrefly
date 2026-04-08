@@ -1393,6 +1393,24 @@ def test_isinstance_then_issubclass(x: object) -> None:
 );
 
 testcase!(
+    test_issubclass_with_metaclass_instance,
+    r#"
+class ModelBase(type):
+    pass
+
+class Model(metaclass=ModelBase):
+    pass
+
+def validate_force_insert(cls: type, force_insert: tuple[object, ...]) -> None:
+    for member in force_insert:
+        if not isinstance(member, ModelBase):
+            raise TypeError("not a model class")
+        if not issubclass(cls, member):
+            raise TypeError("not a base")
+    "#,
+);
+
+testcase!(
     test_issubclass_typevar_object,
     r#"
 from typing import TypeVar
