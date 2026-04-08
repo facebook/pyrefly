@@ -1037,9 +1037,6 @@ impl Query {
                             value,
                             annotation,
                             alias_of: _,
-                        }
-                        | ClassFieldDefinition::DefinedInMethod {
-                            value, annotation, ..
                         } => {
                             annotation
                                 .and_then(|idx| answers.get_idx(idx))
@@ -1055,6 +1052,10 @@ impl Query {
                                 // Final fallback: ClassField.ty()
                                 .or_else(|| answers.get_idx(class_field_idx).map(|cf| cf.ty()))
                         }
+                        ClassFieldDefinition::DefinedInMethod { annotation, .. } => annotation
+                            .and_then(|idx| answers.get_idx(idx))
+                            .and_then(|a| a.annotation.ty.clone())
+                            .or_else(|| answers.get_idx(class_field_idx).map(|cf| cf.ty())),
                         _ => answers.get_idx(class_field_idx).map(|cf| cf.ty()),
                     };
                     let field_ty = field_ty?;

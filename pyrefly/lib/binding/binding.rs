@@ -2792,7 +2792,7 @@ pub enum ClassFieldDefinition {
     /// Implicitly defined in a method, without any explicit reference
     /// in the class body.
     DefinedInMethod {
-        value: Box<ExprOrBinding>,
+        values: Box<MethodFieldWrites>,
         annotation: Option<Idx<KeyAnnotation>>,
         method: MethodThatSetsAttr,
     },
@@ -2843,11 +2843,11 @@ impl DisplayWith<Bindings> for ClassFieldDefinition {
                     ctx.display(*definition),
                 )
             }
-            Self::DefinedInMethod { value, .. } => {
+            Self::DefinedInMethod { values, .. } => {
                 write!(
                     f,
                     "ClassFieldDefinition::DefinedInMethod({}, ..)",
-                    value.display_with(ctx),
+                    values.first.display_with(ctx),
                 )
             }
         }
@@ -2887,6 +2887,12 @@ pub struct MethodThatSetsAttr {
     pub method_name: Name,
     pub recognized_attribute_defining_method: bool,
     pub instance_or_class: MethodSelfKind,
+}
+
+#[derive(Clone, Debug)]
+pub struct MethodFieldWrites {
+    pub first: Box<ExprOrBinding>,
+    pub rest: Vec<ExprOrBinding>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

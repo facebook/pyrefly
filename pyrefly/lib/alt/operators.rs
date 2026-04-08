@@ -560,23 +560,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let target_range = x.target.range();
         let value_range = x.value.range();
-        let binop_call = |op: Operator, lhs: &Type, rhs: &Type, range: TextRange| -> Type {
-            let context = || {
-                ErrorContext::InplaceBinaryOp(
-                    op.as_str().to_owned(),
-                    self.for_display(lhs.clone()),
-                    self.for_display(rhs.clone()),
-                    target_range,
-                    value_range,
-                )
-            };
-            let calls_to_try = [
-                (&Name::new_static(op.in_place_dunder()), lhs, rhs),
-                (&Name::new_static(op.dunder()), lhs, rhs),
-                (&Name::new_static(op.reflected_dunder()), rhs, lhs),
-            ];
-            self.try_binop_calls(&calls_to_try, range, errors, &context)
-        };
         let base = self.expr_infer(&x.target, errors);
         let rhs = self.expr_infer(&x.value, errors);
         if matches!(x.op, Operator::Div | Operator::FloorDiv | Operator::Mod)
@@ -594,29 +577,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let tcc: &dyn Fn() -> TypeCheckContext =
             &|| TypeCheckContext::of_kind(TypeCheckKind::AugmentedAssignment);
-        let result = self.distribute_over_union(&base, |lhs| {
-            self.distribute_over_union(&rhs, |rhs| {
-                if let Type::Any(style) = &lhs {
-                    style.propagate()
-                } else if let Type::Any(style) = &rhs {
-                    style.propagate()
-                } else if x.op == Operator::Add
-                    && base.is_literal_string()
-                    && rhs.is_literal_string()
-                {
-                    self.heap.mk_literal_string(LitStyle::Implicit)
-                } else if x.op == Operator::Add
-                    && let Type::Tuple(ref l) = base
-                    && let Type::Tuple(r) = rhs
-                {
-                    self.tuple_concat(l, r)
-                } else if let Some(result) = self.try_symint_binop(x.op, lhs, rhs) {
-                    result
-                } else {
-                    binop_call(x.op, lhs, rhs, x.range)
-                }
-            })
-        });
+        let result = self.augassign_result_type(
+            x.op,
+            &base,
+            &rhs,
+            target_range,
+            value_range,
+            x.range,
+            errors,
+        );
         // If we're assigning to something with an annotation, make sure the produced value is assignable to it
         if let Some(ann) = ann.map(|k| self.get_idx(k)) {
             self.check_final_reassignment(&ann, x.range(), errors);
@@ -630,6 +599,56 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         result
+    }
+
+    pub fn augassign_result_type(
+        &self,
+        op: Operator,
+        base: &Type,
+        rhs: &Type,
+        target_range: TextRange,
+        value_range: TextRange,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let binop_call = |lhs: &Type, rhs: &Type| {
+            let context = || {
+                ErrorContext::InplaceBinaryOp(
+                    op.as_str().to_owned(),
+                    self.for_display(lhs.clone()),
+                    self.for_display(rhs.clone()),
+                    target_range,
+                    value_range,
+                )
+            };
+            let calls_to_try = [
+                (&Name::new_static(op.in_place_dunder()), lhs, rhs),
+                (&Name::new_static(op.dunder()), lhs, rhs),
+                (&Name::new_static(op.reflected_dunder()), rhs, lhs),
+            ];
+            self.try_binop_calls(&calls_to_try, range, errors, &context)
+        };
+        self.distribute_over_union(base, |lhs| {
+            self.distribute_over_union(rhs, |rhs| {
+                if let Type::Any(style) = &lhs {
+                    style.propagate()
+                } else if let Type::Any(style) = &rhs {
+                    style.propagate()
+                } else if op == Operator::Add && lhs.is_literal_string() && rhs.is_literal_string()
+                {
+                    self.heap.mk_literal_string(LitStyle::Implicit)
+                } else if op == Operator::Add
+                    && let Type::Tuple(l) = lhs
+                    && let Type::Tuple(r) = rhs
+                {
+                    self.tuple_concat(l, r)
+                } else if let Some(result) = self.try_symint_binop(op, lhs, rhs) {
+                    result
+                } else {
+                    binop_call(lhs, rhs)
+                }
+            })
+        })
     }
 
     pub fn compare_infer(&self, x: &ExprCompare, errors: &ErrorCollector) -> Type {

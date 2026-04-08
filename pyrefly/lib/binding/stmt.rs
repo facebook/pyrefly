@@ -844,10 +844,12 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     Expr::Attribute(attr) => {
                         let mut x_cloned = x.clone();
-                        self.bind_attr_assign(attr.clone(), &mut x.value, move |expr, ann| {
-                            *x_cloned.value = expr.clone();
-                            ExprOrBinding::Binding(Binding::AugAssign(ann, Box::new(x_cloned)))
-                        });
+                        let value =
+                            self.bind_attr_assign(attr.clone(), &mut x.value, move |expr, ann| {
+                                *x_cloned.value = expr.clone();
+                                ExprOrBinding::Binding(Binding::AugAssign(ann, Box::new(x_cloned)))
+                            });
+                        self.scopes.record_self_attr_assign(attr, value, None);
                     }
                     Expr::Subscript(subscr) => {
                         let mut x_cloned = x.clone();

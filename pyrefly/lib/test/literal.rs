@@ -326,6 +326,24 @@ assert_type(result5, str)
 );
 
 testcase!(
+    test_literal_string_augassign_widens_instance_attr,
+    r#"
+from typing import Literal, assert_type
+
+class SessionMiddleware:
+    def __init__(
+        self, same_site: Literal["lax", "strict", "none"] = "lax", domain: str | None = None
+    ) -> None:
+        self.security_flags = "httponly; samesite=" + same_site
+        if domain is not None:
+            self.security_flags += f"; domain={domain}"
+
+middleware = SessionMiddleware()
+assert_type(middleware.security_flags, str)
+"#,
+);
+
+testcase!(
     test_literal_string_as_collection,
     r#"
 from collections.abc import Container, Collection, Sequence

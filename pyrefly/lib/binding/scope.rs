@@ -57,6 +57,7 @@ use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::binding::binding::MethodFieldWrites;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::binding::NarrowUseLocation;
@@ -882,7 +883,7 @@ impl ScopeClass {
                         MethodThatSetsAttr {
                             method_name: method_name.clone(),
                             recognized_attribute_defining_method,
-                            instance_or_class: attr.3,
+                            instance_or_class: attr.receiver_kind,
                         },
                         attr,
                     )
@@ -929,12 +930,12 @@ pub struct YieldsAndReturns {
 }
 
 #[derive(Clone, Debug)]
-pub struct InstanceAttribute(
-    pub ExprOrBinding,
-    pub Option<Idx<KeyAnnotation>>,
-    pub TextRange,
-    pub MethodSelfKind,
-);
+pub struct InstanceAttribute {
+    pub writes: Vec<ExprOrBinding>,
+    pub annotation: Option<Idx<KeyAnnotation>>,
+    pub range: TextRange,
+    pub receiver_kind: MethodSelfKind,
+}
 
 #[derive(Clone, Debug)]
 struct ScopeMethod {
@@ -1792,13 +1793,22 @@ impl Scopes {
                 if !method_scope.instance_attributes.contains_key(&x.attr.id) {
                     method_scope.instance_attributes.insert(
                         x.attr.id.clone(),
-                        InstanceAttribute(
-                            value,
+                        InstanceAttribute {
+                            writes: vec![value],
                             annotation,
-                            x.attr.range(),
-                            method_scope.receiver_kind,
-                        ),
+                            range: x.attr.range(),
+                            receiver_kind: method_scope.receiver_kind,
+                        },
                     );
+                } else {
+                    let attr = method_scope
+                        .instance_attributes
+                        .get_mut(&x.attr.id)
+                        .expect("attribute existence checked above");
+                    attr.writes.push(value);
+                    if attr.annotation.is_none() {
+                        attr.annotation = annotation;
+                    }
                 }
                 return true;
             }
@@ -2630,23 +2640,29 @@ impl Scopes {
                 field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
             }
         });
-        method_attrs.into_iter().for_each(
-            |(name, method, InstanceAttribute(value, annotation, range, _))| {
-                if !field_definitions.contains_key_hashed(name.as_ref()) {
-                    field_definitions.insert_hashed(
-                        name,
-                        (
-                            ClassFieldDefinition::DefinedInMethod {
-                                value: Box::new(value),
-                                annotation,
-                                method,
-                            },
-                            range,
-                        ),
-                    );
-                }
-            },
-        );
+        method_attrs.into_iter().for_each(|(name, method, attr)| {
+            if !field_definitions.contains_key_hashed(name.as_ref()) {
+                let mut writes = attr.writes.into_iter();
+                field_definitions.insert_hashed(
+                    name,
+                    (
+                        ClassFieldDefinition::DefinedInMethod {
+                            values: Box::new(MethodFieldWrites {
+                                first: Box::new(
+                                    writes
+                                        .next()
+                                        .expect("method-defined attributes always have a write"),
+                                ),
+                                rest: writes.collect(),
+                            }),
+                            annotation: attr.annotation,
+                            method,
+                        },
+                        attr.range,
+                    ),
+                );
+            }
+        });
         field_definitions
     }
 

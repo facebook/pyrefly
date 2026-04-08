@@ -175,12 +175,12 @@ impl<'a> SelfAttrNames<'a> {
             .map(|(n, r)| {
                 (
                     n,
-                    InstanceAttribute(
-                        ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
-                        None,
-                        r,
-                        MethodSelfKind::Instance,
-                    ),
+                    InstanceAttribute {
+                        writes: vec![ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit))],
+                        annotation: None,
+                        range: r,
+                        receiver_kind: MethodSelfKind::Instance,
+                    },
                 )
             })
             .collect();
