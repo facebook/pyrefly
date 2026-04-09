@@ -1348,9 +1348,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     metadata,
                 }) => {
-                    let is_none_type_newtype_base =
-                        is_new_type && class_object.has_toplevel_qname("types", "NoneType");
-                    if !is_none_type_newtype_base
+                    if !is_new_type
                         && (metadata.is_final()
                             || (metadata.is_enum()
                                 && !self.get_enum_members(&class_object).is_empty()))
