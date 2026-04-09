@@ -43,6 +43,7 @@ use pyrefly_util::thread_pool::ThreadPool;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Alias;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -312,6 +313,13 @@ pub(crate) enum IdentifierContext {
         /// the same as the identifier. If there is as-rename, this will be the name after the `as`.
         /// ex: For `from ... import x`, the name is `x`. For `from ... import x as y`, the name is `y`.
         name_after_import: Identifier,
+    },
+
+    ImportedNameEmpty {
+        /// Name of the imported module
+        module_name: ModuleName,
+        /// Track of leading dots in case of relative imports
+        dots: u32,
     },
     /// An identifier appeared as the name of a function.
     /// ex: `x` in `def x(...): ...`
@@ -672,14 +680,84 @@ impl<'a> Transaction<'a> {
         None
     }
 
+    fn empty_imported_name_from_covering_nodes(
+        covering_nodes: &[AnyNodeRef],
+        source: &str,
+        position: TextSize,
+    ) -> Option<IdentifierWithContext> {
+        let import_from = covering_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::StmtImportFrom(import_from) => Some(import_from),
+            _ => None,
+        })?;
+
+        if !import_from.names.is_empty() {
+            return None;
+        }
+
+        let stmt_start = import_from.range().start().to_usize();
+        let stmt_end = import_from.range().end().to_usize();
+        let stmt_text = source.get(stmt_start..stmt_end)?;
+
+        let import_keyword_end = stmt_text.find(" import")? + " import".len();
+
+        /// slot_start is the boundary present right after 'import' , for eg. 'from foo import|'
+        let slot_start = stmt_start + import_keyword_end;
+
+        /// consider cursor in whitespace/name slot after `import` on same line
+        let line_end = source[slot_start..]
+            .find('\n')
+            .map(|i| slot_start + i)
+            .unwrap_or(source.len());
+
+        let pos = position.to_usize();
+
+        if pos < slot_start || pos > line_end {
+            return None;
+        }
+
+        let (module_name, dots) = IdentifierWithContext::module_name_and_dots(import_from);
+
+        Some(IdentifierWithContext {
+            identifier: Identifier {
+                id: Name::empty(),
+                range: TextRange::at(position, TextSize::new(0)),
+                node_index: AtomicNodeIndex::default(),
+            },
+            context: IdentifierContext::ImportedNameEmpty { module_name, dots },
+        })
+    }
+
     pub(crate) fn identifier_at(
         &self,
         handle: &Handle,
         position: TextSize,
     ) -> Option<IdentifierWithContext> {
         let mod_module = self.get_ast(handle)?;
-        let covering_nodes = Ast::locate_node(&mod_module, position);
-        Self::identifier_from_covering_nodes(&covering_nodes)
+        let covering_nodes: Vec<AnyNodeRef<'_>> = Ast::locate_node(&mod_module, position);
+
+        if let Some(identifier) = Self::identifier_from_covering_nodes(&covering_nodes) {
+            return Some(identifier);
+        }
+
+        let module = self.get_module_info(handle)?;
+        let source = module.lined_buffer().contents();
+
+        if let Some(identifier) =
+            Self::empty_imported_name_from_covering_nodes(&covering_nodes, source, position)
+        {
+            return Some(identifier);
+        }
+
+        if position > TextSize::new(0) {
+            let previous_nodes = Ast::locate_node(&mod_module, position - TextSize::new(1));
+            return Self::empty_imported_name_from_covering_nodes(
+                &previous_nodes,
+                source,
+                position,
+            );
+        }
+
+        None
     }
 
     fn identifier_from_covering_nodes(
@@ -930,6 +1008,11 @@ impl<'a> Transaction<'a> {
                 }
                 self.get_type(handle, &key)
             }
+            Some(IdentifierWithContext {
+                identifier: _,
+                context: IdentifierContext::ImportedNameEmpty { .. },
+            }) => None,
+
             Some(IdentifierWithContext {
                 identifier,
                 context:
@@ -1992,6 +2075,14 @@ impl<'a> Transaction<'a> {
                     }),
                 }
             }
+
+            Some(IdentifierWithContext {
+                identifier,
+                context: IdentifierContext::ImportedNameEmpty { module_name, dots },
+            }) => Err(EmptyResponseReason::NotAnIdentifier {
+                found: identifier.id.to_string(),
+            }),
+
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::MethodDef { docstring_range },

@@ -892,19 +892,77 @@ impl Transaction<'_> {
                     }
                     let exports = self.get_exports(&handle);
                     for (name, export) in exports.iter() {
-                        let (is_deprecated, kind) = match export {
-                            ExportLocation::ThisModule(export) => (
-                                export.deprecation.is_some(),
-                                export
-                                    .symbol_kind
-                                    .map_or(CompletionItemKind::VARIABLE, |k| {
-                                        k.to_lsp_completion_item_kind()
-                                    }),
-                            ),
-                            ExportLocation::OtherModule(_, _) => {
-                                (false, CompletionItemKind::VARIABLE)
-                            }
+                        if name.as_str().starts_with("_") {
+                            continue;
+                        }
+                        let ExportLocation::ThisModule(export) = export else {
+                            continue;
                         };
+
+                        let is_deprecated = export.deprecation.is_some();
+
+                        let kind = export
+                            .symbol_kind
+                            .map_or(CompletionItemKind::VARIABLE, |k| {
+                                k.to_lsp_completion_item_kind()
+                            });
+
+                        result.push(RankedCompletion::new(CompletionItem {
+                            label: name.to_string(),
+                            kind: Some(kind),
+                            tags: if is_deprecated {
+                                Some(vec![CompletionItemTag::DEPRECATED])
+                            } else {
+                                None
+                            },
+                            ..Default::default()
+                        }))
+                    }
+                }
+            }
+
+            Some(IdentifierWithContext {
+                identifier,
+                context:
+                    IdentifierContext::ImportedNameEmpty {
+                        module_name, dots, ..
+                    },
+            }) => {
+                // For relative imports (dots > 0), resolve to an absolute module name.
+                let resolved = if dots > 0 {
+                    let is_init = handle.path().is_init();
+                    let suffix = if module_name.as_str().is_empty() {
+                        None
+                    } else {
+                        Some(&Name::new(module_name.as_str()))
+                    };
+                    handle
+                        .module()
+                        .new_maybe_relative(is_init, dots, suffix)
+                        .unwrap_or(module_name)
+                } else {
+                    module_name
+                };
+
+                if let Some(handle) = self.import_handle(handle, resolved, None).finding() {
+                    let exports = self.get_exports(&handle);
+
+                    for (name, export) in exports.iter() {
+                        if name.as_str().starts_with("_") {
+                            continue;
+                        }
+                        let ExportLocation::ThisModule(export) = export else {
+                            continue;
+                        };
+
+                        let is_deprecated = export.deprecation.is_some();
+
+                        let kind = export
+                            .symbol_kind
+                            .map_or(CompletionItemKind::VARIABLE, |k| {
+                                k.to_lsp_completion_item_kind()
+                            });
+
                         result.push(RankedCompletion::new(CompletionItem {
                             label: name.to_string(),
                             kind: Some(kind),
