@@ -1179,6 +1179,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             }
+            Type::None if is_new_type => {
+                let base_cls = self.stdlib.none_type().class_object();
+                let metadata = self.get_metadata_for_class(base_cls);
+                BaseClassParseResult::Parsed({
+                    ParsedBaseClass {
+                        class_object: base_cls.dupe(),
+                        range,
+                        metadata,
+                    }
+                })
+            }
             Type::Type(box Type::Any(_)) => {
                 // `type[Any]` is equivalent to `type` or `Type`
                 let type_obj = self.stdlib.builtins_type().class_object();
@@ -1337,8 +1348,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     metadata,
                 }) => {
-                    if metadata.is_final()
-                        || (metadata.is_enum() && !self.get_enum_members(&class_object).is_empty())
+                    let is_none_type_newtype_base =
+                        is_new_type && class_object.has_toplevel_qname("types", "NoneType");
+                    if !is_none_type_newtype_base
+                        && (metadata.is_final()
+                            || (metadata.is_enum()
+                                && !self.get_enum_members(&class_object).is_empty()))
                     {
                         self.error(
                             errors,
