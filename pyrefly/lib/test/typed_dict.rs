@@ -2293,10 +2293,10 @@ testcase!(
     r#"
 from typing import TypedDict, assert_type
 
-class Foo(TypedDict):
+class Foo(TypedDict, closed=True):
     a: int
 
-class Bar(TypedDict):
+class Bar(TypedDict, closed=True):
     b: int
 
 def test(foo: Foo | Bar) -> None:
@@ -2306,6 +2306,31 @@ def test(foo: Foo | Bar) -> None:
     else:
         assert_type(foo, Bar)
         assert_type(foo["b"], int)
+"#,
+);
+
+testcase!(
+    test_typed_dict_open_contains_narrowing,
+    r#"
+from typing import TypedDict, assert_type
+
+class TD(TypedDict):
+    x: int
+
+class TD2(TypedDict):
+    x: int
+    y: int
+
+def test(td: TD) -> None:
+    if "y" in td:
+        assert_type(td["y"], object)
+
+def test_union(td: TD | TD2) -> None:
+    if "y" in td:
+        assert_type(td, TD | TD2)
+        assert_type(td["y"], object)
+    else:
+        assert_type(td, TD)
 "#,
 );
 

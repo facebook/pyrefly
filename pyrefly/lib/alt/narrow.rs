@@ -687,14 +687,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match fields.get(key) {
                     Some(field) if present || !field.required => member.clone(),
                     Some(_) => self.heap.mk_never(),
-                    None if matches!(
-                        self.typed_dict_extra_items(typed_dict),
-                        ExtraItems::Extra(_)
-                    ) =>
-                    {
-                        member.clone()
-                    }
-                    None if present => self.heap.mk_never(),
+                    None if present => match self.typed_dict_extra_items(typed_dict) {
+                        ExtraItems::Closed => self.heap.mk_never(),
+                        ExtraItems::Default | ExtraItems::Extra(_) => member.clone(),
+                    },
                     None => member.clone(),
                 }
             }
@@ -712,6 +708,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .any(|member| self.has_dict_like_member(member)),
             _ => false,
         }
+    }
+
+    fn key_membership_value_type(&self, ty: &Type, key: &Name, range: TextRange) -> Type {
+        let slice = Ast::str_expr(key.as_str(), TextRange::empty(TextSize::from(0)));
+        let ignore_errors = self.error_swallower();
+        self.distribute_over_union(ty, |member| match member {
+            Type::TypedDict(typed_dict) => {
+                let fields = self.typed_dict_fields(typed_dict);
+                if let Some(field) = fields.get(key) {
+                    field.ty.clone()
+                } else {
+                    self.typed_dict_extra_items(typed_dict)
+                        .extra_item(self.stdlib)
+                        .ty
+                }
+            }
+            _ => self.subscript_infer_for_type(member, &slice, range, &ignore_errors),
+        })
     }
 
     /// Narrow a union by keeping only members whose facet is identity-compatible with `right`.
@@ -1587,10 +1601,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                         None => Vec1::new(key_facet),
                     };
-                    let chain = FacetChain::new(facets.clone());
                     // Apply a facet narrow w/ that key's type, so that the usual subscript inference
                     // code path which raises a warning for NotRequired keys does not execute later
-                    let value_ty = self.get_facet_chain_type(&narrowed, &chain, range);
+                    let value_ty = self.key_membership_value_type(&narrowed_base, key, range);
                     narrowed = narrowed.with_narrow(&facets, value_ty);
                     narrowed
                 } else {
