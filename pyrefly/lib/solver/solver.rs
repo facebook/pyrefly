@@ -333,7 +333,18 @@ pub enum PinError {
     UnfinishedQuantified(Quantified),
 }
 
-#[derive(Debug)]
+/// Opaque snapshot of partial variable states, used to save and restore
+/// partial vars during speculative overload resolution.
+pub struct PartialVarSnapshot(Vec<(Var, Variable)>);
+
+impl fmt::Debug for PartialVarSnapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PartialVarSnapshot")
+            .field("len", &self.0.len())
+            .finish()
+    }
+}
+
 pub struct Solver {
     variables: Mutex<Variables>,
     instantiation_errors: RwLock<SmallMap<Var, TypeVarSpecializationError>>,
@@ -346,6 +357,12 @@ pub struct Solver {
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
     pub spec_compliant_overloads: bool,
+}
+
+impl fmt::Debug for Solver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Solver").finish_non_exhaustive()
+    }
 }
 
 impl Display for Solver {
@@ -456,44 +473,39 @@ impl Solver {
         )
     }
 
-    /// Create fresh copies of all partial variables in the given list.
-    /// Returns a mapping from original vars to their fresh copies.
-    /// Used during overload resolution to prevent one overload's constraint
-    /// solving from contaminating other overloads' partial variables.
-    pub fn freshen_partial_vars(
-        &self,
-        vars: &[Var],
-        uniques: &UniqueFactory,
-    ) -> SmallMap<Var, Var> {
-        let mut fresh = SmallMap::with_capacity(vars.len());
-        let mut lock = self.variables.lock();
-        for v in vars {
-            let cloned = match &*lock.get(*v) {
+    /// Snapshot the current state of partial variables so they can be restored
+    /// after a speculative overload call.
+    pub fn snapshot_partial_vars(&self, vars: &[Var]) -> PartialVarSnapshot {
+        let lock = self.variables.lock();
+        let entries = vars
+            .iter()
+            .filter_map(|v| {
+                let var = lock.get(*v);
+                match &*var {
+                    Variable::PartialContained(range) => {
+                        Some((*v, Variable::PartialContained(*range)))
+                    }
+                    Variable::PartialQuantified(q) => {
+                        Some((*v, Variable::PartialQuantified(q.clone())))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        PartialVarSnapshot(entries)
+    }
+
+    /// Restore partial variables to a previously snapshotted state.
+    /// This undoes any pinning/solving that occurred during a speculative overload call.
+    pub fn restore_partial_vars(&self, snapshot: &PartialVarSnapshot) {
+        let lock = self.variables.lock();
+        for (v, state) in &snapshot.0 {
+            let replacement = match state {
                 Variable::PartialContained(range) => Variable::PartialContained(*range),
                 Variable::PartialQuantified(q) => Variable::PartialQuantified(q.clone()),
                 _ => continue,
             };
-            let fresh_var = Var::new(uniques);
-            fresh.insert(*v, fresh_var);
-            lock.insert_fresh(fresh_var, cloned);
-        }
-        fresh
-    }
-
-    /// Given an original->fresh mapping of partial vars, transfer solutions
-    /// from fresh partial vars to the originals. Used during overload
-    /// resolution to set partial vars to the solutions found during the
-    /// winning overload call. If a fresh var is still unsolved, leave the
-    /// original as-is.
-    pub fn solve_partial_vars_from_fresh(&self, mapping: &SmallMap<Var, Var>) {
-        let lock = self.variables.lock();
-        for (original, fresh) in mapping {
-            let fresh_var = lock.get(*fresh);
-            if let Variable::Answer(fresh_type) = &*fresh_var {
-                let fresh_type = fresh_type.clone();
-                drop(fresh_var);
-                *lock.get_mut(*original) = Variable::Answer(fresh_type.clone());
-            }
+            *lock.get_mut(*v) = replacement;
         }
     }
 
