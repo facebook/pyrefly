@@ -892,31 +892,37 @@ impl Transaction<'_> {
                     }
                     let exports = self.get_exports(&handle);
                     for (name, export) in exports.iter() {
-                        if name.as_str().starts_with("_") {
-                            continue;
-                        }
-                        let ExportLocation::ThisModule(export) = export else {
-                            continue;
+                        let (is_deprecated, kind, source) = match export {
+                            ExportLocation::ThisModule(export) => (
+                                export.deprecation.is_some(),
+                                export
+                                    .symbol_kind
+                                    .map_or(CompletionItemKind::VARIABLE, |k| {
+                                        k.to_lsp_completion_item_kind()
+                                    }),
+                                CompletionSource::Local,
+                            ),
+                            ExportLocation::OtherModule(_, _) => (
+                                false,
+                                CompletionItemKind::VARIABLE,
+                                CompletionSource::Reexport,
+                            ),
                         };
 
-                        let is_deprecated = export.deprecation.is_some();
-
-                        let kind = export
-                            .symbol_kind
-                            .map_or(CompletionItemKind::VARIABLE, |k| {
-                                k.to_lsp_completion_item_kind()
-                            });
-
-                        result.push(RankedCompletion::new(CompletionItem {
-                            label: name.to_string(),
-                            kind: Some(kind),
-                            tags: if is_deprecated {
-                                Some(vec![CompletionItemTag::DEPRECATED])
-                            } else {
-                                None
+                        result.push(RankedCompletion {
+                            item: CompletionItem {
+                                label: name.to_string(),
+                                kind: Some(kind),
+                                tags: if is_deprecated {
+                                    Some(vec![CompletionItemTag::DEPRECATED])
+                                } else {
+                                    None
+                                },
+                                ..Default::default()
                             },
-                            ..Default::default()
-                        }))
+                            source,
+                            is_incompatible: false,
+                        })
                     }
                 }
             }
@@ -948,31 +954,37 @@ impl Transaction<'_> {
                     let exports = self.get_exports(&handle);
 
                     for (name, export) in exports.iter() {
-                        if name.as_str().starts_with("_") {
-                            continue;
-                        }
-                        let ExportLocation::ThisModule(export) = export else {
-                            continue;
+                        let (is_deprecated, kind, source) = match export {
+                            ExportLocation::ThisModule(export) => (
+                                export.deprecation.is_some(),
+                                export
+                                    .symbol_kind
+                                    .map_or(CompletionItemKind::VARIABLE, |k| {
+                                        k.to_lsp_completion_item_kind()
+                                    }),
+                                CompletionSource::Local,
+                            ),
+                            ExportLocation::OtherModule(_, _) => (
+                                false,
+                                CompletionItemKind::VARIABLE,
+                                CompletionSource::Reexport,
+                            ),
                         };
 
-                        let is_deprecated = export.deprecation.is_some();
-
-                        let kind = export
-                            .symbol_kind
-                            .map_or(CompletionItemKind::VARIABLE, |k| {
-                                k.to_lsp_completion_item_kind()
-                            });
-
-                        result.push(RankedCompletion::new(CompletionItem {
-                            label: name.to_string(),
-                            kind: Some(kind),
-                            tags: if is_deprecated {
-                                Some(vec![CompletionItemTag::DEPRECATED])
-                            } else {
-                                None
+                        result.push(RankedCompletion {
+                            item: CompletionItem {
+                                label: name.to_string(),
+                                kind: Some(kind),
+                                tags: if is_deprecated {
+                                    Some(vec![CompletionItemTag::DEPRECATED])
+                                } else {
+                                    None
+                                },
+                                ..Default::default()
                             },
-                            ..Default::default()
-                        }))
+                            source,
+                            is_incompatible: false,
+                        })
                     }
                 }
             }

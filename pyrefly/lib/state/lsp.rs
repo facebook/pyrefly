@@ -700,10 +700,9 @@ impl<'a> Transaction<'a> {
 
         let import_keyword_end = stmt_text.find(" import")? + " import".len();
 
-        /// slot_start is the boundary present right after 'import' , for eg. 'from foo import|'
+        // slot_start is the boundary present right after `import` , for eg. `from foo import|`
         let slot_start = stmt_start + import_keyword_end;
 
-        /// consider cursor in whitespace/name slot after `import` on same line
         let line_end = source[slot_start..]
             .find('\n')
             .map(|i| slot_start + i)
