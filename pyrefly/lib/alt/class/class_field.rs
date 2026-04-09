@@ -63,9 +63,9 @@ use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassSynthesizedFields;
-use crate::binding::binding::MethodFieldWrites;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodThatSetsAttr;
+use crate::binding::scope::is_constant_name;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -1631,7 +1631,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )
             }
             ClassFieldDefinition::DefinedInMethod {
-                values,
+                value,
                 method,
                 annotation: annot,
                 ..
@@ -1668,11 +1668,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     MethodSelfKind::Class => ClassFieldInitialization::ClassBody(None),
                     MethodSelfKind::Instance => ClassFieldInitialization::Method,
                 };
-                let (mut value_ty, annotation, is_inherited) = self.analyze_method_field_values(
-                    values,
+                let (mut value_ty, annotation, is_inherited) = self.analyze_class_field_value(
+                    value,
                     class,
                     name,
                     direct_annotation.as_ref(),
+                    true,
                     range,
                     errors,
                 );
@@ -2365,6 +2366,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Arc::unwrap_or_clone(self.solve_binding(b, range, errors)).into_ty()
             }
         };
+        let inferred_ty =
+            if inferred_from_method && direct_annotation.is_none() && !is_constant_name(name) {
+                inferred_ty.transform(&mut |ty| {
+                    if matches!(ty, Type::LiteralString(_)) {
+                        *ty = self.stdlib.str().clone().to_type();
+                    }
+                })
+            } else {
+                inferred_ty
+            };
         // Note that we use `final_annotation`'s `ty` rather than `inherited_ty`
         // because we only want to override the `inferred_ty` when there's an inherited
         // *annotation*, and in some cases `inherited_ty` is inferred (which means we only
@@ -2374,58 +2385,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .and_then(|ann| ann.ty.clone())
             .unwrap_or(inferred_ty);
         (ty, final_annotation, is_inherited)
-    }
-
-    fn analyze_method_field_values(
-        &self,
-        values: &MethodFieldWrites,
-        class: &Class,
-        name: &Name,
-        direct_annotation: Option<&Annotation>,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> (Type, Option<Annotation>, IsInherited) {
-        let (mut current_ty, annotation, is_inherited) = self.analyze_class_field_value(
-            values.first.as_ref(),
-            class,
-            name,
-            direct_annotation,
-            true,
-            range,
-            errors,
-        );
-        let mut field_ty = current_ty.clone();
-        for value in &values.rest {
-            let next_ty = match value {
-                ExprOrBinding::Binding(Binding::AugAssign(_, augassign)) => {
-                    let rhs_ty = self.expr_infer(&augassign.value, errors);
-                    self.augassign_result_type(
-                        augassign.op,
-                        &current_ty,
-                        &rhs_ty,
-                        augassign.target.range(),
-                        augassign.value.range(),
-                        augassign.range,
-                        errors,
-                    )
-                }
-                _ => {
-                    self.analyze_class_field_value(
-                        value,
-                        class,
-                        name,
-                        direct_annotation,
-                        true,
-                        range,
-                        errors,
-                    )
-                    .0
-                }
-            };
-            current_ty = next_ty.clone();
-            field_ty = self.unions(vec![field_ty, next_ty]);
-        }
-        (field_ty, annotation, is_inherited)
     }
 
     /// Given an inherited annotation and possible qualifiers from a direct annotation,

@@ -57,7 +57,6 @@ use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
-use crate::binding::binding::MethodFieldWrites;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::binding::NarrowUseLocation;
@@ -883,7 +882,7 @@ impl ScopeClass {
                         MethodThatSetsAttr {
                             method_name: method_name.clone(),
                             recognized_attribute_defining_method,
-                            instance_or_class: attr.receiver_kind,
+                            instance_or_class: attr.3,
                         },
                         attr,
                     )
@@ -930,12 +929,12 @@ pub struct YieldsAndReturns {
 }
 
 #[derive(Clone, Debug)]
-pub struct InstanceAttribute {
-    pub writes: Vec<ExprOrBinding>,
-    pub annotation: Option<Idx<KeyAnnotation>>,
-    pub range: TextRange,
-    pub receiver_kind: MethodSelfKind,
-}
+pub struct InstanceAttribute(
+    pub ExprOrBinding,
+    pub Option<Idx<KeyAnnotation>>,
+    pub TextRange,
+    pub MethodSelfKind,
+);
 
 #[derive(Clone, Debug)]
 struct ScopeMethod {
@@ -1793,49 +1792,15 @@ impl Scopes {
                 if !method_scope.instance_attributes.contains_key(&x.attr.id) {
                     method_scope.instance_attributes.insert(
                         x.attr.id.clone(),
-                        InstanceAttribute {
-                            writes: vec![value],
+                        InstanceAttribute(
+                            value,
                             annotation,
-                            range: x.attr.range(),
-                            receiver_kind: method_scope.receiver_kind,
-                        },
+                            x.attr.range(),
+                            method_scope.receiver_kind,
+                        ),
                     );
-                } else {
-                    let attr = method_scope
-                        .instance_attributes
-                        .get_mut(&x.attr.id)
-                        .expect("attribute existence checked above");
-                    attr.writes.push(value);
-                    if attr.annotation.is_none() {
-                        attr.annotation = annotation;
-                    }
                 }
                 return true;
-            }
-        }
-        false
-    }
-
-    /// Record an additional write to an already-known `self.<attr>` in the current method.
-    ///
-    /// Unlike `record_self_attr_assign`, this will not invent a new instance attribute for
-    /// augmented assignments like `self.x += 1`; those remain invalid unless a prior write
-    /// in the method established the attribute.
-    pub fn record_known_self_attr_write(
-        &mut self,
-        x: &ExprAttribute,
-        value: ExprOrBinding,
-    ) -> bool {
-        for scope in self.iter_rev_mut() {
-            if let ScopeKind::Method(method_scope) = &mut scope.kind
-                && let Some(self_name) = &method_scope.self_name
-                && matches!(&*x.value, Expr::Name(name) if name.id == self_name.id)
-            {
-                if let Some(attr) = method_scope.instance_attributes.get_mut(&x.attr.id) {
-                    attr.writes.push(value);
-                    return true;
-                }
-                return false;
             }
         }
         false
@@ -2665,29 +2630,23 @@ impl Scopes {
                 field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
             }
         });
-        method_attrs.into_iter().for_each(|(name, method, attr)| {
-            if !field_definitions.contains_key_hashed(name.as_ref()) {
-                let mut writes = attr.writes.into_iter();
-                field_definitions.insert_hashed(
-                    name,
-                    (
-                        ClassFieldDefinition::DefinedInMethod {
-                            values: Box::new(MethodFieldWrites {
-                                first: Box::new(
-                                    writes
-                                        .next()
-                                        .expect("method-defined attributes always have a write"),
-                                ),
-                                rest: writes.collect(),
-                            }),
-                            annotation: attr.annotation,
-                            method,
-                        },
-                        attr.range,
-                    ),
-                );
-            }
-        });
+        method_attrs.into_iter().for_each(
+            |(name, method, InstanceAttribute(value, annotation, range, _))| {
+                if !field_definitions.contains_key_hashed(name.as_ref()) {
+                    field_definitions.insert_hashed(
+                        name,
+                        (
+                            ClassFieldDefinition::DefinedInMethod {
+                                value: Box::new(value),
+                                annotation,
+                                method,
+                            },
+                            range,
+                        ),
+                    );
+                }
+            },
+        );
         field_definitions
     }
 
