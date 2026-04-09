@@ -509,7 +509,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         // types that reference the same classes). Use (Class, Class) matching to detect
         // cycles that would otherwise be missed due to fresh Var creation.
         let class_check = if let Type::ClassType(got_class) = &got
-            && got.may_contain_quantified_var()
+            && got.may_contain_placeholder_var()
         {
             let key = (
                 got_class.class_object().clone(),
@@ -1252,7 +1252,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     ) -> Result<(), SubsetError> {
         match (got, want) {
             (Type::Any(_), _) => {
-                for var in want.collect_maybe_quantified_vars() {
+                for var in want.collect_maybe_placeholder_vars() {
                     // Variables in `want` now have `Any` as a lower bound.
                     self.solver
                         .add_lower_bound(var, got.clone(), &mut |got, want| {
@@ -1262,7 +1262,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 Ok(())
             }
             (_, Type::Any(_)) => {
-                for var in got.collect_maybe_quantified_vars() {
+                for var in got.collect_maybe_placeholder_vars() {
                     // Variables in `got` now have `Any` as an upper bound.
                     self.solver
                         .add_upper_bound(var, want.clone(), &mut |got, want| {
@@ -1440,7 +1440,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 // tried first. This prevents cases like `T | type[T]` from incorrectly matching
                 // bare `T` when `type[T]` would produce a better (bound-satisfying) solution.
                 let (vars, nonvars): (Vec<_>, Vec<_>) =
-                    us.iter().partition(|u| u.may_contain_quantified_var());
+                    us.iter().partition(|u| u.may_contain_placeholder_var());
                 let (bare_vars, wrapped_vars): (Vec<_>, Vec<_>) =
                     vars.into_iter().partition(|u| matches!(u, Type::Var(_)));
                 any(nonvars.iter(), |u| self.is_subset_eq(l, u))

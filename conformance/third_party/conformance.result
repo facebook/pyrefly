@@ -115,9 +115,12 @@
   "generics_syntax_infer_variance.py": [],
   "generics_syntax_scoping.py": [],
   "generics_type_erasure.py": [],
-  "generics_typevartuple_args.py": [],
+  "generics_typevartuple_args.py": [
+    "Line 76: Unexpected errors [\"Argument `tuple[Literal['1']]` is not assignable to parameter `*args` with type `tuple[int]` in function `func4`\"]"
+  ],
   "generics_typevartuple_basic.py": [
-    "Line 85: Unexpected errors ['Argument `tuple[float]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`']"
+    "Line 86: Unexpected errors ['Argument `tuple[float]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`']",
+    "Line 90: Unexpected errors [\"Argument `tuple[Literal['0']]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`\"]"
   ],
   "generics_typevartuple_callable.py": [],
   "generics_typevartuple_concat.py": [],

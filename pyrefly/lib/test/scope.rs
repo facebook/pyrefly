@@ -711,13 +711,12 @@ def bar():
 "#,
 );
 
-// https://github.com/facebook/pyrefly/issues/154
 testcase!(
     test_exception_not_in_scope,
     r#"
 def try_except():
     try:
-        1 / 0
+        1 / 0 # E: Cannot divide by zero
     except Exception as e1:
         pass
 
@@ -725,7 +724,7 @@ def try_except():
 
 def try_except_finally():
     try:
-        1 / 0
+        1 / 0 # E: Cannot divide by zero
     except Exception as e2:
         pass
     finally:
@@ -735,7 +734,7 @@ def try_except_finally():
 
 def try_except_twice():
     try:
-        1 / 0
+        1 / 0 # E: Cannot divide by zero
     except OSError as e3:
         pass
     except Exception:
@@ -745,7 +744,7 @@ def try_except_twice():
 
 def try_except_multiple_finally():
     try:
-        1 / 0
+        1 / 0 # E: Cannot divide by zero
     except OSError as e4:
         pass
     except Exception:
@@ -761,7 +760,7 @@ def try_except_multiple_finally():
 
 def try_except_else():
     try:
-        1 / 0
+        1 / 0 # E: Cannot divide by zero
     except OSError as e6:
         pass
     except Exception:
@@ -773,7 +772,7 @@ def try_except_else():
 
 def try_except_else_finally():
     try:
-        1 / 0
+        1 / 0 # E: Cannot divide by zero
     except OSError as e7:
         pass
     except Exception:

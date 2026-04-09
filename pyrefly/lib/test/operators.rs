@@ -963,28 +963,32 @@ def f2(x):
     "#,
 );
 
-// https://github.com/facebook/pyrefly/issues/2915
 testcase!(
-    bug = "Should detect division by zero with literal zero divisor",
     test_division_by_zero_literal,
     r#"
 from typing import Literal
 
-x = 10 / 0
-y = 10 // 0
-z = 10 % 0
+x = 10 / 0  # E: Cannot divide by zero: `/` with a literal zero divisor
+y = 10 // 0  # E: Cannot divide by zero: `//` with a literal zero divisor
+z = 10 % 0  # E: Cannot divide by zero: `%` with a literal zero divisor
 
 # Variable with Literal[0] type
 zero: Literal[0] = 0
-a = 10 / zero
-b = 10 // zero
-c = 10 % zero
+a = 10 / zero  # E: Cannot divide by zero: `/` with a literal zero divisor
+b = 10 // zero  # E: Cannot divide by zero: `//` with a literal zero divisor
+c = 10 % zero  # E: Cannot divide by zero: `%` with a literal zero divisor
 
-# Union containing Literal[0]
+# Union containing Literal[0] should not error (int includes non-zero values)
 mixed: int | Literal[0] = 0
 d = 10 / mixed
 e = 10 // mixed
 f = 10 % mixed
+
+# Literal union containing zero should not error (could be non-zero at runtime)
+maybe_zero: Literal[0, 1] = 0
+g = 10 / maybe_zero
+h = 10 // maybe_zero
+i = 10 % maybe_zero
 "#,
 );
 

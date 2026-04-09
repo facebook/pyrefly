@@ -24,16 +24,20 @@ class Pet(Enum):
         self.species = species
 
 
-assert_type(Pet.genus, str)
-assert_type(Pet.species, str)
+def func1(pet: Pet) -> None:
+    assert_type(pet.genus, str)
+    assert_type(pet.species, str)
+
 assert_type(Pet.CAT, Literal[Pet.CAT])
 assert_type(Pet.DOG, Literal[Pet.DOG])
 
 
 from _enums_members import Pet2
 
-assert_type(Pet2.genus, str)
-assert_type(Pet2.species, str)
+def func2(pet: Pet2) -> None:
+    assert_type(pet.genus, str)
+    assert_type(pet.species, str)
+
 assert_type(Pet2.CAT, Literal[Pet2.CAT])
 assert_type(Pet2.DOG, Literal[Pet2.DOG])
 
@@ -72,7 +76,7 @@ class Pet4(Enum):
         return "mammal"
 
     def speak(self) -> None:  # Non-member method
-        print("meow" if self is Pet.CAT else "woof")
+        print("meow" if self is Pet4.CAT else "woof")
 
     class Nested: ...  # Non-member nested class
 

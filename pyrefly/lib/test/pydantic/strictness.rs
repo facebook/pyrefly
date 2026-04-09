@@ -340,6 +340,23 @@ Model(parameters=d)
 );
 
 pydantic_testcase!(
+    test_lax_mode_pattern_field,
+    r#"
+import re
+from typing import reveal_type
+from pydantic import BaseModel
+
+class RegexSignature(BaseModel):
+    signature: re.Pattern[str]
+
+reveal_type(RegexSignature.__init__)  # E: revealed type: (self: RegexSignature, *, signature: Pattern[str] | str, **Unknown) -> None
+RegexSignature(signature=re.compile(r"needle"))
+RegexSignature(signature="needle")
+RegexSignature(signature=b"needle")  # E: Argument `Literal[b'needle']` is not assignable to parameter `signature`
+    "#,
+);
+
+pydantic_testcase!(
     test_lax_mode_other,
     r#"
 from pydantic import BaseModel

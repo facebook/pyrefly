@@ -679,6 +679,26 @@ set `infer-return-types` to `"never"` in your config or pass it as a flag.
 - Default: `"checked"`
 - Flag equivalent: `--infer-return-types`
 
+### `strict-callable-subtyping`
+
+Controls whether Pyrefly enforces strict parameter compatibility when checking
+callable subtyping for signatures with `*args: Any, **kwargs: Any`.
+
+When set to `false` (the default), callables with `*args: Any, **kwargs: Any`
+are treated as a gradual type — assignability checks in both directions succeed
+when they otherwise wouldn't, similar to how `...` (ellipsis) parameters behave.
+This is a pragmatic default because many real-world stubs and decorators use
+`*args: Any, **kwargs: Any` as a wildcard signature.
+
+When set to `true`, parameter list compatibility is checked strictly even when
+`*args: Any, **kwargs: Any` is present.
+
+[Try it in the sandbox.](https://pyrefly.org/sandbox/?project=N4IgZglgNgpgziAXKOBDAdgEwEYHsAeAdAA4CeSIAxlKnHAAQCCiAOuvR-ZjGPWABRwYUMABp6AKlQAnAOZxxEiQGsA7jPkBKRPUJ621WgwBC-Rtrad6AYnoARHqgCuUAC71%2BYVFCHb66XHoYaWlcaXpAFAJ6DFJ6OAhZdFRXJ2kYeggGSlwAW2JkiGxYelUIVwALegADfik5OB1GdFJFFXV6xubNKstOWwBlV2kISnd%2BIacYP2DQ8Kia-B0IdFdurlx4f1x3VEpKGGIdqChouSccmBX6KEzXBgrk6tqNBqZm1rUXztI1zA24Xocbi8ARCETiRYZFZ%2BPSEECiEBkNJgKCkQiuXJQCi2AAKpGRqLiGBwBHo2XQkFkqQKuHQhDYAxg6XKrlcxAaAHoOUieKjCGFZBzLhy-pQ4BzyZTqa4ILSOXwwtEAG6oaCoIrpSUJaWy9i4Q66uD09BkCq0gC0SuC8Vp9AAvPQWCAAMyEACMACYnWw4EMRq5zZRvDQNea4E5sK5SMRlrJ7fQJjA2ABtGZhOAAXTYTnQEDyYVcMEw5swEDSowgVvjAHIEgE0tW2AEA2kAI5OMtF83KGCkc27fZ0GvtdCN9AgAC%2BCN2MqtADFoDAKGgsHgiGRJ0A)
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--strict-callable-subtyping`
+
 ### `untyped-def-behavior` (deprecated)
 
 :::warning

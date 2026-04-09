@@ -5137,132 +5137,132 @@
       "column": 5,
       "concise_description": "Enum member `DOG` may not be annotated directly. Instead, annotate the `_value_` attribute.",
       "description": "Enum member `DOG` may not be annotated directly. Instead, annotate the `_value_` attribute.",
-      "line": 50,
+      "line": 54,
       "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 8,
-      "stop_line": 50
+      "stop_line": 54
     },
     {
       "code": -2,
       "column": 20,
       "concise_description": "`Pet4.converter` is not a valid enum member",
       "description": "`Pet4.converter` is not a valid enum member",
-      "line": 82,
+      "line": 86,
       "name": "invalid-literal",
       "severity": "error",
       "stop_column": 34,
-      "stop_line": 82
+      "stop_line": 86
     },
     {
       "code": -2,
       "column": 20,
       "concise_description": "`Pet4.transform` is not a valid enum member",
       "description": "`Pet4.transform` is not a valid enum member",
-      "line": 83,
+      "line": 87,
       "name": "invalid-literal",
       "severity": "error",
       "stop_column": 34,
-      "stop_line": 83
+      "stop_line": 87
     },
     {
       "code": -2,
       "column": 18,
       "concise_description": "`Pet4.species` is not a valid enum member",
       "description": "`Pet4.species` is not a valid enum member",
-      "line": 84,
+      "line": 88,
       "name": "invalid-literal",
       "severity": "error",
       "stop_column": 30,
-      "stop_line": 84
+      "stop_line": 88
     },
     {
       "code": -2,
       "column": 16,
       "concise_description": "`Pet4.speak` is not a valid enum member",
       "description": "`Pet4.speak` is not a valid enum member",
-      "line": 85,
+      "line": 89,
       "name": "invalid-literal",
       "severity": "error",
       "stop_column": 26,
-      "stop_line": 85
+      "stop_line": 89
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "assert_type(int, Unknown) failed",
       "description": "assert_type(int, Unknown) failed",
-      "line": 116,
+      "line": 120,
       "name": "assert-type",
       "severity": "error",
       "stop_column": 43,
-      "stop_line": 116
+      "stop_line": 120
     },
     {
       "code": -2,
       "column": 32,
       "concise_description": "`Example.b` is not a valid enum member",
       "description": "`Example.b` is not a valid enum member",
-      "line": 116,
+      "line": 120,
       "name": "invalid-literal",
       "severity": "error",
       "stop_column": 41,
-      "stop_line": 116
+      "stop_line": 120
     },
     {
       "code": -2,
       "column": 20,
       "concise_description": "revealed type: int",
       "description": "revealed type: int",
-      "line": 128,
+      "line": 132,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 34,
-      "stop_line": 128
+      "stop_line": 132
     },
     {
       "code": -2,
       "column": 20,
       "concise_description": "assert_type(int, Unknown) failed",
       "description": "assert_type(int, Unknown) failed",
-      "line": 129,
+      "line": 133,
       "name": "assert-type",
       "severity": "error",
       "stop_column": 57,
-      "stop_line": 129
+      "stop_line": 133
     },
     {
       "code": -2,
       "column": 43,
       "concise_description": "`Example2.__B` is not a valid enum member",
       "description": "`Example2.__B` is not a valid enum member",
-      "line": 129,
+      "line": 133,
       "name": "invalid-literal",
       "severity": "error",
       "stop_column": 55,
-      "stop_line": 129
+      "stop_line": 133
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "assert_type(Literal[Pet5.DOG], int) failed",
       "description": "assert_type(Literal[Pet5.DOG], int) failed",
-      "line": 146,
+      "line": 150,
       "name": "assert-type",
       "severity": "error",
       "stop_column": 27,
-      "stop_line": 146
+      "stop_line": 150
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "assert_type(Literal[Pet5.FISH], int) failed",
       "description": "assert_type(Literal[Pet5.FISH], int) failed",
-      "line": 147,
+      "line": 151,
       "name": "assert-type",
       "severity": "error",
       "stop_column": 28,
-      "stop_line": 147
+      "stop_line": 151
     }
   ],
   "exceptions_context_managers.py": [
@@ -5685,14 +5685,25 @@
     },
     {
       "code": -2,
+      "column": 22,
+      "concise_description": "`type[Bar]` is not assignable to `type[Bar[int]]`",
+      "description": "`type[Bar]` is not assignable to `type[Bar[int]]`",
+      "line": 46,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 25,
+      "stop_line": 46
+    },
+    {
+      "code": -2,
       "column": 1,
       "concise_description": "Expected 0 type arguments for `Foo`, got 1",
       "description": "Expected 0 type arguments for `Foo`, got 1",
-      "line": 55,
+      "line": 56,
       "name": "bad-specialization",
       "severity": "error",
       "stop_column": 9,
-      "stop_line": 55
+      "stop_line": 56
     }
   ],
   "generics_paramspec_basic.py": [
@@ -7228,28 +7239,17 @@
       "column": 13,
       "concise_description": "Argument `tuple[float]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`",
       "description": "Argument `tuple[float]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`",
-      "line": 85,
+      "line": 86,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 19,
-      "stop_line": 85
+      "stop_line": 86
     },
     {
       "code": -2,
       "column": 13,
       "concise_description": "Argument `tuple[Literal['0']]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`",
       "description": "Argument `tuple[Literal['0']]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`",
-      "line": 89,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 19,
-      "stop_line": 89
-    },
-    {
-      "code": -2,
-      "column": 15,
-      "concise_description": "Argument `tuple[Literal[0]]` is not assignable to parameter `arg2` with type `tuple[int, int]` in function `func2`",
-      "description": "Argument `tuple[Literal[0]]` is not assignable to parameter `arg2` with type `tuple[int, int]` in function `func2`",
       "line": 90,
       "name": "bad-argument-type",
       "severity": "error",
@@ -7258,20 +7258,20 @@
     },
     {
       "code": -2,
-      "column": 17,
-      "concise_description": "Argument `Array[Width]` is not assignable to parameter `y` with type `Array[Height]` in function `multiply`",
-      "description": "Argument `Array[Width]` is not assignable to parameter `y` with type `Array[Height]` in function `multiply`",
-      "line": 99,
+      "column": 15,
+      "concise_description": "Argument `tuple[Literal[0]]` is not assignable to parameter `arg2` with type `tuple[int, int]` in function `func2`",
+      "description": "Argument `tuple[Literal[0]]` is not assignable to parameter `arg2` with type `tuple[int, int]` in function `func2`",
+      "line": 91,
       "name": "bad-argument-type",
       "severity": "error",
-      "stop_column": 18,
-      "stop_line": 99
+      "stop_column": 19,
+      "stop_line": 91
     },
     {
       "code": -2,
       "column": 17,
-      "concise_description": "Argument `Array[Height, Width]` is not assignable to parameter `y` with type `Array[Height]` in function `multiply`",
-      "description": "Argument `Array[Height, Width]` is not assignable to parameter `y` with type `Array[Height]` in function `multiply`",
+      "concise_description": "Argument `Array[Width]` is not assignable to parameter `y` with type `Array[Height]` in function `multiply`",
+      "description": "Argument `Array[Width]` is not assignable to parameter `y` with type `Array[Height]` in function `multiply`",
       "line": 100,
       "name": "bad-argument-type",
       "severity": "error",
@@ -7280,14 +7280,25 @@
     },
     {
       "code": -2,
+      "column": 17,
+      "concise_description": "Argument `Array[Height, Width]` is not assignable to parameter `y` with type `Array[Height]` in function `multiply`",
+      "description": "Argument `Array[Height, Width]` is not assignable to parameter `y` with type `Array[Height]` in function `multiply`",
+      "line": 101,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 101
+    },
+    {
+      "code": -2,
       "column": 7,
       "concise_description": "Type parameters for class may not have more than one TypeVarTuple",
       "description": "Type parameters for class may not have more than one TypeVarTuple",
-      "line": 106,
+      "line": 107,
       "name": "invalid-type-var-tuple",
       "severity": "error",
       "stop_column": 13,
-      "stop_line": 106
+      "stop_line": 107
     }
   ],
   "generics_typevartuple_callable.py": [
@@ -8018,11 +8029,11 @@
       "column": 21,
       "concise_description": "`list[LiteralString]` is not assignable to `list[str]`",
       "description": "`list[LiteralString]` is not assignable to `list[str]`",
-      "line": 170,
+      "line": 171,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 24,
-      "stop_line": 170
+      "stop_line": 171
     }
   ],
   "literals_parameterizations.py": [
@@ -8749,17 +8760,6 @@
       "column": 9,
       "concise_description": "Type guard functions must accept at least one positional argument",
       "description": "Type guard functions must accept at least one positional argument",
-      "line": 105,
-      "name": "bad-function-definition",
-      "severity": "error",
-      "stop_column": 13,
-      "stop_line": 105
-    },
-    {
-      "code": -2,
-      "column": 9,
-      "concise_description": "Type guard functions must accept at least one positional argument",
-      "description": "Type guard functions must accept at least one positional argument",
       "line": 110,
       "name": "bad-function-definition",
       "severity": "error",
@@ -8768,80 +8768,91 @@
     },
     {
       "code": -2,
+      "column": 9,
+      "concise_description": "Type guard functions must accept at least one positional argument",
+      "description": "Type guard functions must accept at least one positional argument",
+      "line": 115,
+      "name": "bad-function-definition",
+      "severity": "error",
+      "stop_column": 13,
+      "stop_line": 115
+    },
+    {
+      "code": -2,
       "column": 20,
       "concise_description": "Argument `(val: object) -> TypeIs[int]` is not assignable to parameter `f` with type `(object) -> str` in function `takes_callable_str`",
       "description": "Argument `(val: object) -> TypeIs[int]` is not assignable to parameter `f` with type `(object) -> str` in function `takes_callable_str`",
-      "line": 132,
+      "line": 137,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 36,
-      "stop_line": 132
+      "stop_line": 137
     },
     {
       "code": -2,
       "column": 26,
       "concise_description": "Argument `(val: object) -> TypeIs[int]` is not assignable to parameter `f` with type `CallableStrProto` in function `takes_callable_str_proto`",
       "description": "Argument `(val: object) -> TypeIs[int]` is not assignable to parameter `f` with type `CallableStrProto` in function `takes_callable_str_proto`",
-      "line": 152,
+      "line": 157,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 42,
-      "stop_line": 152
+      "stop_line": 157
     },
     {
       "code": -2,
       "column": 17,
       "concise_description": "Argument `(val: object) -> TypeIs[int]` is not assignable to parameter `f` with type `(object) -> TypeGuard[int]` in function `takes_typeguard`",
       "description": "Argument `(val: object) -> TypeIs[int]` is not assignable to parameter `f` with type `(object) -> TypeGuard[int]` in function `takes_typeguard`",
-      "line": 169,
+      "line": 174,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 30,
-      "stop_line": 169
+      "stop_line": 174
     },
     {
       "code": -2,
       "column": 14,
       "concise_description": "Argument `(val: object) -> TypeGuard[int]` is not assignable to parameter `f` with type `(object) -> TypeIs[int]` in function `takes_typeis`",
       "description": "Argument `(val: object) -> TypeGuard[int]` is not assignable to parameter `f` with type `(object) -> TypeIs[int]` in function `takes_typeis`",
-      "line": 170,
+      "line": 175,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 30,
-      "stop_line": 170
+      "stop_line": 175
     },
     {
       "code": -2,
       "column": 18,
       "concise_description": "Argument `(val: object) -> TypeIs[bool]` is not assignable to parameter `f` with type `(object) -> TypeIs[int]` in function `takes_int_typeis`",
       "description": "Argument `(val: object) -> TypeIs[bool]` is not assignable to parameter `f` with type `(object) -> TypeIs[int]` in function `takes_int_typeis`",
-      "line": 191,
+      "line": 196,
       "name": "bad-argument-type",
       "severity": "error",
       "stop_column": 29,
-      "stop_line": 191
+      "stop_line": 196
     },
     {
       "code": -2,
       "column": 5,
       "concise_description": "Return type `str` must be assignable to the first argument type `int`",
       "description": "Return type `str` must be assignable to the first argument type `int`",
-      "line": 195,
+      "line": 200,
       "name": "bad-function-definition",
       "severity": "error",
       "stop_column": 15,
-      "stop_line": 195
+      "stop_line": 200
     },
     {
       "code": -2,
       "column": 5,
       "concise_description": "Return type `list[int]` must be assignable to the first argument type `list[object]`",
       "description": "Return type `list[int]` must be assignable to the first argument type `list[object]`",
-      "line": 199,
+      "line": 204,
       "name": "bad-function-definition",
       "severity": "error",
       "stop_column": 24,
-      "stop_line": 199
+      "stop_line": 204
     }
   ],
   "overloads_basic.py": [
@@ -9715,47 +9726,47 @@
     },
     {
       "code": -2,
-      "column": 23,
+      "column": 33,
       "concise_description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3B`",
       "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3B`\n  Attribute `method1` has incompatible types: `Concrete3B.method1` has type `int`, which is not consistent with `(self: Concrete3B, a: int) -> int` in `Proto3.method1` (the type of read-write attributes cannot be changed)",
-      "line": 92,
+      "line": 91,
       "name": "unsafe-overlap",
       "severity": "error",
-      "stop_column": 48,
-      "stop_line": 92
+      "stop_column": 58,
+      "stop_line": 91
     },
     {
       "code": -2,
-      "column": 23,
+      "column": 33,
       "concise_description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3B`",
       "description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3B`\n  Attribute `method1` has incompatible types: `Concrete3B.method1` has type `int`, which is not consistent with `(self: Concrete3B) -> int` in `NonDataProtocol.method1` (the type of read-write attributes cannot be changed)",
-      "line": 92,
+      "line": 91,
       "name": "unsafe-overlap",
       "severity": "error",
-      "stop_column": 48,
-      "stop_line": 92
+      "stop_column": 58,
+      "stop_line": 91
     },
     {
       "code": -2,
       "column": 31,
       "concise_description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`",
       "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`\n  Attribute `method1` has incompatible types: `Concrete3A.method1` has type `(self: Concrete3A, a: str) -> None`, which is not assignable to `(self: Concrete3A, a: int) -> int`, the type of `Proto3.method1`",
-      "line": 96,
+      "line": 94,
       "name": "unsafe-overlap",
       "severity": "error",
       "stop_column": 56,
-      "stop_line": 96
+      "stop_line": 94
     },
     {
       "code": -2,
       "column": 31,
       "concise_description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3A`",
       "description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3A`\n  Attribute `method1` has incompatible types: `Concrete3A.method1` has type `(self: Concrete3A, a: str) -> None`, which is not assignable to `(self: Concrete3A) -> int`, the type of `NonDataProtocol.method1`",
-      "line": 96,
+      "line": 94,
       "name": "unsafe-overlap",
       "severity": "error",
       "stop_column": 56,
-      "stop_line": 96
+      "stop_line": 94
     }
   ],
   "protocols_self.py": [],

@@ -94,3 +94,13 @@ def f(outcomes: list[Any]) -> dict[str, int]:
     return {to_plural.get(k, k): v for k, v in ret.items()}
 "#,
 );
+
+testcase!(
+    test_setdefault_append,
+    r#"
+d = {}
+items = [("news", "token1"), ("sports", "token2"), ("news", "token3")]
+for topic, token in items:
+    d.setdefault(topic, []).append(token)
+"#,
+);

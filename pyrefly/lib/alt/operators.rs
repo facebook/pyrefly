@@ -390,7 +390,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self.heap.mk_type_form(self.union(l, r));
         }
 
+        if matches!(x.op, Operator::Div | Operator::FloorDiv | Operator::Mod)
+            && Self::is_literal_zero(&rhs)
+        {
+            self.error(
+                errors,
+                x.range,
+                ErrorInfo::Kind(ErrorKind::DivisionByZero),
+                format!(
+                    "Cannot divide by zero: `{}` with a literal zero divisor",
+                    x.op.as_str()
+                ),
+            );
+        }
+
         self.binop_types(x, &lhs, &rhs, errors)
+    }
+
+    /// Check if a type is exactly `Literal[0]` (either implicit or explicit).
+    fn is_literal_zero(ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Literal(box Literal {
+                value: Lit::Int(n),
+                ..
+            }) if *n == LitInt::new(0)
+        )
     }
 
     fn binop_types(&self, x: &ExprBinOp, lhs: &Type, rhs: &Type, errors: &ErrorCollector) -> Type {
@@ -554,6 +579,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let base = self.expr_infer(&x.target, errors);
         let rhs = self.expr_infer(&x.value, errors);
+        if matches!(x.op, Operator::Div | Operator::FloorDiv | Operator::Mod)
+            && Self::is_literal_zero(&rhs)
+        {
+            self.error(
+                errors,
+                x.range,
+                ErrorInfo::Kind(ErrorKind::DivisionByZero),
+                format!(
+                    "Cannot divide by zero: `{}=` with a literal zero divisor",
+                    x.op.as_str()
+                ),
+            );
+        }
         let tcc: &dyn Fn() -> TypeCheckContext =
             &|| TypeCheckContext::of_kind(TypeCheckKind::AugmentedAssignment);
         let result = self.distribute_over_union(&base, |lhs| {

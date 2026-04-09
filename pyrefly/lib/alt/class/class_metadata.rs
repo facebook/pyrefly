@@ -402,6 +402,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let extends_abc = self.extends_abc(&bases_with_metadata, metaclass);
 
+        // Check for __slots__ layout conflict: if two or more base classes
+        // define non-empty __slots__, CPython raises TypeError at runtime
+        // ("multiple bases have instance lay-out conflict").
+        {
+            let bases_with_nonempty_slots: Vec<&Class> = bases_with_metadata
+                .iter()
+                .filter(|(_, metadata)| {
+                    metadata.slots_info().is_some_and(|si| !si.names.is_empty())
+                })
+                .map(|(base, _)| base)
+                .collect();
+            if bases_with_nonempty_slots.len() > 1 {
+                let names: Vec<String> = bases_with_nonempty_slots
+                    .iter()
+                    .map(|b| format!("`{}`", b.name()))
+                    .collect();
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                    format!(
+                        "Class `{}` has multiple base classes with non-empty `__slots__` ({}), which causes a TypeError at runtime",
+                        cls.name(),
+                        names.join(", "),
+                    ),
+                );
+            }
+        }
+
         // Compute final base class list.
         let bases = if is_typed_dict && bases_with_metadata.is_empty() {
             // This is a "fallback" class that contains attributes that are available on all TypedDict subclasses.

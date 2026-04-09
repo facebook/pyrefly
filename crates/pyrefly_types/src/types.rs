@@ -1306,15 +1306,19 @@ impl Type {
         })
     }
 
-    /// Check if the type contains a Var that may have been instantiated from a Quantified.
-    pub fn may_contain_quantified_var(&self) -> bool {
+    /// Check if the type contains a placeholder var. See `collect_maybe_placeholder_vars`.
+    pub fn may_contain_placeholder_var(&self) -> bool {
         let mut seen = false;
         self.visit_type_variables(&mut |t| seen |= matches!(t, TypeVariable::Var(_)));
         seen
     }
 
-    /// Collect vars that may have been instantiated from Quantifieds.
-    pub fn collect_maybe_quantified_vars(&self) -> Vec<Var> {
+    /// Collect "placeholder" vars - vars that are placeholders for a not-yet-solved type, like
+    /// Variable::Quantified. Contrast this with Variable::Recursive, which serves as a marker that
+    /// we've encountered recursion. Note that this function is used in performance hotspots, so we
+    /// avoid reading from the variables map to check a var's actual type. Instead, we collect all
+    /// vars that we find in positions that placeholders can appear in.
+    pub fn collect_maybe_placeholder_vars(&self) -> Vec<Var> {
         let mut vs = Vec::new();
         self.visit_type_variables(&mut |t| {
             if let TypeVariable::Var(v) = t {
@@ -1324,6 +1328,8 @@ impl Type {
         vs
     }
 
+    /// Collects all `Var`s that appear in the type.
+    /// IMPORTANT: This function can be expensive. Consider using `collect_maybe_placeholder_vars` instead.
     pub fn collect_all_vars(&self) -> Vec<Var> {
         fn f(t: &Type, vars: &mut Vec<Var>) {
             match t {

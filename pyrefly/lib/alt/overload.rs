@@ -22,6 +22,7 @@ use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 use vec1::vec1;
 
@@ -44,11 +45,14 @@ use crate::types::callable::Function;
 use crate::types::callable::Params;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
+use crate::types::types::Var;
 
 struct CalledOverload<'f> {
     func: &'f TargetWithTParams<Function>,
     res: Type,
     ctor_targs: Option<TArgs>,
+    /// Mapping from original partial vars to fresh copies used in this overload call.
+    partial_var_map: SmallMap<Var, Var>,
     call_errors: ErrorCollector,
     /// Maps each argument's source range to the parameter type it was matched against.
     expected_types: HashMap<TextRange, Type>,
@@ -264,6 +268,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     func: arity_closest_overload.unwrap().0,
                     res: self.heap.mk_any_error(),
                     ctor_targs: None,
+                    partial_var_map: SmallMap::new(),
                     call_errors: self.error_collector(),
                     expected_types: HashMap::new(),
                 },
@@ -319,6 +324,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         closest_overload = CalledOverload {
                             func,
                             ctor_targs,
+                            partial_var_map: first_overload.partial_var_map.clone(),
                             expected_types,
                             res: self.unions(matched_overloads.into_map(|o| o.res)),
                             call_errors: self.error_collector(),
@@ -335,11 +341,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
 
-        if matched
-            && let Some(targs) = ctor_targs
-            && let Some(chosen_targs) = closest_overload.ctor_targs
-        {
-            *targs = chosen_targs;
+        if matched {
+            if let Some(targs) = ctor_targs
+                && let Some(chosen_targs) = closest_overload.ctor_targs
+            {
+                *targs = chosen_targs;
+            }
+            self.solver()
+                .solve_partial_vars_from_fresh(&closest_overload.partial_var_map);
         }
         // Record the closest overload to power IDE services.
         let mut overload_trace = |target: &TargetWithTParams<Function>| {
@@ -738,6 +747,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(candidate)
     }
 
+    /// Collect partial vars from self_obj and Type-valued arguments.
+    fn collect_partial_vars(
+        &self,
+        self_obj: Option<&Type>,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+    ) -> Vec<Var> {
+        let mut partial_vars: Vec<Var> = Vec::new();
+        let mut collect = |ty: &Type| {
+            for var in ty.collect_maybe_placeholder_vars() {
+                if self.solver().var_is_partial(var) && !partial_vars.contains(&var) {
+                    partial_vars.push(var);
+                }
+            }
+        };
+        if let Some(obj) = self_obj {
+            collect(obj);
+        }
+        for arg in args {
+            if let CallArg::Arg(TypeOrExpr::Type(ty, _))
+            | CallArg::Star(TypeOrExpr::Type(ty, _), _) = arg
+            {
+                collect(ty);
+            }
+        }
+        for kw in keywords {
+            if let TypeOrExpr::Type(ty, _) = &kw.value {
+                collect(ty);
+            }
+        }
+        partial_vars
+    }
+
+    /// Substitute fresh vars for originals in a type. This is used to generate fresh partial vars
+    /// for overload calls.
+    fn substitute_vars(ty: &mut Type, mapping: &SmallMap<Var, Var>) {
+        ty.transform_mut(&mut |t| {
+            if let Type::Var(v) = t
+                && let Some(fresh) = mapping.get(v)
+            {
+                *t = Type::Var(*fresh);
+            }
+        });
+    }
+
     fn call_overload<'c>(
         &self,
         callable: &'c TargetWithTParams<Function>,
@@ -757,14 +811,63 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut overload_ctor_targs = ctor_targs.as_ref().map(|x| (**x).clone());
         let tparams = callable.0.as_deref();
 
+        // Substitute fresh vars into self_obj and Type-valued arguments. Each overload
+        // gets its own fresh copies so that a failing overload's constraint solving
+        // doesn't pin the original partial vars.
+        let partial_vars = self.collect_partial_vars(self_obj, args, keywords);
+        let partial_var_map = self
+            .solver()
+            .freshen_partial_vars(&partial_vars, self.uniques);
+        let owner = Owner::new();
+        let (self_obj, fresh_args, fresh_keywords) = if partial_var_map.is_empty() {
+            (self_obj.cloned(), None, None)
+        } else {
+            let self_obj = self_obj.cloned().map(|mut obj| {
+                Self::substitute_vars(&mut obj, &partial_var_map);
+                obj
+            });
+            let fresh_args = args
+                .iter()
+                .map(|arg| match arg {
+                    CallArg::Arg(TypeOrExpr::Type(ty, range)) => {
+                        let mut ty = (*ty).clone();
+                        Self::substitute_vars(&mut ty, &partial_var_map);
+                        CallArg::Arg(TypeOrExpr::Type(owner.push(ty), *range))
+                    }
+                    CallArg::Star(TypeOrExpr::Type(ty, _), range) => {
+                        let mut ty = (*ty).clone();
+                        Self::substitute_vars(&mut ty, &partial_var_map);
+                        CallArg::Star(TypeOrExpr::Type(owner.push(ty), arg.range()), *range)
+                    }
+                    other => other.clone(),
+                })
+                .collect::<Vec<_>>();
+            let fresh_keywords = keywords
+                .iter()
+                .map(|kw| match &kw.value {
+                    TypeOrExpr::Type(ty, range) => {
+                        let mut ty = (*ty).clone();
+                        Self::substitute_vars(&mut ty, &partial_var_map);
+                        CallKeyword {
+                            range: kw.range,
+                            arg: kw.arg,
+                            value: TypeOrExpr::Type(owner.push(ty), *range),
+                        }
+                    }
+                    _ => kw.clone(),
+                })
+                .collect::<Vec<_>>();
+            (self_obj, Some(fresh_args), Some(fresh_keywords))
+        };
+
         let call_errors = self.error_collector();
         let (res, specialization_errors, expected_types) = self.callable_infer(
             callable.1.signature.clone(),
             Some(&metadata.kind),
             tparams,
-            self_obj.cloned(),
-            args,
-            keywords,
+            self_obj,
+            fresh_args.as_deref().unwrap_or(args),
+            fresh_keywords.as_deref().unwrap_or(keywords),
             arguments_range,
             errors,
             &call_errors,
@@ -783,6 +886,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             func: callable,
             res,
             ctor_targs: overload_ctor_targs,
+            partial_var_map,
             call_errors,
             expected_types,
         }

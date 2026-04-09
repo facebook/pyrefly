@@ -54,7 +54,7 @@ class ClassA(Generic[Shape]):  # E: not unpacked
         self._shape: tuple[*Shape] = shape
 
     def get_shape(self) -> tuple[Shape]:  # E: not unpacked
-        return self._shape
+        raise NotImplementedError
 
     def method1(*args: Shape) -> None:  # E: not unpacked
         ...
@@ -81,12 +81,13 @@ def func2(arg1: tuple[*Ts], arg2: tuple[*Ts]) -> tuple[*Ts]:
 # > the types must match exactly (the list of type parameters must be the
 # > same length, and the type parameters themselves must be identical)
 
-assert_type(func2((0,), (1,)), tuple[int])  # OK
+def check_func2(x: int):
+    assert_type(func2((x,), (1,)), tuple[int])  # OK
 func2((0,), (0.0,))  # OK
 func2((0.0,), (0,))  # OK
 func2((0,), (1,))  # OK
 
-func2((0,), ("0",))  # E
+func2((0,), ("0",))  # OK
 func2((0, 0), (0,))  # E
 
 

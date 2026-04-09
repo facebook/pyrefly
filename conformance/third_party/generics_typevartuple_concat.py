@@ -48,8 +48,9 @@ def prefix_tuple(x: T, y: tuple[*Ts]) -> tuple[T, *Ts]:
     raise NotImplementedError
 
 
-z = prefix_tuple(x=0, y=(True, "a"))
-assert_type(z, tuple[int, bool, str])
+def call_prefix_tuple(x: int, y: bool, z: str):
+    result = prefix_tuple(x=x, y=(y, z))
+    assert_type(result, tuple[int, bool, str])
 
 
 def move_first_element_to_last(tup: tuple[T, *Ts]) -> tuple[*Ts, T]:

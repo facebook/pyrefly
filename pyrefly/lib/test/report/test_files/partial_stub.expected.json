@@ -2,6 +2,7 @@
   "name": "test",
   "names": [
     "test.x",
+    "test.y",
     "test.one",
     "test.two"
   ],
@@ -16,6 +17,18 @@
       "n_untyped": 0,
       "location": {
         "line": 8,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.y",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 16,
         "column": 1
       }
     },
@@ -56,7 +69,7 @@
   "n_function_params": 0,
   "n_method_params": 0,
   "n_classes": 0,
-  "n_attrs": 1,
+  "n_attrs": 2,
   "n_properties": 0,
   "n_type_ignores": 0
 }

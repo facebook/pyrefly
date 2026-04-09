@@ -1588,6 +1588,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             } => {
                 let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
+                if metadata.is_protocol()
+                    && direct_annotation.is_none()
+                    && !is_dunder(name.as_str())
+                {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::UnannotatedProtocolMember),
+                        format!(
+                            "Protocol member `{}` must have an explicit type annotation",
+                            name,
+                        ),
+                    );
+                }
                 let initialization = if let ExprOrBinding::Expr(e) = value.as_ref()
                     && let Some(dm) = metadata.dataclass_metadata()
                     && let Expr::Call(call) = e

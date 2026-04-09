@@ -1,36 +1,95 @@
 {
   "name": "test",
   "names": [
-    "test.Point.x",
-    "test.Point.y",
-    "test.Color.RED",
-    "test.Color.BLUE",
-    "test.Config.name",
-    "test.Config.value",
-    "test.Coord.x",
-    "test.Coord.y",
-    "test.Color",
-    "test.Config",
-    "test.Coord",
-    "test.Point"
+    "test.Base.x",
+    "test.Base.y",
+    "test.Child.z",
+    "test.OverridingChild.x",
+    "test.OverridingChild.w",
+    "test.Base.__init__",
+    "test.Child.__init__",
+    "test.OverridingChild.__init__",
+    "test.Base",
+    "test.Child",
+    "test.OverridingChild"
   ],
-  "line_count": 34,
+  "line_count": 28,
   "symbol_reports": [
     {
       "kind": "attr",
-      "name": "test.Point.x",
+      "name": "test.Base.x",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 13,
+        "column": 14
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Base.y",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 14,
+        "column": 14
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Child.z",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 20,
+        "column": 14
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.OverridingChild.x",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 26,
+        "column": 14
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.OverridingChild.w",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 27,
+        "column": 14
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.Base.__init__",
       "n_typable": 0,
       "n_typed": 0,
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 17,
+        "line": 12,
         "column": 5
       }
     },
     {
-      "kind": "attr",
-      "name": "test.Point.y",
+      "kind": "function",
+      "name": "test.Child.__init__",
       "n_typable": 0,
       "n_typed": 0,
       "n_any": 0,
@@ -41,139 +100,67 @@
       }
     },
     {
-      "kind": "attr",
-      "name": "test.Color.RED",
+      "kind": "function",
+      "name": "test.OverridingChild.__init__",
       "n_typable": 0,
       "n_typed": 0,
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 22,
-        "column": 5
-      }
-    },
-    {
-      "kind": "attr",
-      "name": "test.Color.BLUE",
-      "n_typable": 0,
-      "n_typed": 0,
-      "n_any": 0,
-      "n_untyped": 0,
-      "location": {
-        "line": 23,
-        "column": 5
-      }
-    },
-    {
-      "kind": "attr",
-      "name": "test.Config.name",
-      "n_typable": 0,
-      "n_typed": 0,
-      "n_any": 0,
-      "n_untyped": 0,
-      "location": {
-        "line": 27,
-        "column": 5
-      }
-    },
-    {
-      "kind": "attr",
-      "name": "test.Config.value",
-      "n_typable": 0,
-      "n_typed": 0,
-      "n_any": 0,
-      "n_untyped": 0,
-      "location": {
-        "line": 28,
-        "column": 5
-      }
-    },
-    {
-      "kind": "attr",
-      "name": "test.Coord.x",
-      "n_typable": 0,
-      "n_typed": 0,
-      "n_any": 0,
-      "n_untyped": 0,
-      "location": {
-        "line": 32,
-        "column": 5
-      }
-    },
-    {
-      "kind": "attr",
-      "name": "test.Coord.y",
-      "n_typable": 0,
-      "n_typed": 0,
-      "n_any": 0,
-      "n_untyped": 0,
-      "location": {
-        "line": 33,
+        "line": 25,
         "column": 5
       }
     },
     {
       "kind": "class",
-      "name": "test.Color",
+      "name": "test.Base",
       "n_typable": 0,
       "n_typed": 0,
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 21,
+        "line": 11,
         "column": 1
       }
     },
     {
       "kind": "class",
-      "name": "test.Config",
+      "name": "test.Child",
       "n_typable": 0,
       "n_typed": 0,
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 26,
+        "line": 17,
         "column": 1
       }
     },
     {
       "kind": "class",
-      "name": "test.Coord",
+      "name": "test.OverridingChild",
       "n_typable": 0,
       "n_typed": 0,
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 31,
-        "column": 1
-      }
-    },
-    {
-      "kind": "class",
-      "name": "test.Point",
-      "n_typable": 0,
-      "n_typed": 0,
-      "n_any": 0,
-      "n_untyped": 0,
-      "location": {
-        "line": 15,
+        "line": 24,
         "column": 1
       }
     }
   ],
   "type_ignores": [],
-  "n_typable": 0,
-  "n_typed": 0,
+  "n_typable": 5,
+  "n_typed": 3,
   "n_any": 0,
-  "n_untyped": 0,
-  "coverage": 100.0,
-  "strict_coverage": 100.0,
+  "n_untyped": 2,
+  "coverage": 60.0,
+  "strict_coverage": 60.0,
   "n_functions": 0,
-  "n_methods": 0,
+  "n_methods": 3,
   "n_function_params": 0,
   "n_method_params": 0,
-  "n_classes": 4,
-  "n_attrs": 8,
+  "n_classes": 3,
+  "n_attrs": 5,
   "n_properties": 0,
   "n_type_ignores": 0
 }

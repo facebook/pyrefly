@@ -1,8 +1,62 @@
 {
   "name": "test",
-  "names": [],
+  "names": [
+    "test.x",
+    "test.y",
+    "test.z",
+    "test.w"
+  ],
   "line_count": 10,
-  "symbol_reports": [],
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.x",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 6,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.y",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 7,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.z",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 8,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.w",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 9,
+        "column": 1
+      }
+    }
+  ],
   "type_ignores": [
     {
       "kind": "type",
@@ -56,7 +110,7 @@
   "n_function_params": 0,
   "n_method_params": 0,
   "n_classes": 0,
-  "n_attrs": 0,
+  "n_attrs": 4,
   "n_properties": 0,
   "n_type_ignores": 4
 }

@@ -21,7 +21,7 @@ class Env:
     ...
 
 
-def exec_le(path: str, *args: * tuple[*Ts, Env], env: Env | None = None) -> tuple[*Ts]:
+def exec_le(path: str, *args: *tuple[*Ts, Env], env: Env | None = None) -> tuple[*Ts]:
     raise NotImplementedError
 
 
@@ -39,7 +39,7 @@ def has_int_and_str(x: int, y: str):
 # > *args: int, which accepts zero or more values of type int.
 
 
-def func1(*args: * tuple[int, ...]) -> None:
+def func1(*args: *tuple[int, ...]) -> None:
     ...
 
 
@@ -48,7 +48,7 @@ func1(1, 2, 3, 4, 5)  # OK
 func1(1, "2", 3)  # E
 
 
-def func2(*args: * tuple[int, *tuple[str, ...], str]) -> None:
+def func2(*args: *tuple[int, *tuple[str, ...], str]) -> None:
     ...
 
 
@@ -59,7 +59,7 @@ func2(1)  # E
 func2("")  # E
 
 
-def func3(*args: * tuple[int, str]) -> None:
+def func3(*args: *tuple[int, str]) -> None:
     ...
 
 
@@ -72,8 +72,8 @@ def func4(*args: tuple[*Ts]):
 
 
 func4((0,), (1,))  # OK
-func4((0,), (1, 2))  # E
-func4((0,), ("1",))  # E
+func4((0,), (1, 2))  # E (length mismatch)
+func4((0,), ("1",))  # OK
 
 
 # This is a syntax error, so leave it commented out.

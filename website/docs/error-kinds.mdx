@@ -444,6 +444,16 @@ def f(): ...
 f()  # deprecated!
 ```
 
+## division-by-zero
+
+Division, floor division, or modulo by a literal zero value. This catches cases where the divisor is the literal `0` or a variable with type `Literal[0]`, which would always raise `ZeroDivisionError` at runtime.
+
+```python
+x = 10 / 0   # error: division by zero
+y = 10 // 0  # error: division by zero
+z = 10 % 0   # error: division by zero
+```
+
 ## implicit-abstract-class
 
 Pyrefly emits this error when a class defines abstract members but is not declared abstract (for example, it does not inherit from `abc.ABC` or use `abc.ABCMeta`). Such classes cannot be instantiated because they have unimplemented abstract methods. Add `ABC` as a base class, adjust the metaclass, or provide concrete implementations to resolve the issue.
@@ -1252,6 +1262,21 @@ def process_data(x: int, y):  # error: `process_data` is missing an annotation f
 # Fixed version:
 def process_data(x: int, y: int) -> int:
     return x + y
+```
+
+## unannotated-protocol-member
+
+This error is raised when a protocol member is assigned a value in the class body without an explicit type annotation. Protocol members must have explicitly declared types so that implementations know exactly what type to provide.
+
+```python
+from typing import Protocol
+
+class MyProto(Protocol):
+    x = None  # error: Protocol member `x` must have an explicit type annotation
+
+# Fixed version:
+class MyProto(Protocol):
+    x: int | None = None
 ```
 
 ## unannotated-return

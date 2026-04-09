@@ -33,13 +33,19 @@ class ChildB(ParentB):
 
     def method2(self) -> None:
         assert_type(self, Self)
-        assert_type(self.a, list[Self])
-        assert_type(self.a[0], Self)
+        # Allow type checkers to error here, since Self definitions on
+        # non-final classes are unsound.
+        a = self.a  # E?
+        assert_type(a, list[Self])
+        assert_type(a[0], Self)
         assert_type(self.method1(), Self)
 
     @classmethod
     def method3(cls) -> None:
         assert_type(cls, type[Self])
-        assert_type(cls.a, list[Self])
-        assert_type(cls.a[0], Self)
+        # Allow type checkers to error here, since Self definitions on
+        # non-final classes are unsound.
+        a = cls.a  # E?
+        assert_type(a, list[Self])
+        assert_type(a[0], Self)
         assert_type(cls.method1(), Self)

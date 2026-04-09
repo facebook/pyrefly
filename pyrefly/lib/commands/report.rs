@@ -39,13 +39,16 @@ use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
+use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingExport;
+use crate::binding::binding::ClassBinding;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassField;
+use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyExport;
@@ -426,6 +429,31 @@ impl ReportArgs {
         index == 0 && (name == "self" || name == "cls")
     }
 
+    /// Returns the ClassBinding if the class owning this field is a schema class (dataclass, enum,
+    /// TypedDict, or NamedTuple). Fields of schema classes are IMPLICIT — they have
+    /// 0 typable slots because the class definition itself governs their types.
+    fn get_cls_binding_if_schema_class_field<'a>(
+        bindings: &'a Bindings,
+        answers: &Answers,
+        field: &BindingClassField,
+    ) -> Option<&'a ClassBinding> {
+        let cls_binding = match bindings.get(field.class_idx) {
+            BindingClass::ClassDef(cls) => cls,
+            BindingClass::FunctionalClassDef(..) => return None,
+        };
+        let metadata_key = KeyClassMetadata(cls_binding.def_index);
+        let metadata = answers.get_idx(bindings.key_to_idx(&metadata_key))?;
+        if metadata.dataclass_metadata().is_some()
+            || metadata.is_enum()
+            || metadata.is_typed_dict()
+            || metadata.named_tuple_metadata().is_some()
+        {
+            Some(cls_binding)
+        } else {
+            None
+        }
+    }
+
     fn parse_variables(
         module: &Module,
         bindings: &Bindings,
@@ -494,21 +522,31 @@ impl ReportArgs {
                         // Skip injected implicit globals
                         Binding::Global(_) => {}
                         // IMPLICIT: special type forms have 0 slots
-                        Binding::TypeVar(_) | Binding::ParamSpec(_) | Binding::TypeVarTuple(_) => {}
+                        Binding::TypeVar(_) | Binding::ParamSpec(_) | Binding::TypeVarTuple(_) => {
+                            variables.push(Variable {
+                                name: qualified_name,
+                                annotation: None,
+                                slots: SlotCounts::default(),
+                                location,
+                            });
+                        }
                         // Functions and classes are handled by parse_functions/parse_classes;
                         // skip them here even when excluded (e.g. @type_check_only).
                         Binding::Function(..) | Binding::ClassDef(..) => {}
                         // IMPLICIT: non-call assignments have 0 slots;
                         // call assignments are untyped (1 slot)
                         Binding::NameAssign(na) => {
-                            if matches!(na.expr.as_ref(), Expr::Call(_)) {
-                                variables.push(Variable {
-                                    name: qualified_name,
-                                    annotation: None,
-                                    slots: SlotCounts::untyped(),
-                                    location,
-                                });
-                            }
+                            let slots = if matches!(na.expr.as_ref(), Expr::Call(_)) {
+                                SlotCounts::untyped()
+                            } else {
+                                SlotCounts::default()
+                            };
+                            variables.push(Variable {
+                                name: qualified_name,
+                                annotation: None,
+                                slots,
+                                location,
+                            });
                         }
                         _ => {
                             variables.push(Variable {
@@ -526,13 +564,18 @@ impl ReportArgs {
         variables
     }
 
-    /// Extract instance attributes assigned in `__init__`/`__new__`/`__post_init__`.
+    /// Extract instance attributes assigned in `__init__`/`__new__`/`__post_init__`,
+    /// plus schema class body fields (dataclass, enum, TypedDict, NamedTuple).
     ///
     /// For each class field that is either:
     /// - `DefinedInMethod` from a recognized attribute-defining method (e.g. `__init__`), or
     /// - `DeclaredByAnnotation` in the class body AND initialized in such a method,
     ///
     /// emit a `Variable` (reported as `SymbolReport::Attr`).
+    ///
+    /// For schema class body fields (dataclass fields, enum members, TypedDict/NamedTuple
+    /// fields), emit a `Variable` with `SlotCounts::default()` (0 typable) to match
+    /// typestats IMPLICIT classification.
     fn parse_instance_attrs(
         module: &Module,
         bindings: &Bindings,
@@ -565,6 +608,8 @@ impl ReportArgs {
             }
 
             // Only count instance attrs from recognized methods (__init__, etc.)
+            // or a schema class body field. We handle recognized-method fields with full
+            // slot classification, and schema body fields as IMPLICIT (0 typable).
             let annotation_idx = match &field.definition {
                 ClassFieldDefinition::DefinedInMethod {
                     annotation, method, ..
@@ -579,9 +624,56 @@ impl ReportArgs {
                     initialized_in_recognized_method,
                 } => {
                     if !initialized_in_recognized_method {
+                        // Check if this is a schema class body field
+                        if let Some(cls_binding) =
+                            Self::get_cls_binding_if_schema_class_field(bindings, answers, field)
+                        {
+                            if Self::has_function_ancestor(&cls_binding.parent) {
+                                continue;
+                            }
+                            let class_name = Self::class_qualified_name(
+                                module,
+                                &cls_binding.parent,
+                                &cls_binding.def.name,
+                            );
+                            let qualified_name =
+                                format!("{}{}.{}", module_prefix, class_name, field.name);
+                            let location = Self::range_to_location(module, field.range);
+                            attrs.push(Variable {
+                                name: qualified_name,
+                                annotation: None,
+                                slots: SlotCounts::default(),
+                                location,
+                            });
+                        }
                         continue;
                     }
                     Some(*annotation)
+                }
+                ClassFieldDefinition::AssignedInBody { .. } => {
+                    // Check if this is an enum member or other schema class body assignment
+                    if let Some(cls_binding) =
+                        Self::get_cls_binding_if_schema_class_field(bindings, answers, field)
+                    {
+                        if Self::has_function_ancestor(&cls_binding.parent) {
+                            continue;
+                        }
+                        let class_name = Self::class_qualified_name(
+                            module,
+                            &cls_binding.parent,
+                            &cls_binding.def.name,
+                        );
+                        let qualified_name =
+                            format!("{}{}.{}", module_prefix, class_name, field.name);
+                        let location = Self::range_to_location(module, field.range);
+                        attrs.push(Variable {
+                            name: qualified_name,
+                            annotation: None,
+                            slots: SlotCounts::default(),
+                            location,
+                        });
+                    }
+                    continue;
                 }
                 _ => continue,
             };
@@ -2112,5 +2204,12 @@ mod tests {
     fn test_report_module_name_override() {
         let report = build_module_report_with_override("functions.py", "my.package.module");
         compare_snapshot("module_name_override.expected.json", &report);
+    }
+
+    /// Inherited attrs should only appear under the defining class, not subclasses.
+    #[test]
+    fn test_report_inherited_attrs() {
+        let report = build_module_report_for_test("inherited_attrs.py");
+        compare_snapshot("inherited_attrs.expected.json", &report);
     }
 }

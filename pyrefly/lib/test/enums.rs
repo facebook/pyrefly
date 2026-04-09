@@ -1015,3 +1015,30 @@ class Planet(float, Enum):
 assert_type(Planet.MERCURY.value, float)
     "#,
 );
+
+fn frozen_enum_members_env() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from enum import Enum
+from typing import Self
+class E(Enum):
+    A = frozenset({1})
+    B = frozenset({2})
+    @classmethod
+    def from_ord(cls) -> list[Self]:
+        return [v for v in cls]
+    "#,
+    )
+}
+
+testcase!(
+    test_frozen_enum_members_cross_module_iteration,
+    frozen_enum_members_env(),
+    r#"
+from foo import E
+def f() -> None:
+    xs = E.from_ord()
+    _ = [x for x in xs if x != E.A]
+    "#,
+);

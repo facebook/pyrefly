@@ -189,7 +189,7 @@ impl QuantifiedHandle {
 
     /// Split the handle into (vars in ty, vars not in ty)
     pub fn partition_by(self, ty: &Type) -> (Self, Self) {
-        let vars_in_ty = ty.collect_maybe_quantified_vars();
+        let vars_in_ty = ty.collect_maybe_placeholder_vars();
         let (left, right) = self.0.into_iter().partition(|var| vars_in_ty.contains(var));
         (QuantifiedHandle(left), QuantifiedHandle(right))
     }
@@ -458,6 +458,47 @@ impl Solver {
             &*variable,
             Variable::PartialQuantified(_) | Variable::PartialContained(_) | Variable::Unwrap(_)
         )
+    }
+
+    /// Create fresh copies of all partial variables in the given list.
+    /// Returns a mapping from original vars to their fresh copies.
+    /// Used during overload resolution to prevent one overload's constraint
+    /// solving from contaminating other overloads' partial variables.
+    pub fn freshen_partial_vars(
+        &self,
+        vars: &[Var],
+        uniques: &UniqueFactory,
+    ) -> SmallMap<Var, Var> {
+        let mut fresh = SmallMap::with_capacity(vars.len());
+        let mut lock = self.variables.lock();
+        for v in vars {
+            let cloned = match &*lock.get(*v) {
+                Variable::PartialContained(range) => Variable::PartialContained(*range),
+                Variable::PartialQuantified(q) => Variable::PartialQuantified(q.clone()),
+                _ => continue,
+            };
+            let fresh_var = Var::new(uniques);
+            fresh.insert(*v, fresh_var);
+            lock.insert_fresh(fresh_var, cloned);
+        }
+        fresh
+    }
+
+    /// Given an original->fresh mapping of partial vars, transfer solutions
+    /// from fresh partial vars to the originals. Used during overload
+    /// resolution to set partial vars to the solutions found during the
+    /// winning overload call. If a fresh var is still unsolved, leave the
+    /// original as-is.
+    pub fn solve_partial_vars_from_fresh(&self, mapping: &SmallMap<Var, Var>) {
+        let lock = self.variables.lock();
+        for (original, fresh) in mapping {
+            let fresh_var = lock.get(*fresh);
+            if let Variable::Answer(fresh_type) = &*fresh_var {
+                let fresh_type = fresh_type.clone();
+                drop(fresh_var);
+                *lock.get_mut(*original) = Variable::Answer(fresh_type.clone());
+            }
+        }
     }
 
     /// Finish the type returned from a function call. This entails expanding solved variables,
@@ -1099,7 +1140,7 @@ impl Solver {
     }
 
     pub fn finish_all_quantified(&self, ty: &Type) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        let vs = QuantifiedHandle(ty.collect_maybe_quantified_vars());
+        let vs = QuantifiedHandle(ty.collect_maybe_placeholder_vars());
         self.finish_quantified(vs, self.infer_with_first_use)
     }
 

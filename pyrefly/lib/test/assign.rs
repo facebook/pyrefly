@@ -991,6 +991,7 @@ assert_type(x, int)
 );
 
 testcase!(
+    bug = "Any assignment should not erase declared annotation",
     test_reassigned_var_does_not_preserve_annotation_over_any,
     r#"
 from typing import Any, assert_type
@@ -999,7 +1000,7 @@ def f() -> Any: ...
 
 x: str = "hello"
 x = f()
-assert_type(x, Any)
+assert_type(x, str)  # E: assert_type(Any, str) failed
 "#,
 );
 
