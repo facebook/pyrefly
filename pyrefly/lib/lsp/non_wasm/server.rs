@@ -249,6 +249,7 @@ use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMro;
+use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
@@ -447,6 +448,17 @@ pub trait TspInterface: Send + Sync {
         line: u32,
         character: u32,
     ) -> Option<pyrefly_types::types::Type>;
+
+    /// Resolve the source range of a function name from its `FuncDefIndex`.
+    ///
+    /// Uses the binding table to look up `KeyUndecoratedFunctionRange` for
+    /// the function's module, returning the `TextRange` of the function
+    /// name identifier. Returns `None` when the function has no
+    /// `FuncDefIndex` or the module's bindings are unavailable.
+    fn resolve_func_def_range(
+        &self,
+        func_id: &pyrefly_types::callable::FuncId,
+    ) -> Option<TextRange>;
 }
 
 pub struct Connection {
@@ -6087,5 +6099,18 @@ impl TspInterface for Server {
             /* notebook_cell */ None,
         );
         transaction.get_type_at(&handle, position)
+    }
+
+    fn resolve_func_def_range(
+        &self,
+        func_id: &pyrefly_types::callable::FuncId,
+    ) -> Option<TextRange> {
+        let def_index = func_id.def_index?;
+        let handle = handle_from_module_path(&self.state, func_id.module.path().dupe());
+        let transaction = self.state.transaction();
+        let bindings = transaction.get_bindings(&handle)?;
+        let key = KeyUndecoratedFunctionRange(def_index);
+        let idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+        Some(bindings.get(idx).0.range())
     }
 }
