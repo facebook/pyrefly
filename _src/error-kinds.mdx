@@ -1264,6 +1264,21 @@ def process_data(x: int, y: int) -> int:
     return x + y
 ```
 
+## unannotated-protocol-member
+
+This error is raised when a protocol member is assigned a value in the class body without an explicit type annotation. Protocol members must have explicitly declared types so that implementations know exactly what type to provide.
+
+```python
+from typing import Protocol
+
+class MyProto(Protocol):
+    x = None  # error: Protocol member `x` must have an explicit type annotation
+
+# Fixed version:
+class MyProto(Protocol):
+    x: int | None = None
+```
+
 ## unannotated-return
 
 This error is raised when a function is missing a return type annotation. This helps enforce fully-typed codebases by ensuring all functions declare their return types explicitly. To fix it, add a return type annotation to the function.
