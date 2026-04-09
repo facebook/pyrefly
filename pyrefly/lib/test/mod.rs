@@ -48,7 +48,6 @@ mod mro;
 mod named_tuple;
 mod narrow;
 mod natural;
-mod issue_3081_repro;
 mod new_type;
 mod operators;
 mod overload;

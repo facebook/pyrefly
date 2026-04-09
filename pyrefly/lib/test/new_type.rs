@@ -164,6 +164,39 @@ Foo.mro()  # E: Object of class `object` has no attribute `mro`
 );
 
 testcase!(
+    test_newtype_none_is_nominal,
+    r#"
+from typing import NewType
+from types import NoneType
+
+NewNoneType = NewType("NewNoneType", NoneType)
+NewNone = NewNoneType(None)
+
+def test(x: int | NewNoneType) -> None:
+    pass
+
+test(None)  # E: Argument `None` is not assignable to parameter `x` with type `NewNoneType | int` in function `test`
+test(NewNone)
+test(1)
+    "#,
+);
+
+testcase!(
+    test_newtype_type_none_is_nominal,
+    r#"
+from typing import NewType
+
+NewNoneType = NewType("NewNoneType", type[None])
+
+def test(x: int | NewNoneType) -> None:
+    pass
+
+test(None)  # E: Argument `None` is not assignable to parameter `x` with type `NewNoneType | int` in function `test`
+test(1)
+    "#,
+);
+
+testcase!(
     test_tuple,
     r#"
 from typing import NewType
