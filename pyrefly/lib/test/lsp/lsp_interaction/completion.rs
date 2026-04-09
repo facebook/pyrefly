@@ -395,6 +395,29 @@ fn test_completion_class_override_members() {
 }
 
 #[test]
+fn test_attribute_completion_remains_unfiltered() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("basic"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+    interaction
+        .client
+        .did_change("foo.py", "class A:\n    name = 1\n\na = A()\na.zz");
+
+    interaction
+        .client
+        .completion("foo.py", 4, 4)
+        .expect_completion_response_with(|list| list.items.iter().any(|item| item.label == "name"))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_import_completion_skips_hidden_directories() {
     let root = get_test_files_root();
     let workspace = root.path().join("basic");

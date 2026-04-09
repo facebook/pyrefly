@@ -863,25 +863,12 @@ impl Transaction<'_> {
         handle: &Handle,
         base_type: Type,
         expected_type: Option<&Type>,
-        filter: Option<&Identifier>,
         completions: &mut Vec<RankedCompletion>,
     ) {
         self.ad_hoc_solve(handle, "completion_attributes", |solver| {
-            let matcher = filter.map(|_| SkimMatcherV2::default().smart_case());
             solver
                 .completions(base_type, None, true)
                 .iter()
-                .filter(|attr| {
-                    if let Some(filter) = filter
-                        && let Some(ref matcher) = matcher
-                    {
-                        matcher
-                            .fuzzy_match(attr.name.as_str(), filter.as_str())
-                            .is_some()
-                    } else {
-                        true
-                    }
-                })
                 .for_each(|attr| {
                     let kind = match attr.ty {
                         Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
@@ -950,12 +937,18 @@ impl Transaction<'_> {
         let Some(class_type) = self.get_type(handle, &key) else {
             return;
         };
+        let mut attribute_completions = Vec::new();
         self.add_attribute_completions_for_type(
             handle,
             class_type,
             None,
-            Some(identifier),
-            completions,
+            &mut attribute_completions,
+        );
+        let prefix = identifier.as_str();
+        completions.extend(
+            attribute_completions
+                .into_iter()
+                .filter(|item| item.item.label.starts_with(prefix)),
         );
     }
 
@@ -1104,7 +1097,6 @@ impl Transaction<'_> {
                         handle,
                         base_type,
                         expected_type.as_ref(),
-                        None,
                         &mut result,
                     );
                 }
