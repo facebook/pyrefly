@@ -19,10 +19,10 @@ impl ErrorContext {
             Self::BadContextManager(cm) => {
                 format!("Cannot use `{cm}` as a context manager")
             }
-            Self::UnaryOp(op, target) => {
+            Self::UnaryOp(op, target, _range) => {
                 format!("Unary `{op}` is not supported on `{target}`")
             }
-            Self::BinaryOp(op, left, right) => {
+            Self::BinaryOp(op, left, right, _left_range, _right_range) => {
                 let ctx = TypeDisplayContext::new(&[left, right]);
                 format!(
                     "`{}` is not supported between `{}` and `{}`",
@@ -31,7 +31,7 @@ impl ErrorContext {
                     ctx.display(right)
                 )
             }
-            Self::InplaceBinaryOp(op, left, right) => {
+            Self::InplaceBinaryOp(op, left, right, _left_range, _right_range) => {
                 let ctx = TypeDisplayContext::new(&[left, right]);
                 format!(
                     "`{}=` is not supported between `{}` and `{}`",
@@ -165,6 +165,12 @@ impl TypeCheckKind {
                 param,
                 ctx.display(want),
             ),
+            Self::OverloadDefault(param) => format!(
+                "Default `{}` from implementation is not assignable to overload parameter `{}` with type `{}`",
+                ctx.display(got),
+                param,
+                ctx.display(want),
+            ),
             Self::TypedDictKey(key) => format!(
                 "`{}` is not assignable to TypedDict key{} with type `{}`",
                 ctx.display(got),
@@ -211,7 +217,7 @@ impl TypeCheckKind {
                 ctx.display(want)
             ),
             Self::CycleBreaking => format!(
-                "`{}` is not assignable to `{}` (caused by inconsistent types when breaking cycles)",
+                "Pyrefly detected conflicting types while breaking a dependency cycle: `{}` is not assignable to `{}`. Adding explicit type annotations might possibly help.",
                 ctx.display(got),
                 ctx.display(want)
             ),
@@ -221,7 +227,7 @@ impl TypeCheckKind {
                 ctx.display(want),
             ),
             Self::YieldValue => format!(
-                "Type of yielded value `{}` is not assignable to declared return type `{}`",
+                "Yielded type `{}` is not assignable to declared yield type `{}`",
                 ctx.display(got),
                 ctx.display(want),
             ),
@@ -235,10 +241,14 @@ impl TypeCheckKind {
                 ctx.display(want),
             ),
             Self::PostInit => format!(
-                "`__post_init__` type `{got}` is not assignable to expected type `{want}` generated from the dataclass's `InitVar` fields"
+                "`__post_init__` type `{}` is not assignable to expected type `{}` generated from the dataclass's `InitVar` fields",
+                ctx.display(got),
+                ctx.display(want),
             ),
             Self::OverloadReturn => format!(
-                "Overload return type `{got}` is not assignable to implementation return type `{want}`",
+                "Overload return type `{}` is not assignable to implementation return type `{}`",
+                ctx.display(got),
+                ctx.display(want),
             ),
             Self::OverloadInput(overload_sig, impl_sig) => {
                 format!(
@@ -247,11 +257,17 @@ impl TypeCheckKind {
             }
             Self::TypeVarSpecialization(name) => {
                 format!(
-                    "`{got}` is not assignable to upper bound `{want}` of type variable `{name}`"
+                    "`{}` is not assignable to upper bound `{}` of type variable `{name}`",
+                    ctx.display(got),
+                    ctx.display(want)
                 )
             }
             Self::Container => {
-                format!("`{got}` is not assignable to contained type `{want}`")
+                format!(
+                    "`{}` is not assignable to contained type `{}`",
+                    ctx.display(got),
+                    ctx.display(want)
+                )
             }
         }
     }

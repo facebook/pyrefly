@@ -1,0 +1,7 @@
+  7:16-19: typing.Type[builtins.str]
+  7:24-27: typing.Type[builtins.str]
+  8:11-26: builtins.str
+  8:11-19: Literal['hello '] -> builtins.str
+  8:22-26: builtins.str
+  11:0-1: callable_defining_func.greet(builtins.str) -> builtins.str
+  11:4-9: callable_defining_func.greet(builtins.str) -> builtins.str

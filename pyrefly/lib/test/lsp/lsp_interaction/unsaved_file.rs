@@ -11,8 +11,8 @@ use lsp_types::request::Completion;
 use lsp_types::request::SemanticTokensFullRequest;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
 
 #[test]
 fn test_semantic_tokens_for_unsaved_file() {

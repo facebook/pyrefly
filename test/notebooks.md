@@ -49,7 +49,9 @@ ERROR `Literal[5]` is not assignable to `bool` [bad-assignment]
  --> */notebook.ipynb#1:1:11 (glob)
   |
 1 | x: bool = 5
-  |           ^
+  |    ----   ^
+  |    |
+  |    declared type
   |
 [1]
 ```
@@ -63,7 +65,9 @@ ERROR `Literal[5]` is not assignable to `bool` [bad-assignment]
  --> */notebook.ipynb#2:1:11 (glob)
   |
 1 | x: bool = 5
-  |           ^
+  |    ----   ^
+  |    |
+  |    declared type
   |
 [1]
 ```

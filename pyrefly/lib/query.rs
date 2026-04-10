@@ -31,10 +31,12 @@ use pyrefly_types::callable::Function;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
+use pyrefly_types::class::ClassFields;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::BoundMethodType;
@@ -46,6 +48,7 @@ use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Decorator;
@@ -66,13 +69,14 @@ use ruff_source_file::SourceLocation;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
-use serde::Serialize;
 use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::binding::binding::ClassFieldDefinition;
+use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassSynthesizedFields;
@@ -87,6 +91,7 @@ use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
+use crate::types::display::LspDisplayMode;
 use crate::types::display::TypeDisplayContext;
 
 const REPR: Name = Name::new_static("__repr__");
@@ -158,79 +163,21 @@ pub struct Attribute {
     pub is_final: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct PythonASTRange {
-    pub start_line: LineNumber,
-    pub start_col: u32,
-    pub end_line: LineNumber,
-    pub end_col: u32,
-}
+/// Re-export from `pyrefly_util::lined_buffer` for backwards compatibility.
+pub use pyrefly_util::lined_buffer::PythonASTRange;
 
-impl Serialize for PythonASTRange {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("PythonASTRange", 4)?;
-        state.serialize_field("start_line", &self.start_line.get())?;
-        state.serialize_field("start_col", &self.start_col)?;
-        state.serialize_field("end_line", &self.end_line.get())?;
-        state.serialize_field("end_col", &self.end_col)?;
-        state.end()
-    }
-}
-
-fn python_ast_range_for_expr(
+/// Thin wrapper around `LinedBuffer::python_ast_range_for_expr` that accepts
+/// a `ModuleInfo` for convenience. Callers with direct access to a
+/// `LinedBuffer` can call the method directly.
+pub fn python_ast_range_for_expr(
     module_info: &ModuleInfo,
     original_range: TextRange,
     expr: &Expr,
     parent_expr: Option<&Expr>,
 ) -> PythonASTRange {
-    let expression_range = if let Expr::Generator(e) = expr {
-        // python AST module reports locations of all generator expressions as if they are parenthesized
-        // i.e any(any(a.b is not None for a in [l2]) for l2 in l1)
-        //        ^-will be col_offset for generator expression over l1
-        // ruff properly distinguishes between parenthesized and non-parenthesized expressions
-        // and points to the first character of the expression
-        // since queries are done based on Python AST for generator expression we will
-        // need to adjust start/end column offsets
-        if e.parenthesized {
-            original_range
-        } else if let Some(Expr::Call(p)) = parent_expr
-            && p.arguments.len() == 1
-            && p.arguments.inner_range().contains_range(original_range)
-        {
-            TextRange::new(
-                p.arguments.l_paren_range().start(),
-                p.arguments.r_paren_range().end(),
-            )
-        } else {
-            original_range
-                .sub_start(TextSize::new(1))
-                .add_end(TextSize::new(1))
-        }
-    } else {
-        original_range
-    };
-
-    let start_location = module_info.lined_buffer().line_index().source_location(
-        expression_range.start(),
-        module_info.lined_buffer().contents(),
-        ruff_source_file::PositionEncoding::Utf8,
-    );
-    let end_location = module_info.lined_buffer().line_index().source_location(
-        expression_range.end(),
-        module_info.lined_buffer().contents(),
-        ruff_source_file::PositionEncoding::Utf8,
-    );
-
-    PythonASTRange {
-        start_line: LineNumber::new(start_location.line.get() as u32).unwrap(),
-        start_col: start_location.character_offset.to_zero_indexed() as u32,
-        end_line: LineNumber::new(end_location.line.get() as u32).unwrap(),
-        end_col: end_location.character_offset.to_zero_indexed() as u32,
-    }
+    module_info
+        .lined_buffer()
+        .python_ast_range_for_expr(original_range, expr, parent_expr)
 }
 
 fn is_static_method(ty: &Type) -> bool {
@@ -279,6 +226,7 @@ fn type_to_string(ty: &Type) -> String {
     let mut ctx = TypeDisplayContext::new(&[ty]);
     ctx.always_display_module_name();
     ctx.always_display_expanded_unions();
+    ctx.set_lsp_display_mode(LspDisplayMode::Query);
     if is_static_method(ty) {
         format!("typing.StaticMethod[{}]", ctx.display(ty))
     } else if let Some(bound) = bound_of_type_var(ty) {
@@ -343,8 +291,13 @@ impl<'a> CalleesWithLocation<'a> {
                         .end()
                         .checked_sub(TextSize::from(1))
                         .unwrap(),
-                    FindPreference::default(),
+                    FindPreference {
+                        resolve_call_dunders: false,
+                        ..FindPreference::default()
+                    },
                 )
+                .map(Vec1::into_vec)
+                .unwrap_or_default()
                 .into_iter()
                 .collect_vec()
                 .as_slice()
@@ -555,8 +508,11 @@ impl<'a> CalleesWithLocation<'a> {
             && let Type::ClassType(class) = &arg_type
         {
             let repr_callees =
-                self.callee_from_mro(class.class_object(), "__repr__", |_solver, c| {
-                    if c.contains(&REPR) {
+                self.callee_from_mro(class.class_object(), "__repr__", |solver, c| {
+                    if solver
+                        .get_class_fields(c)
+                        .is_some_and(|f| f.contains(&REPR))
+                    {
                         Some(format!("{}.{}.__repr__", c.module_name(), c.name()))
                     } else {
                         None
@@ -709,12 +665,14 @@ impl<'a> CalleesWithLocation<'a> {
         fallback_name: &str,
         callee_from_ancestor: F,
     ) -> Vec<Callee> {
-        let call_target = self.transaction.ad_hoc_solve(&self.handle, |solver| {
-            let mro = solver.get_mro_for_class(c);
-            iter::once(c)
-                .chain(mro.ancestors(solver.stdlib).map(|x| x.class_object()))
-                .find_map(|c| callee_from_ancestor(&solver, c))
-        });
+        let call_target = self
+            .transaction
+            .ad_hoc_solve(&self.handle, "query_mro", |solver| {
+                let mro = solver.get_mro_for_class(c);
+                iter::once(c)
+                    .chain(mro.ancestors(solver.stdlib).map(|x| x.class_object()))
+                    .find_map(|c| callee_from_ancestor(&solver, c))
+            });
         let class_name = Self::qname_to_string(c.qname());
         let target = if let Some(Some(t)) = call_target {
             t
@@ -735,8 +693,13 @@ impl<'a> CalleesWithLocation<'a> {
                 &self.handle,
                 // take location of last included character in range (which should work for identifiers and attributes)
                 callee_range.end().checked_sub(TextSize::from(1)).unwrap(),
-                FindPreference::default(),
+                FindPreference {
+                    resolve_call_dunders: false,
+                    ..FindPreference::default()
+                },
             )
+            .map(Vec1::into_vec)
+            .unwrap_or_default()
             .into_iter()
             // filter out attributes since we don't know how to handle them
             .filter(|d| !matches!(d.metadata, DefinitionMetadata::Attribute))
@@ -784,13 +747,14 @@ impl<'a> CalleesWithLocation<'a> {
     fn find_init_or_new(&self, cls: &Class) -> Vec<Callee> {
         self.callee_from_mro(cls, "__init__", |solver, c| {
             // find first class that has __init__ or __new__
-            let has_init = c.contains(&dunder::INIT)
+            let class_fields = solver.get_class_fields(c);
+            let has_init = class_fields.is_some_and(|f| f.contains(&dunder::INIT))
                 || solver
                     .get_from_class(c, &KeyClassSynthesizedFields(c.index()))
                     .is_some_and(|f| f.get(&dunder::INIT).is_some());
             if has_init {
                 Some(format!("{}.{}.__init__", c.module_name(), c.name()))
-            } else if c.contains(&dunder::NEW) {
+            } else if class_fields.is_some_and(|f| f.contains(&dunder::NEW)) {
                 Some(format!("{}.{}.__new__", c.module_name(), c.name()))
             } else {
                 None
@@ -819,6 +783,7 @@ impl<'a> CalleesWithLocation<'a> {
             Type::Union(box Union { members: tys, .. }) => {
                 self.init_or_new_from_union(tys, callee_range)
             }
+            Type::Any(_) => vec![],
             x => {
                 panic!(
                     "unexpected type at [{}]: {x:?}",
@@ -888,6 +853,8 @@ impl<'a> CalleesWithLocation<'a> {
             }
             Type::Callable(..) => self.for_callable(callee_range),
             Type::Type(box ty) => self.init_or_new_from_type(ty, callee_range),
+            // Annotated[T, ...] is not callable (matching as_call_target_impl).
+            Type::Annotated(_, _) => vec![],
 
             Type::ClassDef(cls) => self.find_init_or_new(cls),
             Type::Forall(v) => match &v.body {
@@ -895,13 +862,17 @@ impl<'a> CalleesWithLocation<'a> {
                     vec![self.callee_from_function(func, call_target, call_arguments)]
                 }
                 Forallable::Callable(_) => self.for_callable(callee_range),
-                Forallable::TypeAlias(t) => {
+                Forallable::TypeAlias(TypeAliasData::Value(t)) => {
                     self.callee_from_type(&t.as_type(), call_target, callee_range, call_arguments)
                 }
+                Forallable::TypeAlias(TypeAliasData::Ref(_)) => vec![],
             },
             Type::SelfType(c) | Type::ClassType(c) => {
-                self.callee_from_mro(c.class_object(), "__call__", |_solver, c| {
-                    if c.contains(&dunder::CALL) {
+                self.callee_from_mro(c.class_object(), "__call__", |solver, c| {
+                    if solver
+                        .get_class_fields(c)
+                        .is_some_and(|f| f.contains(&dunder::CALL))
+                    {
                         Some(format!("{}.{}.__call__", c.module_name(), c.name()))
                     } else {
                         None
@@ -910,9 +881,10 @@ impl<'a> CalleesWithLocation<'a> {
             }
             Type::Any(_) => vec![],
             Type::Literal(_) => vec![],
-            Type::TypeAlias(t) => {
+            Type::TypeAlias(box TypeAliasData::Value(t)) => {
                 self.callee_from_type(&t.as_type(), call_target, callee_range, call_arguments)
             }
+            Type::TypeAlias(box TypeAliasData::Ref(_)) => vec![],
             _ => panic!(
                 "unexpected type at [{}]: {ty:?}",
                 self.module_info.display_range(callee_range)
@@ -922,8 +894,8 @@ impl<'a> CalleesWithLocation<'a> {
 }
 
 impl Query {
-    pub fn new(config_finder: ConfigFinder) -> Self {
-        let state = State::new(config_finder);
+    pub fn new(config_finder: ConfigFinder, thread_count: ThreadCount) -> Self {
+        let state = State::new(config_finder, thread_count);
         Self {
             state,
             sys_info: SysInfo::default(),
@@ -954,7 +926,7 @@ impl Query {
             .new_committable_transaction(Require::Exports, None);
         let new_transaction_mut = transaction.as_mut();
         new_transaction_mut.invalidate_events(events);
-        new_transaction_mut.run(&[], Require::Exports);
+        new_transaction_mut.run(&[], Require::Exports, None);
         self.state.commit_transaction(transaction, None);
         let all_files = self.files.lock().iter().cloned().collect::<Vec<_>>();
         self.add_files(all_files);
@@ -967,11 +939,16 @@ impl Query {
             .state
             .new_committable_transaction(Require::Exports, None);
         let handles = files.into_map(|(name, file)| self.make_handle(name, file));
-        transaction.as_mut().run(&handles, Require::Everything);
+        transaction
+            .as_mut()
+            .run(&handles, Require::Everything, None);
         let errors = transaction.as_mut().get_errors(&handles);
         self.state.commit_transaction(transaction, None);
         let project_root = PathBuf::new();
-        errors.collect_errors().shown.map(|e| {
+        let collected = errors.collect_errors();
+        let mut output_errors = collected.ordinary;
+        output_errors.extend(collected.directives);
+        output_errors.map(|e| {
             // We deliberately don't have a Display for `Error`, to encourage doing the right thing.
             // But we just hack something up as this code is experimental.
             let mut s = Cursor::new(Vec::new());
@@ -1021,7 +998,7 @@ impl Query {
                 Type::ClassType(c)
                     if c.name() == "classproperty" || c.name() == "cached_classproperty" =>
                 {
-                    let result_ty = c.targs().as_slice().get(1).unwrap();
+                    let result_ty = c.targs().as_slice().first().unwrap();
                     (Some(String::from("property")), result_ty)
                 }
                 _ => (None, ty),
@@ -1031,28 +1008,58 @@ impl Query {
         let answers = transaction.get_answers(&handle)?;
 
         if let Some(Type::ClassDef(cd)) = &class_ty {
-            let res = cd
-                .fields()
+            let class_fields = bindings
+                .get_class_fields(cd.index())
+                .cloned()
+                .unwrap_or_else(ClassFields::empty);
+            let res = class_fields
+                .names()
                 .filter_map(|n| {
-                    let range = cd.field_decl_range(n)?;
                     let class_field_index = KeyClassField(cd.index(), n.clone());
                     let class_field_idx =
                         bindings.key_to_idx_hashed_opt(Hashed::new(&class_field_index))?;
                     let class_field = bindings.get(class_field_idx);
                     let is_final = match &class_field.definition {
-                        ClassFieldDefinition::DeclaredByAnnotation { annotation } => {
+                        ClassFieldDefinition::DeclaredByAnnotation { annotation, .. } => {
                             Some(*annotation)
                         }
                         ClassFieldDefinition::AssignedInBody { annotation, .. } => *annotation,
-                        ClassFieldDefinition::DefinedInMethod { annotation, .. } => *annotation,
                         _ => None,
                     }
                     .and_then(|idx| answers.get_idx(idx))
                     .map(|f| f.annotation.is_final())
                     .unwrap_or(false);
 
-                    let field_ty = transaction.get_type_at(&handle, range.start())?;
+                    // Get field type efficiently (avoids expensive position-based lookup)
+                    // Priority: annotation type > expression type trace > ClassField.ty()
+                    let field_ty = match &class_field.definition {
+                        ClassFieldDefinition::AssignedInBody {
+                            value,
+                            annotation,
+                            alias_of: _,
+                        }
+                        | ClassFieldDefinition::DefinedInMethod {
+                            value, annotation, ..
+                        } => {
+                            annotation
+                                .and_then(|idx| answers.get_idx(idx))
+                                .and_then(|a| a.annotation.ty.clone())
+                                // Fall back to expression type trace
+                                .or_else(|| {
+                                    if let ExprOrBinding::Expr(expr) = value.as_ref() {
+                                        answers.get_type_trace(expr.range())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                // Final fallback: ClassField.ty()
+                                .or_else(|| answers.get_idx(class_field_idx).map(|cf| cf.ty()))
+                        }
+                        _ => answers.get_idx(class_field_idx).map(|cf| cf.ty()),
+                    };
+                    let field_ty = field_ty?;
                     let (kind, field_ty) = get_kind_and_field_type(&field_ty);
+
                     Some(Attribute {
                         name: n.to_string(),
                         kind,
@@ -1249,12 +1256,12 @@ impl Query {
             path.clone(),
             Some(Arc::new(FileContents::from_source(code))),
         )]);
-        t.run(&[handle.dupe()], Require::Everything);
+        t.run(&[handle.dupe()], Require::Everything, None);
         let errors = t.get_errors([handle]).collect_errors();
-        if !errors.shown.is_empty() {
+        if !errors.ordinary.is_empty() {
             let mut res = Vec::new();
             let project_root = PathBuf::new();
-            for e in errors.shown {
+            for e in errors.ordinary {
                 e.write_line(&mut Cursor::new(&mut res), project_root.as_path(), true)
                     .unwrap();
             }
@@ -1326,7 +1333,9 @@ impl Query {
                 let t = self.state.transaction();
                 let h = self.make_handle(name, ModulePath::filesystem(path));
                 let result = t
-                    .ad_hoc_solve(&h, |solver| solver.is_subset_eq(&sub_ty, &super_ty))
+                    .ad_hoc_solve(&h, "query_is_subset_eq", |solver| {
+                        solver.is_subset_eq(&sub_ty, &super_ty)
+                    })
                     .unwrap_or(false);
                 return Ok(result);
             }
@@ -1379,7 +1388,7 @@ impl Query {
         let result = if is_typed_dict_request {
             matches!(sub_ty, Type::TypedDict(_) | Type::PartialTypedDict(_))
         } else {
-            t.ad_hoc_solve(&h, |solver| {
+            t.ad_hoc_solve(&h, "query_is_subset_eq", |solver| {
                 solver.is_subset_eq(&sub_ty, &super_ty_opt.unwrap())
             })
             .unwrap_or(false)

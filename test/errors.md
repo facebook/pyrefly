@@ -21,13 +21,16 @@ Invalid --search-path: `*/does_not_exist` does not exist (glob)
 ```scrut
 $ echo "x: str = 12" > $TMPDIR/shown1.py && \
 > echo "import shown1; y: int = shown1.x" > $TMPDIR/shown2.py && \
-> $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all --output-format=min-text
+> $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all --output-format=min-text --min-severity=warn
 */shown*.py:1:* (glob)
  WARN ast.pyi:1113:10-11: `Constant.n` is deprecated [deprecated]
  WARN ast.pyi:1113:10-18: `Constant.n` is deprecated [deprecated]
  WARN ast.pyi:1123:10-11: `Constant.s` is deprecated [deprecated]
  WARN ast.pyi:1123:10-18: `Constant.s` is deprecated [deprecated]
+ WARN importlib/abc.pyi:184:9-41: `ResourceReader` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:51:9-29: `contents` is deprecated [deprecated]
+ WARN importlib/resources/__init__.pyi:84:41-73: `ResourceReader` is deprecated [deprecated]
+ WARN importlib/resources/_common.pyi:8:41-55: `ResourceReader` is deprecated [deprecated]
 */shown*.py:1:* (glob)
  WARN typing_extensions.pyi:65:5-55: `no_type_check_decorator` is deprecated [deprecated]
 [1]
@@ -51,7 +54,10 @@ ERROR `+` is not supported * (glob)
  --> */bad.py:1:1 (glob)
   |
 1 | 1 + '2'
-  | ^^^^^^^
+  | -^^^---
+  | |   |
+  | |   has type `Literal['2']`
+  | has type `Literal[1]`
   |
   Argument * is not assignable * (glob)
 [1]
@@ -101,7 +107,7 @@ $ mkdir $TMPDIR/compiled && touch $TMPDIR/compiled/a.pyc && \
 > $PYREFLY check $TMPDIR/compiled_import.py
 *ERROR `reveal_type` must be imported from `typing` for runtime usage* (glob)
 * (glob+)
-*INFO revealed type: tuple[Any, Module[compiled.b], Module[c], Any]* (glob)
+*INFO revealed type: tuple[Unknown, Module[compiled.b], Module[c], Unknown]* (glob)
 * (glob+)
 [1]
 ```

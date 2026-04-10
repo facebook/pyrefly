@@ -7,8 +7,6 @@
 
 use std::time::Instant;
 
-use tracing::info;
-
 pub struct StepLogger {
     start: Instant,
     step_done_message: String,
@@ -16,7 +14,7 @@ pub struct StepLogger {
 
 impl StepLogger {
     pub fn start(step_start_message: &str, step_done_message: &str) -> Self {
-        info!("{}...", step_start_message);
+        tracing::debug!("{}...", step_start_message);
         Self {
             start: Instant::now(),
             step_done_message: step_done_message.to_owned(),
@@ -24,7 +22,7 @@ impl StepLogger {
     }
 
     pub fn finish(&self) {
-        info!(
+        tracing::debug!(
             "{} in {:.3}s",
             self.step_done_message,
             self.start.elapsed().as_secs_f32()

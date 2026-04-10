@@ -320,7 +320,6 @@ def foo(x: Callable[[int], str], c: C, c2: C2, c3: C3):
 );
 
 testcase!(
-    bug = "classmethod bound object w/o targs is default-instantiated, solves T to Any",
     test_bound_classmethod_explicit_targs,
     r#"
 from typing import assert_type
@@ -333,7 +332,7 @@ class A[T]:
         return cls(x)
 
 assert_type(A[int].m(0), A[int])
-assert_type(A.m(0), A[int]) # TODO # E: assert_type(A[Any], A[int]) failed
+assert_type(A.m(0), A[int])
 
 def test_typevar_bounds[T: A[int]](x: type[T]):
     assert_type(x.m(0), A[int])
@@ -357,10 +356,10 @@ class A:
 
 class B:
     def __init__(self, a: A):
-        a.x: int = 1  # E: Type cannot be declared in assignment to non-self attribute `a.x`
+        a.x: int = 1  # E: Cannot annotate non-self attribute `a.x`
 
 a: A = A()
-a.x: int = 5  # E: Type cannot be declared in assignment to non-self attribute `a.x`
+a.x: int = 5  # E: Cannot annotate non-self attribute `a.x`
     "#,
 );
 
@@ -522,6 +521,16 @@ C().f(0)    # E: Argument `Literal[0]` is not assignable to parameter `x` with t
     "#,
 );
 
+testcase!(
+    test_bad_bound_on_self,
+    r#"
+class C:
+    def f[T: int](self: T) -> T:
+        return self
+C().f()  # E: `C` is not assignable to upper bound `int`
+    "#,
+);
+
 // Make sure we treat `callable_attr` as a bare instance attribute, not a bound method.
 testcase!(
     test_callable_instance_only_attribute,
@@ -606,7 +615,7 @@ def f2(c: Callable[[C, int], None]):
 f1(C.f)  # E: Argument `(self: C, x: int) -> None` is not assignable to parameter `c` with type `(int) -> None`
 f1(C().f)
 f2(C.f)
-f2(C().f)  # E: Argument `BoundMethod[C, (self: C, x: int) -> None]` is not assignable to parameter `c` with type `(C, int) -> None`
+f2(C().f)  # E: Argument `(self: C, x: int) -> None` is not assignable to parameter `c` with type `(C, int) -> None`
     "#,
 );
 
@@ -1054,6 +1063,16 @@ class Test(B):
 );
 
 testcase!(
+    test_any_as_base_class_suppresses_missing_attribute_in_method,
+    r#"
+from typing import Any
+class MyTest(Any):
+    def foo(self):
+        self.bar()  # should not error: Any is in base-class hierarchy
+"#,
+);
+
+testcase!(
     test_field_using_method_scope_type_variable,
     r#"
 from typing import assert_type, Any
@@ -1094,6 +1113,50 @@ class C1(Generic[R]):
 class C2[R]:
     def __init__(self, field: R):
         self.field = field
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2204
+testcase!(
+    test_generic_function_assigned_to_attribute,
+    r#"
+from typing import reveal_type, assert_type
+def f[T](x: T) -> T:
+    return x
+
+class C:
+    def m[U](self, x: U) -> U:
+        return x
+
+class D:
+    def __init__(self, c: C):
+        self.f = f
+        self.g = c.m
+        self.h = C.m
+
+def test(o: D):
+    reveal_type(o.f) # E: [T](x: T) -> T
+    assert_type(o.f(1), int)
+
+    reveal_type(o.g) # E: [U](self: C, x: U) -> U
+    assert_type(o.g(1), int)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2812
+testcase!(
+    test_bound_overload_assigned_to_attribute,
+    r#"
+from typing import assert_type
+
+class ThemeStack:
+    def __init__(self) -> None:
+        self._entries: list[dict[str, str]] = [{}]
+        self.get = self._entries[-1].get
+
+def test(stack: ThemeStack) -> None:
+    assert_type(stack.get("theme"), str | None)
+    assert_type(stack.get("theme", "fallback"), str)
 "#,
 );
 
@@ -1635,6 +1698,23 @@ assert_type(A.f(0), int)
 );
 
 testcase!(
+    test_parametrized_class_init_call,
+    r#"
+from typing import reveal_type
+
+class Foo[T]:
+    def __init__(self, /) -> None:
+        pass
+
+class Bar[S](Foo[S]):
+    def __init__(self, /) -> None:
+        Foo[S].__init__(self)
+
+Foo[int].__init__(Foo[int]())
+    "#,
+);
+
+testcase!(
     test_invalid_augmented_assign_in_init,
     r#"
 class C:
@@ -1746,8 +1826,20 @@ testcase!(
     r#"
 from typing import ClassVar, Final
 class C:
-    x: ClassVar[Final[int]] = 42
+    x: ClassVar[Final[int]] = 42  # E: `Final` may not be nested inside `ClassVar`
 C.x = 43  # E: This field is marked as Final
+    "#,
+);
+
+testcase!(
+    test_classvar_final_nesting,
+    r#"
+from typing import ClassVar, Final
+class C:
+    x: Final[ClassVar[int]] = 1  # E: `ClassVar` may not be nested inside `Final`
+    y: ClassVar[Final[int]] = 2  # E: `Final` may not be nested inside `ClassVar`
+    z: Final[int] = 3
+    w: ClassVar[int] = 4
     "#,
 );
 
@@ -1937,7 +2029,7 @@ def get_type_t[T]() -> type[T]:
     return cast(type[T], 0)
 def foo[T](x: type[T]):
     # mypy reveals the same thing we do (the type of `type.__new__`), while pyright reveals `Unknown`.
-    reveal_type(get_type_t().__new__)  # E: Overload[\n  [Self@type](cls: type[Self@type], o: object, /) -> type[Any]\n  [Self](cls: type[Self], name: str, bases: tuple[type[Any], ...], namespace: dict[str, Any], /, **kwds: Any) -> Self\n]
+    reveal_type(get_type_t().__new__)  # E: Overload[\n  [Self@type: type](cls: type[Self@type], o: object, /) -> type[Any]\n  [Self](cls: type[Self], name: str, bases: tuple[type[Any], ...], namespace: dict[str, Any], /, **kwds: Any) -> Self\n]
     "#,
 );
 
@@ -2000,7 +2092,7 @@ testcase!(
     r#"
 from typing import Never, assert_type, reveal_type
 def f() -> type[Never]: ...
-reveal_type(f().mro) # E: BoundMethod[type, (self: type) -> list[type[Any]]]
+reveal_type(f().mro) # E: (self: type) -> list[type[Any]]
 assert_type(f().wut, Never)
     "#,
 );
@@ -2113,6 +2205,70 @@ def f(x: Color) -> Color:
 );
 
 testcase!(
+    test_union_attribute_missing_no_suggestion,
+    r#"
+# When an attribute exists on some union members but not others,
+# we shouldn't suggest similar attributes from the types that have it
+def f(x: str | None):
+    return x.split()  # E: Object of class `NoneType` has no attribute `split` # !E: Did you mean
+"#,
+);
+
+testcase!(
+    test_union_attribute_missing_no_suggestion_three_types,
+    r#"
+# Partial union failure with 3 types: attribute exists on 1, missing on 2
+def f(x: str | int | None):
+    return x.split()  # E: Object of class `NoneType` has no attribute `split`\nObject of class `int` has no attribute `split` # !E: Did you mean
+"#,
+);
+
+testcase!(
+    test_union_attribute_missing_no_suggestion_mostly_have_it,
+    r#"
+# Even if most types have the attribute, if ANY don't, skip suggestion
+class A:
+    upper: int
+    lower: int
+class B:
+    upper: int
+    lower: int
+class C:
+    def upper(self) -> str: ...
+def f(x: C | A | B):
+    # C has "upper" method, A and B have "upper" attribute
+    # But C doesn't have "lower" attribute, A and B do
+    x.lowerr  # E: Object of class `C` has no attribute `lowerr` # !E: Did you mean
+"#,
+);
+
+testcase!(
+    test_union_both_missing_should_suggest,
+    r#"
+# When an attribute is missing on ALL union members, we should still suggest
+class A:
+    value: int
+class B:
+    value: str
+def f(x: A | B):
+    return x.vaule  # E: Object of class `A` has no attribute `vaule`\nObject of class `B` has no attribute `vaule`\n  Did you mean `value`?
+"#,
+);
+
+testcase!(
+    test_union_all_have_attribute_no_error,
+    r#"
+# When all union members have the attribute, there should be no error
+class A:
+    value: int
+class B:
+    value: str
+def f(x: A | B):
+    return x.value  # No error - both A and B have 'value'
+"#,
+);
+
+testcase!(
     test_class_toplevel_inherited_attr_name,
     r#"
 # at the class top level, inherited attribute names should be considered in scope
@@ -2210,7 +2366,8 @@ class A:
         self.y = {"x": 0} if check else 42
 def f(a: A):
     x: TD = a.x
-    y: TD | int = a.y
+    # anoynmous typed dicts are promoted away when unioned
+    y: dict[str, int] | int = a.y
     "#,
 );
 
@@ -2239,4 +2396,32 @@ class B(A[None]):
         if not foo:
             pass
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/417
+testcase!(
+    test_classmethod_inherited_no_missing_attribute,
+    r#"
+class Base:
+    @classmethod
+    def from_pretrained(cls, name: str) -> "Base":
+        return cls()
+
+class Derived(Base):
+    pass
+
+Derived.from_pretrained("model")
+"#,
+);
+
+testcase!(
+    test_classmethod_vararg_does_not_bind_self,
+    r#"
+class C:
+    @classmethod
+    def create(*args, **kwargs): ...
+
+C.create(42)
+C.create(a=42)
+"#,
 );

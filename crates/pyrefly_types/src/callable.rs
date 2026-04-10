@@ -12,8 +12,10 @@ use std::fmt;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::sync::Arc;
 
 use dupe::Dupe;
+use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
@@ -32,7 +34,9 @@ use vec1::vec1;
 
 use crate::class::Class;
 use crate::class::ClassType;
+use crate::display::TypeDisplayContext;
 use crate::equality::TypeEq;
+use crate::equality::TypeEqCtx;
 use crate::keywords::DataclassTransformMetadata;
 use crate::type_output::TypeOutput;
 use crate::types::Type;
@@ -90,6 +94,7 @@ impl ArgCount {
 pub struct ArgCounts {
     pub positional: ArgCount,
     pub keyword: ArgCount,
+    pub overall: ArgCount,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -102,18 +107,18 @@ impl ParamList {
     }
 
     /// Create a new ParamList from a list of types
-    pub fn new_types(xs: Vec<(Type, Required)>) -> Self {
-        Self(xs.into_map(|(t, req)| Param::PosOnly(None, t, req)))
+    pub fn new_types(xs: Vec<PrefixParam>) -> Self {
+        Self(xs.into_map(|p| p.into_param()))
     }
 
-    /// Prepend some position-only parameters.
-    pub fn prepend_types(&self, pre: &[(Type, Required)]) -> Cow<'_, ParamList> {
+    /// Prepend some positional parameters, for `Concatenate`
+    pub fn prepend_types(&self, pre: &[PrefixParam]) -> Cow<'_, ParamList> {
         if pre.is_empty() {
             Cow::Borrowed(self)
         } else {
             Cow::Owned(ParamList(
                 pre.iter()
-                    .map(|(t, req)| Param::PosOnly(None, t.clone(), req.clone()))
+                    .map(|p| p.to_param())
                     .chain(self.0.iter().cloned())
                     .collect(),
             ))
@@ -214,9 +219,70 @@ impl ParamList {
     /// Type signature that permits everything, namely `*args, **kwargs`.
     pub fn everything() -> ParamList {
         ParamList(vec![
-            Param::VarArg(None, Type::any_implicit()),
+            Param::Varargs(None, Type::any_implicit()),
             Param::Kwargs(None, Type::any_implicit()),
         ])
+    }
+}
+
+/// Represents a prefix parameter in `Concatenate`.
+/// Prefix params can be either positional-only or positional (named).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub enum PrefixParam {
+    PosOnly(Option<Name>, Type, Required),
+    Pos(Name, Type, Required),
+}
+
+impl PrefixParam {
+    /// Create a positional-only prefix param (no name).
+    pub fn new(ty: Type, required: Required) -> Self {
+        Self::PosOnly(None, ty, required)
+    }
+
+    pub fn ty(&self) -> &Type {
+        match self {
+            Self::PosOnly(_, ty, _) | Self::Pos(_, ty, _) => ty,
+        }
+    }
+
+    pub fn ty_mut(&mut self) -> &mut Type {
+        match self {
+            Self::PosOnly(_, ty, _) | Self::Pos(_, ty, _) => ty,
+        }
+    }
+
+    /// Convert to a positional-only `Param`. Per the typing spec, params before
+    /// `*args: P.args` are always positional-only at the call site, regardless of
+    /// whether they were originally `Pos` or `PosOnly` in the function definition.
+    pub fn into_param(self) -> Param {
+        match self {
+            Self::PosOnly(name, ty, required) => Param::PosOnly(name, ty, required),
+            Self::Pos(name, ty, required) => Param::PosOnly(Some(name), ty, required),
+        }
+    }
+
+    /// Convert to a positional-only `Param` by cloning. See `into_param`.
+    pub fn to_param(&self) -> Param {
+        match self {
+            Self::PosOnly(name, ty, required) => {
+                Param::PosOnly(name.clone(), ty.clone(), required.clone())
+            }
+            Self::Pos(name, ty, required) => {
+                Param::PosOnly(Some(name.clone()), ty.clone(), required.clone())
+            }
+        }
+    }
+
+    /// Convert to a `Param` preserving the Pos vs PosOnly distinction.
+    /// Used for subset/subtype checking where name matching matters.
+    pub fn to_subset_param(&self) -> Param {
+        match self {
+            Self::PosOnly(name, ty, required) => {
+                Param::PosOnly(name.clone(), ty.clone(), required.clone())
+            }
+            Self::Pos(name, ty, required) => Param::Pos(name.clone(), ty.clone(), required.clone()),
+        }
     }
 }
 
@@ -233,7 +299,7 @@ pub enum Params {
     /// E.g. `Concatenate[int, str, P]` would be `ParamSpec([int, str], P)`,
     /// while `P` alone would be `ParamSpec([], P)`.
     /// `P` may resolve to `Type::ParamSpecValue`, `Type::Concatenate`, or `Type::Ellipsis`
-    ParamSpec(Box<[(Type, Required)]>, Type),
+    ParamSpec(Box<[PrefixParam]>, Type),
 }
 
 impl Params {
@@ -243,24 +309,30 @@ impl Params {
                 let mut counts = ArgCounts {
                     positional: ArgCount::none_allowed(),
                     keyword: ArgCount::none_allowed(),
+                    overall: ArgCount::none_allowed(),
                 };
                 for param in params.items() {
                     match param {
                         Param::PosOnly(_, _, req) => {
                             counts.positional.add_arg(req);
+                            counts.overall.add_arg(req);
                         }
-                        Param::Pos(..) => {
+                        Param::Pos(_, _, req) => {
                             counts.positional.add_arg(&Required::Optional(None));
                             counts.keyword.add_arg(&Required::Optional(None));
+                            counts.overall.add_arg(req);
                         }
                         Param::KwOnly(_, _, req) => {
                             counts.keyword.add_arg(req);
+                            counts.overall.add_arg(req);
                         }
-                        Param::VarArg(..) => {
+                        Param::Varargs(..) => {
                             counts.positional.max = None;
+                            counts.overall.max = None;
                         }
                         Param::Kwargs(..) => {
                             counts.keyword.max = None;
+                            counts.overall.max = None;
                         }
                     }
                 }
@@ -269,6 +341,7 @@ impl Params {
             Self::Ellipsis | Self::Materialization => ArgCounts {
                 positional: ArgCount::any_allowed(),
                 keyword: ArgCount::any_allowed(),
+                overall: ArgCount::any_allowed(),
             },
             Self::ParamSpec(prefix, _) => ArgCounts {
                 positional: ArgCount {
@@ -276,6 +349,10 @@ impl Params {
                     max: None,
                 },
                 keyword: ArgCount::any_allowed(),
+                overall: ArgCount {
+                    min: prefix.len(),
+                    max: None,
+                },
             },
         }
     }
@@ -286,9 +363,59 @@ impl Params {
 pub enum Param {
     PosOnly(Option<Name>, Type, Required),
     Pos(Name, Type, Required),
-    VarArg(Option<Name>, Type),
+    Varargs(Option<Name>, Type),
     KwOnly(Name, Type, Required),
     Kwargs(Option<Name>, Type),
+}
+
+/// The default value of an optional parameter, containing its type and an optional
+/// display string for values whose types don't preserve the literal value (e.g. floats).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DefaultValue {
+    pub ty: Type,
+    /// Display string for defaults that can't be recovered from the type alone,
+    /// e.g. `"3.14"` for float literals whose type is just `float`.
+    pub display: Option<String>,
+}
+
+/// Visit/VisitMut/TypeEq delegate to `ty` only; `display` is display-only metadata.
+impl<To> Visit<To> for DefaultValue
+where
+    Type: Visit<To>,
+{
+    const RECURSE_CONTAINS: bool = <Type as Visit<To>>::RECURSE_CONTAINS;
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
+        self.ty.recurse(f);
+    }
+}
+
+impl<To> VisitMut<To> for DefaultValue
+where
+    Type: VisitMut<To>,
+{
+    const RECURSE_CONTAINS: bool = <Type as VisitMut<To>>::RECURSE_CONTAINS;
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
+        self.ty.recurse_mut(f);
+    }
+}
+
+impl TypeEq for DefaultValue {
+    fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
+        self.ty.type_eq(&other.ty, ctx)
+    }
+}
+
+impl DefaultValue {
+    pub fn new(ty: Type) -> Self {
+        Self { ty, display: None }
+    }
+
+    pub fn with_display(ty: Type, display: String) -> Self {
+        Self {
+            ty,
+            display: Some(display),
+        }
+    }
 }
 
 /// Requiredness for a function parameter.
@@ -296,8 +423,8 @@ pub enum Param {
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Required {
     Required,
-    /// The parameter is optional, with the `Type` being the type of its default value, if available.
-    Optional(Option<Type>),
+    /// The parameter is optional, with the default value info if available.
+    Optional(Option<DefaultValue>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -315,12 +442,14 @@ pub struct FuncMetadata {
 }
 
 impl FuncMetadata {
-    pub fn def(module: Module, cls: Class, func: Name) -> Self {
+    pub fn def(module: Module, cls: Class, func: Name, def_index: Option<FuncDefIndex>) -> Self {
         Self {
-            kind: FunctionKind::Def(Box::new(FuncId {
+            kind: FunctionKind::Def(Arc::new(FuncId {
                 module,
                 cls: Some(cls),
                 name: func,
+                def_index,
+                outer_funcs: None,
             })),
             flags: FuncFlags::default(),
         }
@@ -397,11 +526,30 @@ pub struct FuncFlags {
     pub dataclass_transform_metadata: Option<DataclassTransformMetadata>,
 }
 
+impl FuncFlags {
+    /// Whether the function lacks a runtime implementation and is not defined in a stub file.
+    /// This indicates a method that cannot actually be called at runtime (e.g. an abstract
+    /// method or protocol method with a `...` or `pass` body in a `.py` file).
+    pub fn lacks_runtime_implementation(&self) -> bool {
+        self.lacks_implementation && !self.defined_in_stub_file
+    }
+}
+
+/// The index of a function definition (`def ..():` statement) within the module,
+/// used as a reference to data associated with the function.
+#[derive(Debug, Clone, Dupe, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(Display, Visit, VisitMut, TypeEq)]
+pub struct FuncDefIndex(pub u32);
+
 #[derive(Debug, Clone)]
 pub struct FuncId {
     pub module: Module,
     pub cls: Option<Class>,
     pub name: Name,
+    pub def_index: Option<FuncDefIndex>,
+    /// Dot-separated path of enclosing function names (e.g. `"f1"` for a function nested inside `f1`).
+    /// `None` for top-level and class-method functions.
+    pub outer_funcs: Option<Name>,
 }
 
 impl PartialEq for FuncId {
@@ -438,17 +586,45 @@ impl Visit<Type> for FuncId {
     fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
 
+/// FuncId contains no Type fields, so visiting through Arc is a no-op.
+impl VisitMut<Type> for Arc<FuncId> {
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+impl Visit<Type> for Arc<FuncId> {
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
 impl FuncId {
-    fn key_eq(&self) -> (ModuleName, ModulePath, Option<Class>, &Name) {
+    /// Identity tuple for equality and hashing. `outer_funcs` is intentionally
+    /// excluded because it is display-only metadata (the dotted path of enclosing
+    /// function names) and does not affect the logical identity of a function.
+    fn key_eq(
+        &self,
+    ) -> (
+        ModuleName,
+        ModulePath,
+        Option<Class>,
+        &Name,
+        Option<FuncDefIndex>,
+    ) {
         (
             self.module.name(),
             self.module.path().to_key_eq(),
             self.cls.clone(),
             &self.name,
+            self.def_index,
         )
     }
 
-    fn key_ord(&self) -> (ModuleName, ModulePath, Option<Class>, &Name) {
+    fn key_ord(
+        &self,
+    ) -> (
+        ModuleName,
+        ModulePath,
+        Option<Class>,
+        &Name,
+        Option<FuncDefIndex>,
+    ) {
         self.key_eq()
     }
 
@@ -503,7 +679,7 @@ pub enum FunctionKind {
     RevealType,
     Final,
     RuntimeCheckable,
-    Def(Box<FuncId>),
+    Def(Arc<FuncId>),
     AbstractMethod,
     /// Instance of a protocol with a `__call__` method. The function has the `__call__` signature.
     CallbackProtocol(Box<ClassType>),
@@ -542,7 +718,7 @@ impl Callable {
                     if i > 0 {
                         output.write_str(", ")?;
                     }
-                    write_type(&arg.0, output)?;
+                    write_type(arg.ty(), output)?;
                 }
                 match pspec {
                     Type::ParamSpecValue(params) => {
@@ -615,10 +791,25 @@ impl Callable {
         }
     }
 
-    pub fn concatenate(args: Box<[(Type, Required)]>, param_spec: Type, ret: Type) -> Self {
+    pub fn concatenate(args: Box<[PrefixParam]>, param_spec: Type, ret: Type) -> Self {
         Self {
             params: Params::ParamSpec(args, param_spec),
             ret,
+        }
+    }
+
+    /// Return a new Callable with the first parameter removed (the `self` param for bound methods).
+    /// Returns a clone if the params are not a list or the list is empty.
+    pub fn strip_self_param(&self) -> Self {
+        match &self.params {
+            Params::List(params) => {
+                if let Some((_, rest)) = params.split_first() {
+                    Callable::list(rest, self.ret.clone())
+                } else {
+                    self.clone()
+                }
+            }
+            _ => self.clone(),
         }
     }
 
@@ -635,9 +826,9 @@ impl Callable {
                 params: Params::ParamSpec(ts, p),
                 ret,
             } => {
-                let ((first, _), rest) = ts.split_first()?;
+                let (first, rest) = ts.split_first()?;
                 Some((
-                    first,
+                    first.ty(),
                     Self::concatenate(rest.iter().cloned().collect(), p.clone(), ret.clone()),
                 ))
             }
@@ -655,7 +846,7 @@ impl Callable {
                 params: Params::List(params),
                 ret: _,
             } if let Some(param) = params.items().first() => match param {
-                Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) | Param::VarArg(_, ty) => {
+                Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) | Param::Varargs(_, ty) => {
                     Some(ty.clone())
                 }
                 _ => None,
@@ -663,7 +854,7 @@ impl Callable {
             Self {
                 params: Params::ParamSpec(ts, _),
                 ret: _,
-            } => ts.first().cloned().map(|x| x.0),
+            } => ts.first().map(|x| x.ty().clone()),
             Self {
                 params: Params::Ellipsis,
                 ret: _,
@@ -702,10 +893,17 @@ impl Callable {
 }
 
 impl Param {
-    fn fmt_default(&self, default: &Option<Type>) -> String {
+    fn fmt_default(&self, default: &Option<DefaultValue>) -> String {
         match default {
-            Some(Type::Literal(lit)) => format!("{}", lit.value),
-            Some(Type::None) => "None".to_owned(),
+            Some(DefaultValue {
+                display: Some(text),
+                ..
+            }) => text.clone(),
+            Some(DefaultValue {
+                ty: Type::Literal(lit),
+                ..
+            }) => format!("{}", lit.value),
+            Some(DefaultValue { ty: Type::None, .. }) => "None".to_owned(),
             _ => "...".to_owned(),
         }
     }
@@ -739,13 +937,13 @@ impl Param {
                 output.write_str(" = ")?;
                 output.write_str(&self.fmt_default(default))
             }
-            Param::VarArg(Some(name), ty) => {
+            Param::Varargs(Some(name), ty) => {
                 output.write_str("*")?;
                 output.write_str(name.as_str())?;
                 output.write_str(": ")?;
                 write_type(ty, output)
             }
-            Param::VarArg(None, ty) => {
+            Param::Varargs(None, ty) => {
                 output.write_str("*")?;
                 write_type(ty, output)
             }
@@ -764,7 +962,7 @@ impl Param {
 
     pub fn name(&self) -> Option<&Name> {
         match self {
-            Param::PosOnly(name, ..) | Param::VarArg(name, ..) | Param::Kwargs(name, ..) => {
+            Param::PosOnly(name, ..) | Param::Varargs(name, ..) | Param::Kwargs(name, ..) => {
                 name.as_ref()
             }
             Param::Pos(name, ..) | Param::KwOnly(name, ..) => Some(name),
@@ -775,7 +973,7 @@ impl Param {
         match self {
             Param::PosOnly(_, ty, _)
             | Param::Pos(_, ty, _)
-            | Param::VarArg(_, ty)
+            | Param::Varargs(_, ty)
             | Param::KwOnly(_, ty, _)
             | Param::Kwargs(_, ty) => ty,
         }
@@ -785,7 +983,7 @@ impl Param {
         match self {
             Param::PosOnly(_, ty, _)
             | Param::Pos(_, ty, _)
-            | Param::VarArg(_, ty)
+            | Param::Varargs(_, ty)
             | Param::KwOnly(_, ty, _)
             | Param::Kwargs(_, ty) => ty,
         }
@@ -805,7 +1003,7 @@ impl Param {
     ///
     /// This is similar to the `Display` impl, but allows passing in a `TypeDisplayContext`
     /// for context-aware formatting (e.g., disambiguating types with the same name).
-    pub fn format_for_signature(&self, type_ctx: &crate::display::TypeDisplayContext) -> String {
+    pub fn format_for_signature(&self, type_ctx: &TypeDisplayContext) -> String {
         use pyrefly_util::display::Fmt;
 
         use crate::type_output::DisplayOutput;
@@ -837,7 +1035,13 @@ impl Display for Param {
 }
 
 impl FunctionKind {
-    pub fn from_name(module: Module, cls: Option<Class>, func: &Name) -> Self {
+    pub fn from_name(
+        module: Module,
+        cls: Option<Class>,
+        func: &Name,
+        def_index: Option<FuncDefIndex>,
+        outer_funcs: Option<Name>,
+    ) -> Self {
         match (module.name().as_str(), cls.as_ref(), func.as_str()) {
             ("builtins", None, "isinstance") => Self::IsInstance,
             ("builtins", None, "issubclass") => Self::IsSubclass,
@@ -860,10 +1064,12 @@ impl FunctionKind {
             ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
             ("numba.core.decorators", None, "jit") => Self::NumbaJit,
             ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
-            _ => Self::Def(Box::new(FuncId {
+            _ => Self::Def(Arc::new(FuncId {
                 module,
                 cls,
                 name: func.clone(),
+                def_index,
+                outer_funcs,
             })),
         }
     }
@@ -946,6 +1152,13 @@ impl FunctionKind {
         }
     }
 
+    pub fn outer_funcs(&self) -> Option<&Name> {
+        match self {
+            Self::Def(func_id) => func_id.outer_funcs.as_ref(),
+            _ => None,
+        }
+    }
+
     pub fn format(&self, current_module: ModuleName) -> String {
         FuncId::format_impl(
             self.module_name(),
@@ -980,6 +1193,7 @@ mod tests {
     use crate::callable::Callable;
     use crate::callable::Param;
     use crate::callable::ParamList;
+    use crate::callable::PrefixParam;
     use crate::callable::Required;
     use crate::types::Type;
 
@@ -1033,7 +1247,7 @@ mod tests {
     fn test_arg_counts_varargs() {
         // (*args) -> None
         let callable = Callable::list(
-            ParamList::new(vec![Param::VarArg(None, Type::any_implicit())]),
+            ParamList::new(vec![Param::Varargs(None, Type::any_implicit())]),
             Type::None,
         );
         let counts = callable.arg_counts();
@@ -1068,7 +1282,7 @@ mod tests {
                     Required::Required,
                 ),
                 Param::Pos(Name::new("x"), Type::any_implicit(), Required::Required),
-                Param::VarArg(None, Type::any_implicit()),
+                Param::Varargs(None, Type::any_implicit()),
                 Param::KwOnly(Name::new("y"), Type::any_implicit(), Required::Required),
                 Param::KwOnly(
                     Name::new("z"),
@@ -1099,8 +1313,8 @@ mod tests {
     fn test_arg_counts_paramspec() {
         let callable = Callable::concatenate(
             vec![
-                (Type::None, Required::Required),
-                (Type::None, Required::Required),
+                PrefixParam::new(Type::None, Required::Required),
+                PrefixParam::new(Type::None, Required::Required),
             ]
             .into_boxed_slice(),
             Type::any_implicit(),

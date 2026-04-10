@@ -175,7 +175,6 @@ reveal_type(Model10.__init__)  # E: revealed type: (self: Model10, *, u: LaxUUID
 );
 
 pydantic_testcase!(
-    bug = "An error should be raised here",
     test_lax_mode_coercion_literals,
     r#"
 from typing import Literal
@@ -184,7 +183,12 @@ from pydantic import BaseModel
 class Model1(BaseModel):
     status: Literal[1]
 
-m = Model1(status="1")
+m = Model1(status="1")  # E: Argument `Literal['1']` is not assignable to parameter `status`
+
+class Model2(BaseModel):
+    value: Literal["MyLiteral"]
+
+Model2(value=2)  # E: Argument `Literal[2]` is not assignable to parameter `value`
     "#,
 );
 
@@ -314,6 +318,41 @@ b = TestModel(items=my_list)
 
 my_set = {"a", "b"}
 c = TestModel(items=my_set)
+    "#,
+);
+
+pydantic_testcase!(
+    test_lax_mode_mapping_field,
+    r#"
+from typing import Any, Mapping, reveal_type
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    parameters: Mapping[str, Any] | None = None
+
+# The key type should not be expanded for Mapping, since Mapping is invariant in its key type.
+# This means dict[str, Any] | None should be assignable to the init parameter.
+reveal_type(Model.__init__)  # E: revealed type: (self: Model, *, parameters: Mapping[str, Any] | None = ..., **Unknown) -> None
+
+d: dict[str, Any] = {}
+Model(parameters=d)
+    "#,
+);
+
+pydantic_testcase!(
+    test_lax_mode_pattern_field,
+    r#"
+import re
+from typing import reveal_type
+from pydantic import BaseModel
+
+class RegexSignature(BaseModel):
+    signature: re.Pattern[str]
+
+reveal_type(RegexSignature.__init__)  # E: revealed type: (self: RegexSignature, *, signature: Pattern[str] | str, **Unknown) -> None
+RegexSignature(signature=re.compile(r"needle"))
+RegexSignature(signature="needle")
+RegexSignature(signature=b"needle")  # E: Argument `Literal[b'needle']` is not assignable to parameter `signature`
     "#,
 );
 

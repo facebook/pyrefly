@@ -188,7 +188,7 @@ __debug__ = False
 testcase!(
     test_invalid_expression_in_match,
     r#"
-x = 1
+x: int = 1
 match x:
     case 1 + 1:  # E: Parse error: Expected an imaginary number in complex literal pattern
         pass

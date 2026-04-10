@@ -1,0 +1,101 @@
+{
+  "name": "test",
+  "names": [
+    "test.T",
+    "test.x",
+    "test.y",
+    "test.z",
+    "test.some_func",
+    "test.SomeClass"
+  ],
+  "line_count": 20,
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.T",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 8,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.x",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 9,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.y",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 10,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.z",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 11,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.some_func",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 14,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.SomeClass",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 18,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 3,
+  "n_typed": 3,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 1,
+  "n_methods": 0,
+  "n_function_params": 0,
+  "n_method_params": 0,
+  "n_classes": 1,
+  "n_attrs": 4,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

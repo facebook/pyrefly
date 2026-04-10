@@ -12,7 +12,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
 
 /// A handle to a Python module, containing its name, path, and system information.
-#[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Dupe, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Handle {
     module: ModuleNameWithKind,
     path: ModulePath,

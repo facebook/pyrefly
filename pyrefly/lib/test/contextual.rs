@@ -8,6 +8,24 @@
 use crate::testcase;
 
 testcase!(
+    test_context_subscript_assign_delete,
+    r#"
+class Foo:
+    def __getitem__(self, key: list[str | None]):
+        pass
+    def __setitem__(self, key: list[str | None], value: list[int | None]):
+        pass
+    def __delitem__(self, key: list[str | None]):
+        pass
+
+foo = Foo()
+x = foo[["bar"]]
+foo[["bar"]] = [1]
+del foo[["bar"]]
+"#,
+);
+
+testcase!(
     test_context_annassign,
     r#"
 class A: ...
@@ -218,16 +236,16 @@ from typing import Generator, Iterable
 class A: ...
 class B(A): ...
 x0 = ([B()] for _ in [0])
-x1a: Generator[list[A], None, None] = x0 # E: `Generator[list[B], None, None]` is not assignable to `Generator[list[A], None, None]`
+x1a: Generator[list[A], None, None] = x0 # E: `Generator[list[B]]` is not assignable to `Generator[list[A]]`
 x1b: Generator[list[A], None, None] = ([B()] for _ in [0])
-x2a: Iterable[list[A]] = x0 # E: `Generator[list[B], None, None]` is not assignable to `Iterable[list[A]]`
+x2a: Iterable[list[A]] = x0 # E: `Generator[list[B]]` is not assignable to `Iterable[list[A]]`
 x2b: Iterable[list[A]] = ([B()] for _ in [0])
 
 # In theory, we should allow this, since the generator expression accepts _any_ send type,
 # but both Mypy and Pyright assume that the send type is `None`.
-x3: Generator[int, int, None] = (1 for _ in [1]) # E: `Generator[Literal[1], None, None]` is not assignable to `Generator[int, int, None]`
+x3: Generator[int, int, None] = (1 for _ in [1]) # E: `Generator[Literal[1]]` is not assignable to `Generator[int, int]`
 
-x4: Generator[int, None, int] = (1 for _ in [1]) # E: `Generator[Literal[1], None, None]` is not assignable to `Generator[int, None, int]`
+x4: Generator[int, None, int] = (1 for _ in [1]) # E: `Generator[Literal[1]]` is not assignable to `Generator[int, None, int]`
 "#,
 );
 
@@ -359,8 +377,8 @@ from typing import Callable, assert_type
 def f[**P, R](f: Callable[P, R], g: Callable[P, R]) -> Callable[P, R]: ...
 def g1(x: int, *args: int): ...
 def g2(x: int, **kwargs: str): ...
-x1 = f(g1, lambda x, *args: assert_type(args, tuple[int, ...])) # E: assert_type(Any, tuple[int, ...]) failed
-x2 = f(g2, lambda x, **kwargs: assert_type(kwargs, dict[str, str])) # E: assert_type(Any, dict[str, str]) failed
+x1 = f(g1, lambda x, *args: assert_type(args, tuple[int, ...])) # E: assert_type(Unknown, tuple[int, ...]) failed
+x2 = f(g2, lambda x, **kwargs: assert_type(kwargs, dict[str, str])) # E: assert_type(Unknown, dict[str, str]) failed
     "#,
 );
 
@@ -389,7 +407,6 @@ f(g(0)) # OK
 );
 
 testcase!(
-    bug = "Propagating the hint should still allow for a narrower inferred type",
     test_context_return_narrow,
     r#"
 from typing import assert_type
@@ -399,7 +416,7 @@ def f[T](x: T) -> T:
 
 def test(x: int | str):
     x = f(0)
-    assert_type(x, int) # E: assert_type(int | str, int) failed
+    assert_type(x, int)
 "#,
 );
 
@@ -604,8 +621,8 @@ testcase!(
 from typing import Protocol, assert_type, Any
 class Identity(Protocol):
     def __call__(self, *args: int, **kwargs: int) -> Any: ...
-x: Identity = lambda *args, **kwargs: assert_type(args, tuple[int, ...]) # E: assert_type(Any, tuple[int, ...]) failed
-y: Identity = lambda *args, **kwargs: assert_type(kwargs, dict[str, int]) # E: assert_type(Any, dict[str, int]) failed
+x: Identity = lambda *args, **kwargs: assert_type(args, tuple[int, ...]) # E: assert_type(Unknown, tuple[int, ...]) failed
+y: Identity = lambda *args, **kwargs: assert_type(kwargs, dict[str, int]) # E: assert_type(Unknown, dict[str, int]) failed
     "#,
 );
 
@@ -658,5 +675,48 @@ x1: tuple[TD1] | tuple[TD2, ...] = ({"x": 0},)
 x2: tuple[TD1] | tuple[TD2, ...] = ({"y": "a"}, {"y": "b"})
 x3: tuple[TD1] | tuple[TD2] = ({"y": "a"},)
 x4: tuple[TD1] | tuple[TD2, ...] = ({"x": 0}, {"y": "a"})  # E: `tuple[TD1, TD2]` is not assignable to `tuple[TD1] | tuple[TD2, ...]`
+    "#,
+);
+
+testcase!(
+    test_sequence_hint_in_typevar_bound,
+    r#"
+from typing import Sequence, TypedDict
+class TD(TypedDict):
+    x: int
+def f[T: Sequence[TD]](x: T) -> T:
+    return x
+f(({"x": 0},))
+    "#,
+);
+
+testcase!(
+    bug = "`TD` should be used as a hint when typing `{'x': 0}`",
+    test_typed_dict_hint_in_typevar_bound,
+    r#"
+from typing import TypedDict
+class TD(TypedDict):
+    x: int
+def f[T: TD](x: tuple[T, ...]) -> T:
+    return x[0]
+f(({"x": 0},))  # E: `dict[str, int]` is not assignable to upper bound `TD`
+    "#,
+);
+
+testcase!(
+    test_concat_custom_vecs,
+    r#"
+class Vec[T]:  # invariant in T
+    def _items(self) -> list[T]: ...
+    def _append(self, item: T) -> None: ...
+
+def concat_vecs[T1, T2](left: Vec[T1], right: Vec[T2]) -> Vec[T1 | T2]:
+    return Vec()
+
+class A: ...
+class B: ...
+
+def test_vec_concat(left: Vec[A], right: Vec[B]) -> None:
+    _0: Vec[A | B] = concat_vecs(left, right)
     "#,
 );

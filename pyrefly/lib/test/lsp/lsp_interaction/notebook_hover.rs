@@ -7,9 +7,9 @@
 
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_notebook_hover_basic() {
@@ -63,7 +63,9 @@ fn test_notebook_hover_import() {
                 && let lsp_types::HoverContents::Markup(content) = &hover.contents
             {
                 let value = &content.value;
-                return value.contains("(class) List: type[list]")
+                return value.contains("(class) List:")
+                    && value.contains("def __init__")
+                    && value.contains("list[Unknown]")
                     && value.contains("Go to [list](")
                     && value.contains("builtins.pyi#L");
             }

@@ -15,13 +15,16 @@ use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::display::Fmt;
 use pyrefly_util::uniques::Unique;
-use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::name::Name;
 
 use crate::class::ClassType;
+use crate::heap::TypeHeap;
 use crate::stdlib::Stdlib;
+use crate::type_var::PreInferenceVariance;
 use crate::type_var::Restriction;
+use crate::type_var::TypeVar;
 use crate::types::Type;
 
 #[derive(Debug, Clone, Eq)]
@@ -33,13 +36,26 @@ pub struct Quantified {
     pub kind: QuantifiedKind,
     pub default: Option<Type>,
     pub restriction: Restriction,
+    /// The *declared* variance of this type parameter, as specified by the user
+    /// For function type parameters, variance has no meaning
+    /// We store it here for convenience of our variance inference and checking
+    /// infrastructure so it can directly read it from the type
+    variance: PreInferenceVariance,
+    /// Qualified owner, e.g. `"mod.func"`, set for function type params to enable
+    /// disambiguation in display (e.g. `T@mod.func`).
+    pub owner: Option<Name>,
 }
 
 impl Quantified {
     pub fn with_restriction(self, restriction: Restriction) -> Self {
         Self {
             restriction,
-            ..self
+            unique: self.unique,
+            name: self.name,
+            kind: self.kind,
+            default: self.default,
+            variance: self.variance,
+            owner: self.owner,
         }
     }
 }
@@ -74,6 +90,7 @@ impl Ord for Quantified {
             .then_with(|| self.kind.cmp(&other.kind))
             .then_with(|| self.default.cmp(&other.default))
             .then_with(|| self.restriction.cmp(&other.restriction))
+            .then_with(|| self.variance.cmp(&other.variance))
             .then_with(|| self.unique.cmp(&other.unique))
     }
 }
@@ -123,6 +140,7 @@ impl Quantified {
         kind: QuantifiedKind,
         default: Option<Type>,
         restriction: Restriction,
+        variance: PreInferenceVariance,
     ) -> Self {
         Quantified {
             unique,
@@ -130,46 +148,68 @@ impl Quantified {
             kind,
             default,
             restriction,
+            variance,
+            owner: None,
         }
+    }
+
+    pub fn with_owner(mut self, owner: Name) -> Self {
+        self.owner = Some(owner);
+        self
     }
 
     pub fn type_var(
         name: Name,
-        uniques: &UniqueFactory,
+        unique: Unique,
         default: Option<Type>,
         restriction: Restriction,
+        variance: PreInferenceVariance,
     ) -> Self {
         Self::new(
-            uniques.fresh(),
+            unique,
             name,
             QuantifiedKind::TypeVar,
             default,
             restriction,
+            variance,
         )
     }
 
-    pub fn param_spec(name: Name, uniques: &UniqueFactory, default: Option<Type>) -> Self {
+    /// Creates a Quantified from a TypeVar, extracting all relevant fields.
+    pub fn from_type_var(tv: &TypeVar, unique: Unique) -> Self {
+        Self::type_var(
+            tv.qname().id().clone(),
+            unique,
+            tv.default().cloned(),
+            tv.restriction().clone(),
+            tv.variance(),
+        )
+    }
+
+    pub fn param_spec(name: Name, unique: Unique, default: Option<Type>) -> Self {
         Self::new(
-            uniques.fresh(),
+            unique,
             name,
             QuantifiedKind::ParamSpec,
             default,
             Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
         )
     }
 
-    pub fn type_var_tuple(name: Name, uniques: &UniqueFactory, default: Option<Type>) -> Self {
+    pub fn type_var_tuple(name: Name, unique: Unique, default: Option<Type>) -> Self {
         Self::new(
-            uniques.fresh(),
+            unique,
             name,
             QuantifiedKind::TypeVarTuple,
             default,
             Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
         )
     }
 
-    pub fn to_type(self) -> Type {
-        Type::Quantified(Box::new(self))
+    pub fn to_type(self, heap: &TypeHeap) -> Type {
+        heap.mk_quantified(self)
     }
 
     pub fn to_value(self) -> Type {
@@ -196,6 +236,50 @@ impl Quantified {
         &self.restriction
     }
 
+    /// The upper bound of this type parameter as a type, accounting for the parameter's kind.
+    /// For TypeVar the bound is `object`, for ParamSpec it's `...` (any params), and for
+    /// TypeVarTuple it's an unbounded tuple. Explicit bounds and constraints are used as-is.
+    pub fn bound_type(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
+        match &self.restriction {
+            Restriction::Unrestricted => match self.kind {
+                QuantifiedKind::TypeVar => stdlib.object().clone().to_type(),
+                QuantifiedKind::ParamSpec => Type::Ellipsis,
+                QuantifiedKind::TypeVarTuple => Type::any_tuple(),
+            },
+            r => r.as_type(stdlib, heap),
+        }
+    }
+
+    /// Display this type parameter with its bounds/constraints and default,
+    /// in the format used for type parameter lists (e.g. `T: int = str`).
+    pub fn display_with_bounds(&self) -> impl Display + '_ {
+        Fmt(move |f| {
+            write!(f, "{}", self.name)?;
+            match self.restriction() {
+                Restriction::Bound(t) => write!(f, ": {}", t)?,
+                Restriction::Constraints(ts) => {
+                    write!(f, ": (")?;
+                    for (i, t) in ts.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", t)?;
+                    }
+                    write!(f, ")")?;
+                }
+                Restriction::Unrestricted => {}
+            }
+            if let Some(default) = self.default() {
+                write!(f, " = {}", default)?;
+            }
+            Ok(())
+        })
+    }
+
+    pub fn variance(&self) -> PreInferenceVariance {
+        self.variance
+    }
+
     pub fn is_type_var(&self) -> bool {
         matches!(self.kind, QuantifiedKind::TypeVar)
     }
@@ -208,7 +292,11 @@ impl Quantified {
         matches!(self.kind, QuantifiedKind::TypeVarTuple)
     }
 
-    fn as_gradual_type_helper(kind: QuantifiedKind, default: Option<&Type>) -> Type {
+    pub fn unique(&self) -> Unique {
+        self.unique
+    }
+
+    pub fn as_gradual_type_helper(kind: QuantifiedKind, default: Option<&Type>) -> Type {
         default.map_or_else(
             || kind.empty_value(),
             |default| {

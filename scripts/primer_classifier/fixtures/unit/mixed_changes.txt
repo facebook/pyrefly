@@ -1,0 +1,4 @@
+mixedproject (https://github.com/example/mixedproject)
++ ERROR src/api.py:20:5-30: Object of class `Response` has no attribute `data` [missing-attribute]
++ ERROR src/api.py:25:5-40: Object of class `Response` has no attribute `status` [missing-attribute]
+- ERROR src/utils.py:10:5-20: Unexpected type `str` for argument [bad-argument]

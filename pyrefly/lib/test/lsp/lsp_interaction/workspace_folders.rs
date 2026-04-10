@@ -11,9 +11,9 @@ use lsp_types::Url;
 use lsp_types::notification::DidChangeWorkspaceFolders;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 /// Test that the LSP server doesn't crash when receiving workspace folder change
 /// notifications with non-file URIs (like vscode-remote://, ssh://, untitled:).
@@ -57,7 +57,7 @@ fn test_workspace_folder_change_with_non_file_uri_does_not_crash() {
     // Wait for diagnostics to confirm the server processed the request
     interaction
         .client
-        .expect_publish_diagnostics_error_count(root.join("foo.py"), 0)
+        .expect_publish_diagnostics_eventual_error_count(root.join("foo.py"), 0)
         .unwrap();
 
     // Also test removal with non-file URI doesn't crash

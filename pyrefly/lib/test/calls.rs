@@ -82,8 +82,8 @@ testcase!(
 from typing import assert_type, Self
 class A[T]:
     def __new__(cls: type[Self], x: T) -> Self: ...
-o = A[int].__new__(A[str], "foo") # E: `type[A[str]]` is not assignable to parameter `cls` with type `type[A[int]]` # E: Argument `Literal['foo']` is not assignable to parameter `x` with type `int` in function `A.__new__`
-assert_type(o, A[int])
+# A[int] is a generic alias, which doesn't resolve to custom __new__
+o = A[int].__new__(A[str], "foo") # E: Missing positional argument `args` in function `types.GenericAlias.__new__` # E: `A[str]` is not assignable to upper bound `GenericAlias` of type variable `Self@GenericAlias` # E: Argument `Literal['foo']` is not assignable to parameter `origin` with type `type[Any]` in function `types.GenericAlias.__new__`
     "#,
 );
 
@@ -251,10 +251,20 @@ def f(condition: bool):
 );
 
 testcase!(
+    test_generic_function_subscript,
+    r#"
+def func[T](x: T) -> T:
+    return x
+
+func[int](100)  # E: `func` is not subscriptable
+    "#,
+);
+
+testcase!(
     test_any_constructor,
     r#"
 from typing import Any
-Any()  # E: `Any` can not be instantiated
+Any()  # E: `Any` cannot be instantiated
     "#,
 );
 
@@ -305,8 +315,8 @@ from typing import Self, assert_type
 class A[T]:
     def __new__(cls: type[Self], x: T) -> Self: ...
 
-# Custom __new__ should continue to work correctly
-o = A[int].__new__(A[int], 42)
+# A[int] is a generic alias, which doesn't resolve to custom __new__
+o = A[int].__new__(A[int], 42) # E: Missing positional argument `args` in function `types.GenericAlias.__new__` # E: `A[int]` is not assignable to upper bound `GenericAlias` of type variable `Self@GenericAlias` # E: Argument `Literal[42]` is not assignable to parameter `origin` with type `type[Any]` in function `types.GenericAlias.__new__`
 assert_type(o, A[int])
 
 # Receiver type binding is preserved
@@ -361,4 +371,63 @@ class B(A):
 assert_type(A.__new__(B), B)
 assert_type(A.__new__(B, 0), B)
     "#,
+);
+
+// Minimized from https://github.com/PrefectHQ/prefect/blob/3e80a036349748edfac2ccb5609f65b7f91e85d8/src/prefect/runtime/flow_run.py#L218.
+testcase!(
+    test_complicated_paramspec_forwarding,
+    r#"
+from collections.abc import Awaitable
+from typing import assert_type, Callable
+
+type _SyncOrAsyncCallable[**P, T] = Callable[P, T | Awaitable[T]]
+
+class Flow: ...
+
+class Call[T]:
+    def __call__(self) -> T | Awaitable[T]: ...
+    def result(self) -> T: ...
+
+def create_call[**P, T](
+    fn: _SyncOrAsyncCallable[P, T], *args: P.args, **kwargs: P.kwargs
+) -> Call[T]: ...
+
+def call_soon_in_loop_thread[T](
+    call: _SyncOrAsyncCallable[[], T] | Call[T],
+) -> Call[T]: ...
+
+async def _get_flow_from_run(flow_run_id: str) -> Flow: ...
+
+def get_flow_version(run_id: str | None) -> str | None:
+    flow = call_soon_in_loop_thread(
+        create_call(_get_flow_from_run, run_id)  # E: `str | None` is not assignable to parameter `flow_run_id`
+    ).result()
+    assert_type(flow, Flow)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2918
+testcase!(
+    bug = "Should error when calling NotImplemented (a constant, not a class)",
+    test_call_not_implemented_constant,
+    r#"
+# NotImplemented is a singleton constant, not a callable class.
+# Using NotImplemented() is always a mistake; they mean NotImplementedError().
+def broken():
+    raise NotImplemented()
+
+def also_broken():
+    raise NotImplemented("not yet done")
+"#,
+);
+
+testcase!(
+    test_call_instance_with_non_callable_dunder_call,
+    r#"
+class Uncallable:
+    __call__ = 42
+
+obj = Uncallable()
+obj()  # E: Expected a callable, got `Uncallable`
+"#,
 );
