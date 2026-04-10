@@ -38,6 +38,13 @@ enum DictKeyLiteralContext {
         base_expr: Expr,
         literal: ExprStringLiteral,
     },
+    /// A string literal in a call argument whose completions should come from
+    /// surrounding container expressions.
+    /// Examples: `lookup(data, "na|")`, `df.select(col("na|"))`.
+    CallArgument {
+        source_exprs: Vec<Expr>,
+        literal: ExprStringLiteral,
+    },
     /// A key literal inside a dict literal being constructed.
     /// Example: `{"na|": 1}`.
     DictLiteral {
@@ -55,31 +62,10 @@ impl DictKeyLiteralContext {
     /// `None` for `BareSubscript`, where there is no string to bound the cursor to.
     fn literal_range(&self) -> Option<TextRange> {
         match self {
-            Self::KeyAccess { literal, .. } | Self::DictLiteral { literal, .. } => {
-                Some(literal.range())
-            }
+            Self::KeyAccess { literal, .. }
+            | Self::CallArgument { literal, .. }
+            | Self::DictLiteral { literal, .. } => Some(literal.range()),
             Self::BareSubscript { .. } => None,
-        }
-    }
-
-    fn base_range(&self) -> TextRange {
-        // For key access, we want the container expression's type.
-        // For dict literals, we want the literal's contextual type (e.g. a TypedDict in
-        // `cfg: Config = {"na|": 1}`), which is attached to the literal's range.
-        match self {
-            Self::KeyAccess { base_expr, .. } | Self::BareSubscript { base_expr } => {
-                base_expr.range()
-            }
-            Self::DictLiteral { dict, .. } => dict.range(),
-        }
-    }
-
-    fn base_expr(&self) -> Option<&Expr> {
-        match self {
-            Self::KeyAccess { base_expr, .. } | Self::BareSubscript { base_expr } => {
-                Some(base_expr)
-            }
-            Self::DictLiteral { .. } => None,
         }
     }
 
@@ -205,8 +191,8 @@ impl<'a> Transaction<'a> {
         position: TextSize,
     ) -> Option<DictKeyLiteralContext> {
         // Prefer direct key access (`d["k"]` / `d.get("k")`) so we can reuse the base
-        // expression for facet-based completions, then dict literal keys, and finally
-        // an empty subscript slot (`d[|]`) with no key string typed yet.
+        // expression for facet-based completions, then dict literal keys, surrounding
+        // calls, and finally an empty subscript slot (`d[|]`) with no key string typed yet.
         if let Some((base_expr, literal)) =
             self.dict_key_string_literal_at(handle, module, position)
         {
@@ -214,10 +200,67 @@ impl<'a> Transaction<'a> {
         } else if let Some((dict, literal)) = Self::dict_literal_string_literal_at(module, position)
         {
             Some(DictKeyLiteralContext::DictLiteral { dict, literal })
+        } else if let Some((source_exprs, literal)) =
+            Self::call_argument_string_literal_at(module, position)
+        {
+            Some(DictKeyLiteralContext::CallArgument {
+                source_exprs,
+                literal,
+            })
         } else {
             Self::bare_subscript_base_at(module, position)
                 .map(|base_expr| DictKeyLiteralContext::BareSubscript { base_expr })
         }
+    }
+
+    fn call_argument_string_literal_at(
+        module: &ModModule,
+        position: TextSize,
+    ) -> Option<(Vec<Expr>, ExprStringLiteral)> {
+        let nodes = Ast::locate_node(module, position);
+        let literal = nodes.iter().find_map(|node| match node {
+            AnyNodeRef::ExprStringLiteral(literal) => Some((*literal).clone()),
+            _ => None,
+        })?;
+        let literal_range = literal.range();
+        let mut source_exprs = Vec::new();
+
+        for node in nodes {
+            let AnyNodeRef::ExprCall(call) = node else {
+                continue;
+            };
+            let positional_count = if let Some(idx) = call.arguments.args.iter().position(|arg| {
+                arg.range().start() <= literal_range.start()
+                    && literal_range.end() <= arg.range().end()
+            }) {
+                idx
+            } else if call.arguments.keywords.iter().any(|kw| {
+                kw.value.range().start() <= literal_range.start()
+                    && literal_range.end() <= kw.value.range().end()
+            }) {
+                call.arguments.args.len()
+            } else {
+                continue;
+            };
+
+            if let Expr::Attribute(attr) = call.func.as_ref()
+                && !source_exprs
+                    .iter()
+                    .any(|existing: &Expr| existing.range() == attr.value.range())
+            {
+                source_exprs.push(attr.value.as_ref().clone());
+            }
+            for expr in call.arguments.args.iter().take(positional_count) {
+                if !source_exprs
+                    .iter()
+                    .any(|existing| existing.range() == expr.range())
+                {
+                    source_exprs.push(expr.clone());
+                }
+            }
+        }
+
+        (!source_exprs.is_empty()).then_some((source_exprs, literal))
     }
 
     fn dict_literal_string_literal_at(
@@ -353,8 +396,30 @@ impl<'a> Transaction<'a> {
                 return false;
             }
         }
-        let suggestions =
-            self.dict_key_suggestions(handle, context.base_expr(), context.base_range());
+        let mut suggestions = BTreeMap::new();
+        match &context {
+            DictKeyLiteralContext::KeyAccess { base_expr, .. }
+            | DictKeyLiteralContext::BareSubscript { base_expr } => self
+                .extend_dict_key_suggestions(
+                    handle,
+                    Some(base_expr),
+                    base_expr.range(),
+                    &mut suggestions,
+                ),
+            DictKeyLiteralContext::CallArgument { source_exprs, .. } => {
+                for expr in source_exprs {
+                    self.extend_dict_key_suggestions(
+                        handle,
+                        Some(expr),
+                        expr.range(),
+                        &mut suggestions,
+                    );
+                }
+            }
+            DictKeyLiteralContext::DictLiteral { dict, .. } => {
+                self.extend_dict_key_suggestions(handle, None, dict.range(), &mut suggestions)
+            }
+        }
         if suggestions.is_empty() {
             return false;
         }
@@ -375,16 +440,15 @@ impl<'a> Transaction<'a> {
         None
     }
 
-    /// Collects the known string keys for a dict-like base: explicit keys recorded as
-    /// facets on the base's binding, plus TypedDict fields from the base's type.
-    fn dict_key_suggestions(
+    /// Adds known string keys for a dict-like base: explicit keys recorded as facets
+    /// on the base's binding, plus TypedDict fields from the base's type.
+    fn extend_dict_key_suggestions(
         &self,
         handle: &Handle,
         base_expr: Option<&Expr>,
         base_range: TextRange,
-    ) -> BTreeMap<String, Option<Type>> {
-        let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
-
+        suggestions: &mut BTreeMap<String, Option<Type>>,
+    ) {
         if let Some(base_expr) = base_expr
             && let Some(bindings) = self.get_bindings(handle)
         {
@@ -438,8 +502,6 @@ impl<'a> Transaction<'a> {
                 }
             }
         }
-
-        suggestions
     }
 
     fn push_dict_key_completions(

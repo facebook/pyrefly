@@ -354,6 +354,59 @@ cfg: Config = {"": 1}
 }
 
 #[test]
+fn dict_key_completion_from_prior_call_argument() {
+    let code = r#"
+def lookup(data: dict[str, int], key: str) -> int:
+    return data[key]
+
+payload = {"foo": 1, "bar": 2}
+lookup(payload, "")
+#                ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.contains(
+            r#"
+Completion Results:
+- (Field) bar: Literal[2]
+- (Field) foo: Literal[1]
+"#
+            .trim()
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn dict_key_completion_from_enclosing_call_argument() {
+    let code = r#"
+def select(data: dict[str, int], expr: object) -> None: ...
+def col(name: str) -> str:
+    return name
+
+payload = {"foo": 1, "bar": 2}
+select(payload, col(""))
+#                   ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.contains(
+            r#"
+Completion Results:
+- (Field) bar: Literal[2]
+- (Field) foo: Literal[1]
+"#
+            .trim()
+        ),
+        "{report}"
+    );
+}
+
+#[test]
 fn dot_complete_with_deprecated_method() {
     let code = r#"
 from warnings import deprecated
