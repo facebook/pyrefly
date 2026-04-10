@@ -92,6 +92,7 @@ fn main() -> Result<(), std::io::Error> {
     // changes in the entire typeshed dir.
     println!("cargo::rerun-if-changed=third_party/typeshed_metadata.json");
     println!("cargo::rerun-if-env-changed=CARGO_FEATURE_THIRD_PARTY_STUBS");
+    println!("cargo::rerun-if-changed=third_party/typeshed/stdlib/VERSIONS");
 
     let output_dir = get_output_path().unwrap();
 
