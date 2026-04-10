@@ -18,6 +18,7 @@ use pyrefly_build::module_resolver::find_module_results;
 use pyrefly_build::module_resolver::package_has_py_typed;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::locked_map::LockedMap;
 use pyrefly_util::suggest::Candidate;
@@ -522,7 +523,14 @@ fn find_import_internal(
 ) -> FindingOrError<ModulePath> {
     let style_filter = lookup_mode.style_filter();
     let mut namespaces_found = vec![];
+    let bundled_typeshed_origin =
+        origin.is_some_and(|path| matches!(path.details(), ModulePathDetails::BundledTypeshed(_)));
     let origin = origin.map(|p| p.as_path());
+    let unavailable_stdlib_module = matches!(style_filter, Some(ModuleStyle::Interface) | None)
+        && typeshed().is_ok_and(|ts| {
+            ts.has_module(module)
+                && !ts.is_available_for_python_version(module, config.python_version())
+        });
     let from_real_config_file = config.from_real_config_file();
 
     if lookup_mode.replacement_policy() == ImportReplacementPolicy::Respect
@@ -578,7 +586,14 @@ fn find_import_internal(
                     err, module,
                 )))
             },
-            |ts| ts.find(module).map(FindingOrError::new_finding),
+            |ts| {
+                (if bundled_typeshed_origin {
+                    ts.find(module)
+                } else {
+                    ts.find_for_python_version(module, config.python_version())
+                })
+                .map(FindingOrError::new_finding)
+            },
         )
     {
         path
@@ -613,7 +628,11 @@ fn find_import_internal(
         &mut namespaces_found,
         style_filter,
         SitePackagePolicy {
-            typeshed_third_party_stub: find_third_party_stub(module, style_filter),
+            typeshed_third_party_stub: if unavailable_stdlib_module {
+                None
+            } else {
+                find_third_party_stub(module, style_filter)
+            },
             from_real_config_file,
             // A style-filtered search asks where a module's implementation file
             // lives, not whether to trust the package's types, so it must keep
@@ -708,6 +727,12 @@ pub(crate) fn find_import_with_mode(
 
 /// Find all legitimate imports that start with `module`
 pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<ModuleName> {
+    let is_shadowed_removed_stdlib = |candidate: ModuleName| {
+        typeshed().is_ok_and(|ts| {
+            ts.has_module(candidate)
+                && !ts.is_available_for_python_version(candidate, config.python_version())
+        })
+    };
     let mut results = find_module_prefixes(
         module,
         config.search_path().chain(config.site_package_path()),
@@ -716,7 +741,7 @@ pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<Modu
     if let Ok(ts) = typeshed() {
         let module_str = module.as_str();
         let typeshed_modules = ts
-            .modules()
+            .modules_for_python_version(config.python_version())
             .filter(|m| module_str.is_empty() || m.as_str().starts_with(module_str));
 
         results.extend(typeshed_modules);
@@ -728,7 +753,8 @@ pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<Modu
         let module_str = module.as_str();
         let typeshed_modules = typeshed_third_party
             .modules()
-            .filter(|m| module_str.is_empty() || m.as_str().starts_with(module_str));
+            .filter(|m| module_str.is_empty() || m.as_str().starts_with(module_str))
+            .filter(|m| !is_shadowed_removed_stdlib(*m));
 
         results.extend(typeshed_modules);
     }
@@ -788,6 +814,7 @@ mod tests {
     use pyrefly_config::environment::environment::PythonEnvironment;
     use pyrefly_config::environment::interpreters::Interpreters;
     use pyrefly_python::module_path::ModulePathDetails;
+    use pyrefly_python::sys_info::PythonVersion;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
@@ -3154,6 +3181,28 @@ mod tests {
         assert!(
             !has_requests_file,
             "find_import_prefixes should NOT include typeshed third party stubs with a real config file"
+        );
+    }
+
+    #[test]
+    fn test_find_import_prefixes_respects_stdlib_versions() {
+        let mut config = get_config(ConfigSource::Synthetic);
+        config.python_environment.python_version = Some(PythonVersion::new(3, 11, 0));
+        config.configure();
+        let prefixes = find_import_prefixes(&config, ModuleName::from_str("dist"));
+        assert!(
+            prefixes
+                .iter()
+                .any(|m| m == &ModuleName::from_str("distutils"))
+        );
+
+        config.python_environment.python_version = Some(PythonVersion::new(3, 12, 0));
+        config.configure();
+        let prefixes = find_import_prefixes(&config, ModuleName::from_str("dist"));
+        assert!(
+            !prefixes
+                .iter()
+                .any(|m| m == &ModuleName::from_str("distutils"))
         );
     }
 
