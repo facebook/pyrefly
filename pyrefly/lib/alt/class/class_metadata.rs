@@ -1109,12 +1109,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // The alias body is `type[T]` for bare aliases and `Annotated[T]` for Annotated aliases;
                 // we must handle both.
                 match &ty {
-                    Type::Type(box Type::ClassType(cls))
-                        if cls.class_object() == self.stdlib.builtins_type().class_object()
-                            && let Some(subscript_base_expr) = BaseClassExpr::from_expr(slice) =>
-                    {
-                        self.base_class_expr_infer_for_metadata(&subscript_base_expr, errors)
-                    }
                     Type::Forall(forall)
                         if forall.tparams.len() == 1
                             && let Forallable::TypeAlias(type_alias) = &forall.body
@@ -1185,18 +1179,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             }
-            Type::None if is_new_type => {
-                let base_cls = self.stdlib.none_type().class_object();
-                let metadata = self.get_metadata_for_class(base_cls);
-                BaseClassParseResult::Parsed({
-                    ParsedBaseClass {
-                        class_object: base_cls.dupe(),
-                        range,
-                        metadata,
-                    }
-                })
-            }
-            Type::Type(box Type::None) if is_new_type => {
+            Type::None | Type::Type(box Type::None) if is_new_type => {
                 let base_cls = self.stdlib.none_type().class_object();
                 let metadata = self.get_metadata_for_class(base_cls);
                 BaseClassParseResult::Parsed({
