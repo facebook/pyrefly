@@ -366,9 +366,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // If the class has an unknown base (e.g. inherits from an
                     // unresolved name), it might have inherited `__call__` from
                     // that base, so treat it as callable with implicit Any.
+                    //
+                    // `NotImplemented` is a singleton instance of `NotImplementedType`; it must
+                    // never be treated as callable even when stubs use `NotImplementedType(Any)`,
+                    // which would otherwise set `has_base_any` and hit this branch.
                     None if self
                         .get_metadata_for_class(cls.class_object())
-                        .has_base_any() =>
+                        .has_base_any()
+                        && !cls.has_qname("types", "NotImplementedType")
+                        && !cls.has_qname("builtins", "_NotImplementedType") =>
                     {
                         CallTargetLookup::Ok(Box::new(CallTarget::Any(AnyStyle::Implicit)))
                     }

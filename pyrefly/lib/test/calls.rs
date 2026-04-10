@@ -408,16 +408,15 @@ def get_flow_version(run_id: str | None) -> str | None:
 
 // https://github.com/facebook/pyrefly/issues/2918
 testcase!(
-    bug = "Should error when calling NotImplemented (a constant, not a class)",
     test_call_not_implemented_constant,
     r#"
 # NotImplemented is a singleton constant, not a callable class.
 # Using NotImplemented() is always a mistake; they mean NotImplementedError().
 def broken():
-    raise NotImplemented()
+    raise NotImplemented()  # E: Expected a callable
 
 def also_broken():
-    raise NotImplemented("not yet done")
+    raise NotImplemented("not yet done")  # E: Expected a callable
 "#,
 );
 

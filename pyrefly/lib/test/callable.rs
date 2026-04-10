@@ -1449,3 +1449,13 @@ def after_func() -> None: ...
 schedule(1000, after_func)
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2918
+testcase!(
+    test_notimplemented_not_callable,
+    r#"
+NotImplemented()  # E: Expected a callable
+NotImplemented("not yet done")  # E: Expected a callable
+raise NotImplementedError()
+"#,
+);
