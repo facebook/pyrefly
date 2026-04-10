@@ -4125,6 +4125,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.get_dunder_init_helper(&Instance::of_class(cls), get_object_init)
     }
 
+    /// Get every concrete `__init__` definition visible through the MRO, excluding
+    /// `object.__init__`, bound to `cls`.
+    pub fn get_dunder_init_candidates(&self, cls: &ClassType) -> Vec<Type> {
+        let instance = Instance::of_class(cls);
+        let mut init_candidates = Vec::new();
+        for ancestor in iter::once(cls).chain(
+            self.get_mro_for_class(cls.class_object())
+                .ancestors(self.stdlib),
+        ) {
+            if ancestor.is_builtin("object") {
+                continue;
+            }
+            let Some(field) = self.get_non_synthesized_field_from_current_class_only(
+                ancestor.class_object(),
+                &dunder::INIT,
+            ) else {
+                continue;
+            };
+            let field =
+                field.instantiate_helper(&mut |ty| ancestor.targs().substitute_into_mut(ty));
+            let Some(init_method) = field.as_special_method_type(self.heap, &instance) else {
+                continue;
+            };
+            if !init_candidates.contains(&init_method) {
+                init_candidates.push(init_method);
+            }
+        }
+        init_candidates
+    }
+
     pub fn get_typed_dict_dunder_init(&self, td: &TypedDictInner) -> Type {
         // We synthesize `__init__`, so the lookup will never entirely fail.
         //

@@ -1026,6 +1026,28 @@ Signature Help Result: active=0
 }
 
 #[test]
+fn magicmock_constructor_signature_merges_inherited_init_params() {
+    let code = r#"
+from unittest.mock import MagicMock
+
+MagicMock(
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+4 | MagicMock(
+             ^
+Signature Help Result: active=0
+- (self: MagicMock, spec: list[str] | object | type[object] | None = None, side_effect: Any | None = None, return_value: Any = ..., wraps: Any | None = None, name: str | None = None, spec_set: list[str] | object | type[object] | None = None, parent: NonCallableMock | None = None, _spec_state: Any | None = None, _new_name: str = '', _new_parent: NonCallableMock | None = None, _spec_as_instance: bool = False, _eat_self: bool | None = None, unsafe: bool = False, **kwargs: Any) -> MagicMock, parameters=[spec: list[str] | object | type[object] | None = None, side_effect: Any | None = None, return_value: Any = ..., wraps: Any | None = None, name: str | None = None, spec_set: list[str] | object | type[object] | None = None, parent: NonCallableMock | None = None, _spec_state: Any | None = None, _new_name: str = '', _new_parent: NonCallableMock | None = None, _spec_as_instance: bool = False, _eat_self: bool | None = None, unsafe: bool = False, **kwargs: Any], active parameter = 0
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn method_call_signature_unchanged() {
     let code = r#"
 class Foo:

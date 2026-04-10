@@ -54,6 +54,7 @@ use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
+use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::class::ClassType;
@@ -785,24 +786,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let hint = None; // discard hint
         let class_metadata = self.get_metadata_for_class(cls.class_object());
-        // Tracks whether we've already recorded a trace for IDE features.
-        // Priority: metaclass __call__ > overridden __new__ > __init__.
-        let mut recorded_trace = false;
+        // IDE features want a single constructor signature, even when runtime dispatch
+        // splits construction across `__new__` and inherited `__init__` methods.
+        self.record_resolved_trace(arguments_range, self.constructor_to_display_callable(&cls));
         if let Some(ret) =
             self.call_metaclass(&cls, arguments_range, args, keywords, errors, context, hint)
         {
-            if let Some(metaclass_dunder_call) = self.get_metaclass_dunder_call(&cls) {
-                if let Some(callee_range) = callee_range
-                    && let Some(metaclass) = class_metadata.custom_metaclass()
-                {
-                    self.record_external_attribute_definition_index(
-                        &self.heap.mk_class_type(metaclass.clone()),
-                        &dunder::CALL,
-                        callee_range,
-                    );
-                }
-                self.record_resolved_trace(arguments_range, metaclass_dunder_call);
-                recorded_trace = true;
+            if self.get_metaclass_dunder_call(&cls).is_some()
+                && let Some(callee_range) = callee_range
+                && let Some(metaclass) = class_metadata.custom_metaclass()
+            {
+                self.record_external_attribute_definition_index(
+                    &self.heap.mk_class_type(metaclass.clone()),
+                    &dunder::CALL,
+                    callee_range,
+                );
             }
             // Enum construction is routed through EnumMeta.__call__, which performs
             // member lookup by value. A custom enum __new__ is used for member creation
@@ -865,10 +863,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         callee_range,
                     );
                 }
-                if !recorded_trace {
-                    self.record_resolved_trace(arguments_range, new_method);
-                    recorded_trace = true;
-                }
                 if self.is_compatible_constructor_return(&ret, cls.class_object()) {
                     dunder_new_ret = Some(ret);
                 } else if !matches!(ret, Type::Any(AnyStyle::Error | AnyStyle::Implicit)) {
@@ -922,9 +916,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &dunder::INIT,
                     callee_range,
                 );
-            }
-            if !recorded_trace {
-                self.record_resolved_trace(arguments_range, init_method);
             }
         }
         if class_metadata.is_pydantic_model()
@@ -1693,6 +1684,184 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If both are overridden, take the union
             // Only if neither are overridden, use the `__new__` and `__init__` from object
             self.unions(vec![new_attr_ty, init_attr_ty])
+        }
+    }
+
+    fn bind_dunder_init_for_display(
+        &self,
+        init_method: Type,
+        class_type: &Type,
+    ) -> Option<Callable> {
+        let mut callable = init_method.to_callable()?;
+        callable.ret = callable
+            .get_first_param()
+            .unwrap_or_else(|| class_type.clone());
+        Some(callable)
+    }
+
+    fn constructor_param_count(params: &[Param]) -> usize {
+        let params = match params.first() {
+            Some(first)
+                if first
+                    .name()
+                    .is_some_and(|name| matches!(name.as_str(), "self" | "cls" | "_cls")) =>
+            {
+                &params[1..]
+            }
+            _ => params,
+        };
+        params
+            .iter()
+            .filter(|param| !matches!(param, Param::Varargs(..) | Param::Kwargs(..)))
+            .count()
+    }
+
+    fn constructor_param_insert_index(params: &[Param]) -> usize {
+        params
+            .iter()
+            .position(|param| matches!(param, Param::Varargs(..) | Param::Kwargs(..)))
+            .unwrap_or(params.len())
+    }
+
+    fn constructor_param_is_more_precise(&self, candidate: &Param, current: &Param) -> bool {
+        if current.as_type().any(|ty| ty.is_any()) && !candidate.as_type().any(|ty| ty.is_any()) {
+            return true;
+        }
+        self.is_subset_eq(candidate.as_type(), current.as_type())
+            && !self.is_subset_eq(current.as_type(), candidate.as_type())
+    }
+
+    fn merge_constructor_params(&self, merged: &mut Vec<Param>, other: Vec<Param>) {
+        for param in other {
+            match &param {
+                Param::Varargs(..) => {
+                    if !merged
+                        .iter()
+                        .any(|existing| matches!(existing, Param::Varargs(..)))
+                    {
+                        let idx = Self::constructor_param_insert_index(merged);
+                        merged.insert(idx, param);
+                    }
+                }
+                Param::Kwargs(..) => {
+                    if !merged
+                        .iter()
+                        .any(|existing| matches!(existing, Param::Kwargs(..)))
+                    {
+                        merged.push(param);
+                    }
+                }
+                _ => {
+                    let Some(name) = param.name() else {
+                        let idx = Self::constructor_param_insert_index(merged);
+                        merged.insert(idx, param);
+                        continue;
+                    };
+                    if let Some(existing) = merged.iter_mut().find(|existing| {
+                        existing
+                            .name()
+                            .is_some_and(|existing_name| existing_name == name)
+                    }) {
+                        if self.constructor_param_is_more_precise(&param, existing) {
+                            *existing = param;
+                        }
+                    } else {
+                        let idx = Self::constructor_param_insert_index(merged);
+                        merged.insert(idx, param);
+                    }
+                }
+            }
+        }
+    }
+
+    fn merged_dunder_init_for_display(&self, cls: &ClassType, class_type: &Type) -> Option<Type> {
+        let mut merged_params = None;
+        for init_method in self.get_dunder_init_candidates(cls) {
+            let Some(callable) = self.bind_dunder_init_for_display(init_method, class_type) else {
+                continue;
+            };
+            let Params::List(params) = callable.params else {
+                continue;
+            };
+            let params = params.into_items();
+            if Self::constructor_param_count(&params) == 0 {
+                continue;
+            }
+            if let Some(merged) = &mut merged_params {
+                self.merge_constructor_params(merged, params);
+            } else {
+                merged_params = Some(params);
+            }
+        }
+        merged_params.map(|params| {
+            self.heap
+                .mk_callable_from(Callable::list(ParamList::new(params), class_type.clone()))
+        })
+    }
+
+    pub fn constructor_to_display_callable(&self, cls: &ClassType) -> Type {
+        let class_type = self.heap.mk_class_type(cls.clone());
+        if let Some(metaclass_call_attr_ty) = self.get_metaclass_dunder_call(cls) {
+            if metaclass_call_attr_ty
+                .callable_return_type(self.heap)
+                .is_some_and(|ret| !self.is_compatible_constructor_return(&ret, cls.class_object()))
+            {
+                return metaclass_call_attr_ty;
+            }
+            if self.get_metadata_for_class(cls.class_object()).is_enum() {
+                return metaclass_call_attr_ty;
+            }
+        }
+
+        let default_constructor = self.heap.mk_callable_from(Callable::list(
+            ParamList::new(Vec::new()),
+            class_type.clone(),
+        ));
+
+        let new_callable = if let Some(t) = self.get_dunder_new(cls, false) {
+            if t.callable_return_type(self.heap)
+                .is_some_and(|ret| !self.is_compatible_constructor_return(&ret, cls.class_object()))
+            {
+                return t;
+            }
+            t
+        } else {
+            default_constructor.clone()
+        };
+
+        let init_callable = self
+            .merged_dunder_init_for_display(cls, &class_type)
+            .or_else(|| {
+                self.get_dunder_init(cls, false).and_then(|init_method| {
+                    self.bind_dunder_init_for_display(init_method, &class_type)
+                        .map(|callable| self.heap.mk_callable_from(callable))
+                })
+            })
+            .unwrap_or_else(|| default_constructor.clone());
+
+        let init_param_count = init_callable
+            .clone()
+            .to_callable()
+            .map(|callable| match callable.params {
+                Params::List(params) => Self::constructor_param_count(params.items()),
+                _ => 0,
+            })
+            .unwrap_or(0);
+        let new_param_count = new_callable
+            .clone()
+            .to_callable()
+            .map(|callable| match callable.params {
+                Params::List(params) => Self::constructor_param_count(params.items()),
+                _ => 0,
+            })
+            .unwrap_or(0);
+
+        if init_param_count > new_param_count {
+            init_callable
+        } else if new_param_count > 0 {
+            new_callable
+        } else {
+            init_callable
         }
     }
 

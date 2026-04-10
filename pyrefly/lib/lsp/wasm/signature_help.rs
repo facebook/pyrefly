@@ -248,7 +248,27 @@ impl Transaction<'_> {
             })
         } else {
             answers.get_type_trace(callee_range).map(|t| {
-                let coerced = self.coerce_type_to_callable(handle, t);
+                let coerced = if is_constructor_call(t.clone()) {
+                    self.ad_hoc_solve(handle, "coerce_constructor_display_callable", |solver| {
+                        match t.clone() {
+                            Type::ClassDef(cls)
+                                if !solver.get_metadata_for_class(&cls).is_typed_dict() =>
+                            {
+                                Some(solver.constructor_to_display_callable(
+                                    &solver.promote_nontypeddict_silently_to_classtype(&cls),
+                                ))
+                            }
+                            Type::Type(box Type::ClassType(cls)) => {
+                                Some(solver.constructor_to_display_callable(&cls))
+                            }
+                            _ => None,
+                        }
+                    })
+                    .flatten()
+                    .unwrap_or_else(|| self.coerce_type_to_callable(handle, t))
+                } else {
+                    self.coerce_type_to_callable(handle, t)
+                };
                 // If the coerced type is an Overload, expand it into multiple signatures
                 // so signature help displays each overload separately.
                 if let Type::Overload(overload) = coerced {
