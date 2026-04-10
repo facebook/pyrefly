@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use itertools::Itertools;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
@@ -16,7 +15,6 @@ use pyrefly_types::annotation::Annotation;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::literal::LitEnum;
 use pyrefly_types::read_only::ReadOnlyReason;
-use pyrefly_types::tuple::Tuple;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::helpers::is_sunder;
 use ruff_python_ast::name::Name;
@@ -26,8 +24,10 @@ use starlark_map::small_set::SmallSet;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassAttribute;
+use crate::alt::class::django::transform_django_enum_value;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::EnumMetadata;
+use crate::binding::binding::ClassFieldDefinition;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
@@ -41,6 +41,8 @@ pub const VALUE: Name = Name::new_static("_value_");
 /// The `value` attribute of an enum is a property that returns `_value_`.
 pub const VALUE_PROP: Name = Name::new_static("value");
 
+pub const GENERATE_NEXT_VALUE: Name = Name::new_static("_generate_next_value_");
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_enum_member(&self, cls: &Class, name: &Name) -> Option<Lit> {
         self.get_field_from_current_class_only(cls, name)
@@ -48,32 +50,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn get_enum_members(&self, cls: &Class) -> SmallSet<Lit> {
-        cls.fields()
-            .filter_map(|f| self.get_enum_member(cls, f))
-            .collect()
+        self.get_class_fields(cls)
+            .map(|class_fields| {
+                class_fields
+                    .names()
+                    .filter_map(|f| self.get_enum_member(cls, f))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn is_valid_enum_member(
         &self,
         name: &Name,
         ty: &Type,
-        is_initialized_on_class_body: bool,
+        field_definition: &ClassFieldDefinition,
     ) -> bool {
-        // Names starting but not ending with __ are private
-        // Names starting and ending with _ are reserved by the enum
-        if Ast::is_mangled_attr(name) || (is_sunder(name.as_str()) || is_dunder(name.as_str())) {
+        // Names starting but not ending with __ are private.
+        // Names starting and ending with _ are reserved by the enum.
+        if Ast::is_mangled_attr(name) || is_sunder(name.as_str()) || is_dunder(name.as_str()) {
             return false;
         }
-        // Enum members must be initialized on the class
-        if !is_initialized_on_class_body {
-            return false;
+        // Methods decorated with @enum.member are always enum members.
+        if ty.has_enum_member_decoration() {
+            return true;
+        }
+        // Only values assigned or defined in the class body can be enum members.
+        // MethodLike definitions (def statements) are not enum member candidates
+        // unless decorated with @member (handled above).
+        match field_definition {
+            ClassFieldDefinition::AssignedInBody { .. }
+            | ClassFieldDefinition::DefinedWithoutAssign { .. } => {}
+            _ => return false,
         }
         match ty {
-            // Methods decorated with @member are members
-            _ if ty.has_enum_member_decoration() => true,
-            // Callables are not valid enum members
+            // Callables are not valid enum members.
             _ if ty.is_toplevel_callable() => false,
-            // Values initialized with nonmember() are not members
+            // Values initialized with nonmember() or descriptor-like wrappers are not members.
             Type::ClassType(cls)
                 if cls.has_qname("enum", "nonmember")
                     || cls.is_builtin("staticmethod")
@@ -110,17 +123,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .or_else(|| self.get_instance_attribute(class, attr_name))
     }
 
-    /// Special-case enum attribute lookups:
-    /// - if this is an enum and the attribute is `value`, we'll redirect it to
-    ///   look up the type of `_value_` so that the `value` property understands
-    ///   annotated `_value_`.
-    /// - furthermore, if there is no annotation on `_value_` (meaning it inherits
-    ///   the `Any` annotation from `enum.Enum` we will compute the type based
-    ///   on the observed types of members).
-    ///
-    /// The resulting attribute is read-only if it is `value`, which is a property,
-    /// and read-write if it is `_value_`. Whether `_value_` should be considered
-    /// writable is unspecified, but we at least have to allow it in `__init__`.
+    /// Special-case enum attribute lookups. Dispatches to the appropriate helper
+    /// based on the attribute name and whether we have a known enum literal.
     ///
     /// `enum_literal` is set if we're looking this up on a known member, like `Literal[MyEnum.X]`
     ///
@@ -134,95 +138,182 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
     ) -> Option<ClassAttribute> {
         let enum_metadata = metadata.enum_metadata()?;
-        if !((name == &VALUE || name == &VALUE_PROP)
-            && (self.field_is_inherited_from(
-                class.class_object(),
-                name,
-                (ModuleName::enum_().as_str(), "Enum"),
-            ) || self.field_is_inherited_from(
-                class.class_object(),
-                name,
-                (ModuleName::django_models_enums().as_str(), "Choices"),
-            )))
-        {
-            return None;
-        }
         if name == &VALUE {
-            let ty = self
-                .mixed_in_enum_data_type(class.class_object())
-                .unwrap_or_else(|| {
-                    if let Some(lit_enum) = enum_literal {
-                        self.enum_literal_to_value_type(lit_enum.clone(), enum_metadata.is_django)
-                    } else {
-                        // The `_value_` annotation on `enum.Enum` is `Any`; we can infer a better type
-                        let enum_value_types: Vec<_> = self
-                            .get_enum_members(class.class_object())
-                            .into_iter()
-                            .filter_map(|lit| {
-                                if let Lit::Enum(lit_enum) = lit {
-                                    Some(self.enum_literal_to_value_type(
-                                        *lit_enum,
-                                        enum_metadata.is_django,
-                                    ))
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        if enum_value_types.is_empty() {
-                            // Assume Any, rather than Never, if there are no members because they may
-                            // be created dynamically and we don't want downstream analysis to be incorrect.
-                            Type::any_implicit()
-                        } else {
-                            self.unions(enum_value_types)
-                        }
-                    }
-                });
+            if !self.field_defining_class_matches(class.class_object(), &VALUE, |c| {
+                c.has_toplevel_qname(ModuleName::enum_().as_str(), "Enum")
+                    || c.has_toplevel_qname(ModuleName::enum_().as_str(), "IntEnum")
+                    || c.has_toplevel_qname(ModuleName::enum_().as_str(), "StrEnum")
+                    || c.has_toplevel_qname(ModuleName::django_models_enums().as_str(), "Choices")
+            }) {
+                return None;
+            }
+            let ty = if let Some(lit_enum) = enum_literal {
+                self.enum_value_lookup_on_member(class, lit_enum, enum_metadata)
+            } else {
+                self.enum_value_lookup_on_class(class, enum_metadata)
+            };
             Some(ClassAttribute::read_write(ty))
-        } else if let Some(lit_enum) = enum_literal {
-            self.get_enum_literal_or_instance_attribute(lit_enum, metadata, &VALUE)
-                .map(|attr| {
-                    // Do not allow writing `.value`, which is a property.
-                    attr.read_only_equivalent(ReadOnlyReason::EnumMemberValue)
-                })
+        } else if name == &VALUE_PROP {
+            if !self.field_defining_class_matches(class.class_object(), &VALUE_PROP, |c| {
+                c.has_toplevel_qname(ModuleName::enum_().as_str(), "Enum")
+                    || c.has_toplevel_qname(ModuleName::enum_().as_str(), "IntEnum")
+                    || c.has_toplevel_qname(ModuleName::enum_().as_str(), "StrEnum")
+                    || c.has_toplevel_qname(ModuleName::django_models_enums().as_str(), "Choices")
+            }) {
+                return None;
+            }
+            if let Some(lit_enum) = enum_literal {
+                self.get_enum_literal_or_instance_attribute(lit_enum, metadata, &VALUE)
+                    .map(|attr| attr.read_only_equivalent(ReadOnlyReason::EnumMemberValue))
+            } else {
+                self.get_enum_or_instance_attribute(class, metadata, &VALUE)
+                    .map(|attr| attr.read_only_equivalent(ReadOnlyReason::EnumMemberValue))
+            }
         } else {
-            self.get_enum_or_instance_attribute(class, metadata, &VALUE)
-                .map(|attr| {
-                    // Do not allow writing `.value`, which is a property.
-                    attr.read_only_equivalent(ReadOnlyReason::EnumMemberValue)
-                })
+            None
+        }
+    }
+
+    /// Look up the `_value_` attribute for a specific enum member (e.g. `MyEnum.X._value_`).
+    /// Whether `_value_` should be read-write is unspecified, but we need to allow assigning
+    /// it in `__init__` so we make it read-write.
+    fn enum_value_lookup_on_member(
+        &self,
+        class: &ClassType,
+        lit_enum: &LitEnum,
+        enum_metadata: &EnumMetadata,
+    ) -> Type {
+        let mixed_in = self.mixed_in_enum_data_type(class.class_object());
+        let has_new = self
+            .get_class_fields(class.class_object())
+            .is_some_and(|f| f.contains(&dunder::NEW));
+        // When `__new__` is defined, it can rewrite `_value_` at runtime, so the raw
+        // RHS type is unreliable.
+        // Fallbacks in order of priority: mixed-in type, type of `_value_`, `Any`
+        if has_new {
+            return if let Some(mixed_in) = mixed_in {
+                mixed_in
+            } else if let Some(value_ty) = self.type_of_enum_value(enum_metadata) {
+                value_ty
+            } else {
+                self.heap.mk_any_implicit()
+            };
+        }
+        let value_ty = self.enum_literal_to_value_type(lit_enum.clone(), enum_metadata.is_django);
+        // Only preserve the literal type if its base class type matches the mixin exactly.
+        if let Some(ref mixed_in) = mixed_in {
+            let promoted = value_ty.clone().promote_implicit_literals(self.stdlib);
+            if &promoted == mixed_in {
+                value_ty
+            } else {
+                mixed_in.clone()
+            }
+        } else {
+            value_ty
+        }
+    }
+
+    /// Look up the `_value_` attribute for an enum type (not a specific member).
+    /// Whether `_value_` should be read-write is unspecified, but we need to allow assigning
+    /// it in `__init__` so we make it read-write.
+    fn enum_value_lookup_on_class(&self, class: &ClassType, enum_metadata: &EnumMetadata) -> Type {
+        let mixed_in = self.mixed_in_enum_data_type(class.class_object());
+        let has_new = self
+            .get_class_fields(class.class_object())
+            .is_some_and(|f| f.contains(&dunder::NEW));
+        // When `__new__` is defined, it can rewrite `_value_` at runtime. Fall back to the
+        // mixed-in type, or `Any` if there is no mixin.
+        if has_new {
+            return if let Some(mixed_in) = mixed_in {
+                mixed_in
+            } else {
+                self.heap.mk_any_implicit()
+            };
+        }
+        if let Some(mixed_in) = mixed_in {
+            return mixed_in;
+        }
+        // The `_value_` annotation on `enum.Enum` is `Any`; we can infer a better type.
+        let enum_value_types: Vec<_> = self
+            .get_enum_members(class.class_object())
+            .into_iter()
+            .filter_map(|lit| {
+                if let Lit::Enum(lit_enum) = lit {
+                    let value_ty =
+                        self.enum_literal_to_value_type(*lit_enum, enum_metadata.is_django);
+                    if value_ty.is_implicit_literal() {
+                        Some(value_ty.promote_implicit_literals(self.stdlib))
+                    } else {
+                        Some(value_ty)
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if enum_value_types.is_empty() {
+            // Don't assume Never if there are no members, because they may
+            // be created dynamically and we don't want false-positives downstream.
+            self.heap.mk_any_implicit()
+        } else {
+            self.unions(enum_value_types)
         }
     }
 
     /// If this enum mixes in a data type by inheriting from it, return the mixed-in type.
+    /// Searches all bases, not just the first, to handle cases like
+    /// `IntegerChoices(Choices, IntEnum)` where the data type comes from `IntEnum`.
     fn mixed_in_enum_data_type(&self, class: &Class) -> Option<Type> {
         let bases = self.get_base_types_for_class(class);
-        let first_base = bases.iter().next()?;
         let enum_class = self.stdlib.enum_class();
-        if first_base == enum_class {
-            None
-        } else if self.has_superclass(first_base.class_object(), enum_class.class_object()) {
-            self.mixed_in_enum_data_type(first_base.class_object())
-        } else {
-            Some(first_base.clone().to_type())
+        for base in bases.iter() {
+            if *base == *enum_class {
+                continue;
+            } else if self.has_superclass(base.class_object(), enum_class.class_object()) {
+                if let Some(ty) = self.mixed_in_enum_data_type(base.class_object()) {
+                    return Some(ty);
+                }
+            } else {
+                return Some(self.heap.mk_class_type(base.clone()));
+            }
         }
+        None
     }
 
+    /// Convert an enum literal's raw value type to its `.value` type.
     fn enum_literal_to_value_type(&self, lit_enum: LitEnum, is_django: bool) -> Type {
-        let ty = match lit_enum.ty {
-            Type::Tuple(Tuple::Concrete(elements)) if is_django && elements.len() >= 2 => {
-                // The last element is the label.
-                let value_len = elements.len() - 1;
-                Type::concrete_tuple(elements.into_iter().take(value_len).collect())
-            }
-            ty => ty,
+        let ty = if is_django {
+            transform_django_enum_value(lit_enum.ty, self.heap)
+        } else {
+            lit_enum.ty
         };
-        let int_ty = self.stdlib.int();
+        let auto_ty = self.auto_value_type(lit_enum.class.class_object());
         ty.transform(&mut |t| {
             if matches!(t, Type::ClassType(cls) if cls.has_qname(ModuleName::enum_().as_str(), "auto")) {
-                *t = int_ty.clone().to_type();
+                *t = auto_ty.clone();
             }
         })
+    }
+
+    /// Determine the type that `auto()` produces for the given enum class.
+    /// 1. If a data type is mixed in (e.g. `class E(str, Enum)`), `auto()` produces
+    ///    that type because `__new__` converts the raw value.
+    /// 2. Otherwise, look up `_generate_next_value_` on the class, defaulting to `int` for `enum.Enum`
+    fn auto_value_type(&self, cls: &Class) -> Type {
+        // A mixed-in data type takes priority: the enum's `__new__` converts values to that type.
+        if let Some(mixed_in) = self.mixed_in_enum_data_type(cls) {
+            return mixed_in;
+        }
+        self.get_class_member_with_defining_class(cls, &GENERATE_NEXT_VALUE)
+            .and_then(|field| {
+                // `enum.Enum` declares an `Any` return, but at runtime it generates `int`
+                if field.defining_class.has_toplevel_qname("enum", "Enum") {
+                    Some(self.heap.mk_class_type(self.stdlib.int().clone()))
+                } else {
+                    field.value.ty().callable_return_type(self.heap)
+                }
+            })
+            .unwrap_or_else(|| self.heap.mk_any_implicit()) // Fall back to `Any` if `_generate_next_value_` is missing or not callable
     }
 
     pub fn get_enum_member_count(&self, cls: &Class) -> Option<usize> {
@@ -238,10 +329,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// - Check whether the field is a member (which depends only on its type and name)
     /// - Validate that a member should not have an annotation, and should respect any explicit annotation on `_value_`
     ///
-    /// TODO(stroxler, yangdanny): We currently operate on promoted types, which means we do not infer `Literal[...]`
-    /// types for the `.value` / `._value_` attributes of literals. This is permitted in the spec although not optimal
-    /// for most cases; we are handling it this way in part because generic enum behavior is not yet well-specified.
-    ///
     /// We currently skip the check for `_value_` if the class defines `__new__`, since that can
     /// change the value of the enum member. https://docs.python.org/3/howto/enum.html#when-to-use-new-vs-init
     pub fn get_enum_class_field_type(
@@ -250,7 +337,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         direct_annotation: Option<&Annotation>,
         ty: &Type,
-        is_initialized_on_class_body: bool,
+        field_definition: &ClassFieldDefinition,
         is_descriptor: bool,
         range: TextRange,
         errors: &ErrorCollector,
@@ -258,9 +345,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if is_descriptor {
             return None;
         }
+        // Extract alias_of from field_definition for enum alias detection
+        let alias_of = match field_definition {
+            ClassFieldDefinition::AssignedInBody { alias_of, .. } => alias_of.as_ref(),
+            _ => None,
+        };
         let metadata = self.get_metadata_for_class(class);
         if let Some(enum_) = metadata.enum_metadata()
-            && self.is_valid_enum_member(name, ty, is_initialized_on_class_body)
+            && self.is_valid_enum_member(name, ty, field_definition)
         {
             if direct_annotation.is_some() {
                 self.error(
@@ -270,16 +362,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if enum_.has_value
                 && let Some(enum_value_ty) = self.type_of_enum_value(enum_)
-                && !class.fields().contains(&dunder::NEW)
+                && !self
+                    .get_class_fields(class)
+                    .is_some_and(|f| f.contains(&dunder::NEW))
                 && (!matches!(ty, Type::Ellipsis) || !self.module().path().is_interface())
             {
                 self.check_enum_value_annotation(ty, &enum_value_ty, name, range, errors);
             }
-            Some(Type::Literal(Lit::Enum(Box::new(LitEnum {
-                class: enum_.cls.clone(),
-                member: name.clone(),
-                ty: ty.clone(),
-            }))))
+            // If this field is an alias (value is a simple name referring to another field),
+            // look up the aliased member and return its type instead of creating a new enum literal.
+            if let Some(aliased_name) = alias_of
+                && let Some(aliased_member_lit) = self.get_enum_member(class, aliased_name)
+            {
+                return Some(aliased_member_lit.to_implicit_type());
+            }
+            Some(
+                Lit::Enum(Box::new(LitEnum {
+                    class: enum_.cls.clone(),
+                    member: name.clone(),
+                    ty: self.solver().deep_force(ty.clone()),
+                }))
+                .to_implicit_type(),
+            )
+        } else if let Type::ClassType(cls) = &ty
+            && cls.has_qname("enum", "nonmember")
+            && let [targ] = cls.targs().as_slice()
+        {
+            Some(targ.clone())
         } else {
             None
         }

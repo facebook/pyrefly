@@ -50,11 +50,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repo (to see version.bzl in next step)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Get all history for all branches and tags
       - name: download built vsix
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: pyrefly-${{ matrix.platform }}-${{ matrix.arch }}
       - name: Rename .vsix to .zip
@@ -74,7 +74,7 @@ jobs:
           mkdir -p lsp/bin && mv extracted/extension/bin/* lsp/bin/
         shell: bash
       # Now run the test
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm

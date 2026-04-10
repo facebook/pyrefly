@@ -7,7 +7,7 @@
 
 use configparser::ini::Ini;
 
-use crate::base::UntypedDefBehavior;
+use crate::base::InferReturnTypes;
 use crate::config::ConfigFile;
 use crate::migration::config_option_migrater::ConfigOptionMigrater;
 use crate::migration::pyright::PyrightConfig;
@@ -25,20 +25,18 @@ impl ConfigOptionMigrater for UntypedDefBehaviorConfig {
         // We handle this by only checking for the global config.
         let Ok(Some(check_untyped_defs)) = mypy_cfg.getboolcoerce("mypy", "check_untyped_defs")
         else {
-            pyrefly_cfg.root.untyped_def_behavior = Some(UntypedDefBehavior::SkipAndInferReturnAny);
+            // No setting found: default to skipping unannotated defs, no return inference.
+            pyrefly_cfg.root.check_unannotated_defs = Some(false);
+            pyrefly_cfg.root.infer_return_types = Some(InferReturnTypes::Never);
             return Err(anyhow::anyhow!(
-                "No check_untyped_defs found in mypy config, setting default to `skip-and-infer-return-any`"
+                "No check_untyped_defs found in mypy config, setting default to skip unannotated defs"
             ));
         };
 
-        // If check_untyped_defs is True, set untyped_def_behavior to CheckAndInferReturnAny
-        // This matches Pyrefly's untyped-def-behavior = "check-and-infer-return-any"
-        if check_untyped_defs {
-            pyrefly_cfg.root.untyped_def_behavior =
-                Some(UntypedDefBehavior::CheckAndInferReturnAny);
-        } else {
-            pyrefly_cfg.root.untyped_def_behavior = Some(UntypedDefBehavior::SkipAndInferReturnAny);
-        }
+        // mypy's check_untyped_defs controls whether bodies of unannotated functions
+        // are analyzed. It never infers return types, so infer_return_types = Never.
+        pyrefly_cfg.root.check_unannotated_defs = Some(check_untyped_defs);
+        pyrefly_cfg.root.infer_return_types = Some(InferReturnTypes::Never);
 
         Ok(())
     }
@@ -68,13 +66,14 @@ mod tests {
 
         let mut pyrefly_cfg = ConfigFile::default();
 
-        let untyped_def_behavior = UntypedDefBehaviorConfig;
-        let result = untyped_def_behavior.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+        let config = UntypedDefBehaviorConfig;
+        let result = config.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
         assert!(result.is_ok());
+        assert_eq!(pyrefly_cfg.root.check_unannotated_defs, Some(true));
         assert_eq!(
-            pyrefly_cfg.root.untyped_def_behavior,
-            Some(UntypedDefBehavior::CheckAndInferReturnAny)
+            pyrefly_cfg.root.infer_return_types,
+            Some(InferReturnTypes::Never)
         );
     }
 
@@ -85,14 +84,14 @@ mod tests {
 
         let mut pyrefly_cfg = ConfigFile::default();
 
-        let untyped_def_behavior = UntypedDefBehaviorConfig;
-        let result = untyped_def_behavior.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+        let config = UntypedDefBehaviorConfig;
+        let result = config.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
         assert!(result.is_ok());
-        // When check_untyped_defs is False, we don't change the default behavior
+        assert_eq!(pyrefly_cfg.root.check_unannotated_defs, Some(false));
         assert_eq!(
-            pyrefly_cfg.root.untyped_def_behavior,
-            Some(UntypedDefBehavior::SkipAndInferReturnAny)
+            pyrefly_cfg.root.infer_return_types,
+            Some(InferReturnTypes::Never)
         );
     }
 
@@ -102,13 +101,14 @@ mod tests {
 
         let mut pyrefly_cfg = ConfigFile::default();
 
-        let untyped_def_behavior = UntypedDefBehaviorConfig;
-        let result = untyped_def_behavior.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+        let config = UntypedDefBehaviorConfig;
+        let result = config.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
         assert!(result.is_err());
+        assert_eq!(pyrefly_cfg.root.check_unannotated_defs, Some(false));
         assert_eq!(
-            pyrefly_cfg.root.untyped_def_behavior,
-            Some(UntypedDefBehavior::SkipAndInferReturnAny)
+            pyrefly_cfg.root.infer_return_types,
+            Some(InferReturnTypes::Never)
         );
     }
 
@@ -117,11 +117,12 @@ mod tests {
         let pyright_cfg = default_pyright_config();
         let mut pyrefly_cfg = ConfigFile::default();
 
-        let untyped_def_behavior = UntypedDefBehaviorConfig;
-        let result = untyped_def_behavior.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let config = UntypedDefBehaviorConfig;
+        let result = config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
 
         // Pyright doesn't have a direct equivalent to check_untyped_defs, so we expect an error
         assert!(result.is_err());
-        assert_eq!(pyrefly_cfg.root.untyped_def_behavior, None);
+        assert_eq!(pyrefly_cfg.root.check_unannotated_defs, None);
+        assert_eq!(pyrefly_cfg.root.infer_return_types, None);
     }
 }

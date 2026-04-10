@@ -10,7 +10,29 @@ description:
     Python and IDE extension.
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # Pyrefly Frequently Asked Questions
+
+## Why should I use Pyrefly over another type checker or language server?
+
+Here are the main reasons to consider Pyrefly:
+
+* **Rich IDE experience.** Pyrefly's language server includes advanced refactoring capabilities that were previously only available in Pylance or Pycharm. See [IDE Features](./IDE-features.mdx) for the full list of supported features.
+* **Broad type system coverage & strong inference capabilities.** Pyrefly's type system implementation is mature, and the ability to infer types on un-annotated code allows Pyrefly to provide type safety while reducing the need for manual annotations.
+* **Battle-tested at scale.** Pyrefly runs in CI for Instagram and PyTorch, so it's proven on large, real-world codebases. It's also the default Python language server for the Antigravity and Positron editors.
+* **Built-in Pydantic and Django support.** Pyrefly has native support for [Pydantic](./pydantic.mdx) and [Django](./django.mdx), handling special type-checking behavior that can't be expressed in the current type system. Mypy is the only other type checker that supports these packages, via third-party plugins.
+* **Useful peripheral tools:** Pyrefly comes with a suite of useful tools to help you get the most out of your type annotations:
+    * [`pyrefly report`](./report.mdx) to measure type coverage across your codebase.
+    * [Error baselines](./error-suppressions.mdx#baseline-files-experimental) to track and suppress pre-existing errors without modifying source code.
+    * [`pyrefly infer`](./autotype.mdx) to automatically add inferred type annotations to your code.
+    * [`pyrefly init`](./migrating-to-pyrefly.mdx) for automatic config migration from mypy or pyright.
+    * [`pyrefly suppress`](./error-suppressions.mdx#upgrading-pyrefly-and-other-changes-that-introduce-new-type-errors) for automatic bulk error suppression during upgrades.
 
 ## How do I pronounce Pyrefly?
 

@@ -30,10 +30,10 @@ pub fn get_scope_parent(ast: &ModModule, module_info: &Module, range: TextRange)
             AnyNodeRef::StmtClassDef(class_def) if class_def.name.range() == range => None,
             AnyNodeRef::StmtFunctionDef(fun_def) if fun_def.name.range() == range => None,
             AnyNodeRef::StmtClassDef(class_def) => Some(ScopeParent::Class {
-                location: PysaLocation::new(module_info.display_range(class_def.name.range())),
+                location: PysaLocation::from_text_range(class_def.name.range(), module_info),
             }),
             AnyNodeRef::StmtFunctionDef(fun_def) => Some(ScopeParent::Function {
-                location: PysaLocation::new(module_info.display_range(fun_def.name.range())),
+                location: PysaLocation::from_text_range(fun_def.name.range(), module_info),
             }),
             _ => None,
         })

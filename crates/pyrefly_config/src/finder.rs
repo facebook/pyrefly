@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::absolutize::Absolutize as _;
@@ -99,7 +100,8 @@ type BeforeCallback =
 type LoadCallback = Box<dyn Fn(&Path) -> (ArcId<ConfigFile>, Vec<ConfigError>) + Send + Sync>;
 
 /// Fallback function when no config file exists or loading fails.
-type FallbackCallback = Box<dyn Fn(ModuleName, &ModulePath) -> ArcId<ConfigFile> + Send + Sync>;
+type FallbackCallback =
+    Box<dyn Fn(ModuleNameWithKind, &ModulePath) -> ArcId<ConfigFile> + Send + Sync>;
 
 /// A way to find a config file given a directory or Python file.
 /// Uses a lot of caching.
@@ -160,19 +162,37 @@ impl ConfigFinder {
         Self {
             search: UpwardSearch::new_grouped(
                 vec![
-                    // Prefer config files with actual Pyrefly configuration contents
-                    // over any marker file types. For `pyproject.toml`, this requires
-                    // a `[tool.pyrefly]` section (even if empty).
+                    // Group 1: Prefer config files with actual Pyrefly configuration.
+                    // For `pyproject.toml`, this requires a `[tool.pyrefly]` section
+                    // (even if empty). A real pyrefly config always takes highest
+                    // priority, even over Python tool markers in closer directories.
                     FileGroup::new(
                         ConfigFile::CONFIG_FILE_NAMES
                             .iter()
                             .map(OsString::from)
                             .collect(),
-                        |c: &ArcId<ConfigFile>| matches!(c.source, ConfigSource::File(_)),
+                        |c: &ArcId<ConfigFile>| {
+                            matches!(
+                                c.source,
+                                ConfigSource::File(_) | ConfigSource::FailedParse(_)
+                            )
+                        },
                     ),
-                    // Perform a fallback search, taking any marker files that we can
+                    // Group 2: pyproject.toml files with Python tool sections
+                    // (e.g. [tool.ruff], [tool.mypy], [tool.pyright]) are a strong
+                    // signal of a Python project root. They take priority over bare
+                    // markers but never supersede real pyrefly configuration.
+                    FileGroup::new(
+                        iter::once(&ConfigFile::PYPROJECT_FILE_NAME)
+                            .map(OsString::from)
+                            .collect(),
+                        |c: &ArcId<ConfigFile>| {
+                            matches!(c.source, ConfigSource::PythonToolMarker(_))
+                        },
+                    ),
+                    // Group 3: Fallback search, taking any marker files that we can
                     // find. For `pyproject.toml`, no `[tool.pyrefly]` is required
-                    // (though the previous search group would have ruled that out already).
+                    // (though previous search groups would have ruled that out already).
                     FileGroup::new_simple(
                         iter::once(&ConfigFile::PYPROJECT_FILE_NAME)
                             .chain(ConfigFile::ADDITIONAL_ROOT_FILE_NAMES)
@@ -226,8 +246,9 @@ impl ConfigFinder {
 
     /// Get the config file given a Python file. If no config exists on disk, one will be
     /// constructed.
-    pub fn python_file(&self, name: ModuleName, path: &ModulePath) -> ArcId<ConfigFile> {
-        match (self.before)(name, path) {
+    pub fn python_file(&self, name: ModuleNameWithKind, path: &ModulePath) -> ArcId<ConfigFile> {
+        let module_name = name.name();
+        match (self.before)(module_name, path) {
             Ok(Some(x)) => return x,
             Ok(None) => {}
             Err(e) => {

@@ -24,8 +24,10 @@ class E(enum.Enum):
         "#,
     );
     let cls = get_class("E", &handle, &state);
-    let fields = cls
-        .fields()
+    let bindings = state.transaction().get_bindings(&handle).unwrap();
+    let class_fields = bindings.get_class_fields(cls.index()).unwrap();
+    let fields = class_fields
+        .names()
         .map(|f| f.as_str())
         .sorted()
         .collect::<Vec<_>>();
@@ -45,11 +47,11 @@ class MyEnum(Enum):
 
 assert_type(MyEnum.X, Literal[MyEnum.X])
 assert_type(MyEnum["X"], Literal[MyEnum.X])
-assert_type(MyEnum.__PRIVATE, int)
+assert_type(MyEnum.__PRIVATE, int)  # E: Private attribute `__PRIVATE` cannot be accessed outside of its defining class
 assert_type(MyEnum.X.name, Literal["X"])
 assert_type(MyEnum.X._name_, Literal["X"])
-assert_type(MyEnum.X.value, int)
-assert_type(MyEnum.X._value_, int)
+assert_type(MyEnum.X.value, Literal[1])
+assert_type(MyEnum.X._value_, Literal[1])
 
 MyEnum["FOO"]  # E: Enum `MyEnum` does not have a member named `FOO`
 
@@ -63,6 +65,25 @@ def foo(member: MyEnum) -> None:
     assert_type(member.name, str)
     assert_type(member.value, int)
     assert_type(member._value_, int)
+"#,
+);
+
+testcase!(
+    test_enum_class_value,
+    r#"
+from enum import Enum
+from typing import assert_type, Literal, overload
+
+class E(Enum):
+    X = int
+
+@overload
+def f(x: Literal[E.X]) -> int: ...
+@overload
+def f(x: E) -> int | str | None: ...
+def f(x) -> int | str | None: ...
+
+assert_type(f(E.X), int)
 "#,
 );
 
@@ -110,9 +131,20 @@ assert_type(Color6.RED, Literal[Color6.RED])
 assert_type(Color7.RED, Literal[Color7.RED])
 assert_type(Color8.RED, Literal[Color8.RED])
 assert_type(Color9.RED, Literal[Color9.RED])
+"#,
+);
 
-# String literal doesn't match variable name
-Color = Enum("C", 'RED', 'GREEN', 'BLUE')  # E: Expected string literal "Color"
+// Regression test for https://github.com/facebook/pyrefly/issues/2874
+testcase!(
+    test_enum_functional_name_mismatch,
+    r#"
+from typing import Literal, assert_type
+from enum import Enum
+
+_dvistate = Enum("DviState", "pre outer inpage post_post finale")  # E: Expected string literal "_dvistate"
+
+assert_type(_dvistate.pre, Literal[_dvistate.pre])
+assert_type(_dvistate.post_post, Literal[_dvistate.post_post])
 "#,
 );
 
@@ -151,7 +183,7 @@ class MyEnum(Enum):
     V = member(1)
     W = auto()
     X = 1
-    Y = "FOO"  # E: Enum member `Y` has type `str`, must match the `_value_` attribute annotation of `int`
+    Y = "FOO"  # E: Enum member `Y` has type `Literal['FOO']`, must match the `_value_` attribute annotation of `int`
     Z = member("FOO")  # E: Enum member `Z` has type `str`, must match the `_value_` attribute annotation of `int`
 
     def get_value(self) -> int:
@@ -222,7 +254,7 @@ class MyEnum(Enum):
     def D(self) -> None: pass
 
 reveal_type(MyEnum.A)  # E: revealed type: Literal[MyEnum.A]
-reveal_type(MyEnum.B)  # E: revealed type: nonmember[int]
+reveal_type(MyEnum.B)  # E: revealed type: int
 reveal_type(MyEnum.C)  # E: revealed type: Literal[MyEnum.C]
 reveal_type(MyEnum.D)  # E: revealed type: (self: MyEnum) -> None
 "#,
@@ -430,7 +462,7 @@ testcase!(
     test_magic_enum_attr_3_10,
     TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
     r#"
-from typing_extensions import assert_type
+from typing_extensions import assert_type, Any
 import enum
 class E(enum.Enum):
     _value_: int
@@ -439,7 +471,7 @@ class E(enum.Enum):
     @enum._magic_enum_attr
     def foo(self) -> str: ...
 e = E.E0
-assert_type(e.foo, str)
+assert_type(e.foo, Any)
     "#,
 );
 
@@ -447,7 +479,7 @@ testcase!(
     test_magic_enum_attr_3_11,
     TestEnv::new_with_version(PythonVersion::new(3, 11, 0)),
     r#"
-from typing_extensions import assert_type, Any
+from typing_extensions import assert_type
 import enum
 class E(enum.Enum):
     _value_: int
@@ -479,6 +511,24 @@ assert_type(A.B, Literal[A.B])
     "#,
 );
 
+testcase!(
+    test_intenum_numeric_tower,
+    r#"
+import enum
+from typing import assert_type
+
+class Period(enum.IntEnum):
+    DAY = 24
+
+def takes_float(x: float) -> float:
+    return x
+
+assert_type(takes_float(Period.DAY), float)
+assert_type(takes_float(24), float)
+assert_type(takes_float(24.0), float)
+    "#,
+);
+
 // This used to trigger a false positive where we thought the metaclass inheriting
 // Any meant it was an enum metaclass, see https://github.com/facebook/pyrefly/issues/622
 testcase!(
@@ -499,7 +549,7 @@ from enum import IntEnum
 
 class Color(IntEnum):
     RED = ... # E: Enum member `RED` has type `Ellipsis`, must match the `_value_` attribute annotation of `int`
-    GREEN = "wrong" # E: Enum member `GREEN` has type `str`, must match the `_value_` attribute annotation of `int`
+    GREEN = "wrong" # E: Enum member `GREEN` has type `Literal['wrong']`, must match the `_value_` attribute annotation of `int`
 "#
     );
     env.add_with_path("pyi", "pyi.pyi", r#"
@@ -507,7 +557,7 @@ from enum import IntEnum
 
 class Color(IntEnum):
     RED = ...
-    GREEN = "wrong" # E: Enum member `GREEN` has type `str`, must match the `_value_` attribute annotation of `int`
+    GREEN = "wrong" # E: Enum member `GREEN` has type `Literal['wrong']`, must match the `_value_` attribute annotation of `int`
 "#
     );
     env
@@ -616,7 +666,7 @@ testcase!(
     test_mixin_datatype,
     r#"
 from enum import Enum
-from typing import assert_type
+from typing import assert_type, Literal
 
 class A(float, Enum):
     X = 1
@@ -635,12 +685,12 @@ testcase!(
     test_override_value_prop,
     r#"
 from enum import Enum
-from typing import assert_type
+from typing import assert_type, Literal
 class E(Enum):
     X = 1
     @property
     def value(self) -> str: ...
-assert_type(E.X._value_, int)
+assert_type(E.X._value_, Literal[1])
 assert_type(E.X.value, str)
     "#,
 );
@@ -662,6 +712,41 @@ assert_type(E1.X.value, int)
 assert_type(E2.X.value, str)
 assert_type(E3.X.value, str)
 assert_type(E4.X.value, tuple[int])
+    "#,
+);
+
+testcase!(
+    test_auto_generate_next_value,
+    r#"
+from enum import auto, Enum, StrEnum
+from typing import assert_type
+
+# Custom _generate_next_value_ returning float
+class FloatEnum(Enum):
+    @staticmethod
+    def _generate_next_value_(name: str, start: int, count: int, last_values: list[float]) -> float: ...
+    X = auto()
+    Y = auto()
+
+assert_type(FloatEnum.X.value, float)
+assert_type(FloatEnum.Y.value, float)
+
+# StrEnum auto() generates str values
+class Color(StrEnum):
+    RED = auto()
+    GREEN = auto()
+
+assert_type(Color.RED.value, str)
+
+# Mixin type takes priority over _generate_next_value_
+class BytesEnum(bytes, Enum):
+    X = auto()
+
+assert_type(BytesEnum.X.value, bytes)
+
+# Generic instance access should also use auto inference
+def check_float_enum(e: FloatEnum) -> None:
+    assert_type(e.value, float)
     "#,
 );
 
@@ -700,5 +785,260 @@ class E2(E1):
     X = 1
 
 assert_type(E2.X(), int)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/755
+testcase!(
+    test_access_value_on_mixed_type_enum,
+    r#"
+from enum import Enum
+
+class StrEnum(str, Enum):
+    FOO = "FOO"
+    DEFAULT = "DEFAULT"
+
+    @classmethod
+    def normalize(cls, val: str) -> str:
+        try:
+            return cls(val).value
+        except ValueError:
+            return cls.DEFAULT.value
+
+class IntEnum(int, Enum):
+    FOO = 1
+    DEFAULT = 0
+
+    @classmethod
+    def normalize(cls, val: int) -> int:
+        try:
+            return cls(val).value
+        except ValueError:
+            return cls.DEFAULT.value
+    "#,
+);
+
+testcase!(
+    test_enum_call_uses_metaclass_signature,
+    r#"
+from enum import Enum
+from typing import Callable, assert_type
+
+class SeFileType(Enum):
+    ALL = ("a", "all files")
+    REGULAR = ("f", "regular file")
+    DIRECTORY = ("d", "directory")
+
+    def __new__(cls, code: str, description: str) -> "SeFileType":
+        obj = object.__new__(cls)
+        obj._value_ = code
+        return obj
+
+    @classmethod
+    def from_code(cls, code: str) -> "SeFileType":
+        assert_type(cls(code), SeFileType)
+        return cls(code)
+
+assert_type(SeFileType("a"), SeFileType)
+constructor: Callable[[str], SeFileType] = SeFileType
+    "#,
+);
+
+testcase!(
+    test_enum_call_with_self_type,
+    r#"
+from enum import Enum
+from typing import Self, assert_type
+
+class SeFileType(Enum):
+    ALL = ("a", "all files")
+    REGULAR = ("f", "regular file")
+
+    def __new__(cls, code: str, description: str) -> "SeFileType":
+        obj = object.__new__(cls)
+        obj._value_ = code
+        return obj
+
+    @classmethod
+    def from_code(cls, code: str) -> Self:
+        assert_type(cls, type[Self])
+        assert_type(cls(code), Self)
+        return cls(code)
+    "#,
+);
+
+testcase!(
+    test_enum_alias,
+    r#"
+from typing import assert_type, Literal
+from enum import Enum
+
+class TrafficLight(Enum):
+    YELLOW = 3
+    AMBER = YELLOW  # Alias for YELLOW
+
+assert_type(TrafficLight.AMBER, Literal[TrafficLight.YELLOW])
+    "#,
+);
+
+testcase!(
+    test_illegal_unpacking_in_def,
+    r#"
+from enum import Enum
+def f() -> dict: ...
+X = Enum("X", {'FOO': 1, **f()})  # E: Unpacking is not supported
+    "#,
+);
+
+testcase!(
+    test_enum_classmethod,
+    r#"
+from enum import Enum
+
+class Foo(str, Enum):
+    A = "a"
+    B = "b"
+
+    @classmethod
+    def from_dict(cls, default=None):
+        if default is None:
+            default = cls.A
+        return cls(default)
+Foo.from_dict({})
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2583
+// StrEnum defines its own `_value_: str`, so the guard on the special-case `_value_` path
+// must include StrEnum (and IntEnum) in addition to `enum.Enum`.
+testcase!(
+    test_strenum_value_literal_type,
+    r#"
+from enum import StrEnum, Enum
+from typing import assert_type, Literal
+
+class Foo(StrEnum):
+    X = "x"
+
+class Bar(str, Enum):
+    Y = "y"
+
+def take_literal(z: Literal["x", "y"]) -> None: ...
+
+# StrEnum: specific literal gives literal type
+assert_type(Foo.X.value, Literal["x"])
+# str, Enum mixin: specific literal correctly gives literal type
+assert_type(Bar.Y.value, Literal["y"])
+
+# Generic instance access should give the mixed-in type
+def test(foo: Foo, bar: Bar) -> None:
+    assert_type(foo.value, str)
+    assert_type(bar.value, str)
+    take_literal(Foo.X.value)
+    take_literal(Bar.Y.value)
+    "#,
+);
+
+// When a member's value type doesn't match the mixin (e.g. int value in a str-mixin enum),
+// the mixin's `__new__` coerces the value at runtime (e.g. `str(42)` → `"42"`),
+// so `.value` returns the mixin type.
+testcase!(
+    test_mixin_value_type_mismatch,
+    r#"
+from enum import Enum
+from typing import assert_type, Literal
+
+class Bad(str, Enum):
+    X = 42
+
+assert_type(Bad.X.value, str)
+    "#,
+);
+
+// When `__new__` converts the value type (e.g. int → str), the literal is only
+// preserved if it's a subtype of the mixin. Otherwise we fall back to the mixin type.
+testcase!(
+    test_mixin_new_converts_type,
+    r#"
+from enum import Enum
+from typing import assert_type, Literal
+
+class E(str, Enum):
+    # String literal is a subtype of str, so the literal is preserved.
+    A = "hello"
+    # Int literal is NOT a subtype of str; str.__new__ coerces it at runtime,
+    # so `.value` falls back to the mixin type.
+    B = 42
+
+assert_type(E.A.value, Literal["hello"])
+assert_type(E.B.value, str)
+    "#,
+);
+
+// When `__new__` is defined, it can rewrite `_value_` at runtime, so the raw RHS type
+// is unreliable. Without a mixin or explicit `_value_` annotation, we fall back to `Any`
+// since we can't infer what `__new__` assigns.
+testcase!(
+    test_new_rewrites_value,
+    r#"
+from enum import Enum
+from typing import assert_type, Literal, Any
+
+class SeFileType(Enum):
+    ALL = ("a", "all files")
+    REGULAR = ("f", "regular file")
+
+    def __new__(cls, code: str, description: str) -> "SeFileType":
+        obj = object.__new__(cls)
+        obj._value_ = code
+        return obj
+
+assert_type(SeFileType.ALL.value, Any)
+    "#,
+);
+
+// When `__new__` is defined AND a mixin is present, fall back to the mixin type.
+testcase!(
+    test_new_with_mixin,
+    r#"
+from enum import Enum
+from typing import assert_type
+
+class Planet(float, Enum):
+    MERCURY = (3.303e+23, 2.4397e6)
+
+    def __new__(cls, mass: float, radius: float) -> "Planet":
+        obj = float.__new__(cls, mass)
+        obj._value_ = mass
+        return obj
+
+assert_type(Planet.MERCURY.value, float)
+    "#,
+);
+
+fn frozen_enum_members_env() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from enum import Enum
+from typing import Self
+class E(Enum):
+    A = frozenset({1})
+    B = frozenset({2})
+    @classmethod
+    def from_ord(cls) -> list[Self]:
+        return [v for v in cls]
+    "#,
+    )
+}
+
+testcase!(
+    test_frozen_enum_members_cross_module_iteration,
+    frozen_enum_members_env(),
+    r#"
+from foo import E
+def f() -> None:
+    xs = E.from_ord()
+    _ = [x for x in xs if x != E.A]
     "#,
 );

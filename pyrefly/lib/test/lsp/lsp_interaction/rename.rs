@@ -10,9 +10,9 @@ use lsp_types::request::PrepareRenameRequest;
 use lsp_types::request::Rename;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_prepare_rename() {

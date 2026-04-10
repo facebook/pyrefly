@@ -31,6 +31,12 @@ use crate::module::third_party::BundledThirdParty;
 use crate::module::typeshed::BundledTypeshedStdlib;
 use crate::module::typeshed_third_party::BundledTypeshedThirdParty;
 
+/// A function that wraps a [`ConfigConfigurer`] with additional behavior.
+/// The function receives the "inner" configurer and returns a wrapped configurer
+/// that applies custom settings before delegating to the inner one.
+pub type ConfigConfigurerWrapper =
+    Arc<dyn Fn(Arc<dyn ConfigConfigurer>) -> Arc<dyn ConfigConfigurer> + Send + Sync>;
+
 /// Finalizes a config before being returned by a [`ConfigFinder`].
 pub trait ConfigConfigurer: Send + Sync + 'static {
     /// Sets additional options on, and calls configure to finalize and validate
@@ -81,8 +87,8 @@ impl ConfigConfigurer for DefaultConfigConfigurer {
     }
 }
 
-pub fn default_config_finder() -> ConfigFinder {
-    standard_config_finder(Arc::new(DefaultConfigConfigurer {}))
+pub fn default_config_finder(wrapper: Option<ConfigConfigurerWrapper>) -> ConfigFinder {
+    standard_config_finder(Arc::new(DefaultConfigConfigurer {}), wrapper)
 }
 
 struct DefaultConfigConfigurerWithOverrides {
@@ -119,16 +125,30 @@ impl ConfigConfigurer for DefaultConfigConfigurerWithOverrides {
 pub fn default_config_finder_with_overrides(
     args: ConfigOverrideArgs,
     ignore_errors: bool,
+    wrapper: Option<ConfigConfigurerWrapper>,
 ) -> ConfigFinder {
-    standard_config_finder(Arc::new(DefaultConfigConfigurerWithOverrides::new(
-        args,
-        ignore_errors,
-    )))
+    standard_config_finder(
+        Arc::new(DefaultConfigConfigurerWithOverrides::new(
+            args,
+            ignore_errors,
+        )),
+        wrapper,
+    )
 }
 
 /// Create a standard `ConfigFinder`, using the provided [`ConfigConfigurer`] to finalize
 /// the config before caching/returning it.
-pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFinder {
+///
+/// If `wrapper` is provided, it wraps the `configure` with additional behavior
+/// (e.g., applying internal-specific defaults) before delegation.
+pub fn standard_config_finder(
+    configure: Arc<dyn ConfigConfigurer>,
+    wrapper: Option<ConfigConfigurerWrapper>,
+) -> ConfigFinder {
+    let configure = match wrapper {
+        Some(wrap) => wrap(configure),
+        None => configure,
+    };
     let configure2 = configure.dupe();
     let configure3 = configure.dupe();
 
@@ -178,67 +198,72 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
         }),
         // Fall back to using a default config, but let's see if we can make the `search_path` somewhat useful
         // based on a few heuristics.
-        Box::new(move |name, path| match path.root_of(name) {
-            // We were able to walk up `path` and match each component of `name` to a directory until we ran out.
-            // That means the resulting path is likely the root of the 'project', and should therefore be its `search_path`.
-            Some(path) => cache_one
-                .lock()
-                .entry(path.clone())
-                .or_insert_with(|| {
-                    let (config, errors) = configure2.configure(
-                        path.parent(),
-                        ConfigFile::init_at_root(&path, &ProjectLayout::Flat, true),
-                        vec![],
-                    );
-                    // Since this is a config we generated, these are likely internal errors.
-                    debug_log(errors);
-                    config
-                })
-                .dupe(),
-
-            // We couldn't walk up and find a possible root of the project, so let's try to create a search
-            // path that is still useful for this import by including all of its parents.
-            None => {
-                let parent = match path.details() {
-                    ModulePathDetails::FileSystem(x) | ModulePathDetails::Memory(x) => {
-                        if let Some(path) = x.parent() {
-                            path
-                        } else {
-                            return empty.dupe();
-                        }
-                    }
-                    ModulePathDetails::Namespace(x) => x.as_path(),
-                    ModulePathDetails::BundledTypeshed(_) => {
-                        return BundledTypeshedStdlib::config();
-                    }
-                    ModulePathDetails::BundledTypeshedThirdParty(_) => {
-                        return BundledTypeshedThirdParty::config();
-                    }
-                    ModulePathDetails::BundledThirdParty(_) => {
-                        return BundledThirdParty::config();
-                    }
-                };
-                cache_parents
+        Box::new(move |module_kind, path| {
+            let name = module_kind.name();
+            let is_fallback = module_kind.is_fallback();
+            match path.root_of(name) {
+                // We were able to walk up `path` and match each component of `name` to a directory until we ran out.
+                // That means the resulting path is likely the root of the 'project', and should therefore be its `search_path`.
+                Some(path) if !is_fallback => cache_one
                     .lock()
-                    .entry(parent.to_owned())
+                    .entry(path.clone())
                     .or_insert_with(|| {
-                        let fallback_search_path =
-                            FallbackSearchPath::Explicit(cache_ancestors.get_ancestors(parent));
-                        let mut config = ConfigFile {
-                            project_includes: ConfigFile::default_project_includes(),
-                            // We use `fallback_search_path` because otherwise a user with `/sys` on their
-                            // computer (all of them) will override `sys.version` in preference to typeshed.
-                            fallback_search_path,
-                            root: ConfigBase::default_for_ide_without_config(),
-                            ..Default::default()
-                        };
-                        config.rewrite_with_path_to_config(parent);
-                        let (config, errors) = configure2.configure(Some(parent), config, vec![]);
+                        let (config, errors) = configure2.configure(
+                            path.parent(),
+                            ConfigFile::init_at_root(&path, &ProjectLayout::Flat, true),
+                            vec![],
+                        );
                         // Since this is a config we generated, these are likely internal errors.
                         debug_log(errors);
                         config
                     })
-                    .dupe()
+                    .dupe(),
+
+                // We couldn't walk up and find a possible root of the project, so let's try to create a search
+                // path that is still useful for this import by including all of its parents.
+                _ => {
+                    let parent = match path.details() {
+                        ModulePathDetails::FileSystem(x) | ModulePathDetails::Memory(x) => {
+                            if let Some(path) = x.parent() {
+                                path
+                            } else {
+                                return empty.dupe();
+                            }
+                        }
+                        ModulePathDetails::Namespace(x) => x.as_path(),
+                        ModulePathDetails::BundledTypeshed(_) => {
+                            return BundledTypeshedStdlib::config();
+                        }
+                        ModulePathDetails::BundledTypeshedThirdParty(_) => {
+                            return BundledTypeshedThirdParty::config();
+                        }
+                        ModulePathDetails::BundledThirdParty(_) => {
+                            return BundledThirdParty::config();
+                        }
+                    };
+                    cache_parents
+                        .lock()
+                        .entry(parent.to_owned())
+                        .or_insert_with(|| {
+                            let fallback_search_path =
+                                FallbackSearchPath::Explicit(cache_ancestors.get_ancestors(parent));
+                            let mut config = ConfigFile {
+                                project_includes: ConfigFile::default_project_includes(),
+                                // We use `fallback_search_path` because otherwise a user with `/sys` on their
+                                // computer (all of them) will override `sys.version` in preference to typeshed.
+                                fallback_search_path,
+                                root: ConfigBase::default_for_ide_without_config(),
+                                ..Default::default()
+                            };
+                            config.rewrite_with_path_to_config(parent);
+                            let (config, errors) =
+                                configure2.configure(Some(parent), config, vec![]);
+                            // Since this is a config we generated, these are likely internal errors.
+                            debug_log(errors);
+                            config
+                        })
+                        .dupe()
+                }
             }
         }),
         clear_extra_caches,
@@ -253,6 +278,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use pyrefly_config::args::ConfigOverrideArgs;
     use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_name::ModuleNameWithKind;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_util::test_path::TestPath;
 
@@ -283,7 +309,7 @@ mod tests {
             + Sync
             + 'static,
         ) -> ConfigFinder {
-            standard_config_finder(Arc::new(TestConfigurer(Box::new(f))))
+            standard_config_finder(Arc::new(TestConfigurer(Box::new(f))), None)
         }
     }
 
@@ -302,7 +328,10 @@ mod tests {
     fn test_site_package_path_from_environment() {
         let args = ConfigOverrideArgs::default();
         let config = TestConfigurer::new_standard(move |_, x, _| args.override_config(x))
-            .python_file(ModuleName::unknown(), &ModulePath::filesystem("".into()));
+            .python_file(
+                ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+                &ModulePath::filesystem("".into()),
+            );
         let env = PythonEnvironment::get_default_interpreter_env();
         if let Some(paths) = env.site_package_path {
             for p in paths {
@@ -328,7 +357,7 @@ mod tests {
                 );
                 (ArcId::new(x), Vec::new())
             })
-            .python_file(module_name, &module_path2)
+            .python_file(ModuleNameWithKind::guaranteed(module_name), &module_path2)
         }
 
         let tempdir = tempfile::tempdir().unwrap();
@@ -438,5 +467,143 @@ mod tests {
                     .collect::<Vec<PathBuf>>()
             )),
         );
+    }
+
+    /// A real pyrefly.toml should always take priority over a pyproject.toml
+    /// with Python tool sections (e.g. [tool.ruff]) but no [tool.pyrefly].
+    /// Python tool markers help identify project roots, but they never
+    /// supersede explicit pyrefly configuration.
+    #[test]
+    fn test_pyrefly_toml_beats_python_tool_marker() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        // Simulate: workspace/ has pyrefly.toml, click/ has pyproject.toml
+        // with [tool.ruff] but no [tool.pyrefly], using src layout.
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                // Parent workspace config
+                TestPath::file("pyrefly.toml"),
+                // Click project (src layout)
+                TestPath::dir(
+                    "click",
+                    vec![
+                        TestPath::file_with_contents(
+                            "pyproject.toml",
+                            "[project]\nname = \"click\"\n\n[tool.ruff]\nline-length = 88\n",
+                        ),
+                        TestPath::dir(
+                            "src",
+                            vec![TestPath::dir(
+                                "click",
+                                vec![
+                                    TestPath::file("__init__.py"),
+                                    TestPath::file("core.py"),
+                                    TestPath::file("types.py"),
+                                ],
+                            )],
+                        ),
+                    ],
+                ),
+            ],
+        );
+
+        let finder = TestConfigurer::new_standard(|_, x, _| (ArcId::new(x), Vec::new()));
+        let config = finder.python_file(
+            ModuleNameWithKind::guaranteed(ModuleName::from_str("click.core")),
+            &ModulePath::filesystem(root.join("click/src/click/core.py")),
+        );
+
+        // A real pyrefly.toml always takes priority over a pyproject.toml
+        // with Python tool sections but no [tool.pyrefly].
+        assert_eq!(
+            config.source,
+            ConfigSource::File(root.join("pyrefly.toml")),
+            "parent's pyrefly.toml should take priority over click's pyproject.toml with [tool.ruff]"
+        );
+    }
+
+    /// A pyproject.toml with Python tool sections (e.g. [tool.ruff]) should
+    /// take priority over a bare pyproject.toml (no tool sections) during
+    /// config discovery, because it's a stronger signal of a Python project root.
+    ///
+    /// On the click repo, this improves go-to-def accuracy by 15% (83% -> 98%).
+    #[test]
+    fn test_python_tool_marker_beats_bare_marker() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        // Parent has pyproject.toml with [tool.ruff] (Python project root).
+        // Child has bare pyproject.toml (no tool sections).
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file_with_contents(
+                    "pyproject.toml",
+                    "[project]\nname = \"workspace\"\n\n[tool.ruff]\nline-length = 88\n",
+                ),
+                TestPath::dir(
+                    "subdir",
+                    vec![
+                        TestPath::file_with_contents(
+                            "pyproject.toml",
+                            "[project]\nname = \"subproject\"\n",
+                        ),
+                        TestPath::dir("pkg", vec![TestPath::file("mod.py")]),
+                    ],
+                ),
+            ],
+        );
+
+        let finder = TestConfigurer::new_standard(|_, x, _| (ArcId::new(x), Vec::new()));
+        let config = finder.python_file(
+            ModuleNameWithKind::guaranteed(ModuleName::from_str("pkg.mod")),
+            &ModulePath::filesystem(root.join("subdir/pkg/mod.py")),
+        );
+
+        // The parent's pyproject.toml with [tool.ruff] should win because
+        // PythonToolMarker (Group 2) takes priority over bare Marker (Group 3).
+        assert_eq!(
+            config.source,
+            ConfigSource::PythonToolMarker(root.join("pyproject.toml")),
+            "parent's pyproject.toml with [tool.ruff] should take priority over bare child pyproject.toml"
+        );
+    }
+
+    /// A bare pyproject.toml (no Python tool sections, no [tool.pyrefly]) should
+    /// NOT block a parent config — it remains in Group 3 as before.
+    #[test]
+    fn test_bare_pyproject_does_not_block_parent_config() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file("pyrefly.toml"),
+                TestPath::dir(
+                    "subproject",
+                    vec![
+                        // Bare pyproject.toml — no [tool.*] sections at all.
+                        TestPath::file_with_contents(
+                            "pyproject.toml",
+                            "[project]\nname = \"subproject\"\n",
+                        ),
+                        TestPath::dir("pkg", vec![TestPath::file("mod.py")]),
+                    ],
+                ),
+            ],
+        );
+
+        let finder = TestConfigurer::new_standard(|_, x, _| (ArcId::new(x), Vec::new()));
+        let config = finder.python_file(
+            ModuleNameWithKind::guaranteed(ModuleName::from_str("pkg.mod")),
+            &ModulePath::filesystem(root.join("subproject/pkg/mod.py")),
+        );
+
+        // A bare pyproject.toml is still Group 3, so the parent's pyrefly.toml
+        // (Group 1) takes precedence.
+        assert_eq!(config.source, ConfigSource::File(root.join("pyrefly.toml")));
     }
 }

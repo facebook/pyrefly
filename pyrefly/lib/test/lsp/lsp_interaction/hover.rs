@@ -8,9 +8,9 @@
 use lsp_types::Url;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_hover_basic() {
@@ -132,14 +132,16 @@ fn test_hover_import() {
     interaction
         .client
         .hover("foo.py", 6, 16)
-        .expect_response(json!({
-            "contents": {
-                "kind": "markdown",
-                "value": "```python\n(class) Bar: type[Bar]\n```\n\nGo to [Bar](".to_owned()
-                    + Url::from_file_path(root.path().join("basic/bar.py")).unwrap().as_str()
-                    + "#L7,7)",
-            }
-        }))
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| {
+                text.contains("(class) Bar: def Bar() -> Bar: ...")
+                    && text.contains(
+                        Url::from_file_path(root.path().join("basic/bar.py"))
+                            .unwrap()
+                            .as_str(),
+                    )
+            })
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();

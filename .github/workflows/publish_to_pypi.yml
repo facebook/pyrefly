@@ -27,28 +27,40 @@ jobs:
       id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
     steps:
       - name: Download dist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # release/v1.13
   push-tag:
     name: Push version tag
     runs-on: ubuntu-latest
     needs: pypi-publish  # Don't push a tag unless the publish job succeeds
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Get all history for all branches and tags
       - name: Get version
+        id: get-version
         run: |
           # setting to variable is necessary so sed failures will be red
           VERSION=$(sed -n -e 's/^VERSION = "\(.*\)"/\1/p' version.bzl)
           echo "PYREFLY_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
       - name: Tag commit
         run: git tag ${{ env.PYREFLY_VERSION }}
       - name: Push tag
         run: git push origin tag ${{ env.PYREFLY_VERSION }}
+  create-release:
+    name: Create release
+    needs: push-tag
+    uses: ./.github/workflows/create_release.yml
+    with:
+      tag_name: ${{ needs.push-tag.outputs.version }}
+    secrets:
+      DISCORD_RELEASES_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}

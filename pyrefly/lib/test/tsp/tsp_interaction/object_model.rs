@@ -16,24 +16,26 @@ use std::thread::{self};
 use std::time::Duration;
 
 use crossbeam_channel::RecvTimeoutError;
-use crossbeam_channel::bounded;
-use lsp_server::Connection;
-use lsp_server::Message;
-use lsp_server::Notification;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::Url;
 use lsp_types::notification::Exit;
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow::read_to_string;
+use pyrefly_util::telemetry::NoTelemetry;
 use serde_json::Value;
 
 use crate::commands::lsp::IndexingMode;
 use crate::commands::tsp::TspArgs;
 use crate::commands::tsp::run_tsp;
+use crate::lsp::non_wasm::protocol::JsonRpcMessage;
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Notification;
+use crate::lsp::non_wasm::protocol::Request;
+use crate::lsp::non_wasm::protocol::Response;
+use crate::lsp::non_wasm::server::Connection;
+use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::init_test;
 
 #[derive(Default)]
@@ -69,12 +71,12 @@ impl TestTspServer {
     }
 
     /// Send a message to this server
-    pub fn send_message(&self, message: Message) {
+    pub fn send_message(&self, msg: Message) {
         eprintln!(
             "client--->server {}",
-            serde_json::to_string(&message).unwrap()
+            serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
         );
-        if let Err(err) = self.sender.send_timeout(message.clone(), self.timeout) {
+        if let Err(err) = self.sender.send_timeout(msg, self.timeout) {
             panic!("Failed to send message to TSP server: {err:?}");
         }
     }
@@ -85,6 +87,7 @@ impl TestTspServer {
             id,
             method: "initialize".to_owned(),
             params,
+            activity_key: None,
         }))
     }
 
@@ -92,6 +95,7 @@ impl TestTspServer {
         self.send_message(Message::Notification(Notification {
             method: "initialized".to_owned(),
             params: serde_json::json!({}),
+            activity_key: None,
         }));
     }
 
@@ -100,6 +104,7 @@ impl TestTspServer {
             id,
             method: lsp_types::request::Shutdown::METHOD.to_owned(),
             params: serde_json::json!(null),
+            activity_key: None,
         }));
     }
 
@@ -107,6 +112,7 @@ impl TestTspServer {
         self.send_message(Message::Notification(Notification {
             method: Exit::METHOD.to_owned(),
             params: serde_json::json!(null),
+            activity_key: None,
         }));
     }
 
@@ -116,6 +122,7 @@ impl TestTspServer {
             id,
             method: "typeServer/getSupportedProtocolVersion".to_owned(),
             params: serde_json::json!(null),
+            activity_key: None,
         }));
     }
 
@@ -125,6 +132,87 @@ impl TestTspServer {
             id,
             method: "typeServer/getSnapshot".to_owned(),
             params: serde_json::json!(null),
+            activity_key: None,
+        }));
+    }
+
+    /// Send a `typeServer/resolveImport` request.
+    pub fn resolve_import(
+        &mut self,
+        source_uri: &str,
+        name_parts: Vec<&str>,
+        leading_dots: i32,
+        snapshot: i32,
+    ) {
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "typeServer/resolveImport".to_owned(),
+            params: serde_json::json!({
+                "sourceUri": source_uri,
+                "moduleDescriptor": {
+                    "nameParts": name_parts,
+                    "leadingDots": leading_dots,
+                },
+                "snapshot": snapshot,
+            }),
+            activity_key: None,
+        }));
+    }
+
+    /// Send a `typeServer/getPythonSearchPaths` request.
+    pub fn get_python_search_paths(&mut self, from_uri: &str, snapshot: i32) {
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "typeServer/getPythonSearchPaths".to_owned(),
+            params: serde_json::json!({
+                "fromUri": from_uri,
+                "snapshot": snapshot,
+            }),
+            activity_key: None,
+        }));
+    }
+
+    /// Send a `typeServer/getDeclaredType` request with a Node arg.
+    pub fn get_declared_type(&mut self, uri: &str, line: u32, character: u32, snapshot: i32) {
+        self.send_get_type_request("typeServer/getDeclaredType", uri, line, character, snapshot);
+    }
+
+    /// Send a `typeServer/getComputedType` request with a Node arg.
+    pub fn get_computed_type(&mut self, uri: &str, line: u32, character: u32, snapshot: i32) {
+        self.send_get_type_request("typeServer/getComputedType", uri, line, character, snapshot);
+    }
+
+    /// Send a `typeServer/getExpectedType` request with a Node arg.
+    pub fn get_expected_type(&mut self, uri: &str, line: u32, character: u32, snapshot: i32) {
+        self.send_get_type_request("typeServer/getExpectedType", uri, line, character, snapshot);
+    }
+
+    /// Shared helper for getDeclaredType/getComputedType/getExpectedType.
+    fn send_get_type_request(
+        &mut self,
+        method: &str,
+        uri: &str,
+        line: u32,
+        character: u32,
+        snapshot: i32,
+    ) {
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: method.to_owned(),
+            params: serde_json::json!({
+                "arg": {
+                    "uri": uri,
+                    "range": {
+                        "start": { "line": line, "character": character },
+                        "end": { "line": line, "character": character },
+                    },
+                },
+                "snapshot": snapshot,
+            }),
+            activity_key: None,
         }));
     }
 
@@ -140,6 +228,7 @@ impl TestTspServer {
                     "text": read_to_string(&path).unwrap(),
                 },
             }),
+            activity_key: None,
         }));
     }
 
@@ -156,6 +245,7 @@ impl TestTspServer {
                     "text": content
                 }]
             }),
+            activity_key: None,
         }));
     }
 
@@ -175,6 +265,7 @@ impl TestTspServer {
                     "type": file_change_type
                 }]
             }),
+            activity_key: None,
         }));
     }
 
@@ -247,30 +338,33 @@ impl TestTspClient {
         }
     }
 
-    pub fn expect_message_helper<F>(&self, expected_message: Message, should_skip: F)
+    pub fn expect_message_helper<F>(&self, expected_msg: Message, should_skip: F)
     where
         F: Fn(&Message) -> bool,
     {
         loop {
             match self.receiver.recv_timeout(self.timeout) {
                 Ok(msg) => {
-                    eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
+                    let actual_str =
+                        serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap();
+
+                    eprintln!("client<---server {}", actual_str);
 
                     if should_skip(&msg) {
                         continue;
                     }
 
-                    let expected_str = serde_json::to_string(&expected_message).unwrap();
-                    let actual_str = serde_json::to_string(&msg).unwrap();
-
+                    let expected_str =
+                        serde_json::to_string(&JsonRpcMessage::from_message(expected_msg.clone()))
+                            .unwrap();
                     assert_eq!(&expected_str, &actual_str, "Response mismatch");
                     return;
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    panic!("Timeout waiting for response. Expected: {expected_message:?}");
+                    panic!("Timeout waiting for response. Expected: {expected_msg:?}");
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    panic!("Channel disconnected. Expected: {expected_message:?}");
+                    panic!("Channel disconnected. Expected: {expected_msg:?}");
                 }
             }
         }
@@ -285,7 +379,10 @@ impl TestTspClient {
     pub fn expect_any_message(&self) {
         match self.receiver.recv_timeout(self.timeout) {
             Ok(msg) => {
-                eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
+                eprintln!(
+                    "client<---server {}",
+                    serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+                );
             }
             Err(RecvTimeoutError::Timeout) => {
                 panic!("Timeout waiting for response");
@@ -300,7 +397,10 @@ impl TestTspClient {
     pub fn receive_any_message(&self) -> Message {
         match self.receiver.recv_timeout(self.timeout) {
             Ok(msg) => {
-                eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
+                eprintln!(
+                    "client<---server {}",
+                    serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+                );
                 msg
             }
             Err(RecvTimeoutError::Timeout) => {
@@ -308,6 +408,58 @@ impl TestTspClient {
             }
             Err(RecvTimeoutError::Disconnected) => {
                 panic!("Channel disconnected");
+            }
+        }
+    }
+
+    /// Receive messages until a Response is found, skipping any Notification
+    /// or Request messages. Returns the Response.
+    pub fn receive_response_skip_notifications(&self) -> Response {
+        loop {
+            match self.receiver.recv_timeout(self.timeout) {
+                Ok(msg) => {
+                    eprintln!(
+                        "client<---server {}",
+                        serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+                    );
+                    if let Message::Response(resp) = msg {
+                        return resp;
+                    }
+                    // Skip notifications and requests
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    panic!("Timeout waiting for response (skipping notifications)");
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("Channel disconnected while waiting for response");
+                }
+            }
+        }
+    }
+
+    /// Receive messages until a Notification with the given method is found,
+    /// skipping any other messages. Returns the notification params.
+    pub fn expect_notification(&self, method: &str) -> serde_json::Value {
+        loop {
+            match self.receiver.recv_timeout(self.timeout) {
+                Ok(msg) => {
+                    eprintln!(
+                        "client<---server {}",
+                        serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+                    );
+                    if let Message::Notification(ref n) = msg
+                        && n.method == method
+                    {
+                        return n.params.clone();
+                    }
+                    // Skip non-matching messages
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    panic!("Timeout waiting for notification '{method}'");
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("Channel disconnected waiting for notification '{method}'");
+                }
             }
         }
     }
@@ -322,34 +474,37 @@ impl TspInteraction {
     pub fn new() -> Self {
         init_test();
 
-        let (language_client_sender, language_client_receiver) = bounded::<Message>(0);
-        let (language_server_sender, language_server_receiver) = bounded::<Message>(0);
+        let ((conn_server, server_reader), (conn_client, _client_reader)) = Connection::memory();
+        let client_receiver = conn_client.channel_receiver().clone();
 
         let args = TspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
             workspace_indexing_limit: 0,
-        };
-        let connection = Connection {
-            sender: language_client_sender,
-            receiver: language_server_receiver,
         };
 
         let args = args.clone();
 
         let request_idx = Arc::new(Mutex::new(0));
 
-        let mut server = TestTspServer::new(language_server_sender, request_idx.clone());
+        let mut server = TestTspServer::new(conn_client.sender, request_idx.clone());
 
         // Spawn the server thread and store its handle
         let thread_handle = thread::spawn(move || {
-            run_tsp(connection, args)
-                .map(|_| ())
-                .map_err(|e| std::io::Error::other(e.to_string()))
+            run_tsp(
+                conn_server,
+                server_reader,
+                args,
+                &NoTelemetry,
+                None,
+                TEST_THREAD_COUNT,
+            )
+            .map(|_| ())
+            .map_err(|e| std::io::Error::other(e.to_string()))
         });
 
         server.server_thread = Some(thread_handle);
 
-        let client = TestTspClient::new(language_client_receiver);
+        let client = TestTspClient::new(client_receiver);
 
         Self { server, client }
     }
@@ -386,4 +541,31 @@ impl TspInteraction {
         self.server.root = Some(root.clone());
         self.client.root = Some(root);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shared test helpers
+// ---------------------------------------------------------------------------
+
+/// Create a minimal `pyproject.toml` so pyrefly recognises the directory as a
+/// project root.
+pub fn write_pyproject(dir: &std::path::Path) {
+    let content = r#"[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "test-project"
+version = "1.0.0"
+"#;
+    std::fs::write(dir.join("pyproject.toml"), content).unwrap();
+}
+
+/// Send a `typeServer/getSnapshot` request and return the current snapshot
+/// value from the TSP server.
+pub fn get_current_snapshot(tsp: &mut TspInteraction, expected_id: i32) -> i32 {
+    tsp.server.get_snapshot();
+    let resp = tsp.client.receive_response_skip_notifications();
+    assert_eq!(resp.id, RequestId::from(expected_id));
+    serde_json::from_value(resp.result.unwrap()).unwrap()
 }

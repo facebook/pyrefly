@@ -1,3 +1,0 @@
-from scipy.optimize import OptimizeResult as OptimizeResult
-
-class _NoConvergence(Exception): ...

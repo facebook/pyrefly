@@ -30,7 +30,6 @@ def test(f: type[A | B]) -> A | B:
 );
 
 testcase!(
-    bug = "There should be no errors",
     test_generic_class,
     r#"
 from typing import assert_type
@@ -38,7 +37,7 @@ class Box[T]:
     def __init__(self, x: T): pass
 
     def wrap(self) -> Box[Box[T]]:
-        return Box(self)  # E: Argument `Box[Box[Box[T]]]` is not assignable to parameter `self`  # E: `Self@Box` is not assignable to parameter `x`
+        return Box(self)
 
 def f() -> int:
     return 1
@@ -92,7 +91,6 @@ class A[T]:
 );
 
 testcase!(
-    bug = "Spurious 'Box[Box[Box[T]]] is not assignable...' errors",
     test_generic_init_in_generic_class,
     r#"
 from typing import assert_type
@@ -101,9 +99,9 @@ class Box[T]:
         pass
     def wrap(self, x: bool) -> Box[Box[T]]:
         if x:
-            return Box(self, self)  # E: `Box[Box[Box[T]]]` is not assignable to parameter `self`
+            return Box(self, self)
         else:
-            return Box(self, 42)  # E: `Box[Box[Box[T]]]` is not assignable to parameter `self`  # E: Argument `Literal[42]` is not assignable to parameter `y` with type `Self@Box`
+            return Box(self, 42)
 b = Box[int]("hello", "world")
 assert_type(b, Box[int])
 assert_type(b.wrap(True), Box[Box[int]])
@@ -178,15 +176,66 @@ assert_type(x, int)
 );
 
 testcase!(
-    bug = "Generic metaclasses are not allowed, should error on `C` classdef.",
     test_metaclass_invalid_generic,
     r#"
 from typing import Any, assert_type
 class Meta[T](type):
     def __call__(cls, x: T): ...
-class C[T](metaclass=Meta[T]): # TODO: error here (or possibly on Meta classdef)
+class C[T](metaclass=Meta[T]): # E: Metaclass may not be an unbound generic
     pass
 assert_type(C(), C[Any]) # Correct, because invalid metaclass.
+    "#,
+);
+
+testcase!(
+    test_metaclass_invalid_generic_legacy_typevar,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+T = TypeVar("T")
+class Meta(type, Generic[T]):
+    foo: T
+class C(metaclass=Meta[T]): # E: Metaclass may not be an unbound generic
+    pass
+    "#,
+);
+
+testcase!(
+    test_metaclass_invalid_generic_legacy_typevar_with_default,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+T = TypeVar("T", default=int)
+class Meta(type, Generic[T]):
+    foo: T
+class C(metaclass=Meta[T]): # E: Metaclass may not be an unbound generic
+    pass
+# After gradualization, T (default=int) becomes int.
+assert_type(C.foo, int)
+    "#,
+);
+
+testcase!(
+    test_metaclass_invalid_generic_nested_targ,
+    r#"
+from typing import Any, assert_type
+class Meta[T](type):
+    foo: list[T]
+class C[T](metaclass=Meta[list[T]]): # E: Metaclass may not be an unbound generic
+    pass
+# After gradualization, Meta[list[T]] becomes Meta[list[Any]], so foo: list[list[Any]].
+assert_type(C.foo, list[list[Any]])
+    "#,
+);
+
+testcase!(
+    test_metaclass_invalid_generic_inherited,
+    r#"
+from typing import Any, assert_type
+class Meta[T](type):
+    foo: T
+class Base[T](metaclass=Meta[T]): # E: Metaclass may not be an unbound generic
+    pass
+class Child(Base[int]):
+    pass
     "#,
 );
 
@@ -422,7 +471,7 @@ from typing import Self
 class A:
     def __new__(cls: type[Self]): ...
 A.__new__(A)  # OK
-A.__new__(int) # E: Argument `type[int]` is not assignable to parameter `cls` with type `type[A]` in function `A.__new__`
+A.__new__(int) # E: `int` is not assignable to upper bound `A` of type variable `Self@A`
     "#,
 );
 
@@ -432,7 +481,7 @@ testcase!(
 class A:
     def __new__(cls): ...
 A.__new__(A)  # OK
-A.__new__(int)  # E: Argument `type[int]` is not assignable to parameter `cls` with type `type[A]` in function `A.__new__`
+A.__new__(int)  # E: `int` is not assignable to upper bound `A` of type variable `Self@A`
     "#,
 );
 
@@ -606,6 +655,90 @@ assert_type(C(False), C[B])
 );
 
 testcase!(
+    test_init_bad_receiver_annotation,
+    r#"
+from typing import Literal, assert_type, overload
+
+class A: ...
+class B: ...
+class D:
+    def __init__(self: A): pass  # E: `__init__` method self type `A` is not a superclass of class `D`
+class E(A):
+    def __init__(self: A): pass
+
+class C[T]:
+    @overload
+    def __init__(self: A, x: Literal[True]) -> None: ...  # E: `__init__` method self type `A` is not a superclass of class `C`  # E: Implementation signature `(self: Self@C, x: Unknown) -> None` does not accept all arguments that overload signature `(self: A, x: Literal[True]) -> None` accepts
+    @overload
+    def __init__(self: B, x: Literal[False]) -> None: ...  # E: `__init__` method self type `B` is not a superclass of class `C`  # E: Implementation signature `(self: Self@C, x: Unknown) -> None` does not accept all arguments that overload signature `(self: B, x: Literal[False]) -> None` accepts
+    def __init__(self, x):
+        pass
+
+    "#,
+);
+
+testcase!(
+    test_init_transitive_superclass_annotation,
+    r#"
+class A: ...
+class B(A): ...
+class C(B):
+    def __init__(self: A): pass
+
+class D(B):
+    def __init__(self: B): pass
+    "#,
+);
+
+testcase!(
+    test_init_non_classtype_self_annotation,
+    r#"
+from typing import Self, Any
+
+class E:
+    def __init__(self: Self): pass
+
+class F:
+    def __init__(self: Any): pass
+    "#,
+);
+
+testcase!(
+    test_new_bad_receiver_annotation,
+    r#"
+from typing import Literal, assert_type, overload, Self, Any
+
+class A: ...
+class B: ...
+class D:
+    def __new__(cls: type[A]): pass  # E: `__new__` method cls type `type[A]` is not a superclass of class `D`
+class E(A):
+    def __new__(cls: type[A]): pass
+class F:
+    def __new__(cls: A): pass  # E: `__new__` method cls type `A` is not a valid `type[...]` annotation
+class G:
+    def __new__(cls: Self): pass  # E: `__new__` method cls type `Self@G` is not a valid `type[...]` annotation
+class H:
+    def __new__(cls: type[Self]): pass
+class I:
+    def __new__(cls: type): pass
+class J:
+    def __new__(cls: Any): pass
+class K:
+    def __new__(cls: type[Any]): pass
+
+class C[T]:
+    @overload
+    def __new__(cls: type[A], x: Literal[True]): ...  # E: `__new__` method cls type `type[A]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> None` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> None`
+    @overload
+    def __new__(cls: type[B], x: Literal[False]): ...  # E: `__new__` method cls type `type[B]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> None` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> None` accepts
+    def __new__(cls, x):
+        pass
+
+    "#,
+);
+
+testcase!(
     test_generic_in_generic,
     r#"
 from typing import Literal, assert_type, overload
@@ -626,5 +759,247 @@ class Column[T]:
     def __init__(self, ty: TypeEngine[T]) -> None: ...
 
 assert_type(Column(UUID(as_uuid=False)), Column[B])
+    "#,
+);
+
+testcase!(
+    test_typevar_with_explicit_any_default,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+
+T = TypeVar("T", bound=int, default=Any)
+
+class A(Generic[T]):
+    def __new__(cls, x: T) -> A[T]: ...
+
+assert_type(A(0), A[int])
+A("oops")  # E: `str` is not assignable to upper bound `int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_typevar_with_explicit_any_default_in_nested_constructor_call,
+    r#"
+from typing import Any, assert_type
+
+class A[T = Any]:
+    def __new__(cls, x: T) -> A[T]: ...
+
+class B[T: int | A[Any] = Any]:
+    def __new__(cls, x: list[A[T]]) -> B[A[T]]: ...
+
+assert_type(B([A(0)]), B[A[int]])
+B([A("oops")])  # E: `str` is not assignable to upper bound `A | int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_init_overload_with_self,
+    r#"
+from typing import Generic, TypeVar, overload, Callable
+T = TypeVar("T")
+class C(Generic[T]):
+    @overload
+    def __init__(self: "C[int]", x: int) -> None:
+        ...
+    @overload
+    def __init__(self: "C[str]", x: str) -> None:
+        ...
+    def __init__(self, x: int | str) -> None:
+        ...
+
+def takes_Cint(x: Callable[[int], C[int]]) -> None:
+    pass
+def takes_Cstr(x: Callable[[str], C[str]]) -> None:
+    pass
+def takes_Cstr_wrong(x: Callable[[str], C[int]]) -> None:
+    pass
+takes_Cint(C)
+takes_Cstr(C)
+takes_Cstr_wrong(C) # E: Argument `type[C]` is not assignable to parameter `x` with type `(str) -> C[int]` in function `takes_Cstr_wrong`
+    "#,
+);
+
+testcase!(
+    test_init_to_callable_generics,
+    r#"
+from typing import Generic, TypeVar, assert_type, Callable
+T = TypeVar("T")
+class C(Generic[T]):
+    def __init__[V](self: "C[V]", x: V) -> None: pass
+def takes_callable[V](x: Callable[[V], C[V]], y: V) -> C[V]: ...
+assert_type(takes_callable(C, 42), C[int])
+assert_type(takes_callable(C, "hello"), C[str])
+    "#,
+);
+
+testcase!(
+    test_init_class_scoped_typevars_in_self,
+    r#"
+from typing import Generic, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+
+class Class8(Generic[T1, T2]):
+    def __init__(self: "Class8[T2, T1]") -> None:  # E: `__init__` method self type cannot reference class type parameters `T2`, `T1`
+        pass
+"#,
+);
+
+testcase!(
+    test_constructor_typevar_scope,
+    r#"
+from typing import Generic, TypeVar
+T = TypeVar("T")
+class Ok1(Generic[T]):
+    def __init__(self: "Ok1[int]") -> None:
+        pass
+class Ok2[T]:
+    def __init__(self: "Ok2[int]") -> None:
+        pass
+class Ok3(Generic[T]):
+    def __init__(self) -> None:
+        pass
+class Ok4[T]:
+    def __init__(self) -> None:
+        pass
+class Ok5(Generic[T]):
+    def __init__[V](self: "Ok5[V]", arg: V) -> None:
+        pass
+class Ok6[T]:
+    def __init__[V](self: "Ok6[V]", arg: V) -> None:
+        pass
+class Bad1(Generic[T]):
+    def __init__(self: "Bad1[T]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+class Bad2[T]:
+    def __init__(self: "Bad2[T]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+"#,
+);
+
+testcase!(
+    test_constructor_typevar_scope_nested,
+    r#"
+from typing import Generic, TypeVar
+T = TypeVar("T")
+# Nested type variables should also be detected (e.g., Foo[list[T]])
+class Bad1(Generic[T]):
+    def __init__(self: "Bad1[list[T]]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+class Bad2[T]:
+    def __init__(self: "Bad2[tuple[T, int]]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+"#,
+);
+
+testcase!(
+    test_constructor_typevar_scope_overload,
+    r#"
+from typing import Generic, TypeVar, overload
+T = TypeVar("T")
+# Overloaded __init__ methods should also be checked
+class Bad1(Generic[T]):
+    @overload
+    def __init__(self: "Bad1[T]", x: int) -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        ...
+    @overload
+    def __init__(self: "Bad1[str]", x: str) -> None:
+        ...
+    def __init__(self, x: int | str) -> None:
+        pass
+class Ok1(Generic[T]):
+    @overload
+    def __init__(self: "Ok1[int]", x: int) -> None:
+        ...
+    @overload
+    def __init__(self: "Ok1[str]", x: str) -> None:
+        ...
+    def __init__(self, x: int | str) -> None:
+        pass
+"#,
+);
+
+testcase!(
+    test_class_scoped_typevar_in_decorated_init,
+    r#"
+from typing import Any
+def decorate(f) -> Any: ...
+class A[T]:
+    @decorate
+    def __init__(self: A[T]): ...  # E: self type cannot reference class type parameter `T`
+    "#,
+);
+
+testcase!(
+    test_new_returns_concrete_inside_method,
+    r#"
+from typing import Self, reveal_type
+
+class C:
+    def __new__(cls) -> "C": ...
+
+    def method(self) -> None:
+        # __new__ explicitly returns C, not Self, so type(self)() returns C.
+        reveal_type(type(self)())  # E: revealed type: C
+
+class D(C): ...
+
+def check_subclass(d: D) -> None:
+    reveal_type(type(d)())  # E: revealed type: C
+    "#,
+);
+
+testcase!(
+    test_new_returns_list_self_inside_method,
+    r#"
+from typing import Self, reveal_type
+
+class C:
+    def __new__(cls) -> list[Self]: ...
+
+    def method(self) -> None:
+        # __new__ returns list[Self], so type(self)() preserves Self.
+        reveal_type(type(self)())  # E: revealed type: list[Self@C]
+
+class D(C): ...
+
+def check_subclass(d: D) -> None:
+    reveal_type(type(d)())  # E: revealed type: list[D]
+    "#,
+);
+
+testcase!(
+    test_metaclass_call_with_overridden_new,
+    r#"
+from typing import Self, assert_type
+
+class Meta(type):
+    def __call__[T](cls: type[T], x: int) -> T: ...
+
+class C(metaclass=Meta):
+    def __new__(cls, x: int) -> Self:
+        return super().__new__(cls)
+
+c = C(5)
+assert_type(c, C)
+C()     # E: Missing argument `x`  # E: Missing argument `x` in function `C.__new__`
+C("5")  # E: Argument `Literal['5']` is not assignable to parameter `x` with type `int`  # E: Argument `Literal['5']` is not assignable to parameter `x` with type `int` in function `C.__new__`
+    "#,
+);
+
+testcase!(
+    test_redundant_dict_constructor_call_ok,
+    r#"
+from collections.abc import Mapping
+from typing import Literal
+
+type Kind = Literal["a", "b"]
+
+def g(x: Mapping[Kind, int]) -> None: ...
+
+def f(x: dict[Kind, int]) -> None:
+    g(dict(x))
     "#,
 );

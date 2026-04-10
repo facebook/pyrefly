@@ -1,0 +1,127 @@
+{
+  "name": "test",
+  "names": [
+    "test.WithExit.__exit__",
+    "test.WithGetattr.__getattr__",
+    "test.WithSetattr.__setattr__",
+    "test.AnnotatedExit.__exit__",
+    "test.AnnotatedExit",
+    "test.WithExit",
+    "test.WithGetattr",
+    "test.WithSetattr"
+  ],
+  "line_count": 31,
+  "symbol_reports": [
+    {
+      "kind": "function",
+      "name": "test.WithExit.__exit__",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 14,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.WithGetattr.__getattr__",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 19,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.WithSetattr.__setattr__",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 24,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.AnnotatedExit.__exit__",
+      "n_typable": 4,
+      "n_typed": 4,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 29,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.AnnotatedExit",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 28,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.WithExit",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 13,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.WithGetattr",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 18,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.WithSetattr",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 23,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 7,
+  "n_typed": 4,
+  "n_any": 0,
+  "n_untyped": 3,
+  "coverage": 57.14285714285714,
+  "strict_coverage": 57.14285714285714,
+  "n_functions": 0,
+  "n_methods": 4,
+  "n_function_params": 0,
+  "n_method_params": 4,
+  "n_classes": 4,
+  "n_attrs": 0,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

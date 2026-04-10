@@ -24,6 +24,7 @@ import {
 import {PythonExtension} from '@vscode/python-extension';
 import {updateStatusBar, getStatusBarItem} from './status-bar';
 import {runDocstringFoldingCommand} from './docstring';
+import {registerCodeLensCommands} from './codeLens';
 import {
   triggerMsPythonRefreshLanguageServers,
   disableWindsurfPyrightIfInstalled,
@@ -33,6 +34,7 @@ import {
 
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
+let traceOutputChannel: vscode.OutputChannel;
 
 /// Get a setting at the path, or throw an error if it's not set.
 function requireSetting<T>(path: string): T {
@@ -98,6 +100,13 @@ export async function activate(context: ExtensionContext) {
     );
   }
 
+  // Initialize the trace output channel for separate trace logs
+  if (!traceOutputChannel) {
+    traceOutputChannel = vscode.window.createOutputChannel(
+      'Pyrefly language server trace',
+    );
+  }
+
   const path: string = requireSetting('pyrefly.lspPath');
   const args: [string] = requireSetting('pyrefly.lspArguments');
 
@@ -141,6 +150,7 @@ export async function activate(context: ExtensionContext) {
       ],
     },
     outputChannel: outputChannel,
+    traceOutputChannel: traceOutputChannel,
     middleware: {
       workspace: {
         configuration: async (
@@ -201,6 +211,7 @@ export async function activate(context: ExtensionContext) {
       await client.stop();
       // Clear the output channel but don't dispose it
       outputChannel.clear();
+      traceOutputChannel.clear();
       client = new LanguageClient(
         'pyrefly',
         'Pyrefly language server',
@@ -222,6 +233,7 @@ export async function activate(context: ExtensionContext) {
       await runDocstringFoldingCommand(client, outputChannel, 'editor.unfold');
     }),
   );
+  registerCodeLensCommands(context, pythonExtension);
 
   // When our extension is activated, make sure ms-python knows
   // TODO(kylei): remove this hack once ms-python has this behavior
@@ -262,9 +274,12 @@ export function deactivate(): Thenable<void> | undefined {
   if (!client) {
     return undefined;
   }
-  // Dispose the output channel when the extension is deactivated
+  // Dispose the output channels when the extension is deactivated
   if (outputChannel) {
     outputChannel.dispose();
+  }
+  if (traceOutputChannel) {
+    traceOutputChannel.dispose();
   }
   return client.stop();
 }

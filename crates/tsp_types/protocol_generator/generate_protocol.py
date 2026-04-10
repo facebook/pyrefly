@@ -1,3 +1,8 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
@@ -33,6 +38,27 @@ def load_json_schema(file_path: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def value_to_rust_identifier(val: str) -> str:
+    """
+    Convert a string value to a valid Rust enum identifier.
+
+    Examples:
+        "0.1.0" -> "V010"
+        "0.2.0" -> "V020"
+        "current" -> "Current"
+        "None" -> "None"
+    """
+    # Check if it's a version string like "0.1.0"
+    if re.match(r"^\d+\.\d+\.\d+$", val):
+        # Convert "0.1.0" to "V010"
+        parts = val.split(".")
+        return "V" + "".join(parts)
+    # Otherwise, convert to PascalCase
+    # Handle snake_case or kebab-case
+    parts = re.split(r"[_-]", val)
+    return "".join(part.capitalize() for part in parts)
+
+
 def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
     """
     Convert our TSP JSON format to the lsprotocol internal model format.
@@ -45,7 +71,7 @@ def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
 
     metadata = tsp_json["metaData"]
 
-    # Convert enumerations
+    # Convert enumerations from the "enumerations" array (if present)
 
     enumerations = []
     for enum_def in tsp_json.get("enumerations", []):
@@ -74,7 +100,64 @@ def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
                 supportsCustomValues=enum_def.get("supportsCustomValues", False),
             )
         )
-    # Convert structures
+
+    # Also convert stringLiteral and stringEnum types from the "types" object to enumerations
+    types_obj = tsp_json.get("types", {})
+    for type_name, type_def in types_obj.items():
+        kind = type_def.get("kind")
+        if kind == "stringLiteral":
+            # Convert stringLiteral to string enum (simple array of values)
+            values = []
+            value_list = type_def.get("value", [])
+            value_docs = type_def.get("valueDocumentation", {})
+            for val in value_list:
+                # Convert value to a valid Rust identifier
+                # e.g., "0.1.0" -> "V010", "current" -> "Current"
+                rust_name = value_to_rust_identifier(val)
+                values.append(
+                    model.EnumItem(
+                        name=rust_name,
+                        value=val,
+                        documentation=value_docs.get(val),
+                    )
+                )
+            enumerations.append(
+                model.Enum(
+                    name=type_name,
+                    type=model.EnumValueType(kind="base", name="string"),
+                    values=values,
+                    documentation=type_def.get("documentation"),
+                    supportsCustomValues=False,
+                )
+            )
+        elif kind == "stringEnum":
+            # Convert stringEnum to string enum (key-value mapping)
+            # Format: { "variant_name": "wire_value", ... }
+            values = []
+            values_map = type_def.get("values", {})
+            value_docs = type_def.get("valueDocumentation", {})
+            for variant_name, wire_value in values_map.items():
+                # Convert variant name to a valid Rust identifier
+                # e.g., "v0_1_0" -> "V010", "current" -> "Current"
+                rust_name = value_to_rust_identifier(variant_name)
+                values.append(
+                    model.EnumItem(
+                        name=rust_name,
+                        value=wire_value,  # The actual wire value
+                        documentation=value_docs.get(variant_name),
+                    )
+                )
+            enumerations.append(
+                model.Enum(
+                    name=type_name,
+                    type=model.EnumValueType(kind="base", name="string"),
+                    values=values,
+                    documentation=type_def.get("documentation"),
+                    supportsCustomValues=False,
+                )
+            )
+
+    # Convert structures from the "structures" array (if present)
 
     structures = []
     for struct_def in tsp_json.get("structures", []):
@@ -96,7 +179,39 @@ def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
                 documentation=struct_def.get("documentation"),
             )
         )
-    # Convert type aliases
+
+    # Convert types from the "types" object (interfaces become structures)
+    # Note: types_obj was already created above when processing stringLiteral enums
+    for type_name, type_def in types_obj.items():
+        kind = type_def.get("kind")
+        if kind == "interface":
+            # Convert interface to structure
+            properties = []
+            for prop_def in type_def.get("properties", []):
+                prop_type = convert_type_reference(prop_def["type"])
+                properties.append(
+                    model.Property(
+                        name=prop_def["name"],
+                        type=prop_type,
+                        optional=prop_def.get("optional", False),
+                        documentation=prop_def.get("documentation"),
+                    )
+                )
+            # Convert extends references so the Rust generator flattens
+            # parent properties into child structs.
+            extends = [
+                convert_type_reference(ext) for ext in type_def.get("extends", [])
+            ]
+            structures.append(
+                model.Structure(
+                    name=type_name,
+                    properties=properties,
+                    extends=extends,
+                    documentation=type_def.get("documentation"),
+                )
+            )
+
+    # Convert type aliases from the "typeAliases" array
 
     type_aliases = []
     for alias_def in tsp_json.get("typeAliases", []):
@@ -108,6 +223,23 @@ def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
                 documentation=alias_def.get("documentation"),
             )
         )
+
+    # Also convert alias types from the "types" object
+    for type_name, type_def in types_obj.items():
+        kind = type_def.get("kind")
+        if kind == "alias":
+            try:
+                alias_type = convert_type_reference(type_def["type"])
+                type_aliases.append(
+                    model.TypeAlias(
+                        name=type_name,
+                        type=alias_type,
+                        documentation=type_def.get("documentation"),
+                    )
+                )
+            except Exception as e:
+                print(f"Warning: Could not convert alias type '{type_name}': {e}")
+
     # Convert requests
 
     requests = []
@@ -169,9 +301,22 @@ def convert_type_reference(type_def: Dict[str, Any]) -> model.LSP_TYPE_SPEC:
     kind = type_def["kind"]
 
     if kind == "base":
-        return model.BaseType(kind="base", name=type_def["name"])
+        # Map TSP base types to LSP base types
+        # LSP model accepts: 'URI', 'DocumentUri', 'integer', 'uinteger', 'decimal', 'RegExp', 'string', 'boolean', 'null'
+        name = type_def["name"]
+        base_type_mapping = {
+            "number": "integer",  # TSP uses 'number', LSP uses 'integer'
+        }
+        name = base_type_mapping.get(name, name)
+        return model.BaseType(kind="base", name=name)
     elif kind == "reference":
-        return model.ReferenceType(kind="reference", name=type_def["name"])
+        name = type_def["name"]
+        # Generic type parameters like T in TypeBase<T> and DeclarationBase<T>
+        # are used as discriminator fields. In JSON serialization these are just
+        # strings, so map them to the string base type.
+        if name == "T":
+            return model.BaseType(kind="base", name="string")
+        return model.ReferenceType(kind="reference", name=name)
     elif kind == "array":
         element_type = convert_type_reference(type_def["element"])
         return model.ArrayType(kind="array", element=element_type)
@@ -186,6 +331,21 @@ def convert_type_reference(type_def: Dict[str, Any]) -> model.LSP_TYPE_SPEC:
 
         properties = []
         for prop_def in type_def["value"]["properties"]:
+            prop_type = convert_type_reference(prop_def["type"])
+            properties.append(
+                model.Property(
+                    name=prop_def["name"],
+                    type=prop_type,
+                    optional=prop_def.get("optional", False),
+                    documentation=prop_def.get("documentation"),
+                )
+            )
+        literal_value = model.LiteralValue(properties=properties)
+        return model.LiteralType(kind="literal", value=literal_value)
+    elif kind == "interface":
+        # Handle interface types (similar to literal but properties are at top level)
+        properties = []
+        for prop_def in type_def["properties"]:
             prop_type = convert_type_reference(prop_def["type"])
             properties.append(
                 model.Property(
@@ -216,6 +376,28 @@ def camel_to_upper_snake(name: str) -> str:
 
 def camel_to_snake(name: str) -> str:
     return camel_to_upper_snake(name).lower()
+
+
+def fix_recursive_types(content: str) -> str:
+    """Add Box indirection to break recursive type cycles.
+
+    The Type enum is recursive through fields like BuiltInType.possible_type,
+    which creates an infinite size type in Rust. We fix this by wrapping
+    recursive type references in Box.
+    """
+    # Fix fields that contain Option<Type> - wrap in Box
+    # Match pattern: pub fieldname: Option<Type>,
+    content = re.sub(r"(pub \w+: )Option<Type>(,)", r"\1Option<Box<Type>>\2", content)
+
+    # Fix fields that contain Vec<Type> - these are fine, Vec already provides indirection
+
+    # Fix direct Type fields (not in Option or Vec)
+    # Be careful not to match Vec<Type> or Option<Type>
+    content = re.sub(
+        r"(pub \w+: )(?<!Option<)(?<!Vec<)Type(,)", r"\1Box<Type>\2", content
+    )
+
+    return content
 
 
 def generate_constants_rust(tsp_json: Dict[str, Any]) -> str:
@@ -265,11 +447,14 @@ def generate_request_enum(content: str, requests: list[model.Request]) -> str:
     new_str += "pub enum TSPRequests {\n"
     for request in requests:
         new_str += f'    #[serde(rename = "{request.method}")]'
-        request_params = (
-            ""
-            if request.params is None
-            else f"\n        params: {request.params.name},"
-        )
+        # Only include params if it's a named reference type
+        request_params = ""
+        if request.params is not None:
+            if hasattr(request.params, "name") and request.params.name:
+                request_params = f"\n        params: {request.params.name},"
+            else:
+                # Inline type - use serde_json::Value for flexibility
+                request_params = "\n        params: serde_json::Value,"
         new_str += f"    {request.typeName}{{\n        id: serde_json::Value,{request_params}\n    }},\n"
     new_str += "}\n"
     return content[:end_offset] + "\n\n" + new_str + content[end_offset:]
@@ -359,26 +544,28 @@ def fixup_request_in_content(content: str, request: model.Request) -> str:
         return content[:offset] + request_text + content[end_offset + 1 :]
 
 
+def find_block_end(content: str, idx: int) -> Optional[int]:
+    """Find the end of a brace-delimited block starting at the opening brace at `idx`."""
+    if idx < 0:
+        return None
+    depth = 0
+    i = idx
+    while i < len(content):
+        c = content[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return None
+
+
 # Helper to replace enum flags with newtype bitflag style
 
 
 def replace_flag_enum(content: str, name: str, mapping: Dict[str, int]) -> str:
-    def find_block_end(idx: int) -> Optional[int]:
-        if idx < 0:
-            return None
-        depth = 0
-        i = idx
-        while i < len(content):
-            c = content[i]
-            if c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
-                    return i + 1
-            i += 1
-        return None
-
     enum_marker = f"pub enum {name} "
     enum_start = content.find(enum_marker)
     if enum_start == -1:
@@ -387,7 +574,7 @@ def replace_flag_enum(content: str, name: str, mapping: Dict[str, int]) -> str:
         )
         return content
     enum_brace = content.find("{", enum_start)
-    enum_end = find_block_end(enum_brace)
+    enum_end = find_block_end(content, enum_brace)
     if enum_end is None:
         print(
             f"Warning: Could not find end of enum {name}, skipping flag enum replacement"
@@ -401,7 +588,7 @@ def replace_flag_enum(content: str, name: str, mapping: Dict[str, int]) -> str:
         )
         return content
     ser_brace = content.find("{", ser_start)
-    ser_end = find_block_end(ser_brace)
+    ser_end = find_block_end(content, ser_brace)
     if ser_end is None:
         print(
             f"Warning: Could not find end of Serialize impl for {name}, skipping flag enum replacement"
@@ -415,7 +602,7 @@ def replace_flag_enum(content: str, name: str, mapping: Dict[str, int]) -> str:
         )
         return content
     de_brace = content.find("{", de_start)
-    de_end = find_block_end(de_brace)
+    de_end = find_block_end(content, de_brace)
     if de_end is None:
         print(
             f"Warning: Could not find end of Deserialize impl for {name}, skipping flag enum replacement"
@@ -491,56 +678,141 @@ def replace_flag_enum(content: str, name: str, mapping: Dict[str, int]) -> str:
 
 
 def extract_flag_enums_from_tsp(tsp_json: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
-    """
-    Extract flag enums from TSP JSON file.
+    """Extract flag enums from TSP JSON file.
 
-    A flag enum is identified by:
-    1. Having integer values
-    2. Having "Flags" in the name, OR
-    3. Having values that are powers of 2 (or 0), suggesting bitflag usage
+    A flag enum is identified by having `"isFlags": true` in its definition.
     """
     flag_enums = {}
 
     for enum_def in tsp_json.get("enumerations", []):
         enum_name = enum_def["name"]
 
-        # Check if this enum has integer values
-
         if enum_def.get("type", {}).get("name") != "integer":
             continue
-        # Extract value mappings
+        if not enum_def.get("isFlags", False):
+            continue
 
         mapping = {}
-        power_of_two_count = 0
-        zero_count = 0
-
         for value_def in enum_def["values"]:
-            name = value_def["name"]
-            value = value_def["value"]
-            mapping[name] = value
-
-            if value == 0:
-                zero_count += 1
-            elif value > 0 and (value & (value - 1)) == 0:
-                # This is a power of 2
-
-                power_of_two_count += 1
-        total_values = len(mapping)
-
-        # Determine if this is likely a flag enum:
-
-        is_flag_enum = False
-
-        # Strong indicator: name contains "Flags"
-
-        if "Flags" in enum_name:
-            is_flag_enum = True
-        # Special case: all values are powers of 2 or 0
-        elif total_values > 1 and (power_of_two_count + zero_count) == total_values:
-            is_flag_enum = True
-        if is_flag_enum:
-            flag_enums[enum_name] = mapping
+            mapping[value_def["name"]] = value_def["value"]
+        flag_enums[enum_name] = mapping
     return flag_enums
+
+
+def extract_integer_enums_from_tsp(
+    tsp_json: Dict[str, Any],
+) -> Dict[str, Dict[str, int]]:
+    """Extract non-flag integer enums from TSP JSON file.
+
+    These are integer enums with sequential (non-power-of-2) values,
+    used as discriminators (e.g., DeclarationCategory, TypeKind, DeclarationKind).
+    """
+    flag_enums = extract_flag_enums_from_tsp(tsp_json)
+    integer_enums = {}
+
+    for enum_def in tsp_json.get("enumerations", []):
+        enum_name = enum_def["name"]
+        if enum_def.get("type", {}).get("name") != "integer":
+            continue
+        if enum_name in flag_enums:
+            continue
+        mapping = {}
+        for value_def in enum_def["values"]:
+            mapping[value_def["name"]] = value_def["value"]
+        integer_enums[enum_name] = mapping
+    return integer_enums
+
+
+def replace_integer_enum(
+    content: str, name: str, mapping: Dict[str, int], tsp_json: Dict[str, Any]
+) -> str:
+    """Replace lsprotocol-generated integer enum with #[repr(u8)] + serde_repr.
+
+    The lsprotocol generator emits integer enums with custom Serialize/Deserialize
+    impls. We replace them with simpler #[repr(u8)] enums using serde_repr.
+    """
+
+    enum_marker = f"pub enum {name} "
+    enum_start = content.find(enum_marker)
+    if enum_start == -1:
+        print(
+            f"Warning: Enum {name} not found in content, skipping integer enum replacement"
+        )
+        return content
+    enum_brace = content.find("{", enum_start)
+    enum_end = find_block_end(content, enum_brace)
+    if enum_end is None:
+        print(
+            f"Warning: Could not find end of enum {name}, skipping integer enum replacement"
+        )
+        return content
+
+    # Find and remove Serialize/Deserialize impls generated by lsprotocol
+    ser_marker = f"impl Serialize for {name}"
+    ser_start = content.find(ser_marker, enum_end)
+    de_marker = f"impl<'de> Deserialize<'de> for {name}"
+
+    removal_end = enum_end
+    if ser_start != -1:
+        ser_brace = content.find("{", ser_start)
+        ser_end = find_block_end(content, ser_brace)
+        if ser_end is not None:
+            de_start = content.find(de_marker, ser_end)
+            if de_start != -1:
+                de_brace = content.find("{", de_start)
+                de_end = find_block_end(content, de_brace)
+                if de_end is not None:
+                    removal_end = de_end
+
+    # Capture doc comments preceding enum
+    doc_start = enum_start
+    line_start = content.rfind("\n", 0, enum_start) + 1
+    while line_start >= 0:
+        line = content[line_start:enum_start]
+        stripped = line.strip()
+        if (
+            stripped.startswith("///")
+            or stripped.startswith("#[derive")
+            or stripped == ""
+        ):
+            doc_start = line_start
+            if line_start == 0:
+                break
+            prev_line_end = content.rfind("\n", 0, line_start - 1)
+            if prev_line_end == -1:
+                line_start = 0
+            else:
+                line_start = prev_line_end + 1
+        else:
+            break
+
+    # Look up documentation from tsp.json
+    enum_doc = None
+    value_docs = {}
+    for enum_def in tsp_json.get("enumerations", []):
+        if enum_def["name"] == name:
+            enum_doc = enum_def.get("documentation")
+            for value_def in enum_def.get("values", []):
+                value_docs[value_def["name"]] = value_def.get("documentation")
+            break
+
+    lines: list[str] = []
+    if enum_doc:
+        lines.append(f"/// {enum_doc}")
+    lines.append(
+        "#[derive(Serialize_repr, Deserialize_repr, PartialEq, Debug, Eq, Clone, Copy)]"
+    )
+    lines.append("#[repr(u8)]")
+    lines.append(f"pub enum {name} {{")
+    for variant_name, val in mapping.items():
+        doc = value_docs.get(variant_name)
+        rust_name = value_to_rust_identifier(variant_name)
+        if doc:
+            lines.append(f"    /// {doc}")
+        lines.append(f"    {rust_name} = {val},")
+    lines.append("}")
+    replacement = "\n" + "\n".join(lines) + "\n"
+    return content[:doc_start] + replacement + content[removal_end:]
 
 
 def generate_rust_protocol(tsp_json_path: str, output_dir: str) -> None:
@@ -620,18 +892,59 @@ def generate_rust_protocol(tsp_json_path: str, output_dir: str) -> None:
         constants_rust = generate_constants_rust(tsp_json)
         if constants_rust:
             content += "\n\n" + constants_rust
-        # Add crate-level allows
+        # Remove the Microsoft copyright from the lsprotocol generator output
+        content = content.replace(
+            "// Copyright (c) Microsoft Corporation. All rights reserved.\n// Licensed under the MIT License.\n\n",
+            "",
+        )
 
-        content = "#![allow(clippy::all)]\n#![allow(dead_code)]\n\n" + content
+        # Add crate-level allows and Meta copyright header
+
+        content = (
+            "/*\n"
+            " * Copyright (c) Meta Platforms, Inc. and affiliates.\n"
+            " *\n"
+            " * This source code is licensed under the MIT license found in the\n"
+            " * LICENSE file in the root directory of this source tree.\n"
+            " */\n"
+            "\n"
+            "#![allow(clippy::all)]\n#![allow(dead_code)]\n\n" + content
+        )
 
         # Fixup flag enums - automatically detect flag enums from TSP JSON
 
         flag_enums = extract_flag_enums_from_tsp(tsp_json)
         for enum_name, mapping in flag_enums.items():
             content = replace_flag_enum(content, enum_name, mapping)
+
+        # Fixup integer enums (non-flag) - use #[repr(u8)] + serde_repr
+
+        integer_enums = extract_integer_enums_from_tsp(tsp_json)
+        if integer_enums:
+            # Add serde_repr imports after the allow directives
+            allow_marker = "#![allow(dead_code)]\n\n"
+            content = content.replace(
+                allow_marker,
+                allow_marker
+                + "use serde_repr::Deserialize_repr;\nuse serde_repr::Serialize_repr;\n\n",
+                1,
+            )
+            for enum_name, mapping in integer_enums.items():
+                content = replace_integer_enum(content, enum_name, mapping, tsp_json)
+
+        # Fix recursive types by adding Box indirection
+        # The Type enum is recursive through BuiltInType.possible_type and others
+        content = fix_recursive_types(content)
+
         target_protocol.write_text(content, encoding="utf-8")
         print(f"Successfully generated: {target_protocol}")
-        subprocess.run(["cargo", "fmt", "--", str(target_protocol)], check=False)
+        # Run cargo fmt from the crate root directory
+        crate_root = output_path
+        subprocess.run(
+            ["cargo", "fmt", "--", str(target_protocol)],
+            cwd=str(crate_root),
+            check=False,
+        )
     else:
         print(f"Warning: Generated lib.rs not found at {generated_lib}")
 

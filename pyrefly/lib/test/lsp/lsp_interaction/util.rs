@@ -11,11 +11,10 @@ use std::path::PathBuf;
 
 use lsp_types::GotoDefinitionResponse;
 use lsp_types::Location;
+use pyrefly::module::bundled::BundledStub;
+use pyrefly::module::typeshed::typeshed;
 use pyrefly_util::fs_anyhow;
 use tempfile::TempDir;
-
-use crate::module::bundled::BundledStub;
-use crate::module::typeshed::typeshed;
 
 pub fn get_test_files_root() -> TempDir {
     let mut source_files =
@@ -113,4 +112,33 @@ pub fn line_at_location(location: &Location) -> Option<String> {
         .lines()
         .nth(location.range.start.line as usize)
         .map(|s| s.to_owned())
+}
+
+/// Validates inlay hint label parts against expected values and location presence.
+/// Each tuple in `expected` contains (value, should_have_location).
+pub fn check_inlay_hint_label_values(
+    hint: &lsp_types::InlayHint,
+    expected: &[(&str, bool)],
+) -> bool {
+    match &hint.label {
+        lsp_types::InlayHintLabel::LabelParts(parts) => {
+            if parts.len() != expected.len() {
+                return false;
+            }
+            for (part, (expected_value, should_have_location)) in parts.iter().zip(expected.iter())
+            {
+                if part.value != *expected_value {
+                    return false;
+                }
+                if !*should_have_location && part.location.is_some() {
+                    return false;
+                }
+                if *should_have_location && part.location.is_none() {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => false,
+    }
 }

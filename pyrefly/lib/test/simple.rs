@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::sys_info::PythonVersion;
+
 use crate::test::util::TestEnv;
 use crate::test::util::testcase_for_macro;
 use crate::testcase;
@@ -57,6 +59,54 @@ def f(x: type[int] | type[str], y: type[int | str]) -> None:
 );
 
 testcase!(
+    test_distribute_type_assignability,
+    r#"
+def f() -> type[int | str]: ...
+def g() -> type[int] | type[str]: ...
+x: type[int] | type[str] = f()
+y: type[int | str] = g()
+    "#,
+);
+
+testcase!(
+    test_type_of_union_matches_type_param,
+    r#"
+from typing import assert_type
+def f[T](x: type[T]) -> T: ...
+assert_type(f(int | None), int | None)
+    "#,
+);
+
+testcase!(
+    test_type_of_union_matches_type_param_or_none,
+    r#"
+from typing import assert_type
+def f[T](x: type[T] | None) -> T: ...
+assert_type(f(int | str), int | str)
+    "#,
+);
+
+testcase!(
+    test_type_of_union_partially_matches_type_param,
+    r#"
+from typing import assert_type
+def f[T](x: type[T] | type[int]) -> T: ...
+def g(x: type[int | str]):
+    assert_type(f(x), str)
+    "#,
+);
+
+testcase!(
+    test_union_of_type_matches_type_param,
+    r#"
+from typing import assert_type
+def f[T](x: type[T]) -> T: ...
+def g(x: type[int] | type[str]):
+    assert_type(f(x), int | str)
+    "#,
+);
+
+testcase!(
     test_simple_call,
     r#"
 from typing import assert_type
@@ -64,6 +114,19 @@ def f(x: str) -> int:
     return 1
 y = f("test")
 assert_type(y, int)
+"#,
+);
+
+testcase!(
+    test_tstring,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from string.templatelib import Template
+from typing import assert_type
+
+v = 99
+template = t"hello{42}world{v}goodbye"
+assert isinstance(template, Template)
 "#,
 );
 
@@ -178,6 +241,41 @@ def f(x: str) -> str:
     return x
 y = x
 assert_type(y, Literal[1])
+"#,
+);
+
+testcase!(
+    test_shadow_builtin_zip,
+    r#"
+from typing import assert_type
+
+def zip(*args) -> list[int]:
+    return []
+
+def f(a: list[int], b: list[int]):
+    return zip(a, b)
+
+assert_type(f([1], [2]), list[int])
+"#,
+);
+
+testcase!(
+    test_conditional_shadow_builtin_zip,
+    r#"
+from typing import assert_type
+import random
+
+cond = random.randint(0, 1)
+if cond:
+    def zip(*args) -> list[int]:
+        return []
+
+def f(a: list[int], b: list[int]):
+    return zip(a, b)
+
+# Note that we completely ignore the builtin `zip` here even though it is conditionally shadowed.
+# This matches the behavior of pyright, mypy, and ty.
+assert_type(f([1], [2]), list[int])
 "#,
 );
 
@@ -331,6 +429,25 @@ assert_type(f(1), int)
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2722
+testcase!(
+    test_signature_diff_no_panic,
+    r#"
+class TestABC:
+    pass
+
+class Asset(TestABC):
+    @classmethod
+    def _money_desc(cls):
+        return '累计可领(元)'
+
+class PensionAsset(Asset):
+    @classmethod
+    def _money_desc(cls):  # E: `PensionAsset._money_desc` has type `(cls: type[PensionAsset]) -> Literal['90岁累计可领(元)']`, which is not assignable to `(cls: type[PensionAsset]) -> Literal['累计可领(元)']`, the type of `Asset._money_desc`
+        return '90岁累计可领(元)'
+"#,
+);
+
 testcase!(
     test_final_annotated,
     r#"
@@ -352,10 +469,46 @@ testcase!(
 from typing import Final
 
 x: Final[int] = 0
-x = 1  # E: `x` is marked final
+x = 1  # E: Cannot assign to variable `x` because it is marked final
 
 y: Final = "foo"
-y = "bar"  # E: `y` is marked final
+y = "bar"  # E: Cannot assign to variable `y` because it is marked final
+"#,
+);
+
+testcase!(
+    test_final_field,
+    r#"
+from typing import Final
+class C:
+    x: Final[int] = 1
+    uninitialized: Final[str]
+    def __init__(self):
+        self.x = 42  # E: Cannot set field `x`
+        self.uninitialized = "ok"
+"#,
+);
+
+testcase!(
+    test_final_reassign,
+    r#"
+from typing import Final, TextIO
+x: Final[int] = 0
+x = 1  # E: Cannot assign to variable `x` because it is marked final
+x += 1  # E: Cannot assign to variable `x` because it is marked final
+y = x = 3 # E: Cannot assign to variable `x` because it is marked final
+y = (x := 3) # E: Cannot assign to variable `x` because it is marked final
+x, y = 4, 5 # E: Cannot assign to variable `x` because it is marked final
+[x, y] = [6, 7] # E: Cannot assign to variable `x` because it is marked final
+for x in [1, 2, 3]:  # E: Cannot assign to variable `x` because it is marked final
+    ...
+
+xs: Final[list[int]] = []
+[_, *xs] = [1, 2, 3]  # E: Cannot assign to variable `xs` because it is marked final
+
+f: Final[TextIO] = open("file.txt")
+with open("file.txt") as f:  # E: Cannot assign to variable `f` because it is marked final
+    ...
 "#,
 );
 
@@ -363,6 +516,16 @@ testcase!(
     test_reveal_type,
     r#"
 from typing import reveal_type
+reveal_type()  # E: reveal_type needs 1 positional argument, got 0
+reveal_type(1)  # E: revealed type: Literal[1]
+    "#,
+);
+
+testcase!(
+    test_typing_extensions_reveal_type,
+    TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+from typing_extensions import reveal_type
 reveal_type()  # E: reveal_type needs 1 positional argument, got 0
 reveal_type(1)  # E: revealed type: Literal[1]
     "#,
@@ -414,7 +577,19 @@ testcase!(
 def f(x: str) -> str:
     return x
 
-x = f"abc{f(1)}def"  # E: Argument `Literal[1]` is not assignable to parameter `x` with type `str`
+x = f"abc{f(1)}def"  # E: `Literal[1]` is not assignable to parameter `x` with type `str`
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2669
+testcase!(
+    test_fstring_type_errors,
+    r#"
+arr = [1, 2, 3]
+
+a = f"{len(False)}"  # E: Protocol `Sized` requires attribute `__len__`
+b = f"{2 + 'Foo'}"  # E: `+` is not supported between `Literal[2]` and `Literal['Foo']`
+c = f"{arr['foo']}"  # E: Cannot index into `list[int]`
 "#,
 );
 
@@ -469,11 +644,11 @@ testcase!(
     r#"
 from typing import Callable, Optional, Type, TypeGuard, TypeIs
 
-def test0() -> Type[int, int]: ...  # E: requires exactly one argument
-def test1() -> TypeGuard[int, int]: ...  # E: requires exactly one argument
-def test2() -> TypeIs[int, int]: ...  # E: requires exactly one argument
-def test3() -> Optional[int, int]: ...  # E: requires exactly one argument
-def test4() -> Callable[[], int, int]: ...  # E: requires exactly two arguments
+def test0() -> Type[int, int]: ...  # E: Expected 1 type argument
+def test1() -> TypeGuard[int, int]: ...  # E: Expected 1 type argument
+def test2() -> TypeIs[int, int]: ...  # E: Expected 1 type argument
+def test3() -> Optional[int, int]: ...  # E: Expected 1 type argument
+def test4() -> Callable[[], int, int]: ...  # E: Expected 2 arguments
 "#,
 );
 
@@ -626,7 +801,7 @@ class B[T]:
     pass
 for x in A[str]:
     assert_type(x, int)
-for _ in B[str]:  # E: Type `type[B[str]]` is not iterable
+for _ in B[str]:
     pass
     "#,
 );
@@ -697,12 +872,13 @@ for a in A:  # E: Type `type[A]` is not iterable
 );
 
 testcase!(
+    bug = "Although A[int] is a generic alias and can be iterated over, type[A[int]] is a type and cannot be iterated over.",
     test_getitem_cannot_iterate_generic_class,
     r#"
 class A[T]:
     def __getitem__(self, i: int) -> int: ...
 def f(x: type[A[int]]):
-    for a in x:  # E: Type `type[A[int]]` is not iterable
+    for a in x:  # Expect an error here
         pass
     "#,
 );
@@ -766,11 +942,11 @@ testcase!(
 val = 42
 def foo(arg): ...
 def test(
-    a: foo(arg=val),  # E: function call cannot be used in annotations
-    b: lambda: None,  # E: lambda definition cannot be used in annotations
-    c: [foo(arg=val)], # E: list literal cannot be used in annotations
-    d: (1, 2), # E: tuple literal cannot be used in annotations
-    e: 1 + 2,  # E: binary operation `+` cannot be used in annotations
+    a: foo(arg=val),  # E: Function call cannot be used in annotations
+    b: lambda: None,  # E: Lambda definition cannot be used in annotations
+    c: [foo(arg=val)], # E: List literal cannot be used in annotations
+    d: (1, 2), # E: Tuple literal cannot be used in annotations
+    e: 1 + 2,  # E: Binary operation `+` cannot be used in annotations
 ): ...
 "#,
 );
@@ -785,15 +961,26 @@ assert_type(x, list[int])
 );
 
 testcase!(
-    bug = "TODO",
     test_type_of_type,
     r#"
 class C:
     pass
 c1: type[C] = C
-# TODO(stroxler): Handle `type[Any]` correctly here.
 c2: type[C, C] = C  # E: Expected 1 type argument for `type`, got 2
     "#,
+);
+
+testcase!(
+    test_type_without_argument_is_equivalent_to_type_any,
+    r#"
+from typing import assert_type, Any
+def f(x: type) -> None:
+    g(x)
+    assert_type(x, type[Any])
+def g(x: type[Any]) -> None:
+    f(x)
+    assert_type(x, type)
+"#,
 );
 
 testcase!(
@@ -803,6 +990,19 @@ from typing import Annotated, assert_type
 def f(x: Annotated[int, "test"], y: Annotated[int, "test", "test"]):
     assert_type(x, int)
     assert_type(y, int)
+def g(x: Annotated[int]): # E: `Annotated` needs at least one piece of metadata in addition to the type
+    pass
+X = Annotated[int, "meta"]
+Y = Annotated[int] # E: `Annotated` needs at least one piece of metadata in addition to the type
+    "#,
+);
+
+testcase!(
+    test_annotated_dunder_doc,
+    r#"
+from typing import Annotated, assert_type
+x = Annotated[int, "meta"].__doc__
+assert_type(x, str | None)
     "#,
 );
 
@@ -877,12 +1077,24 @@ assert_type(type(x6), type[dict])
 );
 
 testcase!(
+    test_assert_nonetype,
+    r#"
+from types import NoneType
+from typing import assert_type
+
+def f(x: int | NoneType):
+    assert_type(x, int | None)
+"#,
+);
+
+testcase!(
     test_anywhere_binding,
     r#"
 from typing import assert_type, Literal
 x = 1
 def foo():
-    assert_type(x, Literal['test', 1])
+    # Cross-barrier read promotes Literal[1, 'test'] → int | str
+    assert_type(x, int | str)
 foo()
 x = "test"
 "#,
@@ -988,6 +1200,13 @@ testcase!(
 # This parse error results in two identical Identifiers, which previously caused a panic.
 a = True if # E: Parse
 "#,
+);
+
+testcase!(
+    test_syntax_error_resulting_in_empty_defintion,
+    r#"
+@:a=1 # E: Parse # E: Could not find name `a`
+    "#,
 );
 
 testcase!(
@@ -1352,14 +1571,24 @@ def f(x: Type) -> None: ...
 def g(x: type) -> None: ...
 
 f(int)
-f(Type)
+f(Type)  # E: not assignable to parameter `x` with type `type[Any]`
 f(type)
-f(42)  # E: not assignable to parameter `x` with type `type[Unknown]`
+f(42)  # E: not assignable to parameter `x` with type `type[Any]`
 
 g(int)
-g(Type)
+g(Type)  # E: not assignable to parameter `x` with type `type[Any]`
 g(type)
-g(42)  # E: not assignable to parameter `x` with type `type`
+g(42)  # E: not assignable to parameter `x` with type `type[Any]`
+"#,
+);
+
+testcase!(
+    test_typing_type_properties,
+    r#"
+from typing import Type, assert_type, reveal_type
+def f(x: Type) -> None:
+    assert_type(x.__mro__, tuple[type, ...])
+    assert_type(x.__base__, type | None)
 "#,
 );
 
@@ -1507,6 +1736,22 @@ def g(f: Callable[[Any], int], inputs: Any) -> None:
 );
 
 testcase!(
+    test_map_str_method_with_splitlines,
+    r#"
+def main(a: str) -> None:
+    _ = map(str.strip, a.splitlines())
+    "#,
+);
+
+testcase!(
+    test_str_maketrans_with_dict,
+    r#"
+def main() -> None:
+    _ = str.maketrans({"a": "b", "c": None})
+    "#,
+);
+
+testcase!(
     test_union_function_exponential,
     r#"
 # This used to take an exponential amount of time to type check
@@ -1543,6 +1788,30 @@ testcase!(
     r#"
 # Used to crash, https://github.com/facebook/pyrefly/issues/518
 if"":=  # E: Assignment expression target must be an identifier # E: Expected an expression
+"#,
+);
+
+testcase!(
+    test_crash_on_invalid_attribute_walrus,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/1903
+(:=).:  # E: Cannot annotate non-self attribute `:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Parse error: Expected an expression
+"#,
+);
+
+testcase!(
+    test_crash_on_incomplete_walrus,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/2093
+(:=  # E: Parse error: Expected an expression # E: Parse error: Expected an expression
+"#,
+);
+
+testcase!(
+    test_crash_on_augassign_walrus_rhs,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/1991
+1 += (c := 1)  # E: Parse error: Invalid augmented assignment target
 "#,
 );
 
@@ -1782,6 +2051,40 @@ assert_type(Foo[0], str)
 "#,
 );
 
+testcase!(
+    test_class_getitem_classmethod_does_not_double_bind_cls,
+    r#"
+from types import GenericAlias
+from typing import assert_type
+
+class SparseBase:
+    @classmethod
+    def __class_getitem__(cls, arg: object, /) -> GenericAlias:
+        return GenericAlias(cls, arg)
+
+class SparseMatrix(SparseBase):
+    pass
+
+assert_type(SparseMatrix[int], GenericAlias)
+"#,
+);
+
+testcase!(
+    test_class_metaclass_getitem,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    def __getitem__(self, item: int) -> str:
+        return str(item)
+
+class Foo(metaclass=Meta):
+    pass
+
+assert_type(Foo[0], str)
+"#,
+);
+
 testcase!(test_panic_docstring, "\"\"\" F\n\u{85}\"\"\"",);
 
 testcase!(
@@ -1823,6 +2126,16 @@ testcase!(
     r#"
 __all__ = ["x", "y"]  # E: Name `y` is listed in `__all__` but is not defined in the module
 x = 5
+    "#,
+);
+
+testcase!(
+    test_missing_name_in_dunder_all_with_getattr,
+    r#"
+from typing import Any
+__all__ = ["x", "y"]
+x = 5
+def __getattr__(name: str) -> Any: ...
     "#,
 );
 
@@ -1941,5 +2254,86 @@ testcase!(
     r#"
 def test():
     x: (yield from [1])  # E:
+    "#,
+);
+
+testcase!(
+    test_passing_callable_as_type_not_allowed,
+    r#"
+from typing import Callable, Type, Any
+def takes_type(x: type): ...
+def takes_Type(x: Type): ...
+def takes_type_any(x: type[Any]): ...
+def takes_Type_any(x: Type[Any]): ...
+takes_type(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_type_any(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type_any(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+"#,
+);
+
+testcase!(
+    test_min_max_int_and_float,
+    r#"
+from typing import reveal_type
+def f(x: float):
+    # We use reveal_type rather than assert_type here to verify that the type is exactly float, not
+    # int | float. Even though the two are equivalent, pyrefly doesn't eagerly simplify the union,
+    # so producing the union would cause spurious downstream errors.
+    reveal_type(min(0, x))  # E: revealed type: float
+    reveal_type(max(0, x))  # E: revealed type: float
+    "#,
+);
+
+testcase!(
+    test_open_return_type,
+    r#"
+from io import BufferedReader, TextIOWrapper
+from typing import Any, assert_type, BinaryIO, IO
+def f(fi: Any, buffering1: int, buffering2: Any):
+    with open(fi, "r") as f:
+        assert_type(f, TextIOWrapper)
+    with open(fi, "rb") as f:
+        assert_type(f, BufferedReader)
+    with open(fi, "rb", 1) as f:
+        assert_type(f, BufferedReader)
+    with open(fi, "rb", buffering1) as f:
+        assert_type(f, BinaryIO)
+    with open(fi, "rb", buffering2) as f:
+        assert_type(f, IO[Any])
+    "#,
+);
+
+testcase!(
+    test_index_into_sequence_of_str,
+    r#"
+from typing import assert_type, Sequence
+def f(x: Sequence[str], idx):
+    # idx may be a slice
+    assert_type(x[idx], Sequence[str])
+    "#,
+);
+
+testcase!(
+    test_subscript_with_union_type,
+    r#"
+d: dict[type[bool] | type[float] | type[int], bool | float | int] = {}
+k: type[bool | float | int] = bool
+d[k]
+    "#,
+);
+
+testcase!(
+    test_bool_and_unknown,
+    r#"
+from typing import Any, assert_type
+def f(x):
+    y = True
+    y &= x
+    assert_type(y, Any)
     "#,
 );

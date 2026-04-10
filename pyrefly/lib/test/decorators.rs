@@ -99,6 +99,28 @@ def takes_inferred(i) -> None:
 );
 
 testcase!(
+    test_generic_decorator_with_unannotated_param,
+    r#"
+from typing import Callable, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+T3 = TypeVar("T3")
+
+def decorator(func: Callable[[T1, T2], T3]) -> Callable[[T1, T2], T3]:
+    return func
+
+class Expr:
+    @decorator
+    def __truediv__(self, other) -> "Expr":
+        return Expr()
+
+x = Expr()
+y = x / 2
+    "#,
+);
+
+testcase!(
     test_callable_instance,
     r#"
 from typing import Callable, reveal_type
@@ -586,10 +608,10 @@ testcase!(
     r#"
 import contextlib
 from contextlib import contextmanager
-from typing import Iterator, List, assert_type
+from typing import Generator, List, assert_type
 
 @contextmanager
-def generic_ctx[T](val: T) -> Iterator[T]:
+def generic_ctx[T](val: T) -> Generator[T, None, None]:
     yield val
 
 def test(x: int, items: List[int]):
@@ -658,15 +680,53 @@ reveal_type(my_func)  # E: revealed type: (object) -> None
 );
 
 testcase!(
-    test_numba_jit_decorators_preserve_signature,
-    TestEnv::one_with_path(
+    bug = "FP in Dual-use decorators https://github.com/facebook/pyrefly/issues/2621",
+    test_dual_use_decorator,
+    r#"
+from typing import assert_type
+from functools import wraps
+
+def optional_debug(func_or_flag=None):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+        return wrapper
+    if callable(func_or_flag):
+        return decorator(func_or_flag)
+    return decorator
+
+@optional_debug
+def compute(x: int, y: int, z: int) -> int:
+    return x + y + z
+
+r1 = compute(1, 2, 3)  # E: Expected 1 positional argument, got 3 in function `decorator`
+assert_type(r1, int)  # E: assert_type(((*args: Unknown, **kwargs: Unknown) -> Unknown) | Unknown, int) failed
+    "#,
+);
+
+fn env_numba() -> TestEnv {
+    let mut env = TestEnv::one_with_path(
         "numba",
-        "numba.pyi",
+        "numba/__init__.pyi",
+        r#"
+from numba.core.decorators import jit, njit
+"#,
+    );
+    env.add_with_path(
+        "numba.core.decorators",
+        "numba/core/decorators.pyi",
         r#"
 def jit(*args, **kwargs): ...
 def njit(*args, **kwargs): ...
 "#,
-    ),
+    );
+    env
+}
+
+testcase!(
+    test_numba_jit_decorators_preserve_signature,
+    env_numba(),
     r#"
 import numba
 from typing import assert_type

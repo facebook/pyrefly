@@ -21,9 +21,9 @@ jobs:
         if: ${{ success() }}
         steps:
             - name: upload
-              uses: actions/download-artifact@v4
+              uses: actions/download-artifact@v7
             - name: publish
-              run: npx vsce publish --packagePath $(find . -iname *.vsix)
+              run: npx @vscode/vsce publish --skip-duplicate --packagePath $(find . -iname '*.vsix')
               env:
                 VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
@@ -35,6 +35,6 @@ jobs:
         if: ${{ success() }}
         steps:
             - name: upload
-              uses: actions/download-artifact@v4
+              uses: actions/download-artifact@v7
             - name: publish
-              run: npx ovsx publish --packagePath $(find . -iname *.vsix) --pat ${{ secrets.OPENVSX_TOKEN }}
+              run: npx ovsx publish --skip-duplicate --packagePath $(find . -iname '*.vsix') --pat ${{ secrets.OPENVSX_TOKEN }}

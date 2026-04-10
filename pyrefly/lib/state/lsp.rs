@@ -5,23 +5,22 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Ordering;
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::LazyLock;
 
 use dupe::Dupe;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use lsp_types::CompletionItem;
-use lsp_types::CompletionItemKind;
-use lsp_types::CompletionItemLabelDetails;
-use lsp_types::CompletionItemTag;
-use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
-use pyrefly_python::keywords::get_keywords;
 use pyrefly_python::module::Module;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
@@ -31,28 +30,28 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::facet::FacetKind;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
+use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::Cancelled;
+use pyrefly_util::telemetry::DefinitionContext;
+use pyrefly_util::telemetry::EmptyResponseReason;
+use pyrefly_util::thread_pool::ThreadPool;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Alias;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ExprName;
-use ruff_python_ast::ExprNumberLiteral;
-use ruff_python_ast::ExprStringLiteral;
-use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::Number;
-use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -62,8 +61,12 @@ use ruff_text_size::TextSize;
 use serde::Deserialize;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
+use vec1::Vec1;
+use vec1::vec1;
 
 use crate::ModuleInfo;
+use crate::alt::answers::Index;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
@@ -71,17 +74,44 @@ use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::wasm::completion::CompletionOptions;
 use crate::state::ide::IntermediateDefinition;
+use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::lsp_attributes::AttributeContext;
+use crate::state::lsp_attributes::definition_from_executable_ast;
 use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
-use crate::types::callable::Param;
+use crate::state::state::TransactionHandle;
 use crate::types::module::ModuleType;
+use crate::types::type_var::Restriction;
 use crate::types::types::Type;
+
+mod dict_completions;
+mod quick_fixes;
+
+pub(crate) use self::quick_fixes::types::LocalRefactorCodeAction;
+
+#[derive(Debug)]
+pub(crate) enum CalleeKind {
+    /// A direct function call: `foo()`
+    Function(Identifier),
+    /// A method call: `obj.method()` - stores base expression range + method name
+    Method(TextRange, Identifier),
+    /// Unknown callee (e.g., callable returned from another call)
+    Unknown,
+}
+
+pub(crate) fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
+    match call.func.as_ref() {
+        Expr::Name(name) => CalleeKind::Function(Ast::expr_name_identifier(name.clone())),
+        Expr::Attribute(attr) => CalleeKind::Method(attr.value.range(), attr.attr.clone()),
+        _ => CalleeKind::Unknown,
+    }
+}
 
 fn default_true() -> bool {
     true
@@ -108,6 +138,25 @@ pub struct InlayHintConfig {
     #[serde(default = "default_true")]
     pub variable_types: bool,
 }
+
+/// PEP 610 direct_url.json structure for detecting editable installs.
+#[derive(Deserialize)]
+struct DirectUrl {
+    url: String,
+    #[serde(default)]
+    dir_info: DirInfo,
+}
+
+#[derive(Deserialize, Default)]
+struct DirInfo {
+    #[serde(default)]
+    editable: bool,
+}
+
+/// Cache for editable source paths, keyed by sorted site-packages paths.
+/// This avoids re-scanning site-packages on every check.
+static EDITABLE_PATHS_CACHE: LazyLock<Mutex<SmallMap<Vec<PathBuf>, Vec<PathBuf>>>> =
+    LazyLock::new(|| Mutex::new(SmallMap::new()));
 
 impl Default for InlayHintConfig {
     fn default() -> Self {
@@ -159,6 +208,12 @@ pub struct FindPreference {
     /// controls whether to prioritize finding pyi or py files. if false, we will search all search paths until a .py file is found before
     /// falling back to a .pyi.
     pub prefer_pyi: bool,
+    /// When true (the default), if the cursor is on a name/attribute in call
+    /// position, resolve through `__init__`/`__new__`/`__call__` dunders
+    /// instead of returning the class or variable definition. Set to false
+    /// when callers need the raw definition (e.g., call-graph queries that
+    /// unwrap decorators like `@lru_cache`).
+    pub resolve_call_dunders: bool,
 }
 
 impl Default for FindPreference {
@@ -166,6 +221,7 @@ impl Default for FindPreference {
         Self {
             import_behavior: ImportBehavior::JumpThroughEverything,
             prefer_pyi: true,
+            resolve_call_dunders: true,
         }
     }
 }
@@ -186,23 +242,6 @@ impl DefinitionMetadata {
             DefinitionMetadata::Variable(symbol_kind) => symbol_kind.as_ref().copied(),
             DefinitionMetadata::VariableOrAttribute(symbol_kind) => symbol_kind.as_ref().copied(),
         }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum CalleeKind {
-    // Function name
-    Function(Identifier),
-    // Range of the base expr + method name
-    Method(TextRange, Identifier),
-    Unknown,
-}
-
-fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
-    match call.func.as_ref() {
-        Expr::Name(name) => CalleeKind::Function(Ast::expr_name_identifier(name.clone())),
-        Expr::Attribute(attr) => CalleeKind::Method(attr.value.range(), attr.attr.clone()),
-        _ => CalleeKind::Unknown,
     }
 }
 
@@ -259,7 +298,6 @@ pub(crate) enum IdentifierContext {
         name: ModuleName,
         /// Keeps track of how many leading dots there are for the imported module.
         /// ex: `x.y` in `import x.y` has 0 dots, and `x` in `from ..x.y import z` has 2 dot.
-        #[allow(dead_code)]
         dots: u32,
     },
     /// An identifier appeared as the name of a from...import statement.
@@ -269,7 +307,6 @@ pub(crate) enum IdentifierContext {
         module_name: ModuleName,
         /// Keeps track of how many leading dots there are for the imported module.
         /// ex: `x.y` in `import x.y` has 0 dots, and `x` in `from ..x.y import z` has 2 dot.
-        #[allow(dead_code)]
         dots: u32,
         /// Name of the imported entity in the current module. If there's no as-rename, this will be
         /// the same as the identifier. If there is as-rename, this will be the name after the `as`.
@@ -299,6 +336,9 @@ pub(crate) enum IdentifierContext {
     /// See [`PatternMatchParameterKind`] for examples.
     #[expect(dead_code)]
     PatternMatch(PatternMatchParameterKind),
+    /// An identifier appeared in a `global` or `nonlocal` statement.
+    /// ex: `x` in `global x` or `nonlocal x`.
+    MutableCapture,
 }
 
 #[derive(Debug)]
@@ -309,7 +349,6 @@ pub(crate) struct IdentifierWithContext {
 
 #[derive(PartialEq, Eq)]
 pub enum AnnotationKind {
-    #[allow(dead_code)]
     Parameter,
     Return,
     Variable,
@@ -485,7 +524,53 @@ pub struct FindDefinitionItem {
     pub module: Module,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct QuickfixAction {
+    title: String,
+    module_info: Module,
+    range: TextRange,
+    insert_text: String,
+    is_deprecated: bool,
+    is_private_import: bool,
+}
+
+impl QuickfixAction {
+    fn to_tuple(self) -> (String, Module, TextRange, String) {
+        (self.title, self.module_info, self.range, self.insert_text)
+    }
+}
+
+impl Ord for QuickfixAction {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Sort import code actions: non-private first, then non-deprecated, then alphabetically
+        match (self.is_private_import, other.is_private_import) {
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            _ => match (self.is_deprecated, other.is_deprecated) {
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                _ => self.title.cmp(&other.title),
+            },
+        }
+    }
+}
+
+impl PartialOrd for QuickfixAction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl<'a> Transaction<'a> {
+    fn allows_explicit_reexport(handle: &Handle) -> bool {
+        matches!(
+            handle.path().details(),
+            ModulePathDetails::FileSystem(_)
+                | ModulePathDetails::Namespace(_)
+                | ModulePathDetails::Memory(_)
+        )
+    }
+
     pub fn get_type(&self, handle: &Handle, key: &Key) -> Option<Type> {
         let idx = self.get_bindings(handle)?.key_to_idx(key);
         let answers = self.get_answers(handle)?;
@@ -502,7 +587,65 @@ impl<'a> Transaction<'a> {
         ans.get_chosen_overload_trace(range)
     }
 
+    fn import_handle_with_preference(
+        &self,
+        handle: &Handle,
+        module: ModuleName,
+        preference: FindPreference,
+    ) -> Option<Handle> {
+        match preference.prefer_pyi {
+            true => self.import_handle(handle, module, None).finding(),
+            false => self
+                .import_handle_prefer_executable(handle, module, None)
+                .finding(),
+        }
+    }
+
+    pub(crate) fn submodule_autoimport_edit(
+        &self,
+        handle: &Handle,
+        ast: &ModModule,
+        module_name: ModuleName,
+        import_format: ImportFormat,
+    ) -> Option<(String, TextSize, String, String)> {
+        let (parent_module_str, submodule_name) = module_name.as_str().rsplit_once('.')?;
+        let parent_handle = self
+            .import_handle(handle, ModuleName::from_str(parent_module_str), None)
+            .finding()?;
+        let (position, insert_text, imported_module) = insert_import_edit(
+            ast,
+            self.config_finder(),
+            handle.dupe(),
+            parent_handle,
+            submodule_name,
+            import_format,
+        );
+        Some((
+            submodule_name.to_owned(),
+            position,
+            insert_text,
+            imported_module,
+        ))
+    }
+
     fn type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        self.type_from_expression_at_impl(handle, position, false)
+    }
+
+    /// Like `type_from_expression_at`, but prefers the result type (`get_type_trace`)
+    /// over the callee/method type (`get_chosen_overload_trace`). This is used by the
+    /// provide-type endpoint where operator expressions should return the result
+    /// (e.g. `Literal[False]` for `+pos`) rather than the dunder method signature.
+    fn result_type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        self.type_from_expression_at_impl(handle, position, true)
+    }
+
+    fn type_from_expression_at_impl(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        prefer_result_type: bool,
+    ) -> Option<Type> {
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
         for node in covering_nodes {
@@ -510,11 +653,20 @@ impl<'a> Transaction<'a> {
                 continue;
             }
             let range = node.range();
-            if let Some(callable) = self.get_chosen_overload_trace(handle, range) {
-                return Some(callable);
-            }
-            if let Some(ty) = self.get_type_trace(handle, range) {
-                return Some(ty);
+            if prefer_result_type {
+                if let Some(ty) = self.get_type_trace(handle, range) {
+                    return Some(ty);
+                }
+                if let Some(callable) = self.get_chosen_overload_trace(handle, range) {
+                    return Some(callable);
+                }
+            } else {
+                if let Some(callable) = self.get_chosen_overload_trace(handle, range) {
+                    return Some(callable);
+                }
+                if let Some(ty) = self.get_type_trace(handle, range) {
+                    return Some(ty);
+                }
             }
         }
         None
@@ -658,6 +810,14 @@ impl<'a> Transaction<'a> {
                 // `XXX.id`
                 Some(IdentifierWithContext::from_expr_attr(id, attr))
             }
+            (Some(AnyNodeRef::Identifier(id)), Some(AnyNodeRef::StmtGlobal(_)), _, _)
+            | (Some(AnyNodeRef::Identifier(id)), Some(AnyNodeRef::StmtNonlocal(_)), _, _) => {
+                // `global id` or `nonlocal id`
+                Some(IdentifierWithContext {
+                    identifier: (*id).clone(),
+                    context: IdentifierContext::MutableCapture,
+                })
+            }
             (Some(AnyNodeRef::ExprName(name)), _, _, _) => {
                 Some(IdentifierWithContext::from_expr_name(name))
             }
@@ -712,19 +872,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn definition_at(&self, handle: &Handle, position: TextSize) -> Option<Key> {
-        self.get_bindings(handle)?
-            .definition_at_position(position)
-            .cloned()
-    }
-
     pub fn get_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
-        // TODO(grievejia): Remove the usage of `definition_at()`: it doesn't reliably detect all
-        // definitions.
-        if let Some(key) = self.definition_at(handle, position) {
-            return self.get_type(handle, &key);
-        }
-
         match self.identifier_at(handle, position) {
             Some(IdentifierWithContext {
                 identifier: id,
@@ -737,23 +885,23 @@ impl<'a> Transaction<'a> {
                     }
                 };
 
-                if self.get_bindings(handle)?.is_valid_key(&key) {
-                    if let Some(ExprCall {
-                        node_index: _,
-                        range: _,
-                        func,
-                        arguments,
-                    }) = &self.callee_at(handle, position)
-                        && func.range() == id.range
-                        && let Some(ret) = self.get_chosen_overload_trace(handle, arguments.range)
-                    {
-                        Some(ret)
-                    } else {
-                        self.get_type(handle, &key)
-                    }
-                } else {
-                    None
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
                 }
+                let mut ty = self.get_type(handle, &key)?;
+                let call_args_range = self.callee_at(handle, position).and_then(
+                    |ExprCall {
+                         func, arguments, ..
+                     }| (func.range() == id.range).then_some(arguments.range),
+                );
+                if let Some(arguments_range) = call_args_range {
+                    if let Some(ret) = self.get_chosen_overload_trace(handle, arguments_range) {
+                        return Some(ret);
+                    }
+                    ty = self.coerce_type_to_callable(handle, ty);
+                }
+                Some(ty)
             }
             Some(IdentifierWithContext {
                 identifier: _,
@@ -770,54 +918,85 @@ impl<'a> Transaction<'a> {
             }
             Some(IdentifierWithContext {
                 identifier: _,
-                context: IdentifierContext::ImportedName { .. },
+                context:
+                    IdentifierContext::ImportedName {
+                        name_after_import, ..
+                    },
             }) => {
-                // TODO(grievejia): handle definitions of imported names
-                None
+                let key = Key::Definition(ShortIdentifier::new(&name_after_import));
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                self.get_type(handle, &key)
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context:
                     IdentifierContext::FunctionDef { docstring_range: _ }
                     | IdentifierContext::MethodDef { docstring_range: _ },
             }) => {
-                // TODO(grievejia): Handle definitions of functions
-                None
+                let key = Key::Definition(ShortIdentifier::new(&identifier));
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                self.get_type(handle, &key)
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context: IdentifierContext::ClassDef { docstring_range: _ },
             }) => {
-                // TODO(grievejia): Handle definitions of classes
-                None
+                let key = Key::Definition(ShortIdentifier::new(&identifier));
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                self.get_type(handle, &key)
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context: IdentifierContext::Parameter,
             }) => {
-                // TODO(grievejia): Handle definitions of params
-                None
+                let key = Key::Definition(ShortIdentifier::new(&identifier));
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                self.get_type(handle, &key)
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context: IdentifierContext::TypeParameter,
             }) => {
-                // TODO(grievejia): Handle definitions of type params
-                None
+                let key = Key::Definition(ShortIdentifier::new(&identifier));
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                self.get_type(handle, &key)
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context: IdentifierContext::ExceptionHandler,
             }) => {
-                // TODO(grievejia): Handle definitions of exception names
-                None
+                let key = Key::Definition(ShortIdentifier::new(&identifier));
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                self.get_type(handle, &key)
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context: IdentifierContext::PatternMatch(_),
             }) => {
-                // TODO(grievejia): Handle definitions of pattern-introduced names
-                None
+                let key = Key::Definition(ShortIdentifier::new(&identifier));
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                self.get_type(handle, &key)
             }
             Some(IdentifierWithContext {
                 identifier,
@@ -831,8 +1010,20 @@ impl<'a> Transaction<'a> {
                 )
                 .first()
                 .and_then(|item| {
-                    self.definition_at(handle, item.definition_range.start())
-                        .and_then(|key| self.get_type(handle, &key))
+                    let code_at_range = item.module.code_at(item.definition_range);
+                    // If refinement failed, definition_range points to the callee itself,
+                    // not a matching parameter. In that case, return None.
+                    if code_at_range != identifier.id.as_str() {
+                        return None;
+                    }
+                    let name = Name::new(code_at_range);
+                    let id = Identifier::new(name.clone(), item.definition_range);
+                    let key = Key::Definition(ShortIdentifier::new(&id));
+                    let bindings = self.get_bindings(handle)?;
+                    if !bindings.is_valid_key(&key) {
+                        return None;
+                    }
+                    self.get_type(handle, &key)
                 }),
             Some(IdentifierWithContext {
                 identifier: _,
@@ -852,7 +1043,91 @@ impl<'a> Transaction<'a> {
                     self.get_type_trace(handle, range)
                 }
             }
+            Some(IdentifierWithContext {
+                identifier,
+                context: IdentifierContext::MutableCapture,
+            }) => {
+                let key = Key::MutableCapture(ShortIdentifier::new(&identifier));
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                self.get_type(handle, &key)
+            }
             None => self.type_from_expression_at(handle, position),
+        }
+    }
+
+    /// Like `get_type_at`, but for non-identifier expressions (operators, etc.)
+    /// prefers the result type over the dunder method signature. Used by the
+    /// provide-type endpoint where `+pos` should return `Literal[False]` rather
+    /// than the `__pos__` method signature.
+    pub fn get_result_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        match self.identifier_at(handle, position) {
+            None => self.result_type_from_expression_at(handle, position),
+            _ => self.get_type_at(handle, position),
+        }
+    }
+
+    /// If `ty` represents a callable instance (e.g., a class with `__call__`), return the
+    /// bound `__call__` signature. Otherwise, return the type unchanged.
+    ///
+    /// Note that we should only use this when we already know the value is being used as a
+    /// callee, since this drops the original type information in favor of a callable type.
+    pub(crate) fn coerce_type_to_callable(&self, handle: &Handle, ty: Type) -> Type {
+        if ty.is_toplevel_callable() {
+            return ty;
+        }
+        let original = ty.clone();
+        self.ad_hoc_solve(handle, "coerce_callable", |solver| {
+            Self::callable_from_type(&solver, ty)
+        })
+        .and_then(|callable| callable)
+        .unwrap_or(original)
+    }
+
+    /// Extract a callable type from `ty` by invoking the solver to find its `__call__` method.
+    /// Recursively walks through type wrappers (Union, TypeAlias, Type, Quantified).
+    /// Returns `None` if the type is not callable.
+    fn callable_from_type(solver: &AnswersSolver<TransactionHandle<'_>>, ty: Type) -> Option<Type> {
+        if ty.is_toplevel_callable() {
+            return Some(ty);
+        }
+        match ty {
+            Type::ClassType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
+            Type::SelfType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
+            Type::Union(box Union { members, .. }) => Self::callable_from_types(solver, members),
+            Type::TypeAlias(box TypeAliasData::Value(alias)) => {
+                Self::callable_from_type(solver, alias.as_type())
+            }
+            Type::Type(box inner) => Self::callable_from_type(solver, inner),
+            Type::Quantified(box quantified) => match quantified.restriction {
+                Restriction::Bound(bound) => Self::callable_from_type(solver, bound),
+                Restriction::Constraints(options) => Self::callable_from_types(solver, options),
+                Restriction::Unrestricted => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Convert a collection of types into a single callable union, returning `None` if the list
+    /// was empty or any member failed to coerce into a callable.
+    fn callable_from_types(
+        solver: &AnswersSolver<TransactionHandle<'_>>,
+        types: Vec<Type>,
+    ) -> Option<Type> {
+        if types.is_empty() {
+            return None;
+        }
+        let mut converted = Vec::with_capacity(types.len());
+        for ty in types {
+            let callable = Self::callable_from_type(solver, ty)?;
+            converted.push(callable);
+        }
+        if converted.len() == 1 {
+            converted.into_iter().next()
+        } else {
+            Some(solver.unions(converted))
         }
     }
 
@@ -867,12 +1142,7 @@ impl<'a> Transaction<'a> {
         let mut gas = RESOLVE_EXPORT_INITIAL_GAS;
         let mut name = name;
         while !gas.stop() {
-            let handle = match preference.prefer_pyi {
-                true => self.import_handle(handle, m, None).finding()?,
-                false => self
-                    .import_handle_prefer_executable(handle, m, None)
-                    .finding()?,
-            };
+            let handle = self.import_handle_with_preference(handle, m, preference)?;
             match self.get_exports(&handle).get(&name) {
                 Some(ExportLocation::ThisModule(export)) => {
                     return Some((handle.clone(), export.clone()));
@@ -880,6 +1150,23 @@ impl<'a> Transaction<'a> {
                 Some(ExportLocation::OtherModule(module, aliased_name)) => {
                     if let Some(aliased_name) = aliased_name {
                         name = aliased_name.clone();
+                    }
+                    if *module == m && handle.path().is_init() {
+                        let submodule = m.append(&name);
+                        let sub_handle =
+                            self.import_handle_with_preference(&handle, submodule, preference)?;
+                        let docstring_range = self.get_module_docstring_range(&sub_handle);
+                        return Some((
+                            sub_handle,
+                            Export {
+                                location: TextRange::default(),
+                                symbol_kind: Some(SymbolKind::Module),
+                                docstring_range,
+                                deprecation: None,
+                                is_final: false,
+                                special_export: None,
+                            },
+                        ));
                     }
                     m = *module;
                 }
@@ -937,13 +1224,21 @@ impl<'a> Transaction<'a> {
                     Some((def_handle, export))
                 }
             }
-            IntermediateDefinition::Module(name) => {
-                let handle = match preference.prefer_pyi {
-                    true => self.import_handle(handle, name, None).finding()?,
-                    false => self
-                        .import_handle_prefer_executable(handle, name, None)
-                        .finding()?,
-                };
+            IntermediateDefinition::Module(import_range, name) => {
+                if matches!(preference.import_behavior, ImportBehavior::StopAtEverything) {
+                    return Some((
+                        handle.dupe(),
+                        Export {
+                            location: import_range,
+                            symbol_kind: Some(SymbolKind::Module),
+                            docstring_range: None,
+                            deprecation: None,
+                            is_final: false,
+                            special_export: None,
+                        },
+                    ));
+                }
+                let handle = self.import_handle_with_preference(handle, name, preference)?;
                 let docstring_range = self.get_module_docstring_range(&handle);
                 Some((
                     handle,
@@ -952,6 +1247,7 @@ impl<'a> Transaction<'a> {
                         symbol_kind: Some(SymbolKind::Module),
                         docstring_range,
                         deprecation: None,
+                        is_final: false,
                         special_export: None,
                     },
                 ))
@@ -959,20 +1255,25 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn resolve_attribute_definition(
+    pub(crate) fn resolve_attribute_definition(
         &self,
         handle: &Handle,
         attr_name: &Name,
         definition: AttrDefinition,
-        docstring_range: Option<TextRange>,
         preference: FindPreference,
     ) -> Option<(TextRangeWithModule, Option<TextRange>)> {
         match definition {
-            AttrDefinition::FullyResolved(text_range_with_module_info) => {
+            AttrDefinition::FullyResolved {
+                cls,
+                range,
+                docstring_range,
+            } => {
                 // If prefer_pyi is false and the current module is a .pyi file,
                 // try to find the corresponding .py file
+                let text_range_with_module_info =
+                    TextRangeWithModule::new(cls.module().dupe(), range);
                 if !preference.prefer_pyi
-                    && text_range_with_module_info.module.path().is_interface()
+                    && cls.module_path().is_interface()
                     && let Some((exec_module, exec_range, exec_docstring)) = self
                         .search_corresponding_py_module_for_attribute(
                             handle,
@@ -994,6 +1295,17 @@ impl<'a> Transaction<'a> {
                 Some((
                     TextRangeWithModule::new(module_info, export.location),
                     export.docstring_range,
+                ))
+            }
+            AttrDefinition::Submodule { module_name } => {
+                // For submodule access (e.g., `b` in `a.b` when `import a.b.c`),
+                // resolve by finding the submodule's __init__.py
+                let def = self
+                    .find_definition_for_imported_module(handle, module_name, preference)
+                    .unwrap_or(None)?;
+                Some((
+                    TextRangeWithModule::new(def.module, def.definition_range),
+                    def.docstring_range,
                 ))
             }
         }
@@ -1025,11 +1337,7 @@ impl<'a> Transaction<'a> {
             .into()
         });
         let (def_range, docstring_range) =
-            crate::state::lsp_attributes::definition_from_executable_ast(
-                ast.as_ref(),
-                &context,
-                attr_name,
-            )?;
+            definition_from_executable_ast(ast.as_ref(), &context, attr_name)?;
         Some((executable_module, def_range, docstring_range))
     }
 
@@ -1072,10 +1380,12 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         identifier: &Identifier,
         symbol_kind: SymbolKind,
-    ) -> Option<FindDefinitionItem> {
-        Some(FindDefinitionItem {
+    ) -> Result<FindDefinitionItem, EmptyResponseReason> {
+        Ok(FindDefinitionItem {
             metadata: DefinitionMetadata::Variable(Some(symbol_kind)),
-            module: self.get_module_info(handle)?,
+            module: self
+                .get_module_info(handle)
+                .ok_or(EmptyResponseReason::ModuleInfoNotFound)?,
             definition_range: identifier.range,
         })
     }
@@ -1085,11 +1395,14 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         key: &Key,
         preference: FindPreference,
-    ) -> Option<(Handle, Export)> {
-        if !self.get_bindings(handle)?.is_valid_key(key) {
-            return None;
+    ) -> Result<Option<(Handle, Export)>, EmptyResponseReason> {
+        let bindings = self
+            .get_bindings(handle)
+            .ok_or(EmptyResponseReason::BindingsNotFound)?;
+        if !bindings.is_valid_key(key) {
+            return Ok(None);
         }
-        self.key_to_export(handle, key, preference)
+        Ok(self.key_to_export(handle, key, preference))
     }
 
     fn find_definition_for_name_def(
@@ -1097,9 +1410,9 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         name: &Identifier,
         preference: FindPreference,
-    ) -> Option<FindDefinitionItemWithDocstring> {
+    ) -> Result<Option<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
         let def_key = Key::Definition(ShortIdentifier::new(name));
-        let (
+        let Some((
             handle,
             Export {
                 location,
@@ -1107,15 +1420,20 @@ impl<'a> Transaction<'a> {
                 docstring_range,
                 ..
             },
-        ) = self.find_export_for_key(handle, &def_key, preference)?;
-        let module_info = self.get_module_info(&handle)?;
-        Some(FindDefinitionItemWithDocstring {
+        )) = self.find_export_for_key(handle, &def_key, preference)?
+        else {
+            return Ok(None);
+        };
+        let module_info = self
+            .get_module_info(&handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+        Ok(Some(FindDefinitionItemWithDocstring {
             metadata: DefinitionMetadata::VariableOrAttribute(symbol_kind),
             definition_range: location,
             module: module_info,
             docstring_range,
             display_name: Some(name.id.to_string()),
-        })
+        }))
     }
 
     pub fn find_definition_for_name_use(
@@ -1123,9 +1441,9 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         name: &Identifier,
         preference: FindPreference,
-    ) -> Option<FindDefinitionItemWithDocstring> {
+    ) -> Result<Option<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
         let use_key = Key::BoundName(ShortIdentifier::new(name));
-        let (
+        let Some((
             handle,
             Export {
                 location,
@@ -1133,17 +1451,70 @@ impl<'a> Transaction<'a> {
                 docstring_range,
                 ..
             },
-        ) = self.find_export_for_key(handle, &use_key, preference)?;
-        Some(FindDefinitionItemWithDocstring {
+        )) = self.find_export_for_key(handle, &use_key, preference)?
+        else {
+            return Ok(None);
+        };
+        let module_info = self
+            .get_module_info(&handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+        Ok(Some(FindDefinitionItemWithDocstring {
             metadata: DefinitionMetadata::Variable(symbol_kind),
             definition_range: location,
-            module: self.get_module_info(&handle)?,
+            module: module_info,
             docstring_range,
             display_name: Some(name.id.to_string()),
-        })
+        }))
     }
 
-    fn find_definition_for_base_type(
+    /// When a name or attribute in a call position resolves to a class, find
+    /// `__init__` and `__new__` definitions. When it resolves to a class
+    /// instance, find `__call__`. Returns all found definitions, or empty if
+    /// neither case applies. Does not match functions/callables — those should
+    /// use the normal go-to-definition path.
+    fn find_call_target_definitions(
+        &self,
+        handle: &Handle,
+        preference: FindPreference,
+        ty: Type,
+    ) -> Vec<FindDefinitionItemWithDocstring> {
+        match &ty {
+            Type::ClassDef(_) => {
+                let mut defs = self
+                    .find_attribute_definition_for_base_type(
+                        handle,
+                        preference,
+                        ty.clone(),
+                        &dunder::INIT,
+                    )
+                    .map(Vec1::into_vec)
+                    .unwrap_or_default();
+                defs.extend(
+                    self.find_attribute_definition_for_base_type(
+                        handle,
+                        preference,
+                        ty,
+                        &dunder::NEW,
+                    )
+                    .map(Vec1::into_vec)
+                    .unwrap_or_default(),
+                );
+                defs
+            }
+            Type::ClassType(_) => self
+                .find_attribute_definition_for_base_type(handle, preference, ty, &dunder::CALL)
+                .map(Vec1::into_vec)
+                .unwrap_or_default(),
+            _ => vec![],
+        }
+    }
+
+    // TODO: If completions contain an AttrInfo matching `name` but
+    // `resolve_attribute_definition` returns None, that indicates a bug
+    // (the solver produced a completion it can't resolve). This should
+    // propagate an error rather than silently skipping. Currently it's
+    // swallowed by `find_map`.
+    pub(crate) fn find_definition_for_base_type(
         &self,
         handle: &Handle,
         preference: FindPreference,
@@ -1152,13 +1523,8 @@ impl<'a> Transaction<'a> {
     ) -> Option<FindDefinitionItemWithDocstring> {
         completions.into_iter().find_map(|x| {
             if &x.name == name {
-                let (definition, docstring_range) = self.resolve_attribute_definition(
-                    handle,
-                    &x.name,
-                    x.definition?,
-                    x.docstring_range,
-                    preference,
-                )?;
+                let (definition, docstring_range) =
+                    self.resolve_attribute_definition(handle, &x.name, x.definition, preference)?;
                 Some(FindDefinitionItemWithDocstring {
                     metadata: DefinitionMetadata::Attribute,
                     definition_range: definition.range,
@@ -1172,92 +1538,161 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    /// Look up the definition of an attribute `name` on `base_type`.
+    /// Returns `Err(DefinitionNotFound)` if the attribute doesn't exist
+    /// on any branch of a union type. The returned `Vec1` is guaranteed
+    /// non-empty.
     fn find_attribute_definition_for_base_type(
         &self,
         handle: &Handle,
         preference: FindPreference,
         base_type: Type,
         name: &Name,
-    ) -> Vec<FindDefinitionItemWithDocstring> {
-        self.ad_hoc_solve(handle, |solver| {
-            let completions = |ty| solver.completions(ty, Some(name), false);
+    ) -> Result<Vec1<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
+        let defs = self
+            .ad_hoc_solve(handle, "attribute_definition", |solver| {
+                let completions = |ty| solver.completions(ty, Some(name), false);
 
-            match base_type {
-                Type::Union(box Union { members: tys, .. }) | Type::Intersect(box (tys, _)) => tys
-                    .into_iter()
-                    .filter_map(|ty_| {
-                        self.find_definition_for_base_type(
-                            handle,
-                            preference,
-                            completions(ty_),
-                            name,
-                        )
-                    })
-                    .collect(),
-                ty => self
-                    .find_definition_for_base_type(handle, preference, completions(ty), name)
-                    .map_or(vec![], |item| vec![item]),
-            }
+                match base_type {
+                    Type::Union(box Union { members: tys, .. }) | Type::Intersect(box (tys, _)) => {
+                        tys.into_iter()
+                            .filter_map(|ty_| {
+                                self.find_definition_for_base_type(
+                                    handle,
+                                    preference,
+                                    completions(ty_),
+                                    name,
+                                )
+                            })
+                            .collect()
+                    }
+                    ty => self
+                        .find_definition_for_base_type(handle, preference, completions(ty), name)
+                        .map_or(vec![], |item| vec![item]),
+                }
+            })
+            .unwrap_or_default();
+        Vec1::try_from_vec(defs).map_err(|_| EmptyResponseReason::DefinitionNotFound {
+            name: name.to_string(),
+            context: DefinitionContext::Attribute,
         })
-        .unwrap_or_default()
     }
 
-    fn find_definition_for_operator(
+    /// Try to find the dunder method associated with an operator at the cursor.
+    ///
+    /// Returns:
+    /// - `Ok(None)` — no operator node found in `covering_nodes`
+    /// - `Ok(Some((base_type, dunder_name)))` — operator with a navigable dunder
+    /// - `Err(NotAnIdentifier)` — operator without a dunder (`not`, `is`, `is not`)
+    /// - `Err(AnswersNotFound)` — operator found but answers unavailable
+    /// - `Err(TypeTraceNotFound)` — operator found but base expression has no type trace
+    fn find_operator_dunder(
         &self,
         handle: &Handle,
         covering_nodes: &[AnyNodeRef],
-        preference: FindPreference,
-    ) -> Vec<FindDefinitionItemWithDocstring> {
-        let Some((base_type, dunder_method_name)) =
-            covering_nodes.iter().find_map(|node| match node {
+    ) -> Result<Option<(Type, Name)>, EmptyResponseReason> {
+        // Look up the type of an expression, distinguishing "no answers"
+        // from "answers available but no type trace for this range."
+        let type_at = |range: TextRange| -> Result<Type, EmptyResponseReason> {
+            let answers = self
+                .get_answers(handle)
+                .ok_or(EmptyResponseReason::AnswersNotFound)?;
+            answers
+                .get_type_trace(range)
+                .ok_or(EmptyResponseReason::TypeTraceNotFound)
+        };
+
+        covering_nodes
+            .iter()
+            .find_map(|node| match node {
                 AnyNodeRef::ExprCompare(compare) => {
                     for op in &compare.ops {
-                        if let Some(dunder_name) = dunder::rich_comparison_dunder(*op)
-                            && let Some(answers) = self.get_answers(handle)
-                            && let Some(left_type) = answers.get_type_trace(compare.left.range())
-                        {
-                            return Some((left_type, dunder_name));
+                        // Handle membership test operators (in/not in) - uses __contains__ on the right operand
+                        if matches!(op, CmpOp::In | CmpOp::NotIn) {
+                            let result = type_at(compare.comparators.first()?.range())
+                                .map(|right_type| (right_type, dunder::CONTAINS));
+                            return Some(result);
+                        }
+                        // is / is not — no dunder
+                        if matches!(op, CmpOp::Is) {
+                            return Some(Err(EmptyResponseReason::NotAnIdentifier {
+                                found: "operator:is".to_owned(),
+                            }));
+                        }
+                        if matches!(op, CmpOp::IsNot) {
+                            return Some(Err(EmptyResponseReason::NotAnIdentifier {
+                                found: "operator:is_not".to_owned(),
+                            }));
+                        }
+                        // Handle rich comparison operators
+                        if let Some(dunder_name) = dunder::rich_comparison_dunder(*op) {
+                            let result = type_at(compare.left.range())
+                                .map(|left_type| (left_type, dunder_name));
+                            return Some(result);
                         }
                     }
                     None
                 }
                 AnyNodeRef::ExprBinOp(binop) => {
                     let dunder_name = Name::new_static(binop.op.dunder());
-                    if let Some(answers) = self.get_answers(handle)
-                        && let Some(left_type) = answers.get_type_trace(binop.left.range())
-                    {
-                        return Some((left_type, dunder_name));
-                    }
-                    None
+                    Some(type_at(binop.left.range()).map(|left_type| (left_type, dunder_name)))
                 }
                 AnyNodeRef::ExprUnaryOp(unaryop) => {
                     let dunder_name = match unaryop.op {
-                        UnaryOp::Invert => Some(dunder::INVERT),
-                        UnaryOp::Not => None,
-                        UnaryOp::UAdd => Some(dunder::POS),
-                        UnaryOp::USub => Some(dunder::NEG),
+                        UnaryOp::Invert => Ok(dunder::INVERT),
+                        UnaryOp::UAdd => Ok(dunder::POS),
+                        UnaryOp::USub => Ok(dunder::NEG),
+                        UnaryOp::Not => Err(EmptyResponseReason::NotAnIdentifier {
+                            found: "operator:not".to_owned(),
+                        }),
                     };
-                    if let Some(dunder_name) = dunder_name
-                        && let Some(answers) = self.get_answers(handle)
-                        && let Some(operand_type) = answers.get_type_trace(unaryop.operand.range())
-                    {
-                        return Some((operand_type, dunder_name));
-                    }
-                    None
+                    Some(dunder_name.and_then(|name| {
+                        type_at(unaryop.operand.range()).map(|operand_type| (operand_type, name))
+                    }))
+                }
+                AnyNodeRef::ExprSubscript(subscript) => {
+                    let dunder_name = match subscript.ctx {
+                        ExprContext::Load => Some(dunder::GETITEM),
+                        ExprContext::Store => Some(dunder::SETITEM),
+                        ExprContext::Del => Some(dunder::DELITEM),
+                        ExprContext::Invalid => None,
+                    }?;
+                    Some(type_at(subscript.value.range()).map(|base_type| (base_type, dunder_name)))
+                }
+                // Handle iteration `in` keyword in for loops
+                AnyNodeRef::StmtFor(stmt_for) => {
+                    Some(type_at(stmt_for.iter.range()).map(|iter_type| (iter_type, dunder::ITER)))
+                }
+                // Handle iteration `in` keyword in comprehensions
+                AnyNodeRef::Comprehension(comp) => {
+                    Some(type_at(comp.iter.range()).map(|iter_type| (iter_type, dunder::ITER)))
                 }
                 _ => None,
             })
-        else {
-            return vec![];
-        };
+            .transpose()
+    }
 
-        // Find the attribute definition for the dunder method on the base type
-        self.find_attribute_definition_for_base_type(
-            handle,
-            preference,
-            base_type,
-            &dunder_method_name,
-        )
+    /// Try operator-based go-to-definition. Returns `Ok(None)` when there is
+    /// no operator at the cursor, `Ok(Some(...))` on success, or
+    /// `Err(...)` when an operator was found but couldn't be resolved.
+    fn find_definition_for_operator(
+        &self,
+        handle: &Handle,
+        covering_nodes: &[AnyNodeRef],
+        preference: FindPreference,
+    ) -> Result<Option<Vec1<FindDefinitionItemWithDocstring>>, EmptyResponseReason> {
+        let Some((base_type, dunder_name)) = self.find_operator_dunder(handle, covering_nodes)?
+        else {
+            return Ok(None);
+        };
+        let dunder_str = dunder_name.to_string();
+        let defs = self
+            .find_attribute_definition_for_base_type(handle, preference, base_type, &dunder_name)
+            .map_err(|_| EmptyResponseReason::DefinitionNotFound {
+                name: dunder_str.clone(),
+                context: DefinitionContext::Operator { dunder: dunder_str },
+            })?;
+        Ok(Some(defs))
     }
 
     pub fn find_definition_for_attribute(
@@ -1266,42 +1701,78 @@ impl<'a> Transaction<'a> {
         base_range: TextRange,
         name: &Name,
         preference: FindPreference,
-    ) -> Vec<FindDefinitionItemWithDocstring> {
-        if let Some(answers) = self.get_answers(handle)
-            && let Some(base_type) = answers.get_type_trace(base_range)
-        {
-            self.find_attribute_definition_for_base_type(handle, preference, base_type, name)
-        } else {
-            vec![]
-        }
+    ) -> Result<Vec1<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
+        let answers = self
+            .get_answers(handle)
+            .ok_or(EmptyResponseReason::AnswersNotFound)?;
+        let base_type = answers
+            .get_type_trace(base_range)
+            .ok_or(EmptyResponseReason::TypeTraceNotFound)?;
+        self.find_attribute_definition_for_base_type(handle, preference, base_type, name)
     }
 
-    fn find_definition_for_imported_module(
+    pub(crate) fn find_definition_for_imported_module(
         &self,
         handle: &Handle,
         module_name: ModuleName,
         preference: FindPreference,
-    ) -> Option<FindDefinitionItemWithDocstring> {
+    ) -> Result<Option<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
         // TODO: Handle relative import (via ModuleName::new_maybe_relative)
-        let handle = match preference.prefer_pyi {
-            true => self.import_handle(handle, module_name, None).finding()?,
-            false => self
-                .import_handle_prefer_executable(handle, module_name, None)
-                .finding()?,
+        let Some(handle) = self.import_handle_with_preference(handle, module_name, preference)
+        else {
+            return Err(EmptyResponseReason::ModuleNotFound);
         };
         // if the module is not yet loaded, force loading by asking for exports
         // necessary for imports that are not in tdeps (e.g. .py when there is also a .pyi)
         // todo(kylei): better solution
         let _ = self.get_exports(&handle);
 
-        let module_info = self.get_module_info(&handle)?;
-        Some(FindDefinitionItemWithDocstring {
+        let module_info = self
+            .get_module_info(&handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+        Ok(Some(FindDefinitionItemWithDocstring {
             metadata: DefinitionMetadata::Module,
             definition_range: TextRange::default(),
             module: module_info,
             docstring_range: self.get_module_docstring_range(&handle),
             display_name: Some(module_name.to_string()),
-        })
+        }))
+    }
+
+    fn find_definition_for_dunder_all_entry(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        preference: FindPreference,
+    ) -> Option<FindDefinitionItemWithDocstring> {
+        let module_info = self.get_module_info(handle)?;
+        let exports = self.get_exports_data(handle);
+        let (_entry_range, name) = exports.dunder_all_name_at(position)?;
+
+        if let Some((definition_handle, export)) =
+            self.resolve_named_import(handle, module_info.name(), name.clone(), preference)
+        {
+            let definition_module = self.get_module_info(&definition_handle)?;
+            return Some(FindDefinitionItemWithDocstring {
+                metadata: DefinitionMetadata::VariableOrAttribute(export.symbol_kind),
+                definition_range: export.location,
+                module: definition_module,
+                docstring_range: export.docstring_range,
+                display_name: Some(name.to_string()),
+            });
+        }
+
+        if module_info.path().is_init() {
+            let submodule = module_info.name().append(&name);
+            if let Some(definition) = self
+                .find_definition_for_imported_module(handle, submodule, preference)
+                .unwrap_or(None)
+            {
+                return Some(definition);
+            }
+        }
+
+        None
     }
 
     fn find_definition_for_keyword_argument(
@@ -1367,10 +1838,12 @@ impl<'a> Transaction<'a> {
         let defs = match callee_kind {
             CalleeKind::Function(name) => self
                 .find_definition_for_name_use(handle, name, preference)
+                .unwrap_or(None)
                 .map_or(vec![], |item| vec![item]),
-            CalleeKind::Method(base_range, name) => {
-                self.find_definition_for_attribute(handle, *base_range, name.id(), preference)
-            }
+            CalleeKind::Method(base_range, name) => self
+                .find_definition_for_attribute(handle, *base_range, name.id(), preference)
+                .map(Vec1::into_vec)
+                .unwrap_or_default(),
             CalleeKind::Unknown => vec![],
         };
         defs.into_iter()
@@ -1384,11 +1857,20 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         preference: FindPreference,
-    ) -> Vec<FindDefinitionItemWithDocstring> {
+    ) -> Result<Vec1<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
         let Some(mod_module) = self.get_ast(handle) else {
-            return vec![];
+            return Err(EmptyResponseReason::AstNotFound);
         };
         let covering_nodes = Ast::locate_node(&mod_module, position);
+
+        if covering_nodes
+            .iter()
+            .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+            && let Some(definition) =
+                self.find_definition_for_dunder_all_entry(handle, position, preference)
+        {
+            return Ok(vec1![definition]);
+        }
 
         match Self::identifier_from_covering_nodes(&covering_nodes) {
             Some(IdentifierWithContext {
@@ -1401,145 +1883,311 @@ impl<'a> Transaction<'a> {
                         // Can't use `find_definition_for_simple_def()` here because not all assignments
                         // are guaranteed defs: they might be a modification to a name defined somewhere
                         // else.
-                        self.find_definition_for_name_def(handle, &id, preference)
-                            .map_or(vec![], |item| vec![item])
+                        match self.find_definition_for_name_def(handle, &id, preference)? {
+                            Some(item) => Ok(vec1![item]),
+                            None => Err(EmptyResponseReason::DefinitionNotFound {
+                                name: id.id.to_string(),
+                                context: DefinitionContext::NameDef,
+                            }),
+                        }
                     }
                     ExprContext::Load | ExprContext::Del | ExprContext::Invalid => {
+                        // If this name is the callee of a call expression, jump
+                        // to constructor or __call__ definitions when applicable.
+                        if preference.resolve_call_dunders
+                            && let Some(AnyNodeRef::ExprCall(call)) = covering_nodes.get(1)
+                            && call.func.range() == id.range
+                            && let Some(bindings) = self.get_bindings(handle)
+                        {
+                            let key = Key::BoundName(ShortIdentifier::new(&id));
+                            if bindings.is_valid_key(&key)
+                                && let Some(ty) = self.get_type(handle, &key)
+                            {
+                                let defs =
+                                    self.find_call_target_definitions(handle, preference, ty);
+                                if let Ok(defs) = Vec1::try_from_vec(defs) {
+                                    return Ok(defs);
+                                }
+                            }
+                        }
                         // This is a usage of the variable
-                        self.find_definition_for_name_use(handle, &id, preference)
-                            .map_or(vec![], |item| vec![item])
+                        match self.find_definition_for_name_use(handle, &id, preference)? {
+                            Some(item) => Ok(vec1![item]),
+                            None => Err(EmptyResponseReason::DefinitionNotFound {
+                                name: id.id.to_string(),
+                                context: DefinitionContext::NameUse,
+                            }),
+                        }
                     }
                 }
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context:
                     IdentifierContext::ImportedModule {
-                        name: module_name, ..
+                        name: module_name,
+                        dots,
                     },
-            }) => self
-                .find_definition_for_imported_module(handle, module_name, preference)
-                .map_or(vec![], |item| vec![item]),
+            }) => {
+                // For relative imports (dots > 0), resolve the module name using
+                // the current file's module name as context.
+                let resolved_module_name = if dots > 0 {
+                    let is_init = handle.path().is_init();
+                    let suffix = if module_name.as_str().is_empty() {
+                        None
+                    } else {
+                        Some(&Name::new(module_name.as_str()))
+                    };
+                    handle
+                        .module()
+                        .new_maybe_relative(is_init, dots, suffix)
+                        .unwrap_or(module_name)
+                } else {
+                    module_name
+                };
+
+                // Build the module name for lookup based on identifier position.
+                let components = resolved_module_name.components();
+
+                let target_module_name =
+                    if let Some(idx) = components.iter().position(|c| c == &identifier.id) {
+                        // Identifier matches a module component.
+                        ModuleName::from_parts(&components[..=idx])
+                    } else if identifier.as_str() == resolved_module_name.as_str() {
+                        // Identifier matches full module name; decide which component based on position offset.
+                        let module_str = resolved_module_name.as_str();
+                        let offset = (position - identifier.range.start())
+                            .to_usize()
+                            .min(module_str.len());
+                        let idx = module_str[..offset].matches('.').count();
+                        ModuleName::from_parts(&components[..=idx])
+                    } else {
+                        // Fallback: use the whole module name.
+                        resolved_module_name
+                    };
+                match self.find_definition_for_imported_module(
+                    handle,
+                    target_module_name,
+                    preference,
+                )? {
+                    Some(item) => Ok(vec1![item]),
+                    None => Err(EmptyResponseReason::DefinitionNotFound {
+                        name: identifier.id.to_string(),
+                        context: DefinitionContext::ImportedModule,
+                    }),
+                }
+            }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context:
                     IdentifierContext::ImportedName {
                         name_after_import, ..
                     },
-            }) => self
-                .find_definition_for_name_def(handle, &name_after_import, preference)
-                .map_or(vec![], |item| vec![item]),
+            }) => {
+                match self.find_definition_for_name_def(handle, &name_after_import, preference)? {
+                    Some(item) => Ok(vec1![item]),
+                    None => Err(EmptyResponseReason::DefinitionNotFound {
+                        name: identifier.id.to_string(),
+                        context: DefinitionContext::ImportedName,
+                    }),
+                }
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::MethodDef { docstring_range },
-            }) => self.get_module_info(handle).map_or(vec![], |module| {
-                vec![FindDefinitionItemWithDocstring {
+            }) => {
+                let module = self
+                    .get_module_info(handle)
+                    .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
                     metadata: DefinitionMetadata::Attribute,
                     module,
                     definition_range: identifier.range,
                     docstring_range,
                     display_name: Some(identifier.id.to_string()),
-                }]
-            }),
+                }])
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::FunctionDef { docstring_range },
-            }) => self
-                .find_definition_for_simple_def(handle, &identifier, SymbolKind::Function)
-                .map_or(vec![], |item| {
-                    vec![FindDefinitionItemWithDocstring {
-                        metadata: item.metadata,
-                        definition_range: item.definition_range,
-                        module: item.module,
-                        docstring_range,
-                        display_name: Some(identifier.id.to_string()),
-                    }]
-                }),
+            }) => {
+                let item =
+                    self.find_definition_for_simple_def(handle, &identifier, SymbolKind::Function)?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
+                    metadata: item.metadata,
+                    definition_range: item.definition_range,
+                    module: item.module,
+                    docstring_range,
+                    display_name: Some(identifier.id.to_string()),
+                }])
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::ClassDef { docstring_range },
-            }) => self
-                .find_definition_for_simple_def(handle, &identifier, SymbolKind::Class)
-                .map_or(vec![], |item| {
-                    vec![FindDefinitionItemWithDocstring {
-                        metadata: item.metadata,
-                        definition_range: item.definition_range,
-                        module: item.module,
-                        docstring_range,
-                        display_name: Some(identifier.id.to_string()),
-                    }]
-                }),
+            }) => {
+                let item =
+                    self.find_definition_for_simple_def(handle, &identifier, SymbolKind::Class)?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
+                    metadata: item.metadata,
+                    definition_range: item.definition_range,
+                    module: item.module,
+                    docstring_range,
+                    display_name: Some(identifier.id.to_string()),
+                }])
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::Parameter,
-            }) => self
-                .find_definition_for_simple_def(handle, &identifier, SymbolKind::Parameter)
-                .map_or(vec![], |item| {
-                    vec![FindDefinitionItemWithDocstring {
-                        metadata: item.metadata,
-                        definition_range: item.definition_range,
-                        module: item.module,
-                        docstring_range: None,
-                        display_name: Some(identifier.id.to_string()),
-                    }]
-                }),
+            }) => {
+                let item = self.find_definition_for_simple_def(
+                    handle,
+                    &identifier,
+                    SymbolKind::Parameter,
+                )?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
+                    metadata: item.metadata,
+                    definition_range: item.definition_range,
+                    module: item.module,
+                    docstring_range: None,
+                    display_name: Some(identifier.id.to_string()),
+                }])
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::TypeParameter,
-            }) => self
-                .find_definition_for_simple_def(handle, &identifier, SymbolKind::TypeParameter)
-                .map_or(vec![], |item| {
-                    vec![FindDefinitionItemWithDocstring {
-                        metadata: item.metadata,
-                        definition_range: item.definition_range,
-                        module: item.module,
-                        docstring_range: None,
-                        display_name: Some(identifier.id.to_string()),
-                    }]
-                }),
+            }) => {
+                let item = self.find_definition_for_simple_def(
+                    handle,
+                    &identifier,
+                    SymbolKind::TypeParameter,
+                )?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
+                    metadata: item.metadata,
+                    definition_range: item.definition_range,
+                    module: item.module,
+                    docstring_range: None,
+                    display_name: Some(identifier.id.to_string()),
+                }])
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::ExceptionHandler | IdentifierContext::PatternMatch(_),
-            }) => self
-                .find_definition_for_simple_def(handle, &identifier, SymbolKind::Variable)
-                .map_or(vec![], |item| {
-                    vec![FindDefinitionItemWithDocstring {
-                        metadata: item.metadata,
-                        definition_range: item.definition_range,
-                        module: item.module,
-                        docstring_range: None,
-                        display_name: Some(identifier.id.to_string()),
-                    }]
-                }),
+            }) => {
+                let item =
+                    self.find_definition_for_simple_def(handle, &identifier, SymbolKind::Variable)?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
+                    metadata: item.metadata,
+                    definition_range: item.definition_range,
+                    module: item.module,
+                    docstring_range: None,
+                    display_name: Some(identifier.id.to_string()),
+                }])
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::KeywordArgument(callee_kind),
-            }) => self
-                .find_definition_for_keyword_argument(handle, &identifier, &callee_kind, preference)
-                .map(|item| FindDefinitionItemWithDocstring {
-                    metadata: item.metadata.clone(),
-                    definition_range: item.definition_range,
-                    module: item.module.clone(),
-                    docstring_range: None,
-                    display_name: Some(identifier.id.to_string()),
-                }),
+            }) => {
+                let defs = self
+                    .find_definition_for_keyword_argument(
+                        handle,
+                        &identifier,
+                        &callee_kind,
+                        preference,
+                    )
+                    .map(|item| FindDefinitionItemWithDocstring {
+                        metadata: item.metadata.clone(),
+                        definition_range: item.definition_range,
+                        module: item.module.clone(),
+                        docstring_range: None,
+                        display_name: Some(identifier.id.to_string()),
+                    });
+                Vec1::try_from_vec(defs).map_err(|_| EmptyResponseReason::DefinitionNotFound {
+                    name: identifier.id.to_string(),
+                    context: DefinitionContext::KeywordArgument,
+                })
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
-                self.find_definition_for_attribute(handle, base_range, identifier.id(), preference)
+                // If this attribute is the callee of a call expression, jump
+                // to constructor or __call__ definitions when applicable.
+                if preference.resolve_call_dunders
+                    && let Some(AnyNodeRef::ExprAttribute(attr)) = covering_nodes.get(1)
+                    && let Some(AnyNodeRef::ExprCall(call)) = covering_nodes.get(2)
+                    && call.func.range() == attr.range()
+                    && let Some(ty) = self.get_type_trace(handle, attr.range())
+                {
+                    let defs = self.find_call_target_definitions(handle, preference, ty);
+                    if let Ok(defs) = Vec1::try_from_vec(defs) {
+                        return Ok(defs);
+                    }
+                }
+                Ok(self.find_definition_for_attribute(
+                    handle,
+                    base_range,
+                    identifier.id(),
+                    preference,
+                )?)
+            }
+            Some(IdentifierWithContext {
+                identifier,
+                context: IdentifierContext::MutableCapture,
+            }) => {
+                // `global x` or `nonlocal x` — resolve through the MutableCapture
+                // binding, which forwards to the enclosing scope's definition.
+                let key = Key::MutableCapture(ShortIdentifier::new(&identifier));
+                let Some((
+                    handle,
+                    Export {
+                        location,
+                        symbol_kind,
+                        docstring_range,
+                        ..
+                    },
+                )) = self.find_export_for_key(handle, &key, preference)?
+                else {
+                    return Err(EmptyResponseReason::DefinitionNotFound {
+                        name: identifier.id.to_string(),
+                        context: DefinitionContext::MutableCapture,
+                    });
+                };
+                let module = self
+                    .get_module_info(&handle)
+                    .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+                Ok(vec1![FindDefinitionItemWithDocstring {
+                    metadata: DefinitionMetadata::Variable(symbol_kind),
+                    definition_range: location,
+                    module,
+                    docstring_range,
+                    display_name: Some(identifier.id.to_string()),
+                }])
             }
             None => {
                 // Check if this is a None literal, if so, resolve to NoneType class
                 if covering_nodes
                     .iter()
                     .any(|node| matches!(node, AnyNodeRef::ExprNoneLiteral(_)))
-                    && let Some(res) = self.find_definition_for_none(handle)
                 {
-                    return res;
+                    return match self.find_definition_for_none(handle)? {
+                        Some(res) => Ok(res),
+                        None => Err(EmptyResponseReason::DefinitionNotFound {
+                            name: "None".to_owned(),
+                            context: DefinitionContext::NoneLiteral,
+                        }),
+                    };
                 }
                 // Fall back to operator handling
-                self.find_definition_for_operator(handle, &covering_nodes, preference)
+                if let Some(defs) =
+                    self.find_definition_for_operator(handle, &covering_nodes, preference)?
+                {
+                    return Ok(defs);
+                }
+                let found = covering_nodes
+                    .first()
+                    .map(|n| format!("{:?}", n.kind()))
+                    .unwrap_or_else(|| "empty".to_owned());
+                Err(EmptyResponseReason::NotAnIdentifier { found })
             }
         }
     }
@@ -1548,52 +2196,53 @@ impl<'a> Transaction<'a> {
     fn find_definition_for_none(
         &self,
         handle: &Handle,
-    ) -> Option<Vec<FindDefinitionItemWithDocstring>> {
+    ) -> Result<Option<Vec1<FindDefinitionItemWithDocstring>>, EmptyResponseReason> {
         let stdlib = self.get_stdlib(handle);
-        let none_type = stdlib.none_type().clone().to_type();
+        let answers = self
+            .get_answers(handle)
+            .ok_or(EmptyResponseReason::AnswersNotFound)?;
+        let none_type = answers.heap().mk_class_type(stdlib.none_type().clone());
         let symbol_def_paths = collect_symbol_def_paths(&none_type);
-        if symbol_def_paths.is_empty() {
-            None
-        } else {
-            Some(symbol_def_paths.map(|(qname, _)| {
-                let module_info = qname.module().clone();
-                FindDefinitionItemWithDocstring {
-                    metadata: DefinitionMetadata::VariableOrAttribute(Some(SymbolKind::Class)),
-                    module: module_info,
-                    definition_range: qname.range(),
-                    docstring_range: None,
-                    display_name: None,
-                }
-            }))
-        }
+        let defs = symbol_def_paths.map(|(qname, _)| {
+            let module_info = qname.module().clone();
+            FindDefinitionItemWithDocstring {
+                metadata: DefinitionMetadata::VariableOrAttribute(Some(SymbolKind::Class)),
+                module: module_info,
+                definition_range: qname.range(),
+                docstring_range: None,
+                display_name: None,
+            }
+        });
+        Ok(Vec1::try_from_vec(defs).ok())
     }
 
-    pub fn goto_definition(&self, handle: &Handle, position: TextSize) -> Vec<TextRangeWithModule> {
-        let mut definitions = self.find_definition(
-            handle,
-            position,
-            FindPreference {
-                prefer_pyi: false,
-                ..Default::default()
-            },
-        );
-        // Add pyi definitions if we haven't found any py definition
-        if definitions.is_empty() {
-            definitions.append(&mut self.find_definition(
+    pub fn goto_definition(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Result<Vec<TextRangeWithModule>, EmptyResponseReason> {
+        let definitions = self
+            .find_definition(
                 handle,
                 position,
-                FindPreference::default(),
-            ));
-        }
+                FindPreference {
+                    prefer_pyi: false,
+                    ..Default::default()
+                },
+            )
+            .or_else(|_| self.find_definition(handle, position, FindPreference::default()));
 
-        definitions.into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+        definitions.map(|defs| {
+            defs.into_vec()
+                .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+        })
     }
 
     pub fn goto_declaration(
         &self,
         handle: &Handle,
         position: TextSize,
-    ) -> Vec<TextRangeWithModule> {
+    ) -> Result<Vec<TextRangeWithModule>, EmptyResponseReason> {
         // Go-to declaration stops at intermediate definitions (imports, type stubs)
         // rather than jumping through to the final implementation
         let definitions = self.find_definition(
@@ -1602,31 +2251,37 @@ impl<'a> Transaction<'a> {
             FindPreference {
                 import_behavior: ImportBehavior::StopAtEverything,
                 prefer_pyi: true,
+                ..Default::default()
             },
-        );
+        )?;
 
-        definitions.into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+        Ok(definitions
+            .into_vec()
+            .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range)))
     }
 
     pub fn goto_type_definition(
         &self,
         handle: &Handle,
         position: TextSize,
-    ) -> Vec<TextRangeWithModule> {
+    ) -> Result<Vec<TextRangeWithModule>, EmptyResponseReason> {
         let type_ = self.get_type_at(handle, position);
 
         if let Some(t) = type_ {
             let symbol_def_paths = collect_symbol_def_paths(&t);
 
             if !symbol_def_paths.is_empty() {
-                return symbol_def_paths.map(|(qname, _)| {
+                return Ok(symbol_def_paths.map(|(qname, _)| {
                     TextRangeWithModule::new(qname.module().clone(), qname.range())
-                });
+                }));
             }
         }
 
         self.find_definition(handle, position, FindPreference::default())
-            .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+            .map(|defs| {
+                defs.into_vec()
+                    .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
+            })
     }
 
     /// This function should not be used for user-facing go-to-definition. However, it is exposed to
@@ -1645,12 +2300,14 @@ impl<'a> Transaction<'a> {
                 ..Default::default()
             },
         )
+        .ok()?
+        .into_vec()
         .into_iter()
         .next()
         .map(|item| TextRangeWithModule::new(item.module, item.definition_range))
     }
 
-    fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
+    pub(crate) fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
         let matcher = SkimMatcherV2::default().smart_case();
         let mut results = Vec::new();
 
@@ -1674,63 +2331,409 @@ impl<'a> Transaction<'a> {
     }
 
     /// Produce code actions that makes edits local to the file.
-    pub fn local_quickfix_code_actions(
+    pub fn local_quickfix_code_actions_sorted(
         &self,
         handle: &Handle,
         range: TextRange,
         import_format: ImportFormat,
+        custom_thread_pool: Option<&ThreadPool>,
     ) -> Option<Vec<(String, Module, TextRange, String)>> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
-        let errors = self.get_errors(vec![handle]).collect_errors().shown;
-        let mut code_actions = Vec::new();
+        let errors = self.get_errors(vec![handle]).collect_errors().ordinary;
+        let mut import_actions = Vec::new();
+        let mut generate_actions = Vec::new();
+        let mut other_actions = Vec::new();
         for error in errors {
             match error.error_kind() {
                 ErrorKind::UnknownName => {
                     let error_range = error.range();
                     if error_range.contains_range(range) {
                         let unknown_name = module_info.code_at(error_range);
-                        for handle_to_import_from in self.search_exports_exact(unknown_name) {
-                            let (position, insert_text, _) = insert_import_edit(
-                                &ast,
-                                self.config_finder(),
-                                handle.dupe(),
-                                handle_to_import_from,
-                                unknown_name,
+                        for (handle_to_import_from, export) in self
+                            .search_exports_exact(unknown_name, custom_thread_pool)
+                            .unwrap_or_default()
+                        {
+                            self.create_quickfix_action_for_export(
+                                handle,
                                 import_format,
+                                &module_info,
+                                &ast,
+                                &mut import_actions,
+                                unknown_name,
+                                handle_to_import_from,
+                                export,
                             );
-                            let range = TextRange::at(position, TextSize::new(0));
-                            let title = format!("Insert import: `{}`", insert_text.trim());
-                            code_actions.push((title, module_info.dupe(), range, insert_text));
                         }
 
+                        let aliased_module = self.create_quickfix_action_for_common_alias_import(
+                            handle,
+                            &module_info,
+                            &ast,
+                            &mut import_actions,
+                            unknown_name,
+                        );
                         for module_name in self.search_modules_fuzzy(unknown_name) {
                             if module_name == handle.module() {
                                 continue;
                             }
-                            if let Some(module_handle) =
-                                self.import_handle(handle, module_name, None).finding()
+                            if aliased_module.is_some_and(|m| m == module_name) {
+                                continue;
+                            }
+                            if let Some((_submodule_name, position, insert_text, _)) = self
+                                .submodule_autoimport_edit(handle, &ast, module_name, import_format)
                             {
-                                let (position, insert_text) =
-                                    import_regular_import_edit(&ast, module_handle);
                                 let range = TextRange::at(position, TextSize::new(0));
                                 let title = format!("Insert import: `{}`", insert_text.trim());
-                                code_actions.push((title, module_info.dupe(), range, insert_text));
+                                let is_private_import = module_name
+                                    .components()
+                                    .last()
+                                    .is_some_and(|component| component.as_str().starts_with('_'));
+                                import_actions.push(QuickfixAction {
+                                    title,
+                                    module_info: module_info.dupe(),
+                                    range,
+                                    insert_text,
+                                    is_deprecated: false,
+                                    is_private_import,
+                                });
                             }
+                            self.create_quickfix_action_for_fuzzy_match(
+                                handle,
+                                &module_info,
+                                &ast,
+                                &mut import_actions,
+                                module_name,
+                            );
+                        }
+
+                        if let Some(mut actions) = quick_fixes::generate_code::generate_code_actions(
+                            self,
+                            handle,
+                            &module_info,
+                            ast.as_ref(),
+                            error_range,
+                            unknown_name,
+                        ) {
+                            generate_actions.append(&mut actions);
+                        }
+                    }
+                }
+                ErrorKind::RedundantCast => {
+                    let error_range = error.range();
+                    if let Some(action) = quick_fixes::redundant_cast::redundant_cast_code_action(
+                        &module_info,
+                        &ast,
+                        error_range,
+                    ) {
+                        let call_range = action.2;
+                        if error_range.contains_range(range) || call_range.contains_range(range) {
+                            other_actions.push(action);
                         }
                     }
                 }
                 _ => {}
             }
         }
-        code_actions.sort_by(|(title1, _, _, _), (title2, _, _, _)| title1.cmp(title2));
-        Some(code_actions)
+
+        import_actions.sort();
+
+        // Keep only the first suggestion for each unique import text (after sorting,
+        // this will be the public/non-deprecated version)
+        import_actions.dedup_by(|a, b| a.insert_text == b.insert_text);
+
+        // Drop the deprecated flag and return
+        let mut actions: Vec<(String, Module, TextRange, String)> =
+            import_actions.into_iter().map(|a| a.to_tuple()).collect();
+        actions.extend(generate_actions);
+        actions.extend(other_actions);
+        (!actions.is_empty()).then_some(actions)
+    }
+
+    fn create_quickfix_action_for_common_alias_import(
+        &self,
+        handle: &Handle,
+        module_info: &Module,
+        ast: &std::sync::Arc<ModModule>,
+        import_actions: &mut Vec<QuickfixAction>,
+        unknown_name: &str,
+    ) -> Option<ModuleName> {
+        let module_name_str = common_alias_target_module(unknown_name)?;
+        let module_name = ModuleName::from_str(module_name_str);
+        if module_name == handle.module() {
+            return None;
+        }
+        let module_handle = self.import_handle(handle, module_name, None).finding()?;
+        let (position, insert_text, _) =
+            import_regular_import_edit(ast, module_handle, Some(unknown_name));
+        let range = TextRange::at(position, TextSize::new(0));
+        let title = format!("Use common alias: `{}`", insert_text.trim());
+        let is_private_import = module_name
+            .components()
+            .last()
+            .is_some_and(|component| component.as_str().starts_with('_'));
+        import_actions.push(QuickfixAction {
+            title,
+            module_info: module_info.dupe(),
+            range,
+            insert_text,
+            is_deprecated: false,
+            is_private_import,
+        });
+        Some(module_name)
+    }
+
+    fn create_quickfix_action_for_fuzzy_match(
+        &self,
+        handle: &Handle,
+        module_info: &Module,
+        ast: &std::sync::Arc<ModModule>,
+        import_actions: &mut Vec<QuickfixAction>,
+        module_name: ModuleName,
+    ) {
+        if let Some(module_handle) = self.import_handle(handle, module_name, None).finding() {
+            let (position, insert_text, _) = import_regular_import_edit(ast, module_handle, None);
+            let range = TextRange::at(position, TextSize::new(0));
+            let title = format!("Insert import: `{}`", insert_text.trim());
+            let is_private_import = module_name
+                .components()
+                .last()
+                .is_some_and(|component| component.as_str().starts_with('_'));
+            import_actions.push(QuickfixAction {
+                title,
+                module_info: module_info.dupe(),
+                range,
+                insert_text,
+                is_deprecated: false,
+                is_private_import,
+            });
+        }
+    }
+
+    fn create_quickfix_action_for_export(
+        &self,
+        handle: &Handle,
+        import_format: ImportFormat,
+        module_info: &Module,
+        ast: &std::sync::Arc<ModModule>,
+        import_actions: &mut Vec<QuickfixAction>,
+        unknown_name: &str,
+        handle_to_import_from: Handle,
+        export: Export,
+    ) {
+        let (position, insert_text, _) = insert_import_edit(
+            ast,
+            self.config_finder(),
+            handle.dupe(),
+            handle_to_import_from.dupe(),
+            unknown_name,
+            import_format,
+        );
+        let range = TextRange::at(position, TextSize::new(0));
+        let is_deprecated = export.deprecation.is_some();
+        let title = format!(
+            "Insert import: `{}`{}",
+            insert_text.trim(),
+            if is_deprecated { " (deprecated)" } else { "" }
+        );
+
+        let is_private_import = handle_to_import_from
+            .module()
+            .components()
+            .last()
+            .is_some_and(|component| component.as_str().starts_with('_'));
+
+        import_actions.push(QuickfixAction {
+            title,
+            module_info: module_info.dupe(),
+            range,
+            insert_text,
+            is_deprecated,
+            is_private_import,
+        });
+    }
+
+    pub fn redundant_cast_fix_all_edits(
+        &self,
+        handle: &Handle,
+    ) -> Option<Vec<(Module, TextRange, String)>> {
+        let module_info = self.get_module_info(handle)?;
+        let ast = self.get_ast(handle)?;
+        let errors = self.get_errors(vec![handle]).collect_errors().ordinary;
+        let mut edits = Vec::new();
+        for error in errors {
+            if error.error_kind() != ErrorKind::RedundantCast {
+                continue;
+            }
+            if let Some((_, module, range, replacement)) =
+                quick_fixes::redundant_cast::redundant_cast_code_action(
+                    &module_info,
+                    &ast,
+                    error.range(),
+                )
+            {
+                edits.push((module, range, replacement));
+            }
+        }
+        if edits.is_empty() {
+            None
+        } else {
+            edits.sort_by_key(|(_, range, _)| range.start());
+            Some(edits)
+        }
+    }
+
+    pub fn pytest_fixture_type_annotation_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+        import_format: ImportFormat,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::pytest_fixture::pytest_fixture_type_annotation_code_actions(
+            self,
+            handle,
+            selection,
+            import_format,
+        )
+    }
+
+    pub fn extract_function_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_function::extract_function_code_actions(self, handle, selection)
+    }
+
+    pub fn extract_field_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_field::extract_field_code_actions(self, handle, selection)
+    }
+
+    pub fn extract_variable_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_variable::extract_variable_code_actions(self, handle, selection)
+    }
+
+    pub fn invert_boolean_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::invert_boolean::invert_boolean_code_actions(self, handle, selection)
+    }
+
+    pub fn extract_superclass_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_superclass::extract_superclass_code_actions(self, handle, selection)
+    }
+
+    pub fn pull_members_up_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_members::pull_members_up_code_actions(self, handle, selection)
+    }
+
+    pub fn push_members_down_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_members::push_members_down_code_actions(self, handle, selection)
+    }
+
+    pub fn move_module_member_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+        import_format: ImportFormat,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_module::move_module_member_code_actions(
+            self,
+            handle,
+            selection,
+            import_format,
+        )
+    }
+
+    pub fn make_local_function_top_level_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+        import_format: ImportFormat,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_module::make_local_function_top_level_code_actions(
+            self,
+            handle,
+            selection,
+            import_format,
+        )
+    }
+
+    pub fn inline_variable_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::inline_variable::inline_variable_code_actions(self, handle, selection)
+    }
+
+    pub fn inline_method_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::inline_method::inline_method_code_actions(self, handle, selection)
+    }
+
+    pub fn inline_parameter_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::inline_parameter::inline_parameter_code_actions(self, handle, selection)
+    }
+
+    pub fn safe_delete_code_actions(
+        &mut self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::safe_delete::safe_delete_code_actions(self, handle, selection)
+    }
+
+    pub fn introduce_parameter_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::introduce_parameter::introduce_parameter_code_actions(self, handle, selection)
+    }
+    pub fn convert_star_import_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::convert_star_import::convert_star_import_code_actions(self, handle, selection)
     }
 
     /// Determines whether a module is a third-party package.
     ///
     /// Checks if the module's path is located within any of the configured
     /// site-packages directories (e.g., `site-packages/`, `dist-packages/`).
+    /// Modules in editable install source paths are NOT considered third-party,
+    /// even if they appear in sys.path.
     fn is_third_party_module(&self, module: &Module, handle: &Handle) -> bool {
         let config = self.get_config(handle);
         let module_path = module.path();
@@ -1762,15 +2765,105 @@ impl<'a> Transaction<'a> {
                     return true;
                 }
             }
+
+            // Check editable packages detected via direct_url.json (PEP 610)
+            let site_packages: Vec<PathBuf> = config.site_package_path().cloned().collect();
+            let editable_paths = Self::get_editable_source_paths(&site_packages);
+            for editable_path in &editable_paths {
+                if module_path.as_path().starts_with(editable_path) {
+                    return true;
+                }
+            }
         }
 
         false
     }
 
+    /// Detect editable packages by scanning site-packages for direct_url.json files (PEP 610).
+    fn detect_editable_packages(site_packages: &[PathBuf]) -> Vec<PathBuf> {
+        let mut editable_paths = Vec::new();
+
+        for sp in site_packages {
+            let Ok(entries) = std::fs::read_dir(sp) else {
+                continue;
+            };
+
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+
+                // Look for .dist-info directories
+                if !path.is_dir() {
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "dist-info") {
+                    continue;
+                }
+
+                let direct_url_path = path.join("direct_url.json");
+                let Ok(content) = std::fs::read_to_string(&direct_url_path) else {
+                    continue;
+                };
+                let Ok(direct_url) = serde_json::from_str::<DirectUrl>(&content) else {
+                    continue;
+                };
+
+                if !direct_url.dir_info.editable {
+                    continue;
+                }
+
+                // Parse the file:// URL and extract the path
+                let Ok(url) = lsp_types::Url::parse(&direct_url.url) else {
+                    continue;
+                };
+                if url.scheme() != "file" {
+                    continue;
+                }
+
+                let path_str = url.path();
+
+                // On Windows, file URLs look like file:///C:/path
+                // url.path() returns "/C:/path", we need to strip the leading "/"
+                #[cfg(windows)]
+                let path_str = path_str.strip_prefix('/').unwrap_or(path_str);
+
+                // Decode percent-encoded characters (e.g., %20 -> space)
+                let Ok(decoded) = percent_encoding::percent_decode_str(path_str).decode_utf8()
+                else {
+                    continue;
+                };
+
+                let source_path = PathBuf::from(decoded.as_ref());
+                if source_path.is_dir() {
+                    editable_paths.push(source_path);
+                }
+            }
+        }
+
+        editable_paths
+    }
+
+    /// Get editable source paths for the given site-packages, using cache.
+    fn get_editable_source_paths(site_packages: &[PathBuf]) -> Vec<PathBuf> {
+        let mut key: Vec<PathBuf> = site_packages.to_vec();
+        key.sort();
+
+        let mut cache = EDITABLE_PATHS_CACHE.lock();
+        if let Some(paths) = cache.get(&key) {
+            return paths.clone();
+        }
+
+        let paths = Self::detect_editable_packages(site_packages);
+        cache.insert(key, paths.clone());
+        paths
+    }
+
     pub fn prepare_rename(&self, handle: &Handle, position: TextSize) -> Option<TextRange> {
         let identifier_context = self.identifier_at(handle, position);
 
-        let definitions = self.find_definition(handle, position, FindPreference::default());
+        let definitions = self
+            .find_definition(handle, position, FindPreference::default())
+            .map(Vec1::into_vec)
+            .unwrap_or_default();
 
         for FindDefinitionItemWithDocstring { module, .. } in definitions {
             // Block rename only if it's third-party AND not an editable install/source file.
@@ -1784,7 +2877,12 @@ impl<'a> Transaction<'a> {
         Some(identifier_context?.identifier.range)
     }
 
-    pub fn find_local_references(&self, handle: &Handle, position: TextSize) -> Vec<TextRange> {
+    pub fn find_local_references(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        include_declaration: bool,
+    ) -> Vec<TextRange> {
         self.find_definition(
             handle,
             position,
@@ -1793,6 +2891,8 @@ impl<'a> Transaction<'a> {
                 ..Default::default()
             },
         )
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
         .into_iter()
         .filter_map(
             |FindDefinitionItemWithDocstring {
@@ -1802,7 +2902,13 @@ impl<'a> Transaction<'a> {
                  docstring_range: _,
                  ..
              }| {
-                self.local_references_from_definition(handle, metadata, definition_range, &module)
+                self.local_references_from_definition(
+                    handle,
+                    metadata,
+                    definition_range,
+                    &module,
+                    include_declaration,
+                )
             },
         )
         .concat()
@@ -1853,6 +2959,7 @@ impl<'a> Transaction<'a> {
         definition_metadata: DefinitionMetadata,
         definition_name: &Name,
         definition_range: TextRange,
+        include_declaration: bool,
     ) -> Option<Vec<TextRange>> {
         let mut references = match definition_metadata {
             DefinitionMetadata::Attribute => self.local_attribute_references_from_local_definition(
@@ -1885,16 +2992,19 @@ impl<'a> Transaction<'a> {
             ]
             .concat(),
         };
-        references.push(definition_range);
+        if include_declaration {
+            references.push(definition_range);
+        }
         Some(references)
     }
 
-    fn local_references_from_definition(
+    pub(crate) fn local_references_from_definition(
         &self,
         handle: &Handle,
         definition_metadata: DefinitionMetadata,
         definition_range: TextRange,
         module: &Module,
+        include_declaration: bool,
     ) -> Option<Vec<TextRange>> {
         let mut references = if handle.path() != module.path() {
             self.local_references_from_external_definition(handle, definition_range, module)?
@@ -1905,6 +3015,7 @@ impl<'a> Transaction<'a> {
                 definition_metadata,
                 &definition_name,
                 definition_range,
+                include_declaration,
             )?
         };
         references.sort_by_key(|range| range.start());
@@ -1937,7 +3048,7 @@ impl<'a> Transaction<'a> {
         };
         // For each attribute we found above, we will test whether it actually will jump to the
         // given `definition`.
-        self.ad_hoc_solve(handle, |solver| {
+        self.ad_hoc_solve(handle, "attribute_references", |solver| {
             let mut references = Vec::new();
             for attribute in relevant_attributes {
                 if let Some(answers) = self.get_answers(handle)
@@ -1947,21 +3058,17 @@ impl<'a> Transaction<'a> {
                         name,
                         ty: _,
                         is_deprecated: _,
-                        definition: attribute_definition,
-                        docstring_range,
+                        definition,
                         is_reexport: _,
                     } in solver.completions(base_type, Some(expected_name), false)
                     {
-                        if let Some((TextRangeWithModule { module, range }, _)) =
-                            attribute_definition.and_then(|definition| {
-                                self.resolve_attribute_definition(
-                                    handle,
-                                    &name,
-                                    definition,
-                                    docstring_range,
-                                    FindPreference::default(),
-                                )
-                            })
+                        if let Some((TextRangeWithModule { module, range }, _)) = self
+                            .resolve_attribute_definition(
+                                handle,
+                                &name,
+                                definition,
+                                FindPreference::default(),
+                            )
                             && module.path() == module.path()
                             && range == definition_range
                         {
@@ -2099,14 +3206,17 @@ impl<'a> Transaction<'a> {
         if let Some(mod_module) = self.get_ast(handle) {
             let is_valid_use = |x: &ExprName| {
                 if x.id() == expected_name
-                    && let Some((def_handle, Export { location, .. })) = self.find_export_for_key(
-                        handle,
-                        &Key::BoundName(ShortIdentifier::expr_name(x)),
-                        FindPreference {
-                            import_behavior: ImportBehavior::StopAtRenamedImports,
-                            prefer_pyi: false,
-                        },
-                    )
+                    && let Some((def_handle, Export { location, .. })) = self
+                        .find_export_for_key(
+                            handle,
+                            &Key::BoundName(ShortIdentifier::expr_name(x)),
+                            FindPreference {
+                                import_behavior: ImportBehavior::StopAtRenamedImports,
+                                prefer_pyi: false,
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap_or(None)
                     && def_handle.path() == handle.path()
                     && location == definition_range
                 {
@@ -2143,570 +3253,25 @@ impl<'a> Transaction<'a> {
         Some(references)
     }
 
-    fn add_kwargs_completions(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-        completions: &mut Vec<CompletionItem>,
-    ) {
-        if let Some((callables, overload_idx, _, _)) =
-            self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(overload_idx).cloned()
-            && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
-        {
-            for param in params {
-                match param {
-                    Param::Pos(name, ty, _)
-                    | Param::PosOnly(Some(name), ty, _)
-                    | Param::KwOnly(name, ty, _)
-                    | Param::VarArg(Some(name), ty) => {
-                        if name.as_str() != "self" {
-                            completions.push(CompletionItem {
-                                label: format!("{}=", name.as_str()),
-                                detail: Some(ty.to_string()),
-                                kind: Some(CompletionItemKind::VARIABLE),
-                                ..Default::default()
-                            });
-                        }
-                    }
-                    Param::VarArg(None, _) | Param::Kwargs(_, _) | Param::PosOnly(None, _, _) => {}
-                }
-            }
-        }
-    }
-
-    fn add_magic_method_completions(
-        &self,
-        identifier: &Identifier,
-        completions: &mut Vec<CompletionItem>,
-    ) {
-        let typed = identifier.as_str();
-        if !typed.is_empty() && !typed.starts_with("__") {
-            return;
-        }
-        for name in dunder::MAGIC_METHOD_NAMES {
-            if name.starts_with(typed) {
-                completions.push(CompletionItem {
-                    label: (*name).to_owned(),
-                    kind: Some(CompletionItemKind::METHOD),
-                    ..Default::default()
-                });
-            }
-        }
-    }
-
-    fn add_builtins_autoimport_completions(
-        &self,
-        handle: &Handle,
-        identifier: Option<&Identifier>,
-        completions: &mut Vec<CompletionItem>,
-    ) {
-        if let Some(builtin_handle) = self
-            .import_handle(handle, ModuleName::builtins(), None)
-            .finding()
-        {
-            let builtin_exports = self.get_exports(&builtin_handle);
-            for (name, location) in builtin_exports.iter() {
-                if let Some(identifier) = identifier
-                    && SkimMatcherV2::default()
-                        .smart_case()
-                        .fuzzy_match(name.as_str(), identifier.as_str())
-                        .is_none()
-                {
-                    continue;
-                }
-                let kind = match location {
-                    ExportLocation::OtherModule(..) => continue,
-                    ExportLocation::ThisModule(export) => export
-                        .symbol_kind
-                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                            Some(k.to_lsp_completion_item_kind())
-                        }),
-                };
-                completions.push(CompletionItem {
-                    label: name.as_str().to_owned(),
-                    detail: None,
-                    kind,
-                    data: Some(serde_json::json!("builtin")),
-                    ..Default::default()
-                });
-            }
-        }
-    }
-
-    fn add_autoimport_completions(
-        &self,
-        handle: &Handle,
-        identifier: &Identifier,
-        completions: &mut Vec<CompletionItem>,
-        import_format: ImportFormat,
-        supports_completion_item_details: bool,
-    ) {
-        // Auto-import can be slow. Let's only return results if there are no local
-        // results for now. TODO: re-enable it once we no longer have perf issues.
-        // We should not try to generate autoimport when the user has typed very few
-        // characters. It's unhelpful to narrow down suggestions.
-        if identifier.as_str().len() >= MIN_CHARACTERS_TYPED_AUTOIMPORT
-            && let Some(ast) = self.get_ast(handle)
-            && let Some(module_info) = self.get_module_info(handle)
-        {
-            for (handle_to_import_from, name, export) in
-                self.search_exports_fuzzy(identifier.as_str())
-            {
-                // Using handle itself doesn't always work because handles can be made separately and have different hashes
-                if handle_to_import_from.module() == handle.module()
-                    || handle_to_import_from.module() == ModuleName::builtins()
-                {
-                    continue;
-                }
-                let module_description = handle_to_import_from.module().as_str().to_owned();
-                let (insert_text, additional_text_edits, imported_module) = {
-                    let (position, insert_text, module_name) = insert_import_edit(
-                        &ast,
-                        self.config_finder(),
-                        handle.dupe(),
-                        handle_to_import_from,
-                        &name,
-                        import_format,
-                    );
-                    let import_text_edit = TextEdit {
-                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                        new_text: insert_text.clone(),
-                    };
-                    (insert_text, Some(vec![import_text_edit]), module_name)
-                };
-                let auto_import_label_detail = format!(" (import {imported_module})");
-
-                completions.push(CompletionItem {
-                    label: name,
-                    detail: Some(insert_text),
-                    kind: export
-                        .symbol_kind
-                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                            Some(k.to_lsp_completion_item_kind())
-                        }),
-                    additional_text_edits,
-                    label_details: supports_completion_item_details.then_some(
-                        CompletionItemLabelDetails {
-                            detail: Some(auto_import_label_detail),
-                            description: Some(module_description),
-                        },
-                    ),
-                    tags: if export.deprecation.is_some() {
-                        Some(vec![CompletionItemTag::DEPRECATED])
-                    } else {
-                        None
-                    },
-                    ..Default::default()
-                });
-            }
-
-            for module_name in self.search_modules_fuzzy(identifier.as_str()) {
-                if module_name == handle.module() {
-                    continue;
-                }
-                let module_name_str = module_name.as_str().to_owned();
-                if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
-                {
-                    let (insert_text, additional_text_edits) = {
-                        let (position, insert_text) =
-                            import_regular_import_edit(&ast, module_handle);
-                        let import_text_edit = TextEdit {
-                            range: module_info
-                                .to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                            new_text: insert_text.clone(),
-                        };
-                        (insert_text, Some(vec![import_text_edit]))
-                    };
-                    let auto_import_label_detail = format!(" (import {module_name_str})");
-
-                    completions.push(CompletionItem {
-                        label: module_name_str.clone(),
-                        detail: Some(insert_text),
-                        kind: Some(CompletionItemKind::MODULE),
-                        additional_text_edits,
-                        label_details: supports_completion_item_details.then_some(
-                            CompletionItemLabelDetails {
-                                detail: Some(auto_import_label_detail),
-                                description: Some(module_name_str),
-                            },
-                        ),
-                        ..Default::default()
-                    });
-                }
-            }
-        }
-    }
-
-    fn get_documentation_from_export(
-        &self,
-        export_info: Option<(Handle, Export)>,
-    ) -> Option<lsp_types::Documentation> {
-        let (definition_handle, export) = export_info?;
-        let docstring_range = export.docstring_range?;
-        let def_module = self.get_module_info(&definition_handle)?;
-        let docstring = Docstring(docstring_range, def_module.clone()).resolve();
-        let documentation = lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
-            kind: lsp_types::MarkupKind::Markdown,
-            value: docstring,
-        });
-        Some(documentation)
-    }
-
-    /// Adds completions for local variables and returns true if we have added any
-    /// If an identifier is present, filter matches
-    fn add_local_variable_completions(
-        &self,
-        handle: &Handle,
-        identifier: Option<&Identifier>,
-        position: TextSize,
-        completions: &mut Vec<CompletionItem>,
-    ) -> bool {
-        let mut has_added_any = false;
-        if let Some(bindings) = self.get_bindings(handle)
-            && let Some(module_info) = self.get_module_info(handle)
-        {
-            for idx in bindings.available_definitions(position) {
-                let key = bindings.idx_to_key(idx);
-                let label = match key {
-                    Key::Definition(id) => module_info.code_at(id.range()),
-                    Key::Anywhere(id, _) => id,
-                    _ => continue,
-                };
-                if let Some(identifier) = identifier
-                    && SkimMatcherV2::default()
-                        .fuzzy_match(label, identifier.as_str())
-                        .is_none()
-                {
-                    continue;
-                }
-                let binding = bindings.get(idx);
-                let ty = self.get_type(handle, key);
-                let export_info = self.key_to_export(handle, key, FindPreference::default());
-
-                let kind = if let Some((_, ref export)) = export_info {
-                    export
-                        .symbol_kind
-                        .map_or(CompletionItemKind::VARIABLE, |k| {
-                            k.to_lsp_completion_item_kind()
-                        })
-                } else {
-                    binding
-                        .symbol_kind()
-                        .map_or(CompletionItemKind::VARIABLE, |k| {
-                            k.to_lsp_completion_item_kind()
-                        })
-                };
-
-                let is_deprecated = ty.as_ref().is_some_and(|t| {
-                    if let Type::ClassDef(cls) = t {
-                        self.ad_hoc_solve(handle, |solver| {
-                            solver.get_metadata_for_class(cls).deprecation().is_some()
-                        })
-                        .unwrap_or(false)
-                    } else {
-                        t.function_deprecation().is_some()
-                    }
-                });
-                let detail = ty.map(|t| t.to_string());
-                let documentation = self.get_documentation_from_export(export_info);
-
-                has_added_any = true;
-                completions.push(CompletionItem {
-                    label: label.to_owned(),
-                    detail,
-                    kind: Some(kind),
-                    documentation,
-                    tags: if is_deprecated {
-                        Some(vec![CompletionItemTag::DEPRECATED])
-                    } else {
-                        None
-                    },
-                    ..Default::default()
-                })
-            }
-        }
-        has_added_any
-    }
-
-    fn add_keyword_completions(&self, handle: &Handle, completions: &mut Vec<CompletionItem>) {
-        get_keywords(handle.sys_info().version())
-            .iter()
-            .for_each(|name| {
-                completions.push(CompletionItem {
-                    label: (*name).to_owned(),
-                    kind: Some(CompletionItemKind::KEYWORD),
-                    ..Default::default()
-                })
-            });
-    }
-
-    fn get_docstring_for_attribute(
-        &self,
-        handle: &Handle,
-        attr_info: &AttrInfo,
-    ) -> Option<lsp_types::Documentation> {
-        let definition = attr_info.definition.as_ref()?.clone();
-        let attribute_definition = self.resolve_attribute_definition(
-            handle,
-            &attr_info.name,
-            definition,
-            attr_info.docstring_range,
-            FindPreference::default(),
-        );
-
-        let (definition, Some(docstring_range)) = attribute_definition? else {
-            return None;
-        };
-        let docstring = Docstring(docstring_range, definition.module);
-
-        Some(lsp_types::Documentation::MarkupContent(
-            lsp_types::MarkupContent {
-                kind: lsp_types::MarkupKind::Markdown,
-                value: docstring.resolve().trim().to_owned(),
-            },
-        ))
-    }
-
-    fn add_literal_completions(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-        completions: &mut Vec<CompletionItem>,
-    ) {
-        if let Some((callables, chosen_overload_index, active_argument, _)) =
-            self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(chosen_overload_index)
-            && let Some(params) =
-                Self::normalize_singleton_function_type_into_params(callable.clone())
-            && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
-            && let Some(param) = params.get(arg_index)
-        {
-            Self::add_literal_completions_from_type(param.as_type(), completions);
-        }
-    }
-
-    fn add_literal_completions_from_type(param_type: &Type, completions: &mut Vec<CompletionItem>) {
-        match param_type {
-            Type::Literal(lit) => {
-                completions.push(CompletionItem {
-                    // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
-                    label: lit.to_string_escaped(true),
-                    kind: Some(CompletionItemKind::VALUE),
-                    detail: Some(format!("{param_type}")),
-                    ..Default::default()
-                });
-            }
-            Type::Union(box Union { members, .. }) => {
-                for member in members {
-                    Self::add_literal_completions_from_type(member, completions);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn subscript_string_literal_at(
-        module: &ModModule,
-        position: TextSize,
-    ) -> Option<(ExprSubscript, ExprStringLiteral)> {
-        let nodes = Ast::locate_node(module, position);
-        let mut best: Option<(u8, TextSize, ExprSubscript, ExprStringLiteral)> = None;
-        for node in nodes {
-            if let AnyNodeRef::ExprSubscript(sub) = node
-                && let Expr::StringLiteral(lit) = sub.slice.as_ref()
-            {
-                let (priority, dist) = Self::string_literal_priority(position, lit.range());
-                let should_update = match &best {
-                    Some((best_prio, best_dist, _, _)) => {
-                        priority < *best_prio || (priority == *best_prio && dist < *best_dist)
-                    }
-                    None => true,
-                };
-                if should_update {
-                    best = Some((priority, dist, sub.clone(), lit.clone()));
-                    if priority == 0 && dist == TextSize::from(0) {
-                        break;
-                    }
-                }
-            }
-        }
-        best.map(|(_, _, sub, lit)| (sub, lit))
-    }
-
-    fn string_literal_priority(position: TextSize, range: TextRange) -> (u8, TextSize) {
-        if range.contains(position) {
-            (0, TextSize::from(0))
-        } else if position < range.start() {
-            (1, range.start() - position)
-        } else {
-            (2, position - range.end())
-        }
-    }
-
-    fn expression_facets(expr: &Expr) -> Option<(Identifier, Vec<FacetKind>)> {
-        let mut facets = Vec::new();
-        let mut current = expr;
-        loop {
-            match current {
-                Expr::Subscript(sub) => {
-                    match sub.slice.as_ref() {
-                        Expr::NumberLiteral(ExprNumberLiteral {
-                            value: Number::Int(idx),
-                            ..
-                        }) if idx.as_usize().is_some() => {
-                            facets.push(FacetKind::Index(idx.as_usize().unwrap()))
-                        }
-                        Expr::StringLiteral(lit) => {
-                            facets.push(FacetKind::Key(lit.value.to_string()))
-                        }
-                        _ => return None,
-                    }
-                    current = sub.value.as_ref();
-                }
-                Expr::Attribute(attr) => {
-                    facets.push(FacetKind::Attribute(attr.attr.id.clone()));
-                    current = attr.value.as_ref();
-                }
-                Expr::Name(name) => {
-                    facets.reverse();
-                    return Some((Ast::expr_name_identifier(name.clone()), facets));
-                }
-                _ => return None,
-            }
-        }
-    }
-
-    fn collect_typed_dict_keys(
-        &self,
-        handle: &Handle,
-        base_type: Type,
-    ) -> Option<BTreeMap<String, Type>> {
-        self.ad_hoc_solve(handle, |solver| {
-            let mut map = BTreeMap::new();
-            let mut stack = vec![base_type];
-            while let Some(ty) = stack.pop() {
-                match ty {
-                    Type::TypedDict(td) | Type::PartialTypedDict(td) => {
-                        for (name, field) in solver.type_order().typed_dict_fields(&td) {
-                            map.entry(name.to_string())
-                                .or_insert_with(|| field.ty.clone());
-                        }
-                    }
-                    Type::Union(box Union { members, .. }) => {
-                        stack.extend(members.into_iter());
-                    }
-                    _ => {}
-                }
-            }
-            map
-        })
-    }
-
-    fn add_dict_key_completions(
-        &self,
-        handle: &Handle,
-        module: &ModModule,
-        position: TextSize,
-        completions: &mut Vec<CompletionItem>,
-    ) {
-        let Some((subscript, string_lit)) = Self::subscript_string_literal_at(module, position)
-        else {
-            return;
-        };
-        let literal_range = string_lit.range();
-        // Allow the cursor to sit a few characters before the literal (e.g. between nested
-        // subscripts) so completion requests fired just before the quotes still succeed.
-        let allowance = TextSize::from(4);
-        let lower_bound = literal_range
-            .start()
-            .checked_sub(allowance)
-            .unwrap_or_else(|| TextSize::new(0));
-        if position < lower_bound || position > literal_range.end() {
-            return;
-        }
-        let base_expr = subscript.value.as_ref();
-        let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
-
-        if let Some(bindings) = self.get_bindings(handle) {
-            let base_info = if let Some((identifier, facets)) = Self::expression_facets(base_expr) {
-                Some((identifier, facets))
-            } else if let Expr::Name(name) = base_expr {
-                Some((Ast::expr_name_identifier(name.clone()), Vec::new()))
-            } else {
-                None
-            };
-
-            if let Some((identifier, facets)) = base_info {
-                let short_id = ShortIdentifier::new(&identifier);
-                let idx_opt = {
-                    let bound_key = Key::BoundName(short_id);
-                    if bindings.is_valid_key(&bound_key) {
-                        Some(bindings.key_to_idx(&bound_key))
-                    } else {
-                        let def_key = Key::Definition(short_id);
-                        if bindings.is_valid_key(&def_key) {
-                            Some(bindings.key_to_idx(&def_key))
-                        } else {
-                            None
-                        }
-                    }
-                };
-
-                if let Some(idx) = idx_opt {
-                    let facets_clone = facets.clone();
-                    if let Some(keys) = self.ad_hoc_solve(handle, |solver| {
-                        let info = solver.get_idx(idx);
-                        info.key_facets_at(&facets_clone)
-                    }) {
-                        for (key, ty_opt) in keys {
-                            suggestions.entry(key).or_insert(ty_opt);
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(base_type) = self.get_type_trace(handle, base_expr.range())
-            && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
-        {
-            for (key, ty) in typed_keys {
-                let entry = suggestions.entry(key).or_insert(None);
-                if entry.is_none() {
-                    *entry = Some(ty);
-                }
-            }
-        }
-
-        if suggestions.is_empty() {
-            return;
-        }
-
-        for (label, ty_opt) in suggestions {
-            let detail = ty_opt.as_ref().map(|ty| ty.to_string());
-            completions.push(CompletionItem {
-                label,
-                detail,
-                kind: Some(CompletionItemKind::FIELD),
-                ..Default::default()
-            });
-        }
-    }
-
-    // Kept for backwards compatibility - used by external callers (lsp/server.rs, playground.rs)
-    // who don't need the is_incomplete flag
+    // Kept for backwards compatibility - used by external callers who don't need the
+    // is_incomplete flag.
     pub fn completion(
         &self,
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
         supports_completion_item_details: bool,
+        custom_thread_pool: Option<&ThreadPool>,
     ) -> Vec<CompletionItem> {
         self.completion_with_incomplete(
             handle,
             position,
             import_format,
-            supports_completion_item_details,
+            CompletionOptions {
+                supports_completion_item_details,
+                ..Default::default()
+            },
+            custom_thread_pool,
         )
         .0
     }
@@ -2717,8 +3282,53 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
-        supports_completion_item_details: bool,
+        options: CompletionOptions,
+        custom_thread_pool: Option<&ThreadPool>,
     ) -> (Vec<CompletionItem>, bool) {
+        self.completion_with_incomplete_impl(
+            handle,
+            position,
+            import_format,
+            options,
+            None::<fn(&CompletionItem) -> Option<usize>>,
+            custom_thread_pool,
+        )
+    }
+
+    pub fn completion_with_incomplete_mru<F>(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        import_format: ImportFormat,
+        options: CompletionOptions,
+        mru_index: F,
+        custom_thread_pool: Option<&ThreadPool>,
+    ) -> (Vec<CompletionItem>, bool)
+    where
+        F: FnMut(&CompletionItem) -> Option<usize>,
+    {
+        self.completion_with_incomplete_impl(
+            handle,
+            position,
+            import_format,
+            options,
+            Some(mru_index),
+            custom_thread_pool,
+        )
+    }
+
+    fn completion_with_incomplete_impl<F>(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        import_format: ImportFormat,
+        options: CompletionOptions,
+        mru_index: Option<F>,
+        custom_thread_pool: Option<&ThreadPool>,
+    ) -> (Vec<CompletionItem>, bool)
+    where
+        F: FnMut(&CompletionItem) -> Option<usize>,
+    {
         // Check if position is in a disabled range (comments)
         if let Some(module) = self.get_module_info(handle) {
             let disabled_ranges = Self::comment_ranges_for_module(&module);
@@ -2731,7 +3341,9 @@ impl<'a> Transaction<'a> {
             handle,
             position,
             import_format,
-            supports_completion_item_details,
+            options,
+            mru_index,
+            custom_thread_pool,
         );
         results.sort_by(|item1, item2| {
             item1
@@ -2761,480 +3373,470 @@ impl<'a> Transaction<'a> {
         ranges
     }
 
-    fn completion_sorted_opt_with_incomplete(
+    fn export_from_location(
         &self,
         handle: &Handle,
-        position: TextSize,
-        import_format: ImportFormat,
-        supports_completion_item_details: bool,
-    ) -> (Vec<CompletionItem>, bool) {
-        let mut result = Vec::new();
-        let mut is_incomplete = false;
-        match self.identifier_at(handle, position) {
-            Some(IdentifierWithContext {
-                identifier,
-                context: IdentifierContext::ImportedName { module_name, .. },
-            }) => {
-                if let Some(handle) = self.import_handle(handle, module_name, None).finding() {
-                    // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
-                    // If the user might be typing the `import` keyword, add that as an autocomplete option.
-                    if "import".starts_with(identifier.as_str()) {
-                        result.push(CompletionItem {
-                            label: "import".to_owned(),
-                            kind: Some(CompletionItemKind::KEYWORD),
-                            ..Default::default()
-                        })
-                    }
-                    let exports = self.get_exports(&handle);
-                    for (name, export) in exports.iter() {
-                        let is_deprecated = match export {
-                            ExportLocation::ThisModule(export) => export.deprecation.is_some(),
-                            ExportLocation::OtherModule(_, _) => false,
-                        };
-                        result.push(CompletionItem {
-                            label: name.to_string(),
-                            // todo(kylei): completion kind for exports
-                            kind: Some(CompletionItemKind::VARIABLE),
-                            tags: if is_deprecated {
-                                Some(vec![CompletionItemTag::DEPRECATED])
-                            } else {
-                                None
-                            },
-                            ..Default::default()
-                        })
-                    }
-                }
+        export_name: &Name,
+        location: &ExportLocation,
+    ) -> Option<(Handle, Export)> {
+        match location {
+            ExportLocation::ThisModule(export) => Some((handle.dupe(), export.clone())),
+            ExportLocation::OtherModule(module, original_name) => {
+                let target_name = original_name.clone().unwrap_or_else(|| export_name.clone());
+                self.resolve_named_import(handle, *module, target_name, FindPreference::default())
             }
-            // TODO: Handle relative import (via ModuleName::new_maybe_relative)
-            Some(IdentifierWithContext {
-                identifier,
-                context: IdentifierContext::ImportedModule { .. },
-            }) => self
-                .import_prefixes(handle, ModuleName::from_name(identifier.id()))
+        }
+    }
+
+    /// Used to avoid making use of reexports of private modules for some LSP
+    /// uses like auto-import (where we want to import the public API).
+    /// - Returns true if both modules should be shown in auto-import suggestions.
+    /// - Handles stdlib patterns where a public module (`io`) re-exports from a
+    ///   private implementation module (`_io`).
+    fn should_include_reexport(original: &Handle, canonical: &Handle) -> bool {
+        let canonical_module = canonical.module();
+        let original_module = original.module();
+        let canonical_components = canonical_module.components();
+        let canonical_component = canonical_components
+            .last()
+            .map(|name| name.as_str())
+            .unwrap_or("");
+        let original_components = original_module.components();
+        let original_component = original_components
+            .last()
+            .map(|name| name.as_str())
+            .unwrap_or("");
+
+        if canonical_component.starts_with('_')
+            && canonical_component.trim_start_matches('_') == original_component
+        {
+            return true;
+        }
+
+        // Include re-export if original is a parent package of canonical.
+        if canonical_components.len() > original_components.len()
+            && canonical_components
                 .iter()
-                .for_each(|module_name| {
-                    result.push(CompletionItem {
-                        label: module_name
-                            .components()
-                            .last()
-                            .unwrap_or(&Name::empty())
-                            .to_string(),
-                        detail: Some(module_name.to_string()),
-                        kind: Some(CompletionItemKind::MODULE),
-                        ..Default::default()
-                    })
-                }),
-            Some(IdentifierWithContext {
-                identifier: _,
-                context: IdentifierContext::Attribute { base_range, .. },
-            }) => {
-                if let Some(answers) = self.get_answers(handle)
-                    && let Some(base_type) = answers.get_type_trace(base_range)
-                {
-                    self.ad_hoc_solve(handle, |solver| {
-                        solver
-                            .completions(base_type, None, true)
-                            .iter()
-                            .for_each(|x| {
-                                let kind = match x.ty {
-                                    Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
-                                    Some(Type::Function(_)) => Some(CompletionItemKind::FUNCTION),
-                                    _ => Some(CompletionItemKind::FIELD),
-                                };
-                                let ty = &x.ty;
-                                let detail = ty.clone().map(|t| t.as_hover_string());
-                                let documentation = self.get_docstring_for_attribute(handle, x);
-                                result.push(CompletionItem {
-                                    label: x.name.as_str().to_owned(),
-                                    detail,
-                                    kind,
-                                    documentation,
-                                    sort_text: if x.is_reexport {
-                                        Some("1".to_owned())
-                                    } else {
-                                        None
-                                    },
-                                    tags: if x.is_deprecated {
-                                        Some(vec![CompletionItemTag::DEPRECATED])
-                                    } else {
-                                        None
-                                    },
-                                    ..Default::default()
-                                });
-                            });
-                    });
-                }
+                .zip(original_components.iter())
+                .all(|(c, o)| c == o)
+        {
+            return true;
+        }
+        // Some stdlib shims encode dotted modules with underscores (e.g. _collections_abc).
+        if canonical_module.as_str().starts_with('_') && original_module.as_str().contains('.') {
+            let canonical_trim = canonical_module.as_str().trim_start_matches('_');
+            if canonical_trim == original_module.as_str().replace('.', "_") {
+                return true;
             }
-            Some(IdentifierWithContext {
-                identifier,
-                context,
-            }) => {
-                if matches!(context, IdentifierContext::MethodDef { .. }) {
-                    self.add_magic_method_completions(&identifier, &mut result);
-                }
-                self.add_kwargs_completions(handle, position, &mut result);
-                self.add_keyword_completions(handle, &mut result);
-                let has_local_completions = self.add_local_variable_completions(
-                    handle,
-                    Some(&identifier),
-                    position,
-                    &mut result,
-                );
-                if !has_local_completions {
-                    self.add_autoimport_completions(
-                        handle,
-                        &identifier,
-                        &mut result,
-                        import_format,
-                        supports_completion_item_details,
-                    );
-                }
-                // If autoimport completions were skipped due to character threshold,
-                // mark the results as incomplete so clients keep asking for completions.
-                // This ensures autoimport completions will be checked once the threshold is reached,
-                // even if local completions are currently available.
-                if identifier.as_str().len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
-                    is_incomplete = true;
-                }
-                self.add_builtins_autoimport_completions(handle, Some(&identifier), &mut result);
-            }
-            None => {
-                // todo(kylei): optimization, avoid duplicate ast walks
-                if let Some(mod_module) = self.get_ast(handle) {
-                    let nodes = Ast::locate_node(&mod_module, position);
-                    if nodes.is_empty() {
-                        self.add_keyword_completions(handle, &mut result);
-                        self.add_local_variable_completions(handle, None, position, &mut result);
-                        self.add_builtins_autoimport_completions(handle, None, &mut result);
+        }
+        false
+    }
+
+    pub fn search_exports_exact(
+        &self,
+        name: &str,
+        custom_thread_pool: Option<&ThreadPool>,
+    ) -> Result<Vec<(Handle, Export)>, Cancelled> {
+        self.search_exports(
+            |handle, exports_data, exports| {
+                let name = Name::new(name);
+                match exports.get(&name) {
+                    Some(location) => {
+                        if let Some((canonical_handle, export)) =
+                            self.export_from_location(handle, &name, location)
+                        {
+                            let mut results = vec![(canonical_handle.dupe(), export.clone())];
+                            if canonical_handle != *handle
+                                && (Self::should_include_reexport(handle, &canonical_handle)
+                                    || (exports_data.is_explicit_reexport(&name)
+                                        && Self::allows_explicit_reexport(handle)))
+                            {
+                                results.push((handle.dupe(), export));
+                            }
+                            results
+                        } else {
+                            Vec::new()
+                        }
                     }
-                    self.add_literal_completions(handle, position, &mut result);
-                    self.add_dict_key_completions(
-                        handle,
-                        mod_module.as_ref(),
-                        position,
-                        &mut result,
-                    );
-                    // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
-                    // in foo(<>), the first containing node is AnyNodeRef::ExprCall
-                    if let Some(first) = nodes.first()
-                        && matches!(first, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_))
+                    None => Vec::new(),
+                }
+            },
+            custom_thread_pool,
+        )
+    }
+
+    pub fn search_exports_fuzzy(
+        &self,
+        pattern: &str,
+        custom_thread_pool: Option<&ThreadPool>,
+    ) -> Result<Vec<(Handle, String, Export)>, Cancelled> {
+        let mut res = self.search_exports(
+            |handle, exports_data, exports| {
+                let matcher = SkimMatcherV2::default().smart_case();
+                let mut results = Vec::new();
+                for (name, location) in exports.iter() {
+                    let name_str = name.as_str();
+                    if let Some(score) = matcher.fuzzy_match(name_str, pattern)
+                        && let Some((canonical_handle, export)) =
+                            self.export_from_location(handle, name, location)
                     {
-                        self.add_kwargs_completions(handle, position, &mut result);
-                    }
-                }
-            }
-        }
-        for item in &mut result {
-            let sort_text = if item
-                .tags
-                .as_ref()
-                .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED))
-            {
-                "9"
-            } else if item.additional_text_edits.is_some() {
-                "4"
-            } else if item.label.starts_with("__") {
-                "3"
-            } else if item.label.as_str().starts_with("_") {
-                "2"
-            } else if let Some(sort_text) = &item.sort_text {
-                // 1 is reserved for re-exports
-                sort_text.as_str()
-            } else {
-                "0"
-            }
-            .to_owned();
-            item.sort_text = Some(sort_text);
-        }
-        (result, is_incomplete)
-    }
-
-    pub fn search_exports_exact(&self, name: &str) -> Vec<Handle> {
-        self.search_exports(|handle, exports| {
-            if let Some(export) = exports.get(&Name::new(name)) {
-                match export {
-                    ExportLocation::ThisModule(_) => vec![handle.dupe()],
-                    // Re-exported modules like `foo` in `from from_module import foo`
-                    // should likely be ignored in autoimport suggestions
-                    // because the original export in from_module will show it.
-                    // The current strategy will prevent intended re-exports from showing up in
-                    // result list, but it's better than showing thousands of likely bad results.
-                    ExportLocation::OtherModule(..) => Vec::new(),
-                }
-            } else {
-                Vec::new()
-            }
-        })
-    }
-
-    pub fn search_exports_fuzzy(&self, pattern: &str) -> Vec<(Handle, String, Export)> {
-        let mut res = self.search_exports(|handle, exports| {
-            let matcher = SkimMatcherV2::default().smart_case();
-            let mut results = Vec::new();
-            for (name, location) in exports.iter() {
-                let name = name.as_str();
-                if let Some(score) = matcher.fuzzy_match(name, pattern) {
-                    match location {
-                        ExportLocation::OtherModule(..) => {}
-                        ExportLocation::ThisModule(export) => {
-                            results.push((score, handle.dupe(), name.to_owned(), export.clone()));
+                        results.push((
+                            score,
+                            canonical_handle.dupe(),
+                            name_str.to_owned(),
+                            export.clone(),
+                        ));
+                        if canonical_handle != *handle
+                            && (Self::should_include_reexport(handle, &canonical_handle)
+                                || (exports_data.is_explicit_reexport(name)
+                                    && Self::allows_explicit_reexport(handle)))
+                        {
+                            results.push((score, handle.dupe(), name_str.to_owned(), export));
                         }
                     }
                 }
-            }
-            results
-        });
+                results
+            },
+            custom_thread_pool,
+        )?;
         res.sort_by_key(|(score, _, _, _)| Reverse(*score));
-        res.into_map(|(_, handle, name, export)| (handle, name, export))
+        Ok(res.into_map(|(_, handle, name, export)| (handle, name, export)))
+    }
+}
+
+trait RdepTransaction {
+    fn solutions_index(&self, handle: &Handle) -> Option<Arc<Mutex<Index>>>;
+    fn module_info(&self, handle: &Handle) -> Option<Module>;
+    fn transitive_rdeps(&self, handle: Handle) -> HashSet<Handle>;
+    fn run_for_handles(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled>;
+    fn local_references_from_definition(
+        &self,
+        handle: &Handle,
+        definition_kind: DefinitionMetadata,
+        range: TextRange,
+        module: &Module,
+        include_declaration: bool,
+    ) -> Option<Vec<TextRange>>;
+}
+
+impl<'a> RdepTransaction for Transaction<'a> {
+    fn solutions_index(&self, handle: &Handle) -> Option<Arc<Mutex<Index>>> {
+        self.get_solutions(handle)
+            .and_then(|solutions| solutions.get_index())
+    }
+
+    fn module_info(&self, handle: &Handle) -> Option<Module> {
+        self.get_module_info(handle)
+    }
+
+    fn transitive_rdeps(&self, handle: Handle) -> HashSet<Handle> {
+        self.get_transitive_rdeps(handle)
+    }
+
+    fn run_for_handles(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
+        self.run(handles, require, None);
+        Ok(())
+    }
+
+    fn local_references_from_definition(
+        &self,
+        handle: &Handle,
+        definition_kind: DefinitionMetadata,
+        range: TextRange,
+        module: &Module,
+        include_declaration: bool,
+    ) -> Option<Vec<TextRange>> {
+        self.local_references_from_definition(
+            handle,
+            definition_kind,
+            range,
+            module,
+            include_declaration,
+        )
+    }
+}
+
+impl<'a> RdepTransaction for CancellableTransaction<'a> {
+    fn solutions_index(&self, handle: &Handle) -> Option<Arc<Mutex<Index>>> {
+        self.as_ref()
+            .get_solutions(handle)
+            .and_then(|solutions| solutions.get_index())
+    }
+
+    fn module_info(&self, handle: &Handle) -> Option<Module> {
+        self.as_ref().get_module_info(handle)
+    }
+
+    fn transitive_rdeps(&self, handle: Handle) -> HashSet<Handle> {
+        self.as_ref().get_transitive_rdeps(handle)
+    }
+
+    fn run_for_handles(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
+        self.run(handles, require, None)
+    }
+
+    fn local_references_from_definition(
+        &self,
+        handle: &Handle,
+        definition_kind: DefinitionMetadata,
+        range: TextRange,
+        module: &Module,
+        include_declaration: bool,
+    ) -> Option<Vec<TextRange>> {
+        self.as_ref().local_references_from_definition(
+            handle,
+            definition_kind,
+            range,
+            module,
+            include_declaration,
+        )
+    }
+}
+
+fn find_child_implementations_impl<T: RdepTransaction>(
+    transaction: &T,
+    handle: &Handle,
+    definition: &TextRangeWithModule,
+) -> Vec<TextRange> {
+    let mut child_implementations = Vec::new();
+
+    if let Some(index) = transaction.solutions_index(handle) {
+        let index_lock = index.lock();
+        for (child_range, parent_methods) in &index_lock.parent_methods_map {
+            for (parent_module_path, parent_range) in parent_methods {
+                if parent_module_path == definition.module.path()
+                    && *parent_range == definition.range
+                {
+                    child_implementations.push(*child_range);
+                }
+            }
+        }
+    }
+
+    child_implementations
+}
+
+fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
+    transaction: &mut T,
+    sys_info: SysInfo,
+    definition: &TextRangeWithModule,
+) -> Result<Vec<Handle>, Cancelled> {
+    let mut transitive_rdeps = match definition.module.path().details() {
+        ModulePathDetails::Memory(path_buf) => {
+            let handle_of_filesystem_counterpart = Handle::new(
+                definition.module.name(),
+                ModulePath::filesystem((**path_buf).clone()),
+                sys_info,
+            );
+            let mut rdeps = transaction.transitive_rdeps(handle_of_filesystem_counterpart.dupe());
+            rdeps.insert(Handle::new(
+                definition.module.name(),
+                definition.module.path().dupe(),
+                sys_info,
+            ));
+            rdeps
+        }
+        _ => {
+            let definition_handle = Handle::new(
+                definition.module.name(),
+                definition.module.path().dupe(),
+                sys_info,
+            );
+            let rdeps = transaction.transitive_rdeps(definition_handle.dupe());
+            transaction.run_for_handles(&[definition_handle], Require::Everything)?;
+            rdeps
+        }
+    };
+    for fs_counterpart_of_in_memory_handles in transitive_rdeps
+        .iter()
+        .filter_map(|handle| match handle.path().details() {
+            ModulePathDetails::Memory(path_buf) => Some(Handle::new(
+                handle.module(),
+                ModulePath::filesystem((**path_buf).clone()),
+                handle.sys_info().dupe(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+    {
+        transitive_rdeps.remove(&fs_counterpart_of_in_memory_handles);
+    }
+    let candidate_handles = transitive_rdeps
+        .into_iter()
+        .sorted_by_key(|h| h.path().dupe())
+        .collect::<Vec<_>>();
+
+    Ok(candidate_handles)
+}
+
+fn patch_definition_for_handle_impl<T: RdepTransaction>(
+    transaction: &T,
+    handle: &Handle,
+    definition: &TextRangeWithModule,
+) -> TextRangeWithModule {
+    match definition.module.path().details() {
+        ModulePathDetails::Memory(path_buf) if handle.path() != definition.module.path() => {
+            let TextRangeWithModule { module, range } = definition;
+            let module = if let Some(info) = transaction.module_info(&Handle::new(
+                module.name(),
+                ModulePath::filesystem((**path_buf).clone()),
+                handle.sys_info().dupe(),
+            )) {
+                info
+            } else {
+                module.dupe()
+            };
+            TextRangeWithModule {
+                module,
+                range: *range,
+            }
+        }
+        _ => definition.clone(),
+    }
+}
+
+fn process_rdeps_with_definition_impl<T: RdepTransaction, R>(
+    transaction: &mut T,
+    sys_info: SysInfo,
+    definition: &TextRangeWithModule,
+    mut process_fn: impl FnMut(&mut T, &Handle, &TextRangeWithModule) -> Option<R>,
+) -> Result<Vec<R>, Cancelled> {
+    let candidate_handles =
+        compute_transitive_rdeps_for_definition_impl(transaction, sys_info, definition)?;
+
+    let mut results = Vec::new();
+    for handle in candidate_handles {
+        let patched_definition = patch_definition_for_handle_impl(transaction, &handle, definition);
+        if let Some(result) = process_fn(transaction, &handle, &patched_definition) {
+            results.push(result);
+        }
+    }
+
+    Ok(results)
+}
+
+fn find_global_references_from_definition_impl<T: RdepTransaction>(
+    transaction: &mut T,
+    sys_info: SysInfo,
+    definition_kind: DefinitionMetadata,
+    definition: TextRangeWithModule,
+    include_declaration: bool,
+) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
+    let results = process_rdeps_with_definition_impl(
+        transaction,
+        sys_info,
+        &definition,
+        |transaction, handle, patched_definition| {
+            let mut module_refs: Vec<(Module, Vec<TextRange>)> = Vec::new();
+
+            let references = transaction
+                .local_references_from_definition(
+                    handle,
+                    definition_kind.clone(),
+                    patched_definition.range,
+                    &patched_definition.module,
+                    include_declaration,
+                )
+                .unwrap_or_default();
+            if !references.is_empty()
+                && let Some(module_info) = transaction.module_info(handle)
+            {
+                module_refs.push((module_info, references));
+            }
+
+            let child_implementations =
+                find_child_implementations_impl(transaction, handle, patched_definition);
+            if !child_implementations.is_empty()
+                && let Some(module_info) = transaction.module_info(handle)
+            {
+                if let Some((_, ranges)) = module_refs
+                    .iter_mut()
+                    .find(|(m, _)| m.path() == module_info.path())
+                {
+                    ranges.extend(child_implementations);
+                } else {
+                    module_refs.push((module_info, child_implementations));
+                }
+            }
+
+            if module_refs.is_empty() {
+                None
+            } else {
+                Some(module_refs)
+            }
+        },
+    )?;
+
+    let mut global_references: Vec<(Module, Vec<TextRange>)> = Vec::new();
+    for module_refs in results {
+        for (module, ranges) in module_refs {
+            if let Some((_, existing_ranges)) = global_references
+                .iter_mut()
+                .find(|(m, _)| m.path() == module.path())
+            {
+                existing_ranges.extend(ranges);
+            } else {
+                global_references.push((module, ranges));
+            }
+        }
+    }
+
+    for (_, references) in &mut global_references {
+        references.sort_by_key(|range| range.start());
+        references.dedup();
+    }
+
+    Ok(global_references)
+}
+
+impl<'a> Transaction<'a> {
+    /// Returns all references (including child implementations) for the definition.
+    pub fn find_global_references_from_definition(
+        &mut self,
+        sys_info: SysInfo,
+        definition_kind: DefinitionMetadata,
+        definition: TextRangeWithModule,
+        include_declaration: bool,
+    ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
+        find_global_references_from_definition_impl(
+            self,
+            sys_info,
+            definition_kind,
+            definition,
+            include_declaration,
+        )
     }
 }
 
 impl<'a> CancellableTransaction<'a> {
-    /// Finds child class implementations of a method definition.
-    /// Returns the ranges of child methods that reimplement the given parent method.
-    fn find_child_implementations(
-        &self,
-        handle: &Handle,
-        definition: &TextRangeWithModule,
-    ) -> Vec<TextRange> {
-        let mut child_implementations = Vec::new();
-
-        if let Some(solutions) = self.as_ref().get_solutions(handle)
-            && let Some(index) = solutions.get_index()
-        {
-            let index_lock = index.lock();
-            // Search for child methods that have this definition as a parent
-            for (child_range, parent_methods) in &index_lock.parent_methods_map {
-                for (parent_module_path, parent_range) in parent_methods {
-                    // Check if the parent method matches our definition
-                    if parent_module_path == definition.module.path()
-                        && *parent_range == definition.range
-                    {
-                        // This child method is a reimplementation of our definition
-                        child_implementations.push(*child_range);
-                    }
-                }
-            }
-        }
-
-        child_implementations
-    }
-
-    /// Computes the set of transitive reverse dependencies for a definition, handling
-    /// in-memory files and their filesystem counterparts.
-    /// Returns Err if the request is canceled in the middle of a run.
-    fn compute_transitive_rdeps_for_definition(
-        &mut self,
-        sys_info: &SysInfo,
-        definition: &TextRangeWithModule,
-    ) -> Result<Vec<Handle>, Cancelled> {
-        let mut transitive_rdeps = match definition.module.path().details() {
-            ModulePathDetails::Memory(path_buf) => {
-                let handle_of_filesystem_counterpart = Handle::new(
-                    definition.module.name(),
-                    ModulePath::filesystem((**path_buf).clone()),
-                    sys_info.dupe(),
-                );
-                // In-memory files can never be found through import resolution (no rdeps),
-                // so we must compute the transitive rdeps of its filesystem counterpart instead.
-                let mut rdeps = self
-                    .as_ref()
-                    .get_transitive_rdeps(handle_of_filesystem_counterpart.dupe());
-                // We still add itself to the rdeps set, so that we will still find local references
-                // within the file.
-                rdeps.insert(Handle::new(
-                    definition.module.name(),
-                    definition.module.path().dupe(),
-                    sys_info.dupe(),
-                ));
-                rdeps
-            }
-            _ => {
-                let definition_handle = Handle::new(
-                    definition.module.name(),
-                    definition.module.path().dupe(),
-                    sys_info.dupe(),
-                );
-                let rdeps = self.as_ref().get_transitive_rdeps(definition_handle.dupe());
-                // We still need to know everything about the definition file, because the index
-                // only contains non-local references.
-                self.run(&[definition_handle], Require::Everything)?;
-                rdeps
-            }
-        };
-        // Remove the filesystem counterpart from candidate list,
-        // otherwise we will have results from both filesystem and in-memory version of the file.
-        for fs_counterpart_of_in_memory_handles in transitive_rdeps
-            .iter()
-            .filter_map(|handle| match handle.path().details() {
-                ModulePathDetails::Memory(path_buf) => Some(Handle::new(
-                    handle.module(),
-                    ModulePath::filesystem((**path_buf).clone()),
-                    handle.sys_info().dupe(),
-                )),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-        {
-            transitive_rdeps.remove(&fs_counterpart_of_in_memory_handles);
-        }
-        let candidate_handles = transitive_rdeps
-            .into_iter()
-            .sorted_by_key(|h| h.path().dupe())
-            .collect::<Vec<_>>();
-
-        Ok(candidate_handles)
-    }
-
-    /// Patches a definition location to handle in-memory files when searching from another module.
-    /// For in-memory files, tries to find the corresponding filesystem location to enable
-    /// reference finding across modules.
-    fn patch_definition_for_handle(
-        &self,
-        handle: &Handle,
-        definition: &TextRangeWithModule,
-    ) -> TextRangeWithModule {
-        match definition.module.path().details() {
-            // Special-case for definition inside in-memory file
-            // Calling methods with in-memory definitions naively
-            // will find no references outside of the in-memory file because
-            // file systems don't contain in-memory files.
-            ModulePathDetails::Memory(path_buf)
-                // Why do we exclude the case of finding references within the same in-memory file?
-                // If we are finding references within the same in-memory file,
-                // then there is no problem for us to use the in-memory definition location.
-                if handle.path() != definition.module.path() =>
-            {
-                // Below, we try to patch the definition location to be at the same offset, but
-                // making the path to be filesystem path instead. In this way, in the happy case
-                // where the in-memory content is exactly the same as the filesystem content,
-                // we can successfully find all the references. However, if the content diverges,
-                // then we will miss definitions from other files.
-                //
-                // In general, other than checking the reverse dependency against the in-memory
-                // content, there is not much we can do: the in-memory content can diverge from
-                // the filesystem content in arbitrary ways.
-                let TextRangeWithModule { module, range } = definition;
-                let module = if let Some(info) = self.as_ref().get_module_info(&Handle::new(
-                    module.name(),
-                    ModulePath::filesystem((**path_buf).clone()),
-                    handle.sys_info().dupe(),
-                )) {
-                    info
-                } else {
-                    module.dupe()
-                };
-                TextRangeWithModule {
-                    module,
-                    range: *range,
-                }
-            }
-            _ => definition.clone(),
-        }
-    }
-
     /// Processes each transitive reverse dependency for a given definition location.
     ///
     /// This is a common pattern in workspace-wide
     /// references-related features
-    fn process_rdeps_with_definition<T>(
+    pub(crate) fn process_rdeps_with_definition<T>(
         &mut self,
-        sys_info: &SysInfo,
+        sys_info: SysInfo,
         definition: &TextRangeWithModule,
-        mut process_fn: impl FnMut(&mut Self, &Handle, &TextRangeWithModule) -> Option<T>,
+        process_fn: impl FnMut(&mut Self, &Handle, &TextRangeWithModule) -> Option<T>,
     ) -> Result<Vec<T>, Cancelled> {
-        let candidate_handles =
-            self.compute_transitive_rdeps_for_definition(sys_info, definition)?;
-
-        let mut results = Vec::new();
-        for handle in candidate_handles {
-            // "Patched" means the definition's module path is adjusted for in-memory files
-            // to use the filesystem path instead, enabling cross-module reference finding
-            let patched_definition = self.patch_definition_for_handle(&handle, definition);
-            if let Some(result) = process_fn(self, &handle, &patched_definition) {
-                results.push(result);
-            }
-        }
-
-        Ok(results)
+        process_rdeps_with_definition_impl(self, sys_info, definition, process_fn)
     }
 
     /// Returns Err if the request is canceled in the middle of a run.
     pub fn find_global_references_from_definition(
         &mut self,
-        sys_info: &SysInfo,
+        sys_info: SysInfo,
         definition_kind: DefinitionMetadata,
         definition: TextRangeWithModule,
+        include_declaration: bool,
     ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
-        let results = self.process_rdeps_with_definition(
+        find_global_references_from_definition_impl(
+            self,
             sys_info,
-            &definition,
-            |transaction, handle, patched_definition| {
-                let mut module_refs: Vec<(Module, Vec<TextRange>)> = Vec::new();
-
-                // Find local references
-                let references = transaction
-                    .as_ref()
-                    .local_references_from_definition(
-                        handle,
-                        definition_kind.clone(),
-                        patched_definition.range,
-                        &patched_definition.module,
-                    )
-                    .unwrap_or_default();
-                if !references.is_empty()
-                    && let Some(module_info) = transaction.as_ref().get_module_info(handle)
-                {
-                    module_refs.push((module_info, references));
-                }
-
-                // Search for child class reimplementations using the parent_methods_map
-                let child_implementations =
-                    transaction.find_child_implementations(handle, patched_definition);
-                if !child_implementations.is_empty()
-                    && let Some(module_info) = transaction.as_ref().get_module_info(handle)
-                {
-                    // Check if we already have this module in our results
-                    if let Some((_, ranges)) = module_refs
-                        .iter_mut()
-                        .find(|(m, _)| m.path() == module_info.path())
-                    {
-                        ranges.extend(child_implementations);
-                    } else {
-                        module_refs.push((module_info, child_implementations));
-                    }
-                }
-
-                if module_refs.is_empty() {
-                    None
-                } else {
-                    Some(module_refs)
-                }
-            },
-        )?;
-
-        // Flatten nested results and merge by module
-        let mut global_references: Vec<(Module, Vec<TextRange>)> = Vec::new();
-        for module_refs in results {
-            for (module, ranges) in module_refs {
-                if let Some((_, existing_ranges)) = global_references
-                    .iter_mut()
-                    .find(|(m, _)| m.path() == module.path())
-                {
-                    existing_ranges.extend(ranges);
-                } else {
-                    global_references.push((module, ranges));
-                }
-            }
-        }
-
-        // Sort and deduplicate references in each module
-        for (_, references) in &mut global_references {
-            references.sort_by_key(|range| range.start());
-            references.dedup();
-        }
-
-        Ok(global_references)
+            definition_kind,
+            definition,
+            include_declaration,
+        )
     }
 
     /// Finds all implementations (child class methods) of the definition at the given position.
@@ -3243,7 +3845,7 @@ impl<'a> CancellableTransaction<'a> {
     /// Returns Err if the request is canceled in the middle of a run.
     pub fn find_global_implementations_from_definition(
         &mut self,
-        sys_info: &SysInfo,
+        sys_info: SysInfo,
         definition: TextRangeWithModule,
     ) -> Result<Vec<TextRangeWithModule>, Cancelled> {
         let results = self.process_rdeps_with_definition(
@@ -3252,7 +3854,7 @@ impl<'a> CancellableTransaction<'a> {
             |transaction, handle, patched_definition| {
                 // Search for child class reimplementations using the parent_methods_map
                 let child_implementations =
-                    transaction.find_child_implementations(handle, patched_definition);
+                    find_child_implementations_impl(transaction, handle, patched_definition);
                 if !child_implementations.is_empty()
                     && let Some(module_info) = transaction.as_ref().get_module_info(handle)
                 {
@@ -3277,243 +3879,29 @@ impl<'a> CancellableTransaction<'a> {
 
         Ok(all_implementations)
     }
-
-    /// Finds all incoming calls(functions that call this function) of a function across the entire codebase.
-    ///
-    /// This searches transitive reverse dependencies to find all locations where
-    /// the target function is called. For each call site, it identifies the
-    /// containing function.
-    ///
-    /// Returns a vector of tuples containing:
-    /// - Module where the call occurs
-    /// - Vector of (call_site_range, containing_function_name, containing_function_range)
-    ///
-    /// Returns Err if the request is canceled during execution.
-    pub fn find_global_incoming_calls_from_function_definition(
-        &mut self,
-        sys_info: &SysInfo,
-        definition_kind: DefinitionMetadata,
-        target_definition: &TextRangeWithModule,
-    ) -> Result<Vec<(Module, Vec<(TextRange, String, TextRange)>)>, Cancelled> {
-        // Use process_rdeps_with_definition to find references and filter to call sites in a single pass
-        let results = self.process_rdeps_with_definition(
-            sys_info,
-            target_definition,
-            |transaction, handle, patched_definition| {
-                let module_info = transaction.as_ref().get_module_info(handle)?;
-                let ast = transaction.as_ref().get_ast(handle)?;
-
-                let references = transaction
-                    .as_ref()
-                    .local_references_from_definition(
-                        handle,
-                        definition_kind.clone(),
-                        patched_definition.range,
-                        &patched_definition.module,
-                    )
-                    .unwrap_or_default();
-
-                if references.is_empty() {
-                    return None;
-                }
-
-                let ref_set: std::collections::HashSet<TextRange> =
-                    references.into_iter().collect();
-
-                let mut callers_in_file = Vec::new();
-
-                ast.visit(&mut |expr| {
-                    if let Expr::Call(call) = expr
-                        && ref_set
-                            .iter()
-                            .any(|ref_range| call.func.range().contains(ref_range.start()))
-                        && let Some((containing_func_name, containing_func_range)) =
-                            Self::find_containing_function_for_call(
-                                handle,
-                                &ast,
-                                call.range().start(),
-                            )
-                    {
-                        callers_in_file.push((
-                            call.range(),
-                            containing_func_name,
-                            containing_func_range,
-                        ));
-                    }
-                });
-
-                if callers_in_file.is_empty() {
-                    None
-                } else {
-                    Some((module_info, callers_in_file))
-                }
-            },
-        )?;
-
-        Ok(results)
-    }
-
-    /// Finds outgoing calls(functions called by) of a function, resolving across files.
-    ///
-    /// Given a function definition, this method finds all Call expressions within
-    /// that function's body and resolves each call target to its definition,
-    /// which may be in other files.
-    ///
-    /// Returns a vector of tuples containing:
-    /// - Target module (where the callee is defined)
-    /// - Vector of (call_site_range, callee_definition_range)
-    ///
-    /// Results are grouped by target module for consistency with find_global_callers_from_definition.
-    ///
-    /// Returns Err if the request is canceled during execution.
-    pub fn find_global_outgoing_calls_from_function_definition(
-        &mut self,
-        handle: &Handle,
-        position: TextSize,
-    ) -> Result<Vec<(Module, Vec<(TextRange, TextRange)>)>, Cancelled> {
-        // Resolve cursor position to function definition (handles both definitions and call sites)
-        let definitions =
-            self.as_ref()
-                .find_definition(handle, position, FindPreference::default());
-        let Some(target_def) = definitions.into_iter().next() else {
-            return Ok(Vec::new());
-        };
-
-        // Get handle for module where target function is defined (may differ from original handle)
-        let target_handle = Handle::new(
-            target_def.module.name(),
-            target_def.module.path().dupe(),
-            handle.sys_info().dupe(),
-        );
-
-        let Some(target_ast) = self.as_ref().get_ast(&target_handle) else {
-            return Ok(Vec::new());
-        };
-
-        let Some(func_def) = Self::find_function_at_position_in_ast(
-            &target_ast,
-            target_def.definition_range.start(),
-        ) else {
-            return Ok(Vec::new());
-        };
-
-        let mut callees_by_module: std::collections::HashMap<
-            ModulePath,
-            (Module, Vec<(TextRange, TextRange)>),
-        > = std::collections::HashMap::new();
-
-        for stmt in &func_def.body {
-            stmt.visit(&mut |expr| {
-                if let Expr::Call(call) = expr {
-                    let call_pos = call
-                        .func
-                        .range()
-                        .end()
-                        .checked_sub(TextSize::from(1))
-                        .unwrap_or(call.func.range().start());
-
-                    let definitions = self.as_ref().find_definition(
-                        &target_handle,
-                        call_pos,
-                        FindPreference::default(),
-                    );
-
-                    for def in definitions {
-                        let module_path = def.module.path().dupe();
-                        callees_by_module
-                            .entry(module_path)
-                            .or_insert_with(|| (def.module.clone(), Vec::new()))
-                            .1
-                            .push((call.range(), def.definition_range));
-                    }
-                }
-            });
-        }
-
-        let mut result: Vec<(Module, Vec<(TextRange, TextRange)>)> =
-            callees_by_module.into_values().collect();
-        result.sort_by_key(|(module, _)| module.path().dupe());
-
-        Ok(result)
-    }
-
-    /// Helper: Finds a function definition at a specific position in an AST.
-    ///
-    /// This is used by call hierarchy to identify the function being queried.
-    /// Returns None if no function is found at the position.
-    ///
-    /// Uses `locate_node` for efficient single-pass traversal, consistent with
-    /// other LSP position-based queries. Handles nested functions and methods.
-    pub(crate) fn find_function_at_position_in_ast(
-        ast: &ModModule,
-        position: TextSize,
-    ) -> Option<&StmtFunctionDef> {
-        let covering_nodes = Ast::locate_node(ast, position);
-
-        // Find the first StmtFunctionDef in the covering nodes
-        // This returns the innermost function containing the position
-        for node in covering_nodes.iter() {
-            if let AnyNodeRef::StmtFunctionDef(func_def) = node {
-                return Some(func_def);
-            }
-        }
-        None
-    }
-
-    /// Helper: Creates call hierarchy information for the function containing a call site.
-    ///
-    /// Given a call site position, finds the enclosing function and returns
-    /// information needed to represent it in the call hierarchy.
-    fn find_containing_function_for_call(
-        handle: &Handle,
-        ast: &ModModule,
-        position: TextSize,
-    ) -> Option<(String, TextRange)> {
-        let covering_nodes = Ast::locate_node(ast, position);
-
-        // Look through the node chain for the containing function
-        for (i, node) in covering_nodes.iter().enumerate() {
-            if let AnyNodeRef::StmtFunctionDef(func_def) = node {
-                // Check if this is a method (next node is a ClassDef)
-                if let Some(AnyNodeRef::StmtClassDef(class_def)) = covering_nodes.get(i + 1) {
-                    let name = format!(
-                        "{}.{}.{}",
-                        handle.module(),
-                        class_def.name.id,
-                        func_def.name.id
-                    );
-                    return Some((name, func_def.name.range()));
-                } else {
-                    // Top-level function
-                    let name = format!("{}.{}", handle.module(), func_def.name.id);
-                    return Some((name, func_def.name.range()));
-                }
-            }
-        }
-        None
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use pyrefly_types::heap::TypeHeap;
     use ruff_python_ast::name::Name;
 
-    use super::CancellableTransaction;
     use super::Transaction;
     use crate::types::callable::Param;
     use crate::types::callable::Required;
-    use crate::types::types::AnyStyle;
     use crate::types::types::Type;
 
     fn any_type() -> Type {
-        Type::Any(AnyStyle::Explicit)
+        TypeHeap::new().mk_any_explicit()
     }
 
     #[test]
     fn param_name_for_positional_argument_marks_vararg_repeats() {
         let params = vec![
             Param::Pos(Name::new_static("x"), any_type(), Required::Required),
-            Param::VarArg(Some(Name::new_static("columns")), any_type()),
+            Param::Varargs(Some(Name::new_static("columns")), any_type()),
             Param::KwOnly(Name::new_static("kw"), any_type(), Required::Required),
         ];
 
@@ -3526,7 +3914,7 @@ mod tests {
     fn param_name_for_positional_argument_handles_missing_names() {
         let params = vec![
             Param::PosOnly(None, any_type(), Required::Required),
-            Param::VarArg(None, any_type()),
+            Param::Varargs(None, any_type()),
         ];
 
         assert!(Transaction::<'static>::param_name_for_positional_argument(&params, 0).is_none());
@@ -3538,7 +3926,7 @@ mod tests {
     fn duplicate_vararg_hints_are_not_emitted() {
         let params = vec![
             Param::Pos(Name::new_static("s"), any_type(), Required::Required),
-            Param::VarArg(Some(Name::new_static("args")), any_type()),
+            Param::Varargs(Some(Name::new_static("args")), any_type()),
             Param::KwOnly(Name::new_static("a"), any_type(), Required::Required),
         ];
 
@@ -3559,85 +3947,92 @@ mod tests {
     }
 
     #[test]
-    fn test_find_function_at_position_in_ast() {
-        use pyrefly_python::ast::Ast;
-        use ruff_python_ast::PySourceType;
-        use ruff_text_size::TextSize;
+    fn test_get_editable_source_paths_finds_editable_package() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let site_packages = temp_dir.path().join("site-packages");
+        fs::create_dir(&site_packages).unwrap();
 
-        let source = r#"
-def top_level():
-    pass
+        let dist_info = site_packages.join("mypackage-1.0.0.dist-info");
+        fs::create_dir(&dist_info).unwrap();
 
-class MyClass:
-    def method(self):
-        pass
-"#;
-        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
+        let source_dir = temp_dir.path().join("mypackage_source");
+        fs::create_dir(&source_dir).unwrap();
 
-        // Finds top-level function
-        let pos_in_func = TextSize::from(5);
-        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_in_func);
-        assert_eq!(result.unwrap().name.id.as_str(), "top_level");
-
-        // Finds class method
-        let pos_in_method = TextSize::from(50);
-        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_in_method);
-        assert_eq!(result.unwrap().name.id.as_str(), "method");
-    }
-
-    #[test]
-    fn test_find_function_at_position_in_ast_returns_none_outside_functions() {
-        use pyrefly_python::ast::Ast;
-        use ruff_python_ast::PySourceType;
-        use ruff_text_size::TextSize;
-
-        let source = "x = 10\n";
-        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
-
-        let pos_outside = TextSize::from(0);
-        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_outside);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_find_containing_function_for_call() {
-        use std::path::PathBuf;
-
-        use pyrefly_build::handle::Handle;
-        use pyrefly_python::ast::Ast;
-        use pyrefly_python::module_name::ModuleName;
-        use pyrefly_python::module_path::ModulePath;
-        use pyrefly_python::sys_info::SysInfo;
-        use ruff_python_ast::PySourceType;
-        use ruff_text_size::TextSize;
-
-        let source = r#"
-def my_function():
-    x = call()
-
-class MyClass:
-    def method(self):
-        y = call()
-"#;
-        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
-        let handle = Handle::new(
-            ModuleName::from_str("test"),
-            ModulePath::memory(PathBuf::from("test.py")),
-            SysInfo::default(),
+        // Use Url::from_file_path to construct a proper file URL that works on all platforms
+        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
+        let direct_url_content = format!(
+            r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
+            source_url.as_str()
         );
+        fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
 
-        // Returns qualified name for top-level function
-        let pos_in_func = TextSize::from(30);
-        let (name, _) =
-            CancellableTransaction::find_containing_function_for_call(&handle, &ast, pos_in_func)
-                .unwrap();
-        assert_eq!(name, "test.my_function");
+        let result =
+            Transaction::<'static>::get_editable_source_paths(std::slice::from_ref(&site_packages));
 
-        // Returns qualified name for class method
-        let pos_in_method = TextSize::from(85);
-        let (name, _) =
-            CancellableTransaction::find_containing_function_for_call(&handle, &ast, pos_in_method)
-                .unwrap();
-        assert_eq!(name, "test.MyClass.method");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], source_dir);
+    }
+
+    #[test]
+    fn test_get_editable_source_paths_ignores_non_editable_package() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let site_packages = temp_dir.path().join("site-packages");
+        fs::create_dir(&site_packages).unwrap();
+
+        let dist_info = site_packages.join("requests-2.28.0.dist-info");
+        fs::create_dir(&dist_info).unwrap();
+
+        let source_dir = temp_dir.path().join("requests_source");
+        fs::create_dir(&source_dir).unwrap();
+
+        // Use Url::from_file_path to construct a proper file URL that works on all platforms
+        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
+        let direct_url_content = format!(
+            r#"{{"url": "{}", "dir_info": {{"editable": false}}}}"#,
+            source_url.as_str()
+        );
+        fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
+
+        let result = Transaction::<'static>::get_editable_source_paths(&[site_packages]);
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_editable_source_paths_ignores_missing_direct_url_json() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let site_packages = temp_dir.path().join("site-packages");
+        fs::create_dir(&site_packages).unwrap();
+
+        let dist_info = site_packages.join("somepackage-1.0.0.dist-info");
+        fs::create_dir(&dist_info).unwrap();
+
+        let result = Transaction::<'static>::get_editable_source_paths(&[site_packages]);
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_editable_source_paths_ignores_nonexistent_source_directory() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let site_packages = temp_dir.path().join("site-packages");
+        fs::create_dir(&site_packages).unwrap();
+
+        let dist_info = site_packages.join("mypackage-1.0.0.dist-info");
+        fs::create_dir(&dist_info).unwrap();
+
+        let nonexistent_path = temp_dir.path().join("does_not_exist");
+
+        // Use Url::from_file_path to construct a proper file URL that works on all platforms
+        let nonexistent_url = lsp_types::Url::from_file_path(&nonexistent_path).unwrap();
+        let direct_url_content = format!(
+            r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
+            nonexistent_url.as_str()
+        );
+        fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
+
+        let result = Transaction::<'static>::get_editable_source_paths(&[site_packages]);
+
+        assert!(result.is_empty());
     }
 }

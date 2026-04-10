@@ -27,6 +27,7 @@ use static_interner::Intern;
 use static_interner::Interner;
 use thiserror::Error;
 
+use crate::PYTHON_EXTENSIONS;
 use crate::dunder;
 
 static MODULE_NAME_INTERNER: Interner<String> = Interner::new();
@@ -34,6 +35,92 @@ static MODULE_NAME_INTERNER: Interner<String> = Interner::new();
 /// The name of a python module. Examples: `foo.bar.baz`, `.foo.bar`.
 #[derive(Clone, Dupe, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModuleName(Intern<String>);
+
+/// Indicates whether a module name was found on the guaranteed search path
+/// or via fallback heuristics.
+#[derive(Clone, Dupe, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ModuleNameKind {
+    /// A module name found on the normal, configured search path.
+    /// This is reliable for determining project structure.
+    Guaranteed,
+    /// A module name inferred using fallback search path heuristics.
+    /// This may not be reliable for determining project structure.
+    Fallback,
+}
+
+/// A module name that tracks whether it was found on the guaranteed search path
+/// or via fallback heuristics.
+///
+/// Fallback module names may not be reliable for determining project structure,
+/// since they were inferred using heuristic search paths rather than explicit configuration.
+///
+/// Note: Equality, hashing, and ordering only consider the underlying ModuleName,
+/// not the kind. This ensures that modules with the same name are treated identically
+/// regardless of how their name was discovered.
+#[derive(Clone, Dupe, Copy, Debug)]
+pub struct ModuleNameWithKind {
+    name: ModuleName,
+    kind: ModuleNameKind,
+}
+
+impl Hash for ModuleNameWithKind {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
+
+impl PartialEq for ModuleNameWithKind {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for ModuleNameWithKind {}
+
+impl PartialOrd for ModuleNameWithKind {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ModuleNameWithKind {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.name.cmp(&other.name)
+    }
+}
+
+impl ModuleNameWithKind {
+    /// Create a guaranteed module name.
+    pub fn guaranteed(name: ModuleName) -> Self {
+        Self {
+            name,
+            kind: ModuleNameKind::Guaranteed,
+        }
+    }
+
+    /// Create a fallback module name.
+    pub fn fallback(name: ModuleName) -> Self {
+        Self {
+            name,
+            kind: ModuleNameKind::Fallback,
+        }
+    }
+
+    /// Get the underlying module name, regardless of whether it's guaranteed or fallback.
+    pub fn name(&self) -> ModuleName {
+        self.name
+    }
+
+    /// Get the kind of this module name (Guaranteed or Fallback).
+    pub fn kind(&self) -> ModuleNameKind {
+        self.kind
+    }
+
+    /// Returns true if this module name was created using fallback heuristics.
+    pub fn is_fallback(&self) -> bool {
+        self.kind == ModuleNameKind::Fallback
+    }
+}
 
 impl<To: 'static> Visit<To> for ModuleName {
     const RECURSE_CONTAINS: bool = false;
@@ -116,6 +203,10 @@ impl ModuleName {
         Self::from_str("typing_extensions")
     }
 
+    pub fn future() -> Self {
+        Self::from_str("__future__")
+    }
+
     pub fn types() -> Self {
         Self::from_str("types")
     }
@@ -152,11 +243,14 @@ impl ModuleName {
         Self::from_str("_collections_abc")
     }
 
+    pub fn string_templatelib() -> Self {
+        Self::from_str("string.templatelib")
+    }
+
     pub fn pydantic() -> Self {
         Self::from_str("pydantic.main")
     }
 
-    #[allow(dead_code)]
     pub fn pydantic_settings() -> Self {
         Self::from_str("pydantic_settings.main")
     }
@@ -165,8 +259,20 @@ impl ModuleName {
         Self::from_str("pydantic.root_model")
     }
 
+    pub fn pydantic_dataclasses() -> Self {
+        Self::from_str("pydantic.dataclasses")
+    }
+
     pub fn django_models_enums() -> Self {
         Self::from_str("django.db.models.enums")
+    }
+
+    pub fn attr() -> Self {
+        Self::from_str("attr")
+    }
+
+    pub fn attrs() -> Self {
+        Self::from_str("attrs")
     }
 
     pub fn django_models() -> Self {
@@ -187,6 +293,10 @@ impl ModuleName {
 
     pub fn django_utils_functional() -> Self {
         Self::from_str("django.utils.functional")
+    }
+
+    pub fn marshmallow_schema() -> Self {
+        Self::from_str("marshmallow.schema")
     }
 
     pub fn pydantic_types() -> Self {
@@ -221,9 +331,7 @@ impl ModuleName {
             None => {}
             Some(file_name) => {
                 let splits: Vec<&str> = file_name.rsplitn(2, '.').collect();
-                if splits.len() != 2
-                    || !(splits[0] == "py" || splits[0] == "pyi" || splits[0] == "ipynb")
-                {
+                if splits.len() != 2 || !PYTHON_EXTENSIONS.contains(&splits[0]) {
                     return Err(anyhow::anyhow!(PathConversionError::InvalidExtension {
                         file_name: file_name.to_owned(),
                     }));
@@ -236,7 +344,14 @@ impl ModuleName {
         Ok(ModuleName::from_parts(components))
     }
 
+    /// Convert a relative file path to a module name, stripping the file extension.
+    /// For example, `foo/bar.py` → `foo.bar`, `foo/bar/__init__.py` → `foo.bar`.
     pub fn from_relative_path(path: &Path) -> anyhow::Result<Self> {
+        let components = Self::path_to_components(path)?;
+        Self::from_relative_path_components(components)
+    }
+
+    fn path_to_components(path: &Path) -> anyhow::Result<Vec<&str>> {
         let mut components = Vec::new();
         for raw_component in path.components() {
             if let Some(component) = raw_component.as_os_str().to_str() {
@@ -247,7 +362,7 @@ impl ModuleName {
                 }));
             }
         }
-        Self::from_relative_path_components(components)
+        Ok(components)
     }
 
     pub fn relative_module_name_between(from: &Path, to: &Path) -> Option<ModuleName> {
@@ -320,17 +435,57 @@ impl ModuleName {
     }
 
     /// If the module is on the search path, return its name from that path. Otherwise, return None.
+    /// `extra_extensions` lists non-Python file extensions (e.g. `["cinc", "cconf"]`)
+    /// whose extension is part of the module name rather than being stripped.
     pub fn from_path<'a>(
         path: &Path,
         includes: impl Iterator<Item = &'a PathBuf>,
+        extra_extensions: &[String],
     ) -> Option<ModuleName> {
-        // Return a module name, and a boolean as to whether it is any good.
-        fn path_to_module(mut path: &Path) -> Option<ModuleName> {
+        Self::from_path_impl(path, includes, extra_extensions)
+    }
+
+    /// If the module is on the search path or fallback search path, return its name from that path.
+    /// Returns a ModuleNameWithKind indicating whether the name was found on the normal search path
+    /// or using fallback paths.
+    pub fn from_path_with_fallback<'a>(
+        path: &Path,
+        normal_includes: impl Iterator<Item = &'a PathBuf>,
+        fallback_includes: impl Iterator<Item = &'a PathBuf>,
+        extra_extensions: &[String],
+    ) -> Option<ModuleNameWithKind> {
+        // Try normal includes first (guaranteed)
+        if let Some(name) = Self::from_path_impl(path, normal_includes, extra_extensions) {
+            return Some(ModuleNameWithKind::guaranteed(name));
+        }
+        // Try fallback includes
+        Self::from_path_impl(path, fallback_includes, extra_extensions)
+            .map(ModuleNameWithKind::fallback)
+    }
+
+    fn from_path_impl<'a>(
+        path: &Path,
+        includes: impl Iterator<Item = &'a PathBuf>,
+        extra_extensions: &[String],
+    ) -> Option<ModuleName> {
+        /// Convert a relative path to a module name. For files with an extra
+        /// extension (e.g. `.cinc`), the extension stays in the module name:
+        /// `service/config.cinc` → `service.config.cinc`. For standard Python
+        /// files, the extension is stripped: `foo/bar.py` → `foo.bar`.
+        fn path_to_module(mut path: &Path, extra_extensions: &[String]) -> Option<ModuleName> {
             if path.file_stem() == Some(dunder::INIT.as_str().as_ref()) {
                 path = path.parent()?;
             }
+            // Check if the file has an extra extension. For these files, the
+            // extension is part of the module name (dots in the filename become
+            // module separators via from_parts joining with ".").
+            let has_extra_ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|ext| extra_extensions.iter().any(|e| e == ext));
+            let stripped = path.with_extension("");
+            let path = if has_extra_ext { path } else { &stripped };
             let mut out = Vec::new();
-            let path = path.with_extension("");
             for x in path.components() {
                 if let Component::Normal(x) = x
                     && !x.is_empty()
@@ -347,7 +502,7 @@ impl ModuleName {
 
         for include in includes {
             if let Ok(x) = path.strip_prefix(include)
-                && let Some(res) = path_to_module(x)
+                && let Some(res) = path_to_module(x, extra_extensions)
             {
                 return Some(res);
             }
@@ -465,28 +620,87 @@ mod tests {
     fn test_module_from_path() {
         let includes = [PathBuf::from("/foo/bar")];
         assert_eq!(
-            ModuleName::from_path(Path::new("/foo/bar/baz.py"), includes.iter()),
+            ModuleName::from_path(Path::new("/foo/bar/baz.py"), includes.iter(), &[]),
             Some(ModuleName::from_str("baz"))
         );
         assert_eq!(
-            ModuleName::from_path(Path::new("/foo/bar/baz/qux.pyi"), includes.iter()),
+            ModuleName::from_path(Path::new("/foo/bar/baz/qux.pyi"), includes.iter(), &[]),
             Some(ModuleName::from_str("baz.qux"))
         );
         assert_eq!(
-            ModuleName::from_path(Path::new("/foo/bar/baz/test/magic.py"), includes.iter()),
+            ModuleName::from_path(
+                Path::new("/foo/bar/baz/test/magic.py"),
+                includes.iter(),
+                &[]
+            ),
             Some(ModuleName::from_str("baz.test.magic"))
         );
         assert_eq!(
-            ModuleName::from_path(Path::new("/foo/bar/baz/__init__.pyi"), includes.iter()),
+            ModuleName::from_path(Path::new("/foo/bar/baz/__init__.pyi"), includes.iter(), &[]),
             Some(ModuleName::from_str("baz"))
         );
         assert_eq!(
-            ModuleName::from_path(Path::new("/test.py"), includes.iter()),
+            ModuleName::from_path(Path::new("/test.py"), includes.iter(), &[]),
             None
         );
         assert_eq!(
-            ModuleName::from_path(Path::new("/not_foo/test.py"), includes.iter()),
+            ModuleName::from_path(Path::new("/not_foo/test.py"), includes.iter(), &[]),
             None
+        );
+    }
+
+    #[test]
+    fn test_module_from_path_extra_extensions() {
+        let includes = [PathBuf::from("/root")];
+        let extra = vec!["cinc".to_owned(), "cconf".to_owned(), "mcconf".to_owned()];
+        // Extra extension becomes part of the module name.
+        assert_eq!(
+            ModuleName::from_path(Path::new("/root/foo.cinc"), includes.iter(), &extra),
+            Some(ModuleName::from_str("foo.cinc"))
+        );
+        assert_eq!(
+            ModuleName::from_path(Path::new("/root/foo.cconf"), includes.iter(), &extra),
+            Some(ModuleName::from_str("foo.cconf"))
+        );
+        // Dots in the filename become module separators.
+        assert_eq!(
+            ModuleName::from_path(Path::new("/root/foo.bar.cinc"), includes.iter(), &extra),
+            Some(ModuleName::from_str("foo.bar.cinc"))
+        );
+        // Directory components work normally.
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/root/service/config.cinc"),
+                includes.iter(),
+                &extra
+            ),
+            Some(ModuleName::from_str("service.config.cinc"))
+        );
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/root/dir/sub/foo.bar.cinc"),
+                includes.iter(),
+                &extra
+            ),
+            Some(ModuleName::from_str("dir.sub.foo.bar.cinc"))
+        );
+        // Standard Python extensions still work with extra extensions configured.
+        assert_eq!(
+            ModuleName::from_path(Path::new("/root/foo.py"), includes.iter(), &extra),
+            Some(ModuleName::from_str("foo"))
+        );
+        assert_eq!(
+            ModuleName::from_path(Path::new("/root/foo/bar.pyi"), includes.iter(), &extra),
+            Some(ModuleName::from_str("foo.bar"))
+        );
+        // .pyi stubs for extra extensions: strip .pyi, keep the rest.
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/root/service/types.cinc.pyi"),
+                includes.iter(),
+                &extra
+            ),
+            Some(ModuleName::from_str("service.types.cinc"))
         );
     }
 }

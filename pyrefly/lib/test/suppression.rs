@@ -186,3 +186,131 @@ x: int = "1"  # type: ignore
 y: int = "2"  # E: is not assignable
 "#,
 );
+
+testcase!(
+    test_pyrefly_suppression_fstring_above,
+    r#"
+def foo() -> str:
+  # pyrefly: ignore
+  return f"""
+result: {1 + "a"}
+"""
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_fstring_inline_end,
+    r#"
+def foo() -> str:
+  return f"""
+result: {1 + "a"}
+"""  # pyrefly: ignore
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_fstring_typed,
+    r#"
+def foo() -> str:
+  # pyrefly: ignore[unsupported-operation]
+  return f"""
+result: {1 + "a"}
+"""
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_nested_fstring_single_line_inner,
+    r#"
+def foo() -> str:
+  # pyrefly: ignore
+  return f"""
+result: {f"{1 + 'a'}"}
+"""
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_nested_fstring_multi_line_inner,
+    r#"
+def foo() -> str:
+  # pyrefly: ignore
+  return f"""
+result: {f'''
+{1 + "a"}
+'''}
+"""
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_consecutive_fstrings_above_first,
+    r#"
+def foo():
+  # pyrefly: ignore
+  f"""hello"""
+  f"result: {1 + "a"}"  # E: is not supported
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_consecutive_fstrings_above_second,
+    r#"
+def foo():
+  f"""hello"""
+  # pyrefly: ignore
+  f"result: {1 + "a"}"
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_fstring_embedded_comment,
+    r#"
+def foo() -> str:
+  return f"""
+# pyrefly: ignore
+result: {1 + "a"}  # E: is not supported
+"""
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_backslash_continuation_above,
+    r#"
+# pyrefly: ignore
+x: str = 1 + \
+    "a"
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_backslash_continuation_middle_line,
+    r#"
+# pyrefly: ignore
+x: int = \
+    "a" + \
+    2
+"#,
+);
+
+testcase!(
+    test_pyrefly_top_level_ignore_after_docstring,
+    r#"
+"""Module docstring."""
+# pyrefly: ignore-errors
+3 + "3"
+3 + "3"
+"#,
+);
+
+testcase!(
+    test_pyrefly_top_level_ignore_after_multiline_docstring,
+    r#"
+"""
+Module docstring.
+"""
+# pyrefly: ignore-errors
+3 + "3"
+3 + "3"
+"#,
+);
