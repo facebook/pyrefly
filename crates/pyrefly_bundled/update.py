@@ -127,7 +127,10 @@ def should_include_member(info: tarfile.TarInfo) -> bool:
     if parts[1] not in ("stdlib", "stubs"):
         return False
 
-    # Only Python source files are interesting to us
+    if parts[1] == "stdlib" and parts[-1] == "VERSIONS":
+        return True
+
+    # Only Python source files are interesting to us, apart from stdlib/VERSIONS.
     if path.suffix not in (".py", ".pyi"):
         return False
 
