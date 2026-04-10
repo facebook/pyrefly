@@ -710,7 +710,7 @@ impl<'a> Transaction<'a> {
 
         let pos = position.to_usize();
 
-        if pos < slot_start || pos > line_end {
+        if pos <= slot_start || pos > line_end {
             return None;
         }
 
@@ -2077,7 +2077,7 @@ impl<'a> Transaction<'a> {
 
             Some(IdentifierWithContext {
                 identifier,
-                context: IdentifierContext::ImportedNameEmpty { module_name, dots },
+                context: IdentifierContext::ImportedNameEmpty { .. },
             }) => Err(EmptyResponseReason::NotAnIdentifier {
                 found: identifier.id.to_string(),
             }),

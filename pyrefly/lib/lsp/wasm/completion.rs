@@ -902,11 +902,9 @@ impl Transaction<'_> {
                                     }),
                                 CompletionSource::Local,
                             ),
-                            ExportLocation::OtherModule(_, _) => (
-                                false,
-                                CompletionItemKind::VARIABLE,
-                                CompletionSource::Reexport,
-                            ),
+                            ExportLocation::OtherModule(_, _) => {
+                                (false, CompletionItemKind::VARIABLE, CompletionSource::Local)
+                            }
                         };
 
                         result.push(RankedCompletion {
@@ -928,7 +926,7 @@ impl Transaction<'_> {
             }
 
             Some(IdentifierWithContext {
-                identifier,
+                identifier: _,
                 context:
                     IdentifierContext::ImportedNameEmpty {
                         module_name, dots, ..
@@ -964,11 +962,9 @@ impl Transaction<'_> {
                                     }),
                                 CompletionSource::Local,
                             ),
-                            ExportLocation::OtherModule(_, _) => (
-                                false,
-                                CompletionItemKind::VARIABLE,
-                                CompletionSource::Reexport,
-                            ),
+                            ExportLocation::OtherModule(_, _) => {
+                                (false, CompletionItemKind::VARIABLE, CompletionSource::Local)
+                            }
                         };
 
                         result.push(RankedCompletion {
