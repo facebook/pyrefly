@@ -1748,7 +1748,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 kws = x.arguments.keywords.map(CallKeyword::new);
             }
 
-            let result = self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
+            let result = self.distribute_over_union(&callee_ty, |ty| {
+                // NotImplemented is a singleton constant, not a callable class.
+                if matches!(ty, Type::ClassType(cls) if cls.is_builtin("_NotImplementedType") || cls.has_qname("types", "NotImplementedType"))
+                {
+                    return self.error(
+                        errors,
+                        x.func.range(),
+                        ErrorInfo::Kind(ErrorKind::NotCallable),
+                        "`NotImplemented` is not callable. Did you mean `NotImplementedError`?".to_owned(),
+                    );
+                }
+                match ty.callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::AssertType)) => self
                     .call_assert_type(
                         &x.arguments.args,
@@ -1844,7 +1855,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Check if this call applies a decorator with known typing effects to a function.
                 _ if let Some(ret) = self.maybe_apply_function_decorator(ty, &args, &kws, errors) => ret,
                 _ => self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors),
-            });
+            }});
             // TypeIs and TypeGuard functions return bool at runtime
             match result {
                 Type::TypeIs(_) | Type::TypeGuard(_) => {
