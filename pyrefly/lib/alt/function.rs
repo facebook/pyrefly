@@ -1427,6 +1427,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 original_decoratee.clone()
             }
+            // A "dual-use" decorator can be applied with or without parentheses
+            // (e.g., @my_decorator or @my_decorator(flag)). Its return type is a union of
+            // the wrapper result and the inner decorator function. If any member
+            // is a *args/**kwargs wrapper or a functools._Wrapped, treat the
+            // whole decorator as a passthrough that preserves the original signature.
+            Type::Union(ref u)
+                if u.members.iter().any(|m| match m {
+                    Type::Function(f) => f.signature.is_args_kwargs_wrapper(),
+                    Type::Callable(c) => c.is_args_kwargs_wrapper(),
+                    Type::ClassType(cls) => cls.has_qname("functools", "_Wrapped"),
+                    _ => false,
+                }) =>
+            {
+                original_decoratee.clone()
+            }
             returned_ty => returned_ty,
         }
     }

@@ -54,7 +54,7 @@ jobs:
             fs.writeFileSync("diff.zip", Buffer.from(download.data));
 
       - run: unzip diff.zip
-      - run: cat diff_*.txt | tee fulldiff.txt
+      - run: for f in diff_*.txt; do cat "$f"; echo; done | tee fulldiff.txt
 
       - name: Fetch PR code diff and description
         uses: actions/github-script@v8
