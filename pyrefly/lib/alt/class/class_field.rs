@@ -2737,14 +2737,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(quantified) = self_quantified {
                     ty = self.wrap_with_quantified(ty, quantified);
                 }
-                ClassAttribute::read_write(
-                    make_bound_method(self.heap, instance.to_type(self.heap), ty).unwrap_or_else(
-                        |ty| {
-                            make_bound_classmethod(self.heap, &instance.to_class_base(), ty)
-                                .into_inner()
-                        },
-                    ),
-                )
+                let mut obj = instance.to_type(self.heap);
+                self.expand_vars_mut(&mut obj);
+                ClassAttribute::read_write(make_bound_method(self.heap, obj, ty).unwrap_or_else(
+                    |ty| {
+                        make_bound_classmethod(self.heap, &instance.to_class_base(), ty)
+                            .into_inner()
+                    },
+                ))
             }
             ClassFieldInner::NestedClass { ty, .. } => {
                 // Nested classes are always read-only (ClassObjectInitializedOnBody)

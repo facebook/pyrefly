@@ -104,7 +104,7 @@ impl Bounds {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Variable {
     /// A "partial type" (terminology borrowed from mypy) for an empty container.
     ///
@@ -126,10 +126,6 @@ enum Variable {
     /// A variable due to generic instantiation, `def f[T](x: T): T` with `f(1)`
     Quantified {
         quantified: Quantified,
-        // TODO(https://github.com/facebook/pyrefly/issues/105): This will eventually be used to
-        // collect lower bounds for typevars rather than eagerly pinning them. Currently, the only
-        // thing it does is store `Any` lower bounds to avoid pinning to `Any` unless we have no
-        // other solution.
         bounds: Bounds,
     },
     /// A variable caused by general recursion, e.g. `x = f(); def f(): return x`.
@@ -337,6 +333,11 @@ pub enum PinError {
     UnfinishedQuantified(Quantified),
 }
 
+/// Snapshot of solver variable state.
+/// IMPORTANT: this struct is deliberately opaque.
+/// `Variable` should not be exposed outside this file.
+pub struct VarSnapshot(Vec<(Var, Variable)>);
+
 #[derive(Debug)]
 pub struct Solver {
     variables: Mutex<Variables>,
@@ -460,44 +461,17 @@ impl Solver {
         )
     }
 
-    /// Create fresh copies of all partial variables in the given list.
-    /// Returns a mapping from original vars to their fresh copies.
-    /// Used during overload resolution to prevent one overload's constraint
-    /// solving from contaminating other overloads' partial variables.
-    pub fn freshen_partial_vars(
-        &self,
-        vars: &[Var],
-        uniques: &UniqueFactory,
-    ) -> SmallMap<Var, Var> {
-        let mut fresh = SmallMap::with_capacity(vars.len());
-        let mut lock = self.variables.lock();
-        for v in vars {
-            let cloned = match &*lock.get(*v) {
-                Variable::PartialContained(range) => Variable::PartialContained(*range),
-                Variable::PartialQuantified(q) => Variable::PartialQuantified(q.clone()),
-                _ => continue,
-            };
-            let fresh_var = Var::new(uniques);
-            fresh.insert(*v, fresh_var);
-            lock.insert_fresh(fresh_var, cloned);
-        }
-        fresh
+    /// Snapshot the current state of the given vars so they can be restored later.
+    pub fn snapshot_vars(&self, vars: &[Var]) -> VarSnapshot {
+        let lock = self.variables.lock();
+        VarSnapshot(vars.iter().map(|v| (*v, lock.get(*v).clone())).collect())
     }
 
-    /// Given an original->fresh mapping of partial vars, transfer solutions
-    /// from fresh partial vars to the originals. Used during overload
-    /// resolution to set partial vars to the solutions found during the
-    /// winning overload call. If a fresh var is still unsolved, leave the
-    /// original as-is.
-    pub fn solve_partial_vars_from_fresh(&self, mapping: &SmallMap<Var, Var>) {
+    /// Restore vars to a previously saved snapshot.
+    pub fn restore_vars(&self, snapshot: &VarSnapshot) {
         let lock = self.variables.lock();
-        for (original, fresh) in mapping {
-            let fresh_var = lock.get(*fresh);
-            if let Variable::Answer(fresh_type) = &*fresh_var {
-                let fresh_type = fresh_type.clone();
-                drop(fresh_var);
-                *lock.get_mut(*original) = Variable::Answer(fresh_type.clone());
-            }
+        for (var, state) in &snapshot.0 {
+            lock.update(*var, state.clone());
         }
     }
 

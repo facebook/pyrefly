@@ -497,3 +497,28 @@ def h(x: ThisIsANameError):  # E: Could not find name
     assert_type(y, list[Any])
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3088
+testcase!(
+    test_dict_with_initial_none_values,
+    r#"
+def parse(obj):
+    data = {"a": None, "b": None, "c": None, "d": None, "e": None, "f": None, "g": None}
+
+    for item in obj.select("div"):
+        child = item.next_sibling.select_one("span")
+
+        if item.string == "list_case":
+            value = [x.strip() for x in child.strings][:-1]
+        elif item.string == "update_case":
+            data.update(
+                {"a": child.select_one("a"), "b": child.select_one("b"), "c": None}
+            )
+            continue
+        else:
+            value = child.text
+
+        data[item.string] = value
+    return data
+    "#,
+);

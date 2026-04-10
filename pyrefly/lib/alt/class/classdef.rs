@@ -163,7 +163,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::None | Type::Type(box Type::None) => {
                 Some((TParams::empty(), self.heap.mk_none()))
             }
-            Type::ClassType(cls) if cls.is_builtin("type") => {
+            // Instances of `type` subclasses are class objects too, so metaclass-narrowed
+            // values remain valid inputs to isinstance()/issubclass().
+            Type::ClassType(cls)
+                if self.has_superclass(
+                    cls.class_object(),
+                    self.stdlib.builtins_type().class_object(),
+                ) =>
+            {
                 Some((TParams::empty(), self.heap.mk_any_implicit()))
             }
             Type::Any(_) => Some((TParams::empty(), ty.clone())),

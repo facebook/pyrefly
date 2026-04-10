@@ -48,6 +48,7 @@ use vec1::Vec1;
 use crate::module::module_info::ModuleInfo;
 use crate::report::glean::facts::*;
 use crate::report::glean::schema::*;
+use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
 use crate::types::types::Type;
@@ -569,7 +570,7 @@ impl GleanState<'_> {
             Expr::Subscript(expr_subscript) => {
                 self.find_definition_for_expr(&expr_subscript.value, only_resolved_name)
             }
-            Expr::Attribute(attr) => self.find_definition_for_attribute(attr),
+            Expr::Attribute(attr) => self.find_definition_for_expr_attribute(attr),
             Expr::Name(name) => self.find_definition_for_expr_name(name, only_resolved_name),
             _ => vec![],
         }
@@ -615,6 +616,26 @@ impl GleanState<'_> {
         definitions
     }
 
+    fn resolve_name_use(
+        &self,
+        identifier: &Identifier,
+        only_resolved_name: bool,
+        definition: Option<FindDefinitionItemWithDocstring>,
+    ) -> Vec<DefinitionLocation> {
+        let additional_definitions =
+            self.get_additional_definitions(identifier.range(), only_resolved_name);
+
+        match definition {
+            Some(def) => self.get_definition_location(
+                def.definition_range,
+                &def.module,
+                None,
+                additional_definitions,
+            ),
+            None => additional_definitions,
+        }
+    }
+
     fn find_definition_for_name_use(
         &self,
         identifier: Identifier,
@@ -624,42 +645,22 @@ impl GleanState<'_> {
             .transaction
             .find_definition_for_name_use(self.handle, &identifier, find_preference_glean())
             .unwrap_or(None);
-
-        let additional_definitions =
-            self.get_additional_definitions(identifier.range(), only_resolved_name);
-
-        definition.map_or(additional_definitions.clone(), |def| {
-            self.get_definition_location(
-                def.definition_range,
-                &def.module,
-                None,
-                additional_definitions,
-            )
-        })
+        self.resolve_name_use(&identifier, only_resolved_name, definition)
     }
 
     fn find_definition_for_str_literal(&self, range: TextRange) -> Vec<DefinitionLocation> {
         let name = self.module.code_at(range);
-        let fqname = join_names(self.module_name.as_str(), name);
+        let as_name = join_names(self.module_name.as_str(), name);
         let identifier = Identifier::new(name, range);
         let definition = self
             .transaction
             .find_definition_for_name_use(self.handle, &identifier, find_preference_glean())
             .unwrap_or(None);
-        let additional_definitions = if definition.is_some() || self.names.contains(&fqname) {
-            self.get_additional_definitions(range, false)
+        if definition.is_some() || self.names.contains(&as_name) {
+            self.resolve_name_use(&identifier, false, definition)
         } else {
             vec![]
-        };
-
-        definition.map_or(additional_definitions.clone(), |def| {
-            self.get_definition_location(
-                def.definition_range,
-                &def.module,
-                None,
-                additional_definitions,
-            )
-        })
+        }
     }
 
     fn find_definition_for_literal_symbol(&self, name: &str) -> DefinitionLocation {
@@ -703,17 +704,20 @@ impl GleanState<'_> {
             .collect()
     }
 
-    fn find_definition_for_attribute(&self, expr_attr: &ExprAttribute) -> Vec<DefinitionLocation> {
-        let attr_name = &expr_attr.attr;
-        let base_expr = expr_attr.value.as_ref();
-
-        let definitions_with_type = if let Some(answers) = self.transaction.get_answers(self.handle)
-            && let Some(base_type) = answers.get_type_trace(base_expr.range())
+    /// Type-driven attribute definition lookup. Returns empty when no type trace
+    /// exists for `base_range`; caller is responsible for fallback.
+    fn find_definition_for_typed_attribute(
+        &self,
+        base_range: TextRange,
+        attr_name: &Name,
+    ) -> Vec<DefinitionLocation> {
+        let definitions_with_type: Vec<_> = if let Some(answers) =
+            self.transaction.get_answers(self.handle)
+            && let Some(base_type) = answers.get_type_trace(base_range)
         {
             self.transaction
                 .ad_hoc_solve(self.handle, "glean_attribute_definition", |solver| {
-                    let name = attr_name.id();
-                    let completions = |ty| solver.completions(ty, Some(name), false);
+                    let completions = |ty| solver.completions(ty, Some(attr_name), false);
 
                     let tys = match base_type.clone() {
                         Type::Union(box Union { members: tys, .. })
@@ -728,7 +732,7 @@ impl GleanState<'_> {
                                     self.handle,
                                     find_preference_glean(),
                                     completions(ty.clone()),
-                                    name,
+                                    attr_name,
                                 )
                                 .map(|def| (ty, def))
                         })
@@ -736,43 +740,57 @@ impl GleanState<'_> {
                 })
                 .unwrap_or_default()
         } else {
-            vec![]
+            return vec![];
         };
 
         if definitions_with_type.is_empty() {
-            self.find_definition_for_expr(base_expr, false)
+            return vec![];
+        }
+
+        let base_expr_name = join_names(self.module_name.as_str(), self.module.code_at(base_range));
+        let additional_definitions = if self.names.contains(&base_expr_name) {
+            self.get_additional_definitions(base_range, false)
                 .into_iter()
-                .map(|base_expr| DefinitionLocation {
-                    name: join_names(&base_expr.name, attr_name),
-                    file: base_expr.file,
+                .map(|ty| DefinitionLocation {
+                    name: join_names(&ty.name, attr_name),
+                    file: ty.file,
                 })
                 .collect()
         } else {
-            let base_expr_name = join_names(
-                self.module_name.as_str(),
-                self.module.code_at(base_expr.range()),
-            );
-            let additional_definitions = if self.names.contains(&base_expr_name) {
-                self.get_additional_definitions(base_expr.range(), false)
-                    .into_iter()
-                    .map(|ty| DefinitionLocation {
-                        name: join_names(&ty.name, attr_name),
-                        file: ty.file,
-                    })
-                    .collect()
-            } else {
-                vec![]
-            };
+            vec![]
+        };
 
-            definitions_with_type
+        definitions_with_type
+            .into_iter()
+            .flat_map(|(ty, def)| {
+                self.get_definition_location(
+                    def.definition_range,
+                    &def.module,
+                    Some(&ty),
+                    additional_definitions.clone(),
+                )
+            })
+            .collect()
+    }
+
+    fn find_definition_for_expr_attribute(
+        &self,
+        expr_attr: &ExprAttribute,
+    ) -> Vec<DefinitionLocation> {
+        let attr_name = &expr_attr.attr;
+        let base_expr = expr_attr.value.as_ref();
+
+        let definitions =
+            self.find_definition_for_typed_attribute(base_expr.range(), attr_name.id());
+
+        if !definitions.is_empty() {
+            definitions
+        } else {
+            self.find_definition_for_expr(base_expr, false)
                 .into_iter()
-                .flat_map(|(ty, def)| {
-                    self.get_definition_location(
-                        def.definition_range,
-                        &def.module,
-                        Some(&ty),
-                        additional_definitions.clone(),
-                    )
+                .map(|base_def| DefinitionLocation {
+                    name: join_names(&base_def.name, attr_name),
+                    file: base_def.file,
                 })
                 .collect()
         }
@@ -838,7 +856,7 @@ impl GleanState<'_> {
         match expr {
             Expr::Attribute(attr) => {
                 if attr.ctx.is_load() {
-                    self.find_definition_for_attribute(attr)
+                    self.find_definition_for_expr_attribute(attr)
                         .into_iter()
                         .map(|name| (name, attr.attr.range()))
                         .collect()
