@@ -747,13 +747,29 @@ impl<'a> Transaction<'a> {
             return Some(identifier);
         }
 
-        if position > TextSize::new(0) {
-            let previous_nodes = Ast::locate_node(&mod_module, position - TextSize::new(1));
-            return Self::empty_imported_name_from_covering_nodes(
-                &previous_nodes,
-                source,
-                position,
-            );
+        // If the cursor is in trailing whitespace after `import` for eg. `from math import    |`, probe left on
+        // the same line until we hit a non-whitespace character and reuse that
+        // AST context while validating the original cursor position.
+        let mut probe = position.to_usize();
+        while probe > 0 {
+            let previous = probe - 1;
+            let Some(byte) = source.as_bytes().get(previous).copied() else {
+                break;
+            };
+            match byte {
+                b' ' | b'\t' | b'\r' => {
+                    probe = previous;
+                }
+                b'\n' => break,
+                _ => {
+                    let probe_nodes = Ast::locate_node(&mod_module, TextSize::new(previous as u32));
+                    return Self::empty_imported_name_from_covering_nodes(
+                        &probe_nodes,
+                        source,
+                        position,
+                    );
+                }
+            }
         }
 
         None
