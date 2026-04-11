@@ -34,6 +34,7 @@ use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::tsp::type_conversion::convert_type_with_resolver;
 
 /// TSP server that delegates to LSP server infrastructure while handling only TSP requests
 pub struct TspServer<T: TspInterface> {
@@ -48,6 +49,14 @@ impl<T: TspInterface> TspServer<T> {
             inner: lsp_server,
             current_snapshot: Arc::new(Mutex::new(0)), // Start at 0, increments on RecheckFinished
         }
+    }
+
+    /// Convert a pyrefly `Type` to a TSP protocol `Type`, resolving function
+    /// declaration ranges via the binding table.
+    pub(crate) fn convert_type(&self, ty: &pyrefly_types::types::Type) -> tsp_types::Type {
+        let resolver =
+            |func_id: &pyrefly_types::callable::FuncId| self.inner.resolve_func_def_range(func_id);
+        convert_type_with_resolver(ty, &resolver)
     }
 
     pub fn process_event<'a>(

@@ -1851,3 +1851,15 @@ f(x, y)
 assert_type(x, list[str])
     "#,
 );
+
+testcase!(
+    test_round_after_narrow,
+    r#"
+def test(value: int | float | None) -> str:
+    if value is None:
+        return ''
+    value = round(value, 4)
+    i = int(value)
+    return str(i)
+    "#,
+);

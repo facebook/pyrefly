@@ -104,3 +104,31 @@ for topic, token in items:
     d.setdefault(topic, []).append(token)
 "#,
 );
+
+testcase!(
+    test_large_dict_literal_mixed_none,
+    r#"
+# Regression test: dict literals with many entries of mixed str | None values
+# previously caused exponential memory blowup during overload resolution
+# because partial type variables were not restored after failed overload attempts.
+# This test completes in bounded time only with the fix in place.
+d = {
+    "a": None,
+    "b": "v1",
+    "c": None,
+    "d": "v2",
+    "e": None,
+    "f": "v3",
+    "g": None,
+    "h": "v4",
+    "i": None,
+    "j": "v5",
+    "k": None,
+    "l": "v6",
+    "m": None,
+    "n": "v7",
+    "o": None,
+}
+x: dict[str, str | None] = d
+"#,
+);

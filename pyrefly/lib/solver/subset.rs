@@ -1252,24 +1252,26 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     ) -> Result<(), SubsetError> {
         match (got, want) {
             (Type::Any(_), _) => {
-                for var in want.collect_maybe_placeholder_vars() {
+                all(want.collect_maybe_placeholder_vars().iter(), |var| {
                     // Variables in `want` now have `Any` as a lower bound.
+                    // TODO(https://github.com/facebook/pyrefly/issues/105): whether to add a lower
+                    // or upper bound should depend on variance.
                     self.solver
-                        .add_lower_bound(var, got.clone(), &mut |got, want| {
-                            self.is_subset_eq(got, want).is_ok()
-                        });
-                }
-                Ok(())
+                        .add_lower_bound(*var, got.clone(), &mut |got, want| {
+                            self.is_subset_eq(got, want)
+                        })
+                })
             }
             (_, Type::Any(_)) => {
-                for var in got.collect_maybe_placeholder_vars() {
+                all(got.collect_maybe_placeholder_vars().iter(), |var| {
                     // Variables in `got` now have `Any` as an upper bound.
+                    // TODO(https://github.com/facebook/pyrefly/issues/105): whether to add a lower
+                    // or upper bound should depend on variance.
                     self.solver
-                        .add_upper_bound(var, want.clone(), &mut |got, want| {
-                            self.is_subset_eq(got, want).is_ok()
-                        });
-                }
-                Ok(())
+                        .add_upper_bound(*var, want.clone(), &mut |got, want| {
+                            self.is_subset_eq(got, want)
+                        })
+                })
             }
             (Type::Never(_), _) => Ok(()),
             (_, Type::ClassType(want)) if want.is_builtin("object") => {

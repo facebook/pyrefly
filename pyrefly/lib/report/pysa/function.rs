@@ -15,6 +15,7 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
+use pyrefly_types::callable::FuncDefIndex;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
@@ -58,7 +59,7 @@ use crate::report::pysa::types::is_callable_like;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FunctionId {
     /// Function declared with a `def` statement.
-    Function { location: PysaLocation },
+    Function { func_def_index: FuncDefIndex },
     /// Implicit function containing all top-level statements.
     ModuleTopLevel,
     /// Implicit function containing the class body.
@@ -68,20 +69,20 @@ pub enum FunctionId {
     /// Decorated target, which represents an artificial function containing all
     /// decorators of a function, inlined as an expression.
     /// For e.g, `@foo` on `def bar()` -> `return foo(bar)`
-    FunctionDecoratedTarget { location: PysaLocation },
+    FunctionDecoratedTarget { func_def_index: FuncDefIndex },
 }
 
 impl FunctionId {
     pub fn serialize_to_string(&self) -> String {
         match self {
-            FunctionId::Function { location } => format!("F:{}", location.as_key()),
+            FunctionId::Function { func_def_index } => format!("F:{}", func_def_index.0),
             FunctionId::ModuleTopLevel => "MTL".to_owned(),
             FunctionId::ClassTopLevel { class_id } => format!("CTL:{}", class_id.to_int()),
             FunctionId::ClassField { class_id, name } => {
                 format!("CF:{}:{}", class_id.to_int(), name)
             }
-            FunctionId::FunctionDecoratedTarget { location } => {
-                format!("FDT:{}", location.as_key())
+            FunctionId::FunctionDecoratedTarget { func_def_index } => {
+                format!("FDT:{}", func_def_index.0)
             }
         }
     }
@@ -116,7 +117,7 @@ impl FunctionRef {
             module_id: context.module_id,
             module_name: context.module_info.name(),
             function_id: FunctionId::Function {
-                location: PysaLocation::from_text_range(function.id_range(), &context.module_info),
+                func_def_index: function.undecorated.def_index,
             },
             function_name: name,
         }
@@ -127,12 +128,12 @@ impl FunctionRef {
             FunctionRef {
                 module_id,
                 module_name,
-                function_id: FunctionId::Function { location },
+                function_id: FunctionId::Function { func_def_index },
                 function_name,
             } => Some(FunctionRef {
                 module_id,
                 module_name,
-                function_id: FunctionId::FunctionDecoratedTarget { location },
+                function_id: FunctionId::FunctionDecoratedTarget { func_def_index },
                 function_name,
             }),
             _ => None,
@@ -191,6 +192,10 @@ pub struct FunctionSignature {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct FunctionBaseDefinition {
     pub name: Name,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Location of the function name in the source code (e.g., `foo` in `def foo()`).
+    /// None for synthesized functions (e.g., dataclass `__init__`).
+    pub name_location: Option<PysaLocation>,
     pub parent: ScopeParent,
     #[serde(skip_serializing_if = "<&bool>::not")]
     pub is_overload: bool,
@@ -289,6 +294,12 @@ impl FunctionDefinition {
     #[cfg(test)]
     pub fn with_overridden_base_method(mut self, overridden_base_method: FunctionRef) -> Self {
         self.overridden_base_method = Some(overridden_base_method);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_name_location(mut self, name_location: Option<PysaLocation>) -> Self {
+        self.base.name_location = name_location;
         self
     }
 }
@@ -649,18 +660,12 @@ impl FunctionNode {
         match self {
             FunctionNode::DecoratedFunction(function) => match &function.undecorated.defining_cls {
                 Some(cls) => ScopeParent::Class {
-                    location: PysaLocation::from_text_range(
-                        cls.qname().range(),
-                        &context.module_info,
-                    ),
+                    class_id: ClassId::from_class(cls),
                 },
-                None => get_scope_parent(&context.ast, &context.module_info, function.id_range()),
+                None => get_scope_parent(context, function.id_range()),
             },
             FunctionNode::ClassField { class, .. } => ScopeParent::Class {
-                location: PysaLocation::from_text_range(
-                    class.qname().range(),
-                    &context.module_info,
-                ),
+                class_id: ClassId::from_class(class),
             },
         }
     }
@@ -833,6 +838,12 @@ pub fn export_all_functions(
                     current_function.function_id.clone(),
                     FunctionBaseDefinition {
                         name: current_function.function_name.clone(),
+                        name_location: match &function {
+                            FunctionNode::DecoratedFunction(f) => Some(
+                                PysaLocation::from_text_range(f.id_range(), &context.module_info)
+                            ),
+                            FunctionNode::ClassField { .. } => None,
+                        },
                         parent,
                         is_overload: function.is_overload(),
                         is_staticmethod: function.is_staticmethod(),

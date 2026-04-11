@@ -22,7 +22,6 @@ use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 use vec1::vec1;
 
@@ -51,8 +50,6 @@ struct CalledOverload<'f> {
     func: &'f TargetWithTParams<Function>,
     res: Type,
     ctor_targs: Option<TArgs>,
-    /// Mapping from original partial vars to fresh copies used in this overload call.
-    partial_var_map: SmallMap<Var, Var>,
     call_errors: ErrorCollector,
     /// Maps each argument's source range to the parameter type it was matched against.
     expected_types: HashMap<TextRange, Type>,
@@ -268,7 +265,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     func: arity_closest_overload.unwrap().0,
                     res: self.heap.mk_any_error(),
                     ctor_targs: None,
-                    partial_var_map: SmallMap::new(),
                     call_errors: self.error_collector(),
                     expected_types: HashMap::new(),
                 },
@@ -324,7 +320,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         closest_overload = CalledOverload {
                             func,
                             ctor_targs,
-                            partial_var_map: first_overload.partial_var_map.clone(),
                             expected_types,
                             res: self.unions(matched_overloads.into_map(|o| o.res)),
                             call_errors: self.error_collector(),
@@ -341,14 +336,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
 
-        if matched {
-            if let Some(targs) = ctor_targs
-                && let Some(chosen_targs) = closest_overload.ctor_targs
-            {
-                *targs = chosen_targs;
-            }
-            self.solver()
-                .solve_partial_vars_from_fresh(&closest_overload.partial_var_map);
+        if matched
+            && let Some(targs) = ctor_targs
+            && let Some(chosen_targs) = closest_overload.ctor_targs
+        {
+            *targs = chosen_targs;
         }
         // Record the closest overload to power IDE services.
         let mut overload_trace = |target: &TargetWithTParams<Function>| {
@@ -510,9 +502,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         ctor_targs: &Option<&mut TArgs>,
     ) -> (CalledOverload<'c>, bool) {
+        // Collect partial vars so we can save/restore them around each overload evaluation. This
+        // prevents premature pinning of partial vars on failed overload calls.
+        let partial_vars = self.collect_partial_vars(self_obj, args, keywords);
+
         let mut matched_overloads = Vec::with_capacity(overloads.len());
         let mut closest_unmatched_overload: Option<CalledOverload<'c>> = None;
         for callable in overloads {
+            let snapshot = self.solver().snapshot_vars(&partial_vars);
             let called_overload = self.call_overload(
                 callable,
                 metadata,
@@ -524,6 +521,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None, // don't use the hint yet, it shouldn't influence overload selection
                 ctor_targs,
             );
+            self.solver().restore_vars(&snapshot);
             if called_overload.call_errors.is_empty() {
                 matched_overloads.push(called_overload);
             } else {
@@ -632,6 +630,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     matched_overloads
                         .iter()
                         .find_position(|o| {
+                            let snapshot = self.solver().snapshot_vars(&partial_vars);
                             let res = self.call_overload(
                                 o.func,
                                 metadata,
@@ -643,6 +642,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 None, // don't use the hint yet, it shouldn't influence overload selection
                                 &None,
                             );
+                            self.solver().restore_vars(&snapshot);
                             res.call_errors.is_empty()
                         })
                         .map(|(split_point, _)| split_point + 1)
@@ -780,18 +780,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         partial_vars
     }
 
-    /// Substitute fresh vars for originals in a type. This is used to generate fresh partial vars
-    /// for overload calls.
-    fn substitute_vars(ty: &mut Type, mapping: &SmallMap<Var, Var>) {
-        ty.transform_mut(&mut |t| {
-            if let Type::Var(v) = t
-                && let Some(fresh) = mapping.get(v)
-            {
-                *t = Type::Var(*fresh);
-            }
-        });
-    }
-
     fn call_overload<'c>(
         &self,
         callable: &'c TargetWithTParams<Function>,
@@ -811,63 +799,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut overload_ctor_targs = ctor_targs.as_ref().map(|x| (**x).clone());
         let tparams = callable.0.as_deref();
 
-        // Substitute fresh vars into self_obj and Type-valued arguments. Each overload
-        // gets its own fresh copies so that a failing overload's constraint solving
-        // doesn't pin the original partial vars.
-        let partial_vars = self.collect_partial_vars(self_obj, args, keywords);
-        let partial_var_map = self
-            .solver()
-            .freshen_partial_vars(&partial_vars, self.uniques);
-        let owner = Owner::new();
-        let (self_obj, fresh_args, fresh_keywords) = if partial_var_map.is_empty() {
-            (self_obj.cloned(), None, None)
-        } else {
-            let self_obj = self_obj.cloned().map(|mut obj| {
-                Self::substitute_vars(&mut obj, &partial_var_map);
-                obj
-            });
-            let fresh_args = args
-                .iter()
-                .map(|arg| match arg {
-                    CallArg::Arg(TypeOrExpr::Type(ty, range)) => {
-                        let mut ty = (*ty).clone();
-                        Self::substitute_vars(&mut ty, &partial_var_map);
-                        CallArg::Arg(TypeOrExpr::Type(owner.push(ty), *range))
-                    }
-                    CallArg::Star(TypeOrExpr::Type(ty, _), range) => {
-                        let mut ty = (*ty).clone();
-                        Self::substitute_vars(&mut ty, &partial_var_map);
-                        CallArg::Star(TypeOrExpr::Type(owner.push(ty), arg.range()), *range)
-                    }
-                    other => other.clone(),
-                })
-                .collect::<Vec<_>>();
-            let fresh_keywords = keywords
-                .iter()
-                .map(|kw| match &kw.value {
-                    TypeOrExpr::Type(ty, range) => {
-                        let mut ty = (*ty).clone();
-                        Self::substitute_vars(&mut ty, &partial_var_map);
-                        CallKeyword {
-                            range: kw.range,
-                            arg: kw.arg,
-                            value: TypeOrExpr::Type(owner.push(ty), *range),
-                        }
-                    }
-                    _ => kw.clone(),
-                })
-                .collect::<Vec<_>>();
-            (self_obj, Some(fresh_args), Some(fresh_keywords))
-        };
-
         let call_errors = self.error_collector();
         let (res, specialization_errors, expected_types) = self.callable_infer(
             callable.1.signature.clone(),
             Some(&metadata.kind),
             tparams,
-            self_obj,
-            fresh_args.as_deref().unwrap_or(args),
-            fresh_keywords.as_deref().unwrap_or(keywords),
+            self_obj.cloned(),
+            args,
+            keywords,
             arguments_range,
             errors,
             &call_errors,
@@ -886,7 +825,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             func: callable,
             res,
             ctor_targs: overload_ctor_targs,
-            partial_var_map,
             call_errors,
             expected_types,
         }

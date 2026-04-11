@@ -497,3 +497,48 @@ def h(x: ThisIsANameError):  # E: Could not find name
     assert_type(y, list[Any])
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3088
+testcase!(
+    test_dict_with_initial_none_values,
+    r#"
+def parse(obj):
+    data = {"a": None, "b": None, "c": None, "d": None, "e": None, "f": None, "g": None}
+
+    for item in obj.select("div"):
+        child = item.next_sibling.select_one("span")
+
+        if item.string == "list_case":
+            value = [x.strip() for x in child.strings][:-1]
+        elif item.string == "update_case":
+            data.update(
+                {"a": child.select_one("a"), "b": child.select_one("b"), "c": None}
+            )
+            continue
+        else:
+            value = child.text
+
+        data[item.string] = value
+    return data
+    "#,
+);
+
+testcase!(
+    bug = "Partial inference fails due to bug in var snapshot+restore logic",
+    test_partial_inference_of_dict_through_overload,
+    r#"
+from typing import assert_type, overload, TypeVar
+
+T = TypeVar('T')
+d = {}
+
+@overload
+def f(x: dict[T, T], flag: str) -> None: ...
+@overload
+def f(x: dict[str, int], flag: int) -> None: ...
+def f(x, flag) -> None: ...
+
+f(d, 42)
+assert_type(d, dict[str, int])  # E: assert_type(dict[Unknown, Unknown], dict[str, int])
+    "#,
+);

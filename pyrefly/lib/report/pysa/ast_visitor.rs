@@ -28,7 +28,6 @@ use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionId;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::should_export_decorated_function;
-use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleId;
 
 pub enum Scope {
@@ -322,10 +321,7 @@ fn visit_statement<V: AstScopedVisitor>(
                 ) {
                     Scope::ExportedFunction {
                         function_id: FunctionId::Function {
-                            location: PysaLocation::from_text_range(
-                                function_def.identifier().range(),
-                                &module_context.answers_context.module_info,
-                            ),
+                            func_def_index: decorated_function.undecorated.def_index,
                         },
                         location: function_def.identifier().range(),
                         function_name: function_def.name.id().clone(),

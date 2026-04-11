@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -98,6 +99,9 @@ use lsp_types::OneOf;
 use lsp_types::Position;
 use lsp_types::PositionEncodingKind;
 use lsp_types::PrepareRenameResponse;
+use lsp_types::ProgressParams;
+use lsp_types::ProgressParamsValue;
+use lsp_types::ProgressToken;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Range;
 use lsp_types::ReferenceParams;
@@ -136,6 +140,11 @@ use lsp_types::UnregistrationParams;
 use lsp_types::Url;
 use lsp_types::VersionedTextDocumentIdentifier;
 use lsp_types::WatchKind;
+use lsp_types::WorkDoneProgress;
+use lsp_types::WorkDoneProgressBegin;
+use lsp_types::WorkDoneProgressCreateParams;
+use lsp_types::WorkDoneProgressEnd;
+use lsp_types::WorkDoneProgressReport;
 use lsp_types::WorkspaceClientCapabilities;
 use lsp_types::WorkspaceEdit;
 use lsp_types::WorkspaceFoldersServerCapabilities;
@@ -152,6 +161,7 @@ use lsp_types::notification::DidSaveTextDocument;
 use lsp_types::notification::Exit;
 use lsp_types::notification::Initialized;
 use lsp_types::notification::Notification as _;
+use lsp_types::notification::Progress;
 use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::CallHierarchyIncomingCalls;
 use lsp_types::request::CallHierarchyOutgoingCalls;
@@ -190,6 +200,7 @@ use lsp_types::request::TypeHierarchySubtypes;
 use lsp_types::request::TypeHierarchySupertypes;
 use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WillRenameFiles;
+use lsp_types::request::WorkDoneProgressCreate;
 use lsp_types::request::WorkspaceConfiguration;
 use lsp_types::request::WorkspaceSymbolRequest;
 use pyrefly_build::SourceDatabase;
@@ -224,6 +235,7 @@ use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
 use pyrefly_util::telemetry::TelemetryFileStats;
 use pyrefly_util::telemetry::TelemetryFileWatcherStats;
+use pyrefly_util::telemetry::TelemetryInvalidateFindReason;
 use pyrefly_util::telemetry::TelemetryServerState;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::thread_pool::ThreadPool;
@@ -249,6 +261,7 @@ use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMro;
+use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
@@ -313,6 +326,7 @@ use crate::lsp::wasm::provide_type::ProvideTypeParams;
 use crate::lsp::wasm::provide_type::ProvideTypeResponse;
 use crate::lsp::wasm::provide_type::provide_type;
 use crate::module::bundled::BundledStub;
+use crate::state::load::Load;
 use crate::state::load::LspFile;
 use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
@@ -327,7 +341,9 @@ use crate::state::state::CancellableTransaction;
 use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
+use crate::state::subscriber::CompositeSubscriber;
 use crate::state::subscriber::PublishDiagnosticsSubscriber;
+use crate::state::subscriber::Subscriber;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassType;
 
@@ -447,6 +463,17 @@ pub trait TspInterface: Send + Sync {
         line: u32,
         character: u32,
     ) -> Option<pyrefly_types::types::Type>;
+
+    /// Resolve the source range of a function name from its `FuncDefIndex`.
+    ///
+    /// Uses the binding table to look up `KeyUndecoratedFunctionRange` for
+    /// the function's module, returning the `TextRange` of the function
+    /// name identifier. Returns `None` when the function has no
+    /// `FuncDefIndex` or the module's bindings are unavailable.
+    fn resolve_func_def_range(
+        &self,
+        func_id: &pyrefly_types::callable::FuncId,
+    ) -> Option<TextRange>;
 }
 
 pub struct Connection {
@@ -587,6 +614,137 @@ impl ServerConnection {
                 )),
             ));
         }
+    }
+}
+
+const PROGRESS_REPORT_INTERVAL: Duration = Duration::from_millis(100);
+
+struct LspProgressSubscriber<'a> {
+    server: &'a Server,
+    token: ProgressToken,
+    title: &'static str,
+    state: Mutex<LspProgressState>,
+}
+
+struct LspProgressState {
+    started: u64,
+    finished: u64,
+    ended: bool,
+    last_report: Instant,
+    last_percentage: u32,
+}
+
+impl LspProgressState {
+    fn snapshot(&mut self) -> (String, u32) {
+        let mut percentage = if self.started == 0 {
+            0
+        } else {
+            (((self.finished * 100) / self.started) as u32).min(99)
+        };
+        if percentage < self.last_percentage {
+            percentage = self.last_percentage;
+        }
+        self.last_percentage = percentage;
+        (format!("{}/{}", self.finished, self.started), percentage)
+    }
+}
+
+impl<'a> LspProgressSubscriber<'a> {
+    fn new(server: &'a Server, title: &'static str) -> Option<Self> {
+        if !server.supports_work_done_progress() {
+            return None;
+        }
+        let token = server.new_progress_token();
+        server.send_request::<WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
+            token: token.clone(),
+        });
+        // TODO: Per LSP spec, the server must not send progress notifications using
+        // the token before the client acknowledges the create request. Currently,
+        // send_request is fire-and-forget, so Begin is emitted immediately without
+        // waiting for the response. This works in practice (VS Code processes messages
+        // in order) but a strict LSP client could discard the Begin. Ideally, defer
+        // Begin until the first start_work call, by which point the round-trip has
+        // likely completed.
+        let me = Self {
+            server,
+            token,
+            title,
+            state: Mutex::new(LspProgressState {
+                started: 0,
+                finished: 0,
+                ended: false,
+                last_report: Instant::now(),
+                last_percentage: 0,
+            }),
+        };
+        me.send_progress(WorkDoneProgress::Begin(WorkDoneProgressBegin {
+            title: me.title.to_owned(),
+            cancellable: None,
+            message: Some("0/0".to_owned()),
+            percentage: Some(0),
+        }));
+        Some(me)
+    }
+
+    fn send_progress(&self, value: WorkDoneProgress) {
+        let params = ProgressParams {
+            token: self.token.clone(),
+            value: ProgressParamsValue::WorkDone(value),
+        };
+        self.server
+            .connection
+            .send(Message::Notification(new_notification::<Progress>(params)));
+    }
+
+    fn event(&self, update: impl FnOnce(&mut LspProgressState)) {
+        let now = Instant::now();
+        let outcome = {
+            let mut state = self.state.lock();
+            if state.ended {
+                return;
+            }
+            update(&mut state);
+            let should_report = now.duration_since(state.last_report) >= PROGRESS_REPORT_INTERVAL;
+            if !should_report {
+                return;
+            }
+            state.last_report = now;
+            let (message, percentage) = state.snapshot();
+            Some((message, percentage))
+        };
+        if let Some((message, percentage)) = outcome {
+            self.send_progress(WorkDoneProgress::Report(WorkDoneProgressReport {
+                cancellable: None,
+                message: Some(message),
+                percentage: Some(percentage),
+            }));
+        }
+    }
+}
+
+impl Subscriber for LspProgressSubscriber<'_> {
+    fn start_work(&self, _: &Handle) {
+        self.event(|state| state.started += 1);
+    }
+
+    fn finish_work(&self, _: &Transaction<'_>, _: &Handle, _: &Arc<Load>, _: bool) {
+        self.event(|state| state.finished += 1);
+    }
+}
+
+impl Drop for LspProgressSubscriber<'_> {
+    fn drop(&mut self) {
+        let message = {
+            let mut state = self.state.lock();
+            if state.ended {
+                return;
+            }
+            state.ended = true;
+            format!("{}/{}", state.finished, state.started)
+        };
+        self.send_progress(WorkDoneProgress::End(WorkDoneProgressEnd {
+            message: Some(message),
+        }));
     }
 }
 
@@ -769,6 +927,7 @@ pub struct Server {
     completion_mru: Mutex<CompletionMru>,
     outgoing_request_id: AtomicI32,
     outgoing_requests: Mutex<HashMap<RequestId, Request>>,
+    next_progress_token_id: AtomicUsize,
     filewatcher_registered: AtomicBool,
     watched_patterns: Mutex<SmallSet<WatchPattern>>,
     version_info: Mutex<HashMap<PathBuf, i32>>,
@@ -2429,6 +2588,7 @@ impl Server {
             completion_mru: Mutex::new(CompletionMru::default()),
             outgoing_request_id: AtomicI32::new(1),
             outgoing_requests: Mutex::new(HashMap::new()),
+            next_progress_token_id: AtomicUsize::new(1),
             filewatcher_registered: AtomicBool::new(false),
             watched_patterns: Mutex::new(SmallSet::new()),
             version_info: Mutex::new(HashMap::new()),
@@ -2540,6 +2700,32 @@ impl Server {
         };
         self.connection.send(Message::Request(request.clone()));
         self.outgoing_requests.lock().insert(id, request);
+    }
+
+    fn supports_work_done_progress(&self) -> bool {
+        self.initialize_params
+            .capabilities
+            .window
+            .as_ref()
+            .and_then(|window| window.work_done_progress)
+            == Some(true)
+    }
+
+    fn new_progress_token(&self) -> ProgressToken {
+        let id = self.next_progress_token_id.fetch_add(1, Ordering::Relaxed);
+        ProgressToken::String(format!("pyrefly-progress-{id}"))
+    }
+
+    fn make_recheck_subscriber<'a>(
+        &'a self,
+        publish_callback: impl Fn(&Transaction<'_>, &Handle, bool) + Send + Sync + 'a,
+    ) -> Box<dyn Subscriber + 'a> {
+        let mut subscribers: Vec<Box<dyn Subscriber + 'a>> = Vec::new();
+        subscribers.push(Box::new(PublishDiagnosticsSubscriber { publish_callback }));
+        if let Some(progress_subscriber) = LspProgressSubscriber::new(self, "Pyrefly: Rechecking") {
+            subscribers.push(Box::new(progress_subscriber));
+        }
+        Box::new(CompositeSubscriber::new(subscribers))
     }
 
     /// Run the transaction with the in-memory content of open files. Returns the handles of open files when the transaction is done.
@@ -2886,9 +3072,11 @@ impl Server {
     }
 
     fn invalidate_find_for_configs(&self, invalidated_configs: SmallSet<ArcId<ConfigFile>>) {
-        self.invalidate(TelemetryEventKind::InvalidateFind, |t| {
-            t.invalidate_find_for_configs(invalidated_configs)
-        });
+        self.invalidate(
+            TelemetryEventKind::InvalidateFind,
+            Some(TelemetryInvalidateFindReason::SourceDbConfigChanged),
+            |t| t.invalidate_find_for_configs(invalidated_configs),
+        );
     }
 
     fn populate_project_files_if_necessary(
@@ -2981,12 +3169,16 @@ impl Server {
     fn invalidate(
         &self,
         kind: TelemetryEventKind,
+        invalidate_find_reason: Option<TelemetryInvalidateFindReason>,
         f: impl FnOnce(&mut Transaction) + Send + Sync + 'static,
     ) {
         let open_handles = self.get_open_file_handles();
         self.recheck_queue.queue_task(
             kind,
             Box::new(move |server, _telemetry, telemetry_event| {
+                if let Some(reason) = invalidate_find_reason {
+                    telemetry_event.set_invalidate_find_reason(reason);
+                }
                 // Filter to only include handles from workspaces with streaming enabled
                 let streaming_handles: SmallSet<Handle> = open_handles
                     .iter()
@@ -3014,10 +3206,10 @@ impl Server {
                             )
                         }
                     };
-                let subscriber = PublishDiagnosticsSubscriber { publish_callback };
+                let subscriber = server.make_recheck_subscriber(publish_callback);
                 let mut transaction = server
                     .state
-                    .new_committable_transaction(Require::Exports, Some(Box::new(subscriber)));
+                    .new_committable_transaction(Require::Exports, Some(subscriber));
                 let invalidate_start = Instant::now();
                 // Mark files as dirty
                 f(transaction.as_mut());
@@ -3285,7 +3477,7 @@ impl Server {
 
     fn did_save(&self, url: Url) {
         if let Some(path) = self.path_for_uri(&url) {
-            self.invalidate(TelemetryEventKind::InvalidateDisk, move |t| {
+            self.invalidate(TelemetryEventKind::InvalidateDisk, None, move |t| {
                 t.invalidate_disk(&[path])
             })
         }
@@ -3613,6 +3805,10 @@ impl Server {
 
         // Record the files that changed for telemetry
         telemetry_event.set_did_change_watched_files_stats(TelemetryDidChangeWatchedFilesStats {
+            created_count: events.created.len(),
+            modified_count: events.modified.len(),
+            removed_count: events.removed.len(),
+            unknown_count: events.unknown.len(),
             created: events.created.iter().take(20).cloned().collect(),
             modified: events.modified.iter().take(20).cloned().collect(),
             removed: events.removed.iter().take(20).cloned().collect(),
@@ -3633,12 +3829,16 @@ impl Server {
         // and subsequent tasks find an empty buffer and become no-ops.
         self.pending_invalidation_events.lock().extend(events);
         let pending = Arc::clone(&self.pending_invalidation_events);
-        self.invalidate(TelemetryEventKind::InvalidateFind, move |t| {
-            let events = std::mem::take(&mut *pending.lock());
-            if !events.is_empty() {
-                t.invalidate_events(&events);
-            }
-        });
+        self.invalidate(
+            TelemetryEventKind::InvalidateFind,
+            Some(TelemetryInvalidateFindReason::WatcherEvents),
+            move |t| {
+                let events = std::mem::take(&mut *pending.lock());
+                if !events.is_empty() {
+                    t.invalidate_events(&events);
+                }
+            },
+        );
 
         // If a non-Python, non-config file was changed, then try rebuilding build systems.
         // If no build system file was changed, then we should just not do anything. If
@@ -5395,10 +5595,10 @@ impl Server {
                             )
                         }
                     };
-                let subscriber = PublishDiagnosticsSubscriber { publish_callback };
+                let subscriber = server.make_recheck_subscriber(publish_callback);
                 let mut transaction = server
                     .state
-                    .new_committable_transaction(Require::Exports, Some(Box::new(subscriber)));
+                    .new_committable_transaction(Require::Exports, Some(subscriber));
                 let invalidate_start = Instant::now();
                 transaction.as_mut().invalidate_config();
                 telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
@@ -6087,5 +6287,18 @@ impl TspInterface for Server {
             /* notebook_cell */ None,
         );
         transaction.get_type_at(&handle, position)
+    }
+
+    fn resolve_func_def_range(
+        &self,
+        func_id: &pyrefly_types::callable::FuncId,
+    ) -> Option<TextRange> {
+        let def_index = func_id.def_index?;
+        let handle = handle_from_module_path(&self.state, func_id.module.path().dupe());
+        let transaction = self.state.transaction();
+        let bindings = transaction.get_bindings(&handle)?;
+        let key = KeyUndecoratedFunctionRange(def_index);
+        let idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+        Some(bindings.get(idx).0.range())
     }
 }

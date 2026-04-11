@@ -94,8 +94,8 @@ pub fn split_module_class_and_identifier(string: &str) -> (String, Option<String
 impl FunctionRefForTest {
     fn from_definition_ref(function_ref: FunctionRef, resolver: &PysaResolver) -> Self {
         let (function_id, is_decorated_target) = match function_ref.function_id {
-            FunctionId::FunctionDecoratedTarget { location } => {
-                (FunctionId::Function { location }, true)
+            FunctionId::FunctionDecoratedTarget { func_def_index } => {
+                (FunctionId::Function { func_def_index }, true)
             }
             function_id => (function_id, false),
         };

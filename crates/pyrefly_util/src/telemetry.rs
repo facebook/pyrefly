@@ -100,6 +100,7 @@ pub struct TelemetryEvent {
     pub sourcedb_rebuild_instance_stats: Option<TelemetrySourceDbRebuildInstanceStats>,
     pub file_watcher_stats: Option<TelemetryFileWatcherStats>,
     pub did_change_watched_files_stats: Option<TelemetryDidChangeWatchedFilesStats>,
+    pub invalidate_find_reason: Option<TelemetryInvalidateFindReason>,
     pub external_references_stats: Option<TelemetryExternalReferencesStats>,
     pub external_workspace_symbols_stats: Option<TelemetryExternalWorkspaceSymbolsStats>,
     pub activity_key: Option<ActivityKey>,
@@ -108,6 +109,21 @@ pub struct TelemetryEvent {
     /// The LSP request ID, used to correlate CancelRequest notifications with
     /// the requests they cancel.
     pub request_id: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+pub enum TelemetryInvalidateFindReason {
+    WatcherEvents,
+    SourceDbConfigChanged,
+}
+
+impl TelemetryInvalidateFindReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::WatcherEvents => "watcher_events",
+            Self::SourceDbConfigChanged => "sourcedb_config_changed",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -194,6 +210,10 @@ pub struct TelemetryFileWatcherStats {
 
 #[derive(Default)]
 pub struct TelemetryDidChangeWatchedFilesStats {
+    pub created_count: usize,
+    pub modified_count: usize,
+    pub removed_count: usize,
+    pub unknown_count: usize,
     pub created: Vec<PathBuf>,
     pub modified: Vec<PathBuf>,
     pub removed: Vec<PathBuf>,
@@ -402,6 +422,7 @@ impl TelemetryEvent {
                 sourcedb_rebuild_instance_stats: None,
                 file_watcher_stats: None,
                 did_change_watched_files_stats: None,
+                invalidate_find_reason: None,
                 external_references_stats: None,
                 external_workspace_symbols_stats: None,
                 activity_key: None,
@@ -435,6 +456,7 @@ impl TelemetryEvent {
             sourcedb_rebuild_instance_stats: None,
             file_watcher_stats: None,
             did_change_watched_files_stats: None,
+            invalidate_find_reason: None,
             external_references_stats: None,
             external_workspace_symbols_stats: None,
             activity_key: None,
@@ -484,6 +506,10 @@ impl TelemetryEvent {
         stats: TelemetryDidChangeWatchedFilesStats,
     ) {
         self.did_change_watched_files_stats = Some(stats);
+    }
+
+    pub fn set_invalidate_find_reason(&mut self, reason: TelemetryInvalidateFindReason) {
+        self.invalidate_find_reason = Some(reason);
     }
 
     pub fn set_external_references_stats(&mut self, stats: TelemetryExternalReferencesStats) {

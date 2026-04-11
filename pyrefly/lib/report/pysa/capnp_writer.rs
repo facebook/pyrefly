@@ -153,11 +153,11 @@ fn set_pysa_type(mut builder: pysa_report_capnp::pysa_type::Builder, ty: &PysaTy
 
 fn set_scope_parent(mut builder: pysa_report_capnp::scope_parent::Builder, parent: &ScopeParent) {
     match parent {
-        ScopeParent::Function { location } => {
-            set_location(builder.init_function(), location);
+        ScopeParent::Function { func_def_index } => {
+            builder.set_function(func_def_index.0);
         }
-        ScopeParent::Class { location } => {
-            set_location(builder.init_class(), location);
+        ScopeParent::Class { class_id } => {
+            builder.set_class(class_id.to_int());
         }
         ScopeParent::TopLevel => {
             builder.set_top_level(());
@@ -592,6 +592,12 @@ fn set_function_definition(
 ) {
     // Flattened FunctionBaseDefinition fields
     builder.reborrow().set_name(func_def.base.name.as_str());
+    if let Some(name_location) = &func_def.base.name_location {
+        set_location(
+            builder.reborrow().init_define_name_location(),
+            name_location,
+        );
+    }
     set_scope_parent(builder.reborrow().init_parent(), &func_def.base.parent);
     builder
         .reborrow()
@@ -654,7 +660,7 @@ fn set_function_definition(
     }
     if let Some(overridden_base_method) = &func_def.overridden_base_method {
         set_function_ref(
-            builder.init_overridden_base_method(),
+            builder.reborrow().init_overridden_base_method(),
             overridden_base_method,
         );
     }
@@ -662,12 +668,14 @@ fn set_function_definition(
 
 fn set_class_definition(
     mut builder: pysa_report_capnp::class_definition::Builder,
-    loc: &PysaLocation,
     class_def: &ClassDefinition,
 ) {
-    set_location(builder.reborrow().init_location(), loc);
     builder.reborrow().set_class_id(class_def.class_id.to_int());
     builder.reborrow().set_name(&class_def.name);
+    set_location(
+        builder.reborrow().init_name_location(),
+        &class_def.name_location,
+    );
     {
         let mut bases = builder.reborrow().init_bases(class_def.bases.len() as u32);
         for (i, base) in class_def.bases.iter().enumerate() {
@@ -782,8 +790,8 @@ pub fn write_definitions<W: Write>(writer: W, defs: &PysaModuleDefinitions) -> a
         let mut classes = root
             .reborrow()
             .init_class_definitions(defs.class_definitions.len() as u32);
-        for (i, (loc, class_def)) in defs.class_definitions.iter().enumerate() {
-            set_class_definition(classes.reborrow().get(i as u32), loc, class_def);
+        for (i, (_class_id, class_def)) in defs.class_definitions.iter().enumerate() {
+            set_class_definition(classes.reborrow().get(i as u32), class_def);
         }
 
         // Global variables

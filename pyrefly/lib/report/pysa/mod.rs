@@ -133,7 +133,7 @@ pub struct PysaModuleDefinitions {
     pub module_name: ModuleName,
     pub source_path: ModulePathDetails,
     pub function_definitions: ModuleFunctionDefinitions<FunctionDefinition>,
-    pub class_definitions: HashMap<PysaLocation, ClassDefinition>,
+    pub class_definitions: HashMap<ClassId, ClassDefinition>,
     pub global_variables: HashMap<Name, GlobalVariable>,
 }
 

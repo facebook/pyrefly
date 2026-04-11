@@ -152,6 +152,7 @@ pub struct PysaClassField {
 pub struct ClassDefinition {
     pub class_id: ClassId,
     pub name: String,
+    pub name_location: PysaLocation,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub bases: Vec<ClassRef>,
     pub mro: PysaClassMro,
@@ -493,7 +494,7 @@ fn get_decorator_callees(
     }
 }
 
-pub fn export_all_classes(context: &ModuleContext) -> HashMap<PysaLocation, ClassDefinition> {
+pub fn export_all_classes(context: &ModuleContext) -> HashMap<ClassId, ClassDefinition> {
     let mut class_definitions = HashMap::new();
     let ann_assign_map = AnnAssignMap::build(&context.answers_context.ast);
 
@@ -507,11 +508,7 @@ pub fn export_all_classes(context: &ModuleContext) -> HashMap<PysaLocation, Clas
             .dupe()
             .unwrap();
         let class_index = class.index();
-        let parent = get_scope_parent(
-            &context.answers_context.ast,
-            &context.answers_context.module_info,
-            class.qname().range(),
-        );
+        let parent = get_scope_parent(&context.answers_context, class.qname().range());
         let metadata = context
             .answers_context
             .answers
@@ -550,6 +547,10 @@ pub fn export_all_classes(context: &ModuleContext) -> HashMap<PysaLocation, Clas
         let class_definition = ClassDefinition {
             class_id: ClassId::from_class(&class),
             name: class.qname().id().to_string(),
+            name_location: PysaLocation::from_text_range(
+                class.qname().range(),
+                &context.answers_context.module_info,
+            ),
             parent,
             bases,
             mro,
@@ -563,15 +564,9 @@ pub fn export_all_classes(context: &ModuleContext) -> HashMap<PysaLocation, Clas
 
         assert!(
             class_definitions
-                .insert(
-                    PysaLocation::from_text_range(
-                        class.qname().range(),
-                        &context.answers_context.module_info
-                    ),
-                    class_definition
-                )
+                .insert(ClassId::from_class(&class), class_definition)
                 .is_none(),
-            "Found class definitions with the same location"
+            "Found class definitions with the same class id"
         );
     }
 

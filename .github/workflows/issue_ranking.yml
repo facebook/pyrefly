@@ -56,16 +56,16 @@ jobs:
 
       - name: Build pyrefly
         run: |
-          cargo build --manifest-path pyrefly/Cargo.toml
-          echo "Built pyrefly binary at $(pwd)/target/debug/pyrefly"
-          ./target/debug/pyrefly --version
+          cargo build --release --manifest-path pyrefly/Cargo.toml
+          echo "Built pyrefly binary at $(pwd)/target/release/pyrefly"
+          ./target/release/pyrefly --version
 
       - name: Run primer shard ${{ matrix.shard }}/4
         working-directory: scripts
         run: |
           echo "=== Starting primer shard ${{ matrix.shard }}/4 ==="
           python3 compare_typecheckers.py \
-            --pyrefly ../target/debug/pyrefly \
+            --pyrefly ../target/release/pyrefly \
             --cache-dir /tmp/primer_cache \
             --output-json /tmp/primer_shard_${{ matrix.shard }}.json \
             --shard-index ${{ matrix.shard }} \

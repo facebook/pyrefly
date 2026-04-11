@@ -36,6 +36,12 @@
         "onLanguage:python",
         "onNotebook:jupyter-notebook"
     ],
+    "capabilities": {
+        "untrustedWorkspaces": {
+            "supported": false,
+            "description": "Pyrefly can be configured to execute binaries. A malicious actor could exploit this to run arbitrary code on your machine."
+        }
+    },
     "contributes": {
         "languages": [
             {
@@ -98,7 +104,8 @@
                 "pyrefly.lspPath": {
                     "type": "string",
                     "default": "",
-                    "description": "The path to the binary used for the lsp"
+                    "description": "The path to the binary used for the lsp",
+                    "scope": "machine-overridable"
                 },
                 "pyrefly.lspArguments": {
                     "type": "array",
@@ -108,7 +115,8 @@
                     "default": [
                         "lsp"
                     ],
-                    "description": "Additional arguments that should be passed to the binary at pyrefly.lspPath"
+                    "description": "Additional arguments that should be passed to the binary at pyrefly.lspPath",
+                    "scope": "machine-overridable"
                 },
                 "python.pyrefly.disableLanguageServices": {
                     "type": "boolean",

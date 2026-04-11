@@ -680,7 +680,6 @@ reveal_type(my_func)  # E: revealed type: (object) -> None
 );
 
 testcase!(
-    bug = "FP in Dual-use decorators https://github.com/facebook/pyrefly/issues/2621",
     test_dual_use_decorator,
     r#"
 from typing import assert_type
@@ -696,12 +695,21 @@ def optional_debug(func_or_flag=None):
         return decorator(func_or_flag)
     return decorator
 
+# Used without parentheses — func_or_flag receives the function directly.
 @optional_debug
 def compute(x: int, y: int, z: int) -> int:
     return x + y + z
 
-r1 = compute(1, 2, 3)  # E: Expected 1 positional argument, got 3 in function `decorator`
-assert_type(r1, int)  # E: assert_type(((*args: Unknown, **kwargs: Unknown) -> Unknown) | Unknown, int) failed
+r1 = compute(1, 2, 3)
+assert_type(r1, int)
+
+# Used with parentheses — func_or_flag receives the flag, returns decorator.
+@optional_debug(True)
+def compute2(x: int, y: int, z: int) -> int:
+    return x + y + z
+
+r2 = compute2(1, 2, 3)
+assert_type(r2, int)
     "#,
 );
 

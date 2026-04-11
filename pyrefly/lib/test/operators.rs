@@ -1069,3 +1069,12 @@ class Container:
 10 in Container()
 "#,
 );
+
+testcase!(
+    test_list_mul_literal_int,
+    r#"
+from typing import assert_type
+_ = [{"col": None}] * 1000
+assert_type([1, 2, 3] * 5, list[int])
+"#,
+);

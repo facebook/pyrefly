@@ -1044,3 +1044,193 @@ for y in xs:
     assert_type(y, int)
 "#,
 );
+
+testcase!(
+    bug = "Any assignment should not erase nullable annotation",
+    test_nullable_annotation_any_assign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: int | None = None
+x = f()
+assert_type(x, int | None)  # E: assert_type(Any, int | None) failed
+"#,
+);
+
+testcase!(
+    bug = "Any assignment should not erase nullable parameter annotation",
+    test_param_nullable_annotation_any_reassign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+def test(x: int | None) -> None:
+    x = f()
+    assert_type(x, int | None)  # E: assert_type(Any, int | None) failed
+"#,
+);
+
+testcase!(
+    bug = "Should filter None from union, preserving gradual list[Any] member",
+    test_union_gradual_narrow_list_any_or_none,
+    r#"
+from typing import Any, assert_type
+
+def f() -> list[int]: ...
+
+x: list[Any] | None = None
+x = f()
+assert_type(x, list[Any])  # E: assert_type(list[int], list[Any]) failed
+"#,
+);
+
+testcase!(
+    bug = "Should filter None from union, preserving Any member",
+    test_union_gradual_narrow_any_or_none,
+    r#"
+from typing import Any, assert_type
+
+def f() -> list[int]: ...
+
+x: Any | None = None
+x = f()
+assert_type(x, Any)  # E: assert_type(list[int], Any) failed
+"#,
+);
+
+testcase!(
+    test_union_narrow_concrete_int_from_function,
+    r#"
+from typing import assert_type
+
+def f() -> int: ...
+
+x: int | str | None = None
+x = f()
+assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_union_narrow_subclass_filters_none,
+    r#"
+from typing import assert_type
+
+class Base: ...
+class Sub(Base): ...
+
+def f() -> Sub: ...
+
+x: Base | None = None
+x = f()
+assert_type(x, Sub)
+"#,
+);
+
+testcase!(
+    test_union_narrow_sequence_with_list,
+    r#"
+from typing import Sequence, assert_type
+
+def f() -> list[int]: ...
+
+x: Sequence[int] | str = "hello"
+x = f()
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    bug = "Any expr should preserve full annotation, not erase it",
+    test_any_expr_preserves_full_union_annotation,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: int | str | None = None
+x = f()
+assert_type(x, int | str | None)  # E: assert_type(Any, int | str | None) failed
+"#,
+);
+
+testcase!(
+    bug = "Any assignment should not erase concrete parameter annotation",
+    test_param_concrete_annotation_any_reassign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+def test(x: int) -> None:
+    x = f()
+    assert_type(x, int)  # E: assert_type(Any, int) failed
+"#,
+);
+
+testcase!(
+    bug = "Any assignment should not erase union annotation",
+    test_union_annotation_any_assign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: int | str = 0
+x = f()
+assert_type(x, int | str)  # E: assert_type(Any, int | str) failed
+"#,
+);
+
+testcase!(
+    bug = "Any assignment should not erase generic annotation",
+    test_generic_annotation_any_assign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: list[int] = [1, 2, 3]
+x = f()
+assert_type(x, list[int])  # E: assert_type(Any, list[int]) failed
+"#,
+);
+
+testcase!(
+    test_gradual_annotation_direct_preserved,
+    r#"
+from typing import Any, assert_type
+
+x: list[Any] = [1, 2, 3]
+assert_type(x, list[Any])
+"#,
+);
+
+testcase!(
+    test_gradual_annotation_forwarded_preserved,
+    r#"
+from typing import Any, assert_type
+
+x: list[Any] = []
+x = [1, 2, 3]
+assert_type(x, list[Any])
+"#,
+);
+
+testcase!(
+    bug = "None guard + Any assignment should preserve annotation",
+    test_param_none_guard_any_reassign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+def test(x: int | None) -> None:
+    if x is None:
+        x = f()
+    assert_type(x, int | None)  # E: assert_type(int | Any, int | None) failed
+"#,
+);

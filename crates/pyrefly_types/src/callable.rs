@@ -39,6 +39,7 @@ use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::keywords::DataclassTransformMetadata;
 use crate::type_output::TypeOutput;
+use crate::types::AnyStyle;
 use crate::types::Type;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -46,6 +47,34 @@ use crate::types::Type;
 pub struct Callable {
     pub params: Params,
     pub ret: Type,
+}
+
+impl Callable {
+    /// Returns true if this callable has only *args and **kwargs parameters
+    /// (plus an optional unannotated self/cls at index 0) and no return type
+    /// annotation. Used as a heuristic in decorator type resolution: when a
+    /// decorator returns a union containing such a wrapper, the decorator is
+    /// treated as preserving the original function's signature.
+    pub fn is_args_kwargs_wrapper(&self) -> bool {
+        if !matches!(&self.ret, Type::Any(AnyStyle::Implicit)) {
+            return false;
+        }
+        match &self.params {
+            Params::List(params) => {
+                let items = params.items();
+                items.iter().any(|p| matches!(p, Param::Varargs(..)))
+                    && items.iter().any(|p| matches!(p, Param::Kwargs(..)))
+                    && items.iter().enumerate().all(|(i, p)| match p {
+                        Param::Varargs(..) | Param::Kwargs(..) => true,
+                        Param::Pos(_, ty, _) | Param::PosOnly(Some(_), ty, _) if i == 0 => {
+                            matches!(ty, Type::Any(AnyStyle::Implicit))
+                        }
+                        _ => false,
+                    })
+            }
+            _ => false,
+        }
+    }
 }
 
 impl Display for Callable {

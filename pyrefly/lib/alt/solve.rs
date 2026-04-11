@@ -2005,7 +2005,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut found = false;
             type_info.visit(&mut |ty| {
                 if !found {
-                    let vars = ty.collect_all_vars();
+                    let vars = ty.collect_maybe_placeholder_vars();
                     found = vars.iter().any(|v| solver.var_is_partial(*v));
                 }
             });

@@ -2219,7 +2219,7 @@ checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "pyrefly"
-version = "0.60.0"
+version = "0.60.2"
 dependencies = [
  "anstream 0.6.21",
  "anyhow",
@@ -2281,7 +2281,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_build"
-version = "0.60.0"
+version = "0.60.2"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2301,7 +2301,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_bundled"
-version = "0.60.0"
+version = "0.60.2"
 dependencies = [
  "anyhow",
  "sha2",
@@ -2312,7 +2312,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_config"
-version = "0.60.0"
+version = "0.60.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2347,7 +2347,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_derive"
-version = "0.60.0"
+version = "0.60.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2356,7 +2356,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_graph"
-version = "0.60.0"
+version = "0.60.2"
 dependencies = [
  "dupe",
  "pyrefly_util",
@@ -2365,7 +2365,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_python"
-version = "0.60.0"
+version = "0.60.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2392,7 +2392,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_types"
-version = "0.60.0"
+version = "0.60.2"
 dependencies = [
  "compact_str 0.9.0",
  "dupe",
@@ -2412,7 +2412,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_util"
-version = "0.60.0"
+version = "0.60.2"
 dependencies = [
  "anstream 0.6.21",
  "anyhow",
@@ -3624,7 +3624,7 @@ dependencies = [
 
 [[package]]
 name = "tsp_types"
-version = "0.60.0"
+version = "0.60.2"
 dependencies = [
  "lsp-server",
  "serde",
@@ -3661,9 +3661,9 @@ dependencies = [
 
 [[package]]
 name = "unicode-segmentation"
-version = "1.12.0"
+version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6ccf251212114b54433ec949fd6a7841275f9ada20dddd2f29e9ceea4501493"
+checksum = "9629274872b2bfaf8d66f5f15725007f635594914870f65218920345aa11aa8c"
 
 [[package]]
 name = "unicode-width"
