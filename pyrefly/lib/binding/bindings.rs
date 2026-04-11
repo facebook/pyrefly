@@ -75,6 +75,7 @@ use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
+use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
@@ -573,9 +574,19 @@ impl Bindings {
         }
     }
 
+<<<<<<< HEAD
     pub fn function_has_return_annotation(&self, name: &Identifier) -> bool {
         let b = self.get(self.key_to_idx(&Key::ReturnType(ShortIdentifier::new(name))));
         if let Binding::ReturnType(r) = b {
+||||||| parent of 9e4f6adef (fix FP)
+    pub fn function_has_return_annotation(&self, name: &Identifier) -> bool {
+        let b = self.get(self.key_to_idx(&Key::ReturnType(ShortIdentifier::new(name))));
+        if let Binding::ReturnType(box r) = b {
+=======
+    fn function_has_return_annotation_at_short_identifier(&self, name: ShortIdentifier) -> bool {
+        let b = self.get(self.key_to_idx(&Key::ReturnType(name)));
+        if let Binding::ReturnType(box r) = b {
+>>>>>>> 9e4f6adef (fix FP)
             r.kind.has_return_annotation()
         } else if matches!(b, Binding::Any(_)) {
             // This happens when we have an un-annotated return & the inference behavior is "skip and infer Any"
@@ -583,13 +594,24 @@ impl Bindings {
         } else {
             panic!(
                 "Internal error: unexpected binding for return type `{}` @  {:?}: {}, module={}, path={}",
-                &name.id,
-                name.range,
+                self.module().display(&name),
+                name.range(),
                 b.display_with(self),
                 self.module().name(),
                 self.module().path(),
             )
         }
+    }
+
+    pub fn function_has_return_annotation(&self, name: &Identifier) -> bool {
+        self.function_has_return_annotation_at_short_identifier(ShortIdentifier::new(name))
+    }
+
+    pub fn function_def_has_return_annotation(&self, def_index: FuncDefIndex) -> bool {
+        let short_identifier = self
+            .get(self.key_to_idx(&KeyUndecoratedFunctionRange(def_index)))
+            .0;
+        self.function_has_return_annotation_at_short_identifier(short_identifier)
     }
 
     pub fn new(
