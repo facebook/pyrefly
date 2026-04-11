@@ -1707,6 +1707,22 @@ if Foo(): ...  # E: The `__bool__` method of `Foo` returns `Never`, so it cannot
 );
 
 testcase!(
+    test_dunder_bool_returning_never_subclass_override,
+    r#"
+class Foo:
+    def __bool__(self):
+        raise TypeError
+
+class Bar(Foo):
+    def __bool__(self) -> bool:
+        return True
+
+bar: Foo = Bar()
+if bar: ...
+"#,
+);
+
+testcase!(
     test_union_dunder_bool,
     r#"
 from typing import Literal
