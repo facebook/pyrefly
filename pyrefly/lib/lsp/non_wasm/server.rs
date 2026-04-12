@@ -4594,6 +4594,10 @@ impl Server {
                 transaction.convert_star_import_code_actions(&handle, range)
             );
             timed_refactor_action!(
+                "unwrap_block",
+                transaction.unwrap_block_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "pytest_fixture_type_annotation",
                 transaction.pytest_fixture_type_annotation_code_actions(
                     &handle,

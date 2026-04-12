@@ -320,6 +320,19 @@ fn apply_first_inline_parameter_action(code: &str) -> Option<String> {
     Some(apply_refactor_edits_for_module(&module_info, &edits))
 }
 
+fn apply_first_unwrap_block_action(code: &str, selection: TextRange) -> Option<String> {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .unwrap_block_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
+}
+
 fn apply_first_safe_delete_action(code: &str) -> Option<String> {
     apply_first_safe_delete_action_multi(&[("main", code)], "main")
 }
@@ -380,6 +393,21 @@ fn assert_no_introduce_parameter_action(code: &str) {
     assert!(
         actions.is_empty(),
         "expected no introduce-parameter actions, found {}",
+        actions.len()
+    );
+}
+
+fn assert_no_unwrap_block_action(code: &str, selection: TextRange) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let actions = transaction
+        .unwrap_block_code_actions(handle, selection)
+        .unwrap_or_default();
+    assert!(
+        actions.is_empty(),
+        "expected no unwrap-block actions, found {}",
         actions.len()
     );
 }
@@ -4099,6 +4127,58 @@ class Child(Base):
         return 2
 "#;
     assert!(apply_first_safe_delete_action(code).is_none());
+}
+
+#[test]
+fn unwrap_block_if_body() {
+    let code = r#"
+def f():
+    if True:
+        print(2)
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print(2)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_if_else_branch_after_colon() {
+    let code = r#"
+def f():
+    if True:
+        print("then")
+    else:
+        # keep this comment
+        print("else")
+"#;
+    let else_colon = find_nth_range(code, ":", 3);
+    let selection = TextRange::new(else_colon.end(), else_colon.end());
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    # keep this comment
+    print("else")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_rejects_loop_else() {
+    let code = r#"
+def f(items):
+    for item in items:
+        print(item)
+    else:
+        print("done")
+"#;
+    let selection = find_nth_range(code, ":", 3);
+    assert_no_unwrap_block_action(code, selection);
 }
 
 #[test]
