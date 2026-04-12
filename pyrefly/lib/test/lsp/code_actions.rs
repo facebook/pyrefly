@@ -1441,6 +1441,25 @@ class myFunc:
         pass
 myFunc(user)
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc(user)
+# ^
+## After:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+# pyrefly: ignore [unknown-name]
+myFunc(user)
+# ^
 "#
         .trim(),
         report.trim()
@@ -1510,6 +1529,21 @@ class myFunc:
         pass
 myFunc(x, y, z)
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+myFunc(x, y, z)
+# ^
+## After:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+# pyrefly: ignore [unknown-name]
+myFunc(x, y, z)
+# ^
 "#
         .trim(),
         report.trim()
@@ -1577,6 +1611,21 @@ kwargs: dict[str, int] = {"a": 1}
 class myFunc:
     def __init__(self, x: int, *args: list[str], key: int, **kwargs: dict[str, int]):
         pass
+myFunc(x, *args, key=42, **kwargs)
+# ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+myFunc(x, *args, key=42, **kwargs)
+# ^
+## After:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+# pyrefly: ignore [unknown-name]
 myFunc(x, *args, key=42, **kwargs)
 # ^
 "#
@@ -1654,6 +1703,23 @@ class myFunc:
         pass
 myFunc(a.val, b.val)
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+myFunc(a.val, b.val)
+# ^
+## After:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+# pyrefly: ignore [unknown-name]
+myFunc(a.val, b.val)
+# ^
 "#
         .trim(),
         report.trim()
@@ -1703,6 +1769,15 @@ myFunc(42, len("test"), [i for i in range(3)])
 class myFunc:
     def __init__(self, arg1: int, arg2: int, arg3: list[int]):
         pass
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+## After:
+# pyrefly: ignore [unknown-name]
 myFunc(42, len("test"), [i for i in range(3)])
 # ^
 "#
@@ -1768,6 +1843,19 @@ class outer:
         pass
 outer(inner(42))
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+def inner(x: int) -> str:
+    return str(x)
+outer(inner(42))
+# ^
+## After:
+def inner(x: int) -> str:
+    return str(x)
+# pyrefly: ignore [unknown-name]
+outer(inner(42))
+# ^
 "#
         .trim(),
         report.trim()
@@ -1826,6 +1914,19 @@ x: Any = 1
 class myFunc:
     def __init__(self, x):
         pass
+myFunc(x)
+# ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+from typing import Any
+x: Any = 1
+myFunc(x)
+# ^
+## After:
+from typing import Any
+x: Any = 1
+# pyrefly: ignore [unknown-name]
 myFunc(x)
 # ^
 "#
