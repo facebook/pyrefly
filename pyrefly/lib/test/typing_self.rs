@@ -564,3 +564,18 @@ class Base:
         self.field = "hello"
 "#,
 );
+
+testcase!(
+    bug = "Should raise error in the overloads when returning concrete class instead of Self",
+    test_overload_returning_self,
+    r#"
+from typing import Self, overload
+
+class C:
+    @overload
+    def clone(self, x: int) -> C: ...
+    @overload
+    def clone(self, x: str) -> C: ...
+    def clone(self, x) -> Self: ...
+    "#,
+);
