@@ -237,32 +237,33 @@ impl<'a> TypeDisplayContext<'a> {
     }
 
     fn fmt_targ(&self, param: &Quantified, arg: &Type, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if param.is_type_var_tuple()
-            && let Type::Tuple(tuple) = arg
-        {
-            match tuple {
-                Tuple::Concrete(elts) if !elts.is_empty() => write!(
-                    f,
-                    "{}",
-                    commas_iter(|| elts.iter().map(|elt| self.display_internal(elt)))
-                ),
-                Tuple::Unpacked(box (prefix, middle, suffix)) => {
-                    let unpacked_middle = Type::Unpack(Box::new(middle.clone()));
-                    write!(
+        if param.is_type_var_tuple() {
+            match arg {
+                Type::Tuple(tuple) => match tuple {
+                    Tuple::Concrete(elts) if !elts.is_empty() => write!(
                         f,
                         "{}",
-                        commas_iter(|| {
-                            prefix
-                                .iter()
-                                .chain(std::iter::once(&unpacked_middle))
-                                .chain(suffix.iter())
-                                .map(|elt| self.display_internal(elt))
-                        })
-                    )
-                }
-                _ => {
-                    write!(f, "*{}", self.display_internal(arg))
-                }
+                        commas_iter(|| elts.iter().map(|elt| self.display_internal(elt)))
+                    ),
+                    Tuple::Unpacked(box (prefix, middle, suffix)) => {
+                        let unpacked_middle = Type::Unpack(Box::new(middle.clone()));
+                        write!(
+                            f,
+                            "{}",
+                            commas_iter(|| {
+                                prefix
+                                    .iter()
+                                    .chain(std::iter::once(&unpacked_middle))
+                                    .chain(suffix.iter())
+                                    .map(|elt| self.display_internal(elt))
+                            })
+                        )
+                    }
+                    _ => write!(f, "*{}", self.display_internal(arg)),
+                },
+                Type::Unpack(_) => write!(f, "{}", self.display_internal(arg)),
+                _ if arg.is_kind_type_var_tuple() => write!(f, "*{}", self.display_internal(arg)),
+                _ => write!(f, "{}", self.display_internal(arg)),
             }
         } else {
             write!(f, "{}", self.display_internal(arg))
@@ -1545,6 +1546,19 @@ pub mod tests {
             )
             .to_string(),
             "TupleParam[foo, *tuple[foo, ...], foo]"
+        );
+        let heap = TypeHeap::new();
+        let shape_param = fake_tparam(&uniques, "Shape", QuantifiedKind::TypeVarTuple);
+        assert_eq!(
+            class_type(
+                &tuple_param,
+                TArgs::new(
+                    tuple_param_tparams.dupe(),
+                    vec![shape_param.clone().to_type(&heap)]
+                )
+            )
+            .to_string(),
+            "TupleParam[*Shape]"
         );
 
         assert_eq!(
