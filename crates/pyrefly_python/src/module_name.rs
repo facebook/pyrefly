@@ -493,6 +493,12 @@ impl ModuleName {
                     out.push(x.to_string_lossy());
                 }
             }
+            // strip `-stubs` from the top-level directory (e.g. `scipy-stubs/` -> `scipy`)
+            if let Some(first) = out.first_mut()
+                && let Some(stripped) = first.strip_suffix("-stubs")
+            {
+                *first = stripped.to_owned().into();
+            }
             if out.is_empty() {
                 None
             } else {
@@ -702,5 +708,26 @@ mod tests {
             ),
             Some(ModuleName::from_str("service.types.cinc"))
         );
+    }
+
+    #[test]
+    fn test_module_from_path_stubs_suffix() {
+        // PEP 561: `-stubs` suffix on the top-level directory should be stripped.
+        let includes = [PathBuf::from("/sp")];
+        let assert_module_name = |path: &str, expected: &str| {
+            assert_eq!(
+                ModuleName::from_path(Path::new(path), includes.iter(), &[]),
+                Some(ModuleName::from_str(expected))
+            );
+        };
+
+        assert_module_name("/sp/scipy-stubs/stats/foo.pyi", "scipy.stats.foo");
+        assert_module_name("/sp/scipy-stubs/__init__.pyi", "scipy");
+
+        // Non-top-level `-stubs` should not be stripped.
+        assert_module_name("/sp/pkg/nested-stubs/foo.py", "pkg.nested-stubs.foo");
+
+        // Plain package without `-stubs` is unchanged.
+        assert_module_name("/sp/scipy/stats/foo.py", "scipy.stats.foo");
     }
 }
