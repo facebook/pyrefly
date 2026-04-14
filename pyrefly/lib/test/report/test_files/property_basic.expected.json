@@ -42,8 +42,8 @@
     {
       "kind": "property",
       "name": "test.GetterSetter.x",
-      "n_typable": 1,
-      "n_typed": 1,
+      "n_typable": 2,
+      "n_typed": 2,
       "n_any": 0,
       "n_untyped": 0,
       "location": {
@@ -53,49 +53,13 @@
     },
     {
       "kind": "property",
-      "name": "test.GetterSetter.x",
+      "name": "test.GetterSetterDeleter.x",
       "n_typable": 2,
       "n_typed": 2,
-      "n_any": 0,
-      "n_untyped": 0,
-      "location": {
-        "line": 27,
-        "column": 5
-      }
-    },
-    {
-      "kind": "property",
-      "name": "test.GetterSetterDeleter.x",
-      "n_typable": 1,
-      "n_typed": 1,
       "n_any": 0,
       "n_untyped": 0,
       "location": {
         "line": 33,
-        "column": 5
-      }
-    },
-    {
-      "kind": "property",
-      "name": "test.GetterSetterDeleter.x",
-      "n_typable": 2,
-      "n_typed": 2,
-      "n_any": 0,
-      "n_untyped": 0,
-      "location": {
-        "line": 37,
-        "column": 5
-      }
-    },
-    {
-      "kind": "property",
-      "name": "test.GetterSetterDeleter.x",
-      "n_typable": 1,
-      "n_typed": 1,
-      "n_any": 0,
-      "n_untyped": 0,
-      "location": {
-        "line": 41,
         "column": 5
       }
     },
@@ -185,18 +149,18 @@
     }
   ],
   "type_ignores": [],
-  "n_typable": 11,
-  "n_typed": 10,
+  "n_typable": 8,
+  "n_typed": 7,
   "n_any": 0,
   "n_untyped": 1,
-  "coverage": 90.9090909090909,
-  "strict_coverage": 90.9090909090909,
+  "coverage": 87.5,
+  "strict_coverage": 87.5,
   "n_functions": 0,
   "n_methods": 0,
   "n_function_params": 0,
   "n_method_params": 0,
   "n_classes": 5,
   "n_attrs": 0,
-  "n_properties": 9,
+  "n_properties": 6,
   "n_type_ignores": 0
 }

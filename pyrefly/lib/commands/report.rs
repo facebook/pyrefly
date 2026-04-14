@@ -22,6 +22,7 @@ use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::ClassDefIndex;
 use pyrefly_types::types::Type;
 use pyrefly_util::forgetter::Forgetter;
@@ -173,7 +174,9 @@ struct Function {
     is_return_type_known: bool,
     parameters: Vec<Parameter>,
     is_type_known: bool,
-    is_property: bool,
+    /// Property role if this function is a property accessor, `None` otherwise.
+    #[serde(skip)]
+    property_role: Option<PropertyRole>,
     /// Number of non-self/cls, non-implicit params (for entity counting).
     n_params: usize,
     slots: SlotCounts,
@@ -827,13 +830,27 @@ impl ReportArgs {
                 let all_params = Self::extract_parameters(&fun.def.parameters);
                 let mut all_params_type_known = true;
 
+                let property_role = answers
+                    .get_type_at(idx)
+                    .and_then(|t| t.property_metadata().map(|m| m.role.clone()));
+                let is_property_deleter =
+                    matches!(property_role, Some(PropertyRole::DeleterDecorator));
+
                 // Compute slot counts: return + non-self/cls params.
                 // Some dunder methods have implicit return types that don't need
                 // annotation (__init__ → None, __bool__ → bool, __len__ → int, etc.).
                 // These are always excluded from coverage, even when explicitly annotated.
-                let has_implicit_return = fun.class_key.is_some()
-                    && Self::is_implicit_dunder_return(fun.def.name.as_str());
-                let return_slot = if has_implicit_return {
+                //
+                // Property setters/deleters have a trivial `-> None` return that
+                // is not a meaningful typable, so skip it like implicit returns.
+                let skip_return = is_property_deleter
+                    || matches!(
+                        property_role,
+                        Some(PropertyRole::Setter | PropertyRole::SetterDecorator)
+                    )
+                    || (fun.class_key.is_some()
+                        && Self::is_implicit_dunder_return(fun.def.name.as_str()));
+                let return_slot = if skip_return {
                     SlotCounts::default()
                 } else {
                     Self::classify_slot(return_annotation.is_some(), is_return_type_known)
@@ -876,7 +893,8 @@ impl ReportArgs {
                         all_params_type_known = false;
                     }
 
-                    if !is_self && !is_implicit_param {
+                    // Deleters have 0 typables; skip parameter slots entirely.
+                    if !is_self && !is_implicit_param && !is_property_deleter {
                         let param_slot =
                             Self::classify_slot(param_annotation.is_some(), is_param_type_known);
                         func_slots = func_slots.merge(param_slot);
@@ -898,9 +916,6 @@ impl ReportArgs {
                         .all(|(i, p)| (i == 0 && implicit_receiver) || p.annotation.is_some());
                 let is_type_known =
                     is_fully_annotated && is_return_type_known && all_params_type_known;
-                let is_property = answers
-                    .get_type_at(idx)
-                    .is_some_and(|t| t.property_metadata().is_some());
 
                 functions.push(Function {
                     name: func_name,
@@ -908,7 +923,7 @@ impl ReportArgs {
                     is_return_type_known,
                     parameters,
                     is_type_known,
-                    is_property,
+                    property_role,
                     n_params,
                     slots: func_slots,
                     location,
@@ -947,7 +962,7 @@ impl ReportArgs {
                         is_return_type_known: target_func.is_return_type_known,
                         parameters: target_func.parameters.clone(),
                         is_type_known: target_func.is_type_known,
-                        is_property: target_func.is_property,
+                        property_role: target_func.property_role.clone(),
                         n_params: target_func.n_params,
                     });
                 }
@@ -1365,22 +1380,33 @@ impl ReportArgs {
             });
         }
 
+        // Merge same-name property accessors into a single report entry.
+        let mut property_map: Vec<(String, SlotCounts, Location)> = Vec::new();
         for func in functions {
-            total_slots = total_slots.merge(func.slots);
-            names.push(func.name.clone());
-            if func.is_property {
-                symbol_reports.push(SymbolReport::Property {
-                    name: func.name.clone(),
-                    slots: func.slots,
-                    location: func.location,
-                });
+            if func.property_role.is_some() {
+                if let Some(entry) = property_map.iter_mut().find(|(n, _, _)| *n == func.name) {
+                    entry.1 = entry.1.merge(func.slots);
+                } else {
+                    property_map.push((func.name.clone(), func.slots, func.location));
+                }
             } else {
+                total_slots = total_slots.merge(func.slots);
+                names.push(func.name.clone());
                 symbol_reports.push(SymbolReport::Function {
                     name: func.name.clone(),
                     slots: func.slots,
                     location: func.location,
                 });
             }
+        }
+        for (name, slots, location) in &property_map {
+            total_slots = total_slots.merge(*slots);
+            names.push(name.clone());
+            symbol_reports.push(SymbolReport::Property {
+                name: name.clone(),
+                slots: *slots,
+                location: *location,
+            });
         }
 
         for cls in classes {
@@ -1407,9 +1433,9 @@ impl ReportArgs {
         let mut n_classes = 0usize;
         let mut n_attrs = 0usize;
         let mut n_properties = 0usize;
-        // Count functions/methods using the Function list directly so we
-        // can use n_params (accurate even for implicit-return dunders).
-        for func in functions.iter().filter(|f| !f.is_property) {
+        // Count functions/methods using the `Function` list directly so we
+        // can use `n_params` (accurate even for implicit-return dunders).
+        for func in functions.iter().filter(|f| f.property_role.is_none()) {
             if Self::is_method(&func.name, &module_prefix) {
                 n_methods += 1;
                 n_method_params += func.n_params;
@@ -2021,7 +2047,7 @@ mod tests {
                     })
                     .collect(),
                 is_type_known: false, // Not relevant for annotation-only tests
-                is_property: false,
+                property_role: None,
                 n_params: 0,
                 slots: SlotCounts::default(),
                 location: Location { line: 1, column: 1 },
@@ -2125,9 +2151,7 @@ mod tests {
     // These tests capture pyrefly's CURRENT behaviour for scenarios from typestats.
     // Snapshots may need updating when later diffs improve property/overload/schema handling.
 
-    /// @property getter/setter/deleter reporting.
-    /// Current: each accessor is a separate Function with is_property=true.
-    /// Typestats: single PropertyReport with fget/fset/fdel slot counts.
+    /// @property getter/setter/deleter merged into one report per property.
     #[test]
     fn test_report_property_basic() {
         let report = build_module_report_for_test("property_basic.py");
