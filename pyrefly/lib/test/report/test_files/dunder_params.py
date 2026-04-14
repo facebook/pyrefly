@@ -7,7 +7,7 @@
 # __exit__ params (exc_type, exc_val, exc_tb) are protocol-fixed → 0 slots.
 # __getattr__ param 0 (name: str) is implicit → 0 slots.
 # __setattr__ param 0 (name: str) is implicit, param 1 (value) is not.
-# Explicit annotations on implicit params are counted normally.
+# Explicit annotations on implicit slots are still excluded.
 
 
 class WithExit:

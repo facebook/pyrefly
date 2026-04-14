@@ -820,10 +820,8 @@ impl ReportArgs {
                 // Compute slot counts: return + non-self/cls params.
                 // Some dunder methods have implicit return types that don't need
                 // annotation (__init__ → None, __bool__ → bool, __len__ → int, etc.).
-                // Only treat as implicit when the annotation is ABSENT; explicit
-                // annotations (e.g. `-> bool` on `__bool__`) are counted normally.
+                // These are always excluded from coverage, even when explicitly annotated.
                 let has_implicit_return = fun.class_key.is_some()
-                    && return_annotation.is_none()
                     && Self::is_implicit_dunder_return(fun.def.name.as_str());
                 let return_slot = if has_implicit_return {
                     SlotCounts::default()
@@ -857,10 +855,9 @@ impl ReportArgs {
                     };
 
                     // Check if this non-self param has an implicit type for a dunder method.
-                    // Like implicit returns, only applies when annotation is absent.
+                    // These are always excluded from coverage, even when explicitly annotated.
                     let is_implicit_param = !Self::is_self_or_cls(i, param_name)
                         && fun.class_key.is_some()
-                        && param_annotation.is_none()
                         && Self::is_implicit_dunder_param(
                             fun.def.name.as_str(),
                             i.saturating_sub(1),
@@ -1033,7 +1030,6 @@ impl ReportArgs {
     /// Dunder method parameters whose types are fully determined by the
     /// protocol (e.g. `__exit__`'s exception triple, `__getattr__`'s `name: str`).
     /// Positions are 0-indexed after excluding self/cls.
-    /// Only applies when the annotation is absent — explicit annotations count normally.
     fn is_implicit_dunder_param(name: &str, non_self_param_pos: usize) -> bool {
         match name {
             // __exit__/__aexit__(self, exc_type, exc_val, exc_tb)
