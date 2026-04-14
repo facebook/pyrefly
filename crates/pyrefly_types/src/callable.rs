@@ -74,6 +74,22 @@ impl Callable {
             _ => false,
         }
     }
+
+    /// Returns true if this callable carries no real type information: all
+    /// parameters and the return type are `Any(Implicit)` (i.e. Unknown).
+    pub fn is_fully_unknown(&self) -> bool {
+        if !matches!(&self.ret, Type::Any(AnyStyle::Implicit)) {
+            return false;
+        }
+        match &self.params {
+            Params::List(params) => params
+                .items()
+                .iter()
+                .all(|p| matches!(p.as_type(), Type::Any(AnyStyle::Implicit))),
+            Params::Ellipsis => true,
+            _ => false,
+        }
+    }
 }
 
 impl Display for Callable {

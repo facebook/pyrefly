@@ -20,6 +20,7 @@ use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::types::AnyStyle;
 use pyrefly_types::types::BoundMethod;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::TParams;
@@ -1441,6 +1442,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::Function(f) => f.signature.is_args_kwargs_wrapper(),
                     Type::Callable(c) => c.is_args_kwargs_wrapper(),
                     Type::ClassType(cls) => cls.has_qname("functools", "_Wrapped"),
+                    _ => false,
+                }) =>
+            {
+                original_decoratee.clone()
+            }
+            // If the decorator's return type is a union where every member is
+            // fully unknown (either Unknown itself or a callable with all-Unknown
+            // params and return), the decorator is completely unannotated and its
+            // return carries no useful type information. Preserve the original
+            // function signature rather than replacing it with a useless union.
+            Type::Union(ref u)
+                if u.members.iter().all(|m| match m {
+                    Type::Function(f) => f.signature.is_fully_unknown(),
+                    Type::Callable(c) => c.is_fully_unknown(),
+                    Type::Any(AnyStyle::Implicit) => true,
                     _ => false,
                 }) =>
             {
