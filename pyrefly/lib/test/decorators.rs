@@ -713,6 +713,43 @@ assert_type(r2, int)
     "#,
 );
 
+testcase!(
+    test_dual_use_decorator_explicit_any,
+    r#"
+import functools  # noqa: E402
+from typing import Any
+
+
+def add_dispatch_support(target=None, iterable_parameters=None):  # type: ignore[no-untyped-def]
+    """Decorator with optional args. Can be used as @deco or @deco()."""
+
+    def decorator(dispatch_target):  # type: ignore[no-untyped-def]
+        @functools.wraps(dispatch_target)
+        def op_dispatch_handler(*args: Any, **kwargs: Any) -> Any:
+            return dispatch_target(*args, **kwargs)
+
+        return op_dispatch_handler
+
+    if target is not None:
+        return decorator(target)
+    return decorator
+
+
+@add_dispatch_support
+def matmul(
+    a: list[list[float]],
+    b: list[list[float]],
+    name: str | None = None,
+) -> list[list[float]]:
+    return a
+
+
+result = matmul(
+    [[1.0]], [[2.0]], name="test"
+)  # FP: Unexpected keyword argument `name` in function `decorator`
+    "#,
+);
+
 fn env_numba() -> TestEnv {
     let mut env = TestEnv::one_with_path(
         "numba",

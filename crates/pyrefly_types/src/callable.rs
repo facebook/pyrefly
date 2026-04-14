@@ -51,12 +51,12 @@ pub struct Callable {
 
 impl Callable {
     /// Returns true if this callable has only *args and **kwargs parameters
-    /// (plus an optional unannotated self/cls at index 0) and no return type
-    /// annotation. Used as a heuristic in decorator type resolution: when a
-    /// decorator returns a union containing such a wrapper, the decorator is
-    /// treated as preserving the original function's signature.
+    /// (plus an optional unannotated self/cls at index 0) and an `Any` return
+    /// type (implicit or explicit). Used as a heuristic in decorator type
+    /// resolution: when a decorator returns a union containing such a wrapper,
+    /// the decorator is treated as preserving the original function's signature.
     pub fn is_args_kwargs_wrapper(&self) -> bool {
-        if !matches!(&self.ret, Type::Any(AnyStyle::Implicit)) {
+        if !matches!(&self.ret, Type::Any(_)) {
             return false;
         }
         match &self.params {
