@@ -505,9 +505,7 @@ impl ReportArgs {
                     let is_type_known = annotation_text.is_some()
                         && answers
                             .get_idx(*annot_idx)
-                            .and_then(|awt| {
-                                awt.annotation.ty.as_ref().map(Self::is_type_fully_known)
-                            })
+                            .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
                             .unwrap_or(false);
                     let slots = Self::classify_slot(annotation_text.is_some(), is_type_known);
                     variables.push(Variable {
@@ -699,9 +697,9 @@ impl ReportArgs {
             let is_type_known = annotation_text.is_some()
                 && annotation_idx
                     .and_then(|idx| {
-                        answers.get_idx(idx).and_then(|awt| {
-                            awt.annotation.ty.as_ref().map(Self::is_type_fully_known)
-                        })
+                        answers
+                            .get_idx(idx)
+                            .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
                     })
                     .unwrap_or(false);
             let slots = Self::classify_slot(annotation_text.is_some(), is_type_known);
@@ -811,7 +809,7 @@ impl ReportArgs {
                 let is_return_type_known = return_annotation.is_some()
                     && answers
                         .get_type_at(return_idx)
-                        .is_some_and(|t| Self::is_type_fully_known(&t));
+                        .is_some_and(|t| Self::is_type_known(&t));
 
                 let mut parameters = Vec::new();
                 let all_params = Self::extract_parameters(&fun.def.parameters);
@@ -848,9 +846,7 @@ impl ReportArgs {
                         let annot_idx = bindings.key_to_idx(&annot_key);
                         answers
                             .get_idx(annot_idx)
-                            .and_then(|awt| {
-                                awt.annotation.ty.as_ref().map(Self::is_type_fully_known)
-                            })
+                            .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
                             .unwrap_or(false)
                     } else {
                         false
@@ -985,9 +981,9 @@ impl ReportArgs {
         true
     }
 
-    /// Returns true if the type contains no `Any` anywhere in its structure.
-    fn is_type_fully_known(ty: &Type) -> bool {
-        !ty.any(|t| t.is_any())
+    /// Only a bare `Any` counts as unknown; container types like `list[Any]` are known.
+    fn is_type_known(ty: &Type) -> bool {
+        !ty.is_any()
     }
 
     /// Dunder methods whose return type is fully determined by the protocol
@@ -2211,5 +2207,12 @@ mod tests {
     fn test_report_inherited_attrs() {
         let report = build_module_report_for_test("inherited_attrs.py");
         compare_snapshot("inherited_attrs.expected.json", &report);
+    }
+
+    /// `list[Any]` etc. count as typed; only bare `Any` is "any".
+    #[test]
+    fn test_report_partial_any() {
+        let report = build_module_report_for_test("partial_any.py");
+        compare_snapshot("partial_any.expected.json", &report);
     }
 }
