@@ -5,12 +5,14 @@
     "test.WithGetattr.__getattr__",
     "test.WithSetattr.__setattr__",
     "test.AnnotatedExit.__exit__",
+    "test.WithNewRenamed.__new__",
     "test.AnnotatedExit",
     "test.WithExit",
     "test.WithGetattr",
+    "test.WithNewRenamed",
     "test.WithSetattr"
   ],
-  "line_count": 31,
+  "line_count": 36,
   "symbol_reports": [
     {
       "kind": "function",
@@ -61,6 +63,18 @@
       }
     },
     {
+      "kind": "function",
+      "name": "test.WithNewRenamed.__new__",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 34,
+        "column": 5
+      }
+    },
+    {
       "kind": "class",
       "name": "test.AnnotatedExit",
       "n_typable": 0,
@@ -98,6 +112,18 @@
     },
     {
       "kind": "class",
+      "name": "test.WithNewRenamed",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 33,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
       "name": "test.WithSetattr",
       "n_typable": 0,
       "n_typed": 0,
@@ -110,17 +136,17 @@
     }
   ],
   "type_ignores": [],
-  "n_typable": 7,
-  "n_typed": 4,
+  "n_typable": 9,
+  "n_typed": 6,
   "n_any": 0,
   "n_untyped": 3,
-  "coverage": 57.14285714285714,
-  "strict_coverage": 57.14285714285714,
+  "coverage": 66.66666666666666,
+  "strict_coverage": 66.66666666666666,
   "n_functions": 0,
-  "n_methods": 4,
+  "n_methods": 5,
   "n_function_params": 0,
-  "n_method_params": 4,
-  "n_classes": 4,
+  "n_method_params": 5,
+  "n_classes": 5,
   "n_attrs": 0,
   "n_properties": 0,
   "n_type_ignores": 0

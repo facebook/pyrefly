@@ -28,3 +28,8 @@ class WithSetattr:
 class AnnotatedExit:
     def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> bool:
         return False
+
+
+class WithNewRenamed:
+    def __new__(_cls, x: int) -> "WithNewRenamed":
+        return super().__new__(_cls)
