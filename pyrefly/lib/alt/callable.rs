@@ -24,6 +24,7 @@ use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
@@ -285,6 +286,11 @@ impl<'a> CallArg<'a> {
                         }
                     }
                 }
+                let bounded_len = if let TypeOrExpr::Expr(Expr::Subscript(subscript)) = e {
+                    Self::bounded_star_slice_len(subscript, solver, arg_errors)
+                } else {
+                    None
+                };
                 let ty = e.infer(solver, arg_errors);
                 let iterables = solver.iterate(&ty, *_range, arg_errors, None);
                 // If we have a union of iterables, use a fixed length only if every iterable is
@@ -310,12 +316,42 @@ impl<'a> CallArg<'a> {
                     }
                     let tys = fixed_tys.into_map(|tys| solver.unions(tys));
                     CallArgPreEval::Fixed(tys, 0)
+                } else if let Some(max_len) = bounded_len {
+                    CallArgPreEval::Bounded(solver.get_produced_type(iterables), 0, max_len)
                 } else {
                     let ty = solver.get_produced_type(iterables);
                     CallArgPreEval::Star(ty, false)
                 }
             }
         }
+    }
+
+    /// Some simple slices have a statically known upper bound on how many values
+    /// they can contribute when star-unpacked.
+    fn bounded_star_slice_len<Ans: LookupAnswer>(
+        subscript: &ExprSubscript,
+        solver: &AnswersSolver<Ans>,
+        arg_errors: &ErrorCollector,
+    ) -> Option<usize> {
+        let Expr::Slice(slice) = &*subscript.slice else {
+            return None;
+        };
+        if slice.step.is_some() {
+            return None;
+        }
+        let parse_literal = |expr: &Option<Box<Expr>>| -> Option<i64> {
+            let expr = expr.as_ref()?;
+            match solver.expr_infer(expr, arg_errors) {
+                Type::Literal(lit) => lit.value.as_index_i64(),
+                _ => None,
+            }
+        };
+        let lower = parse_literal(&slice.lower)?;
+        let upper = parse_literal(&slice.upper)?;
+        if (lower < 0 && upper >= 0) || (lower >= 0 && upper < 0) {
+            return None;
+        }
+        usize::try_from((upper - lower).max(0)).ok()
     }
 }
 
@@ -326,6 +362,7 @@ enum CallArgPreEval<'a> {
     Type(&'a Type, bool),
     Expr(&'a Expr, bool),
     Star(Type, bool),
+    Bounded(Type, usize, usize),
     Fixed(Vec<Type>, usize),
 }
 
@@ -333,12 +370,17 @@ impl CallArgPreEval<'_> {
     fn step(&self) -> bool {
         match self {
             Self::Type(_, done) | Self::Expr(_, done) | Self::Star(_, done) => !*done,
+            Self::Bounded(_, consumed, max_len) => *consumed < *max_len,
             Self::Fixed(tys, i) => *i < tys.len(),
         }
     }
 
     fn is_star(&self) -> bool {
-        matches!(self, Self::Star(..))
+        matches!(self, Self::Star(..) | Self::Bounded(..))
+    }
+
+    fn is_bounded_star(&self) -> bool {
+        matches!(self, Self::Bounded(..))
     }
 
     /// Check the argument against a parameter hint and return the inferred argument type.
@@ -381,6 +423,11 @@ impl CallArgPreEval<'_> {
                 solver.check_type(ty, hint, range, call_errors, tcc);
                 Some(ty.clone())
             }
+            Self::Bounded(ty, consumed, max_len) => {
+                *consumed = if vararg { *max_len } else { *consumed + 1 };
+                solver.check_type(ty, hint, range, call_errors, tcc);
+                Some(ty.clone())
+            }
             Self::Fixed(tys, i) => {
                 let arg_ty = tys[*i].clone();
                 solver.check_type(&arg_ty, hint, range, call_errors, tcc);
@@ -397,6 +444,9 @@ impl CallArgPreEval<'_> {
             Self::Type(_, done) | Self::Expr(_, done) | Self::Star(_, done) => {
                 *done = true;
             }
+            Self::Bounded(_, consumed, max_len) => {
+                *consumed = *max_len;
+            }
             Self::Fixed(_, i) => {
                 *i += 1;
             }
@@ -408,6 +458,9 @@ impl CallArgPreEval<'_> {
         match self {
             Self::Type(_, done) | Self::Expr(_, done) | Self::Star(_, done) => {
                 *done = true;
+            }
+            Self::Bounded(_, consumed, max_len) => {
+                *consumed = *max_len;
             }
             Self::Fixed(tys, i) => {
                 *i = tys.len();
@@ -616,6 +669,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut unpacked_vararg_matched_args: Vec<CallArgPreEval<'_>> = Vec::new();
         let mut variadic_name: Option<&Name> = None;
         let mut variadic_collected: Vec<Type> = Vec::new();
+        let positional_args = self_arg.iter().chain(args.iter()).collect::<Vec<_>>();
 
         // Resolve a deferred ParamSpec Var into additional parameters.
         // Returns `Err(q)` when the Var resolved to a quantified ParamSpec `q`
@@ -647,8 +701,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             Ok(param_list_owner.push(ps).items().iter().rev().collect())
         };
-        for arg in self_arg.iter().chain(args.iter()) {
+        let min_remaining_positional_args = |args: &[&CallArg<'_>]| {
+            args.iter()
+                .map(|arg| match arg {
+                    CallArg::Arg(_) => 1,
+                    CallArg::Star(TypeOrExpr::Expr(expr), _) => match expr {
+                        Expr::List(list_expr) => list_expr.elts.len(),
+                        Expr::Set(set_expr) => set_expr.elts.len(),
+                        Expr::Tuple(tuple_expr) => tuple_expr.elts.len(),
+                        _ => 0,
+                    },
+                    CallArg::Star(..) => 0,
+                })
+                .sum::<usize>()
+        };
+        for (arg_idx, arg) in positional_args.iter().enumerate() {
+            let arg = *arg;
             let mut arg_pre = arg.pre_eval(self, arg_errors);
+            let remaining_positional_args =
+                min_remaining_positional_args(&positional_args[arg_idx + 1..]);
             while arg_pre.step() {
                 let param = if let Some(p) = rparams.last() {
                     PosParam::new(p)
@@ -693,6 +764,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             && kind == PosParamKind::Positional
                             && name.is_some_and(|n| keyword_arg_names.contains(n))
                         {
+                            arg_pre.mark_done();
+                            break;
+                        }
+                        if arg_pre.is_bounded_star() && rparams.len() <= remaining_positional_args {
                             arg_pre.mark_done();
                             break;
                         }
@@ -826,7 +901,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             suffix.push(tys[idx].clone());
                         }
                     }
-                    CallArgPreEval::Star(ty, _) => {
+                    CallArgPreEval::Star(ty, _) | CallArgPreEval::Bounded(ty, ..) => {
                         if !middle.is_empty() {
                             middle.extend(suffix);
                             suffix = Vec::new();
