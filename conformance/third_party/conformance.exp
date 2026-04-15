@@ -8918,17 +8918,6 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Implementation signature `(cls: type[Self@C], *args: int | str) -> int | str` does not accept all arguments that overload signature `(self: Self@C, x: str, /) -> str` accepts",
-      "description": "Implementation signature `(cls: type[Self@C], *args: int | str) -> int | str` does not accept all arguments that overload signature `(self: Self@C, x: str, /) -> str` accepts",
-      "line": 90,
-      "name": "inconsistent-overload",
-      "severity": "error",
-      "stop_column": 14,
-      "stop_line": 90
-    },
-    {
-      "code": -2,
-      "column": 9,
       "concise_description": "`@final` should only be applied to the implementation of an overloaded function.",
       "description": "`@final` should only be applied to the implementation of an overloaded function.",
       "line": 124,

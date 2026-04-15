@@ -1784,14 +1784,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(Arc::new(all_tparams))
             }
         };
+        let has_self_param = def.defining_cls().is_some() && !def.metadata().flags.is_staticmethod;
         let sig_for_input_check = |sig: &Callable| {
             let mut sig = sig.clone();
             // Set the return type to `Any` so that we check just the input signature.
             sig.ret = self.heap.mk_any_implicit();
+            // Skip self/cls to avoid false positive overload errors on narrowed self types.
+            if has_self_param {
+                let mut owner = Owner::new();
+                if let Some((_, rest)) = sig.split_first_param(&mut owner) {
+                    sig = rest;
+                }
+            }
             sig
         };
         // Collect param name -> default map from implementation so we can check for
         // inconsistencies between the default and the param type in overloads.
+        // This uses the original parameter lists instead of `sig_for_input_check`:
+        // self/cls never has a default, so stripping the receiver is unnecessary here.
         let mut defaults = match &impl_sig.params {
             Params::List(params) => params
                 .items()

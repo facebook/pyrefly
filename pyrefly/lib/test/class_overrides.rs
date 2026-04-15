@@ -1307,16 +1307,16 @@ class MyString(str):
 );
 
 testcase!(
-    bug = "We raise 4 inconsistent-overload errors where pyright raises 1. We should investigate this.",
+    bug = "We raise 2 inconsistent-overload errors where pyright raises 1. We should investigate this.",
     test_override_all_parent_overloads_inapplicable,
     r#"
 from typing import overload, LiteralString
 
 class Base(str):
     @overload
-    def method(self: LiteralString) -> LiteralString: ...  # E: Implementation signature `(self: Self@Base, x: Unknown | None = None) -> Self@Base` does not accept all arguments that overload signature `(self: LiteralString) -> LiteralString` accepts  # E: Overload return type `LiteralString` is not assignable to implementation return type `Self@Base`
+    def method(self: LiteralString) -> LiteralString: ...  # E: Overload return type `LiteralString` is not assignable to implementation return type `Self@Base`
     @overload
-    def method(self: LiteralString, x: int) -> LiteralString: ...  # E: Implementation signature `(self: Self@Base, x: Unknown | None = None) -> Self@Base` does not accept all arguments that overload signature `(self: LiteralString, x: int) -> LiteralString` accepts  # E: Overload return type `LiteralString` is not assignable to implementation return type `Self@Base`
+    def method(self: LiteralString, x: int) -> LiteralString: ...  # E: Overload return type `LiteralString` is not assignable to implementation return type `Self@Base`
     def method(self, x=None):
         return self
 
@@ -1344,6 +1344,32 @@ class Narrow(Parent):
 
 class Child(Parent):
     def method(self, x: int) -> int:
+        return x
+    "#,
+);
+
+testcase!(
+    test_override_generic_overload_with_inapplicable_cls,
+    r#"
+from typing import overload
+
+class Parent[T]:
+    @classmethod
+    @overload
+    def make(cls: type["Narrow"], x: T) -> T: ...
+    @classmethod
+    @overload
+    def make(cls, x: int) -> int: ...
+    @classmethod
+    def make(cls, x):
+        return x
+
+class Narrow(Parent[int]):
+    pass
+
+class Child(Parent[int]):
+    @classmethod
+    def make(cls, x: int) -> int:
         return x
     "#,
 );

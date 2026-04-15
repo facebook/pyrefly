@@ -668,9 +668,9 @@ class E(A):
 
 class C[T]:
     @overload
-    def __init__(self: A, x: Literal[True]) -> None: ...  # E: `__init__` method self type `A` is not a superclass of class `C`  # E: Implementation signature `(self: Self@C, x: Unknown) -> None` does not accept all arguments that overload signature `(self: A, x: Literal[True]) -> None` accepts
+    def __init__(self: A, x: Literal[True]) -> None: ...  # E: `__init__` method self type `A` is not a superclass of class `C`
     @overload
-    def __init__(self: B, x: Literal[False]) -> None: ...  # E: `__init__` method self type `B` is not a superclass of class `C`  # E: Implementation signature `(self: Self@C, x: Unknown) -> None` does not accept all arguments that overload signature `(self: B, x: Literal[False]) -> None` accepts
+    def __init__(self: B, x: Literal[False]) -> None: ...  # E: `__init__` method self type `B` is not a superclass of class `C`
     def __init__(self, x):
         pass
 
