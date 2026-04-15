@@ -989,6 +989,28 @@ C("5")  # E: Argument `Literal['5']` is not assignable to parameter `x` with typ
     "#,
 );
 
+// Regression test for a problem in networkx: https://github.com/facebook/pyrefly/issues/3121
+testcase!(
+    bug = "Following the typing spec, we may assume unannotated `__new__` returns Self, which would avoid bad behaviors in some complex, dynamically-typed codebases",
+    test_return_type_inference_for_constructors,
+    r#"
+from typing import assert_type
+
+class A:
+    def __new__(cls, x: int | None = None):
+        if x is None:
+            return cls.__new__(cls, 5)
+        else:
+            return object.__new__(cls)
+    
+    def __init__(cls):
+        return "x"
+
+a = A()
+assert_type(a, A)  # E: assert_type(A | Unknown, A)
+"#,
+);
+
 testcase!(
     test_redundant_dict_constructor_call_ok,
     r#"
