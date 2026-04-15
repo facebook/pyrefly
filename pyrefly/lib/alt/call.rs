@@ -1000,6 +1000,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn check_unnecessary_type_conversion(
+        &self,
+        cls: &ClassType,
+        args: &[CallArg],
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let builtin_names = ["str", "int", "float"];
+        if !builtin_names
+            .iter()
+            .any(|name| cls.has_qname("builtins", name))
+        {
+            return;
+        }
+        if let Some(arg_ty) = self.first_arg_type(args, errors) {
+            let target_ty = self.heap.mk_class_type(cls.clone());
+            if !arg_ty.is_any() && arg_ty == target_ty {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::UnnecessaryTypeConversion),
+                    format!(
+                        "Unnecessary `{}()` call; argument is already of type `{}`",
+                        cls.name(),
+                        arg_ty.deterministic_printing(),
+                    ),
+                );
+            }
+        }
+    }
+
     fn call_infer_with_callee_range(
         &self,
         call_target: CallTarget,
@@ -1092,6 +1123,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 };
+                self.check_unnecessary_type_conversion(&cls, args, arguments_range, errors);
                 let constructed_type = self.construct_class(
                     cls,
                     constructor_kind,
