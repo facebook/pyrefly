@@ -78,8 +78,11 @@ use crate::types::annotation::Qualifier;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::Param;
+use crate::types::callable::PropertyMetadata;
+use crate::types::callable::PropertyRole;
 use crate::types::callable::Required;
 use crate::types::class::Class;
+use crate::types::class::ClassKind;
 use crate::types::class::ClassType;
 use crate::types::display::LspDisplayMode;
 use crate::types::display::TypeDisplayContext;
@@ -93,6 +96,7 @@ use crate::types::typed_dict::TypedDictField;
 use crate::types::types::AnyStyle;
 use crate::types::types::BoundMethod;
 use crate::types::types::BoundMethodType;
+use crate::types::types::CalleeKind;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
 use crate::types::types::Overload;
@@ -2138,6 +2142,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             range,
             errors,
         )
+        .or_else(|| self.get_property_class_field_type(class, name, field_definition))
         .or_else(|| self.get_pydantic_root_model_class_field_type(class, name))
         .or_else(|| {
             let initial_value_expr = match field_definition {
@@ -2152,6 +2157,119 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             self.get_django_field_type(ty, class, Some(name), initial_value_expr)
         })
+    }
+
+    fn get_property_class_field_type(
+        &self,
+        class: &Class,
+        name: &Name,
+        field_definition: &ClassFieldDefinition,
+    ) -> Option<Type> {
+        let ClassFieldDefinition::AssignedInBody { value, .. } = field_definition else {
+            return None;
+        };
+        let ExprOrBinding::Expr(expr) = value.as_ref() else {
+            return None;
+        };
+        let call = expr.as_call_expr()?;
+        let callee_errors = self.error_collector();
+        let callee_ty = self.expr_infer(&call.func, &callee_errors);
+        if !matches!(
+            callee_ty.callee_kind(),
+            Some(CalleeKind::Class(ClassKind::Property(_)))
+        ) {
+            return None;
+        }
+
+        let getter = self.property_constructor_arg(call, 0, "fget")?;
+        let mut getter = self.property_constructor_callable(class, name, getter)?;
+        let setter = self
+            .property_constructor_arg(call, 1, "fset")
+            .and_then(|setter| self.property_constructor_callable(class, name, setter));
+        let has_deleter = self
+            .property_constructor_arg(call, 2, "fdel")
+            .is_some_and(|deleter| !matches!(deleter, Type::None));
+
+        let getter_without_property = getter.without_property_metadata();
+        if let Some(mut setter) = setter {
+            let setter_without_property = setter.without_property_metadata();
+            setter.transform_toplevel_func_metadata(|meta| {
+                meta.flags.property_metadata = Some(PropertyMetadata {
+                    role: PropertyRole::Setter,
+                    getter: getter_without_property.clone(),
+                    setter: Some(setter_without_property.clone()),
+                    has_deleter,
+                });
+            });
+            Some(setter)
+        } else {
+            getter.transform_toplevel_func_metadata(|meta| {
+                meta.flags.property_metadata = Some(PropertyMetadata {
+                    role: PropertyRole::Getter,
+                    getter: getter_without_property.clone(),
+                    setter: None,
+                    has_deleter,
+                });
+            });
+            Some(getter)
+        }
+    }
+
+    fn property_constructor_arg(
+        &self,
+        call: &ExprCall,
+        position: usize,
+        keyword: &str,
+    ) -> Option<Type> {
+        let arg = call.arguments.args.get(position).or_else(|| {
+            call.arguments.keywords.iter().find_map(|kw| {
+                (kw.arg
+                    .as_ref()
+                    .is_some_and(|name| name.id.as_str() == keyword))
+                .then_some(&kw.value)
+            })
+        })?;
+        let arg_errors = self.error_collector();
+        Some(self.expr_infer(arg, &arg_errors))
+    }
+
+    fn property_constructor_callable(&self, class: &Class, name: &Name, ty: Type) -> Option<Type> {
+        match ty {
+            Type::Function(_)
+            | Type::Overload(_)
+            | Type::Forall(box Forall {
+                body: Forallable::Function(_),
+                ..
+            }) => Some(ty),
+            Type::Callable(callable) => Some(self.heap.mk_function(Function {
+                signature: *callable,
+                metadata: self.synthetic_property_function_metadata(class, name),
+            })),
+            Type::Forall(box Forall {
+                tparams,
+                body: Forallable::Callable(callable),
+            }) => Some(
+                Forallable::Function(Function {
+                    signature: callable,
+                    metadata: self.synthetic_property_function_metadata(class, name),
+                })
+                .forall(tparams),
+            ),
+            _ => None,
+        }
+    }
+
+    fn synthetic_property_function_metadata(&self, class: &Class, name: &Name) -> FuncMetadata {
+        FuncMetadata {
+            kind: FunctionKind::Def(Arc::new(FuncId {
+                module: self.module().clone(),
+                cls: Some(class.dupe()),
+                name: name.clone(),
+                def_index: None,
+                outer_funcs: None,
+            })),
+            flags: FuncFlags::default(),
+        }
     }
 
     fn determine_read_only_reason(
