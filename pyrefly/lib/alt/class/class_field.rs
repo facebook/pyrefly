@@ -4089,7 +4089,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 Instance::of_class(cls)
             };
-            Arc::unwrap_or_clone(new_member.value).as_raw_special_method_type(self.heap, &instance)
+            let assume_self_return = new_member.value.is_function_without_return_annotation();
+            let mut new_ty = Arc::unwrap_or_clone(new_member.value)
+                .as_raw_special_method_type(self.heap, &instance)?;
+            if assume_self_return {
+                // Per the constructor typing spec, unannotated `__new__` may be assumed to
+                // return `Self` for constructor analysis.
+                let ret = if preserve_self {
+                    self.heap.mk_self_type(cls.clone())
+                } else {
+                    self.heap.mk_class_type(cls.clone())
+                };
+                new_ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
+                    callable.ret = ret.clone();
+                });
+            }
+            Some(new_ty)
         }
     }
 
