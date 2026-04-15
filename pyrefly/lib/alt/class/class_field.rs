@@ -1817,22 +1817,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Identify whether this is a descriptor
         let mut descriptor = None;
-        // Descriptor semantics apply when:
-        // 1. The field is initialized in the class body (class-level attribute), or
-        // 2. The field is annotated with ClassVar (explicitly class-level, even without initialization), or
-        // 3. The field's type is special-case to always be treated like a descriptor.
-        let is_classvar = direct_annotation
-            .as_ref()
-            .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar));
+        // Descriptor semantics apply when the field is modeled as class-level:
+        // either by a class-body definition, or by `Magic` for stub/interface
+        // declarations where the runtime initializer is omitted. Some types are
+        // also always treated like descriptors.
         let is_special_descriptor_type = direct_annotation.as_ref().is_some_and(|annot| {
             annot
                 .ty
                 .as_ref()
                 .is_some_and(|ty| self.is_special_descriptor_type(ty))
         });
-        if matches!(initialization, ClassFieldInitialization::ClassBody(_))
-            || is_classvar
-            || is_special_descriptor_type
+        if matches!(
+            initialization,
+            ClassFieldInitialization::ClassBody(_) | ClassFieldInitialization::Magic
+        ) || is_special_descriptor_type
         {
             match &ty {
                 // TODO(stroxler): This works for simple descriptors. There are known gaps:
@@ -1910,7 +1908,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if ty.is_property_getter() || ty.is_property_setter_with_getter().is_some() {
             ClassField(ClassFieldInner::Property { ty, is_abstract }, is_inherited)
         } else if let Some(descriptor) = descriptor {
-            // Descriptors are always initialized in class body (or wouldn't trigger descriptor protocol)
             ClassField(
                 ClassFieldInner::Descriptor {
                     ty,
