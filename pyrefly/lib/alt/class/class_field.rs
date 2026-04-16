@@ -2260,16 +2260,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn synthetic_property_function_metadata(&self, class: &Class, name: &Name) -> FuncMetadata {
-        FuncMetadata {
-            kind: FunctionKind::Def(Arc::new(FuncId {
-                module: self.module().clone(),
-                cls: Some(class.dupe()),
-                name: name.clone(),
-                def_index: None,
-                outer_funcs: None,
-            })),
-            flags: FuncFlags::default(),
-        }
+        FuncMetadata::def(self.module().dupe(), class.dupe(), name.clone(), None)
     }
 
     fn determine_read_only_reason(
