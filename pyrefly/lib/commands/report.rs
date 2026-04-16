@@ -65,6 +65,9 @@ use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 
+/// `(major, minor)` version for the report JSON schema.
+const REPORT_SCHEMA_VERSION: (u32, u32) = (0, 1);
+
 /// Slot-level annotation counts for a symbol.
 ///
 /// A "slot" is a single annotation site: a function return type, a function
@@ -277,6 +280,8 @@ struct ReportSummary {
 
 #[derive(Debug, Serialize)]
 struct FullReport {
+    /// `"{major}.{minor}"` version for this report format.
+    schema_version: String,
     module_reports: Vec<ModuleReport>,
     summary: ReportSummary,
 }
@@ -1622,6 +1627,7 @@ impl ReportArgs {
 
         let summary = Self::calculate_summary(&module_reports);
         let full_report = FullReport {
+            schema_version: format!("{}.{}", REPORT_SCHEMA_VERSION.0, REPORT_SCHEMA_VERSION.1),
             module_reports,
             summary,
         };
@@ -2247,5 +2253,21 @@ mod tests {
     fn test_report_partial_any() {
         let report = build_module_report_for_test("partial_any.py");
         compare_snapshot("partial_any.expected.json", &report);
+    }
+
+    #[test]
+    fn test_full_report_has_schema_version() {
+        let report = build_module_report_for_test("functions.py");
+        let full = FullReport {
+            schema_version: format!("{}.{}", REPORT_SCHEMA_VERSION.0, REPORT_SCHEMA_VERSION.1),
+            module_reports: vec![report],
+            summary: ReportArgs::calculate_summary(&[]),
+        };
+        let json: serde_json::Value = serde_json::to_value(&full).unwrap();
+        let version = json["schema_version"].as_str().unwrap();
+        let parts: Vec<&str> = version.split('.').collect();
+        assert_eq!(parts.len(), 2, "schema_version must be \"major.minor\"");
+        assert!(parts[0].parse::<u32>().is_ok());
+        assert!(parts[1].parse::<u32>().is_ok());
     }
 }
