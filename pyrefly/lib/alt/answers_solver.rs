@@ -3033,45 +3033,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match self.is_subset_eq_with_reason(got, want) {
             Ok(()) => true,
             Err(error) => {
-                let tcc = tcc();
-                let msg = tcc.kind.format_error(
-                    &self.for_display(got.clone()),
-                    &self.for_display(want.clone()),
-                    errors.module().name(),
-                );
-                let mut msg_lines = vec1![msg];
+                let mut extra_lines = Vec::new();
                 if matches!(
-                    tcc.kind,
+                    tcc().kind,
                     TypeCheckKind::CallArgument(..)
                         | TypeCheckKind::CallVarArgs(..)
                         | TypeCheckKind::CallKwArgs(..)
                         | TypeCheckKind::CallUnpackKwArg(..)
                 ) && let Some(suggestion) = self.suggest_enum_member_for_value(want, got)
                 {
-                    msg_lines.push(format!("Did you mean `{suggestion}`?"));
+                    extra_lines.push(format!("Did you mean `{suggestion}`?"));
                 }
-                if let Some(subset_error_msg) = error.to_error_msg() {
-                    msg_lines.push(subset_error_msg);
-                }
-                let extra_annotations = tcc.annotations;
-                match tcc.context {
-                    Some(ctx) => {
-                        errors.add_with_annotations(
-                            loc,
-                            ErrorInfo::Context(&|| ctx.clone()),
-                            msg_lines,
-                            extra_annotations,
-                        );
-                    }
-                    None => {
-                        errors.add_with_annotations(
-                            loc,
-                            ErrorInfo::Kind(tcc.kind.as_error_kind()),
-                            msg_lines,
-                            extra_annotations,
-                        );
-                    }
-                }
+                self.solver().error_with_extra_lines(
+                    got,
+                    want,
+                    errors,
+                    loc,
+                    tcc,
+                    error,
+                    extra_lines,
+                );
                 false
             }
         }

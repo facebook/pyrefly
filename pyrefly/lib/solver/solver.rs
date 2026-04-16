@@ -1385,6 +1385,19 @@ impl Solver {
         tcc: &dyn Fn() -> TypeCheckContext,
         subset_error: SubsetError,
     ) {
+        self.error_with_extra_lines(got, want, errors, loc, tcc, subset_error, Vec::new());
+    }
+
+    pub fn error_with_extra_lines(
+        &self,
+        got: &Type,
+        want: &Type,
+        errors: &ErrorCollector,
+        loc: TextRange,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        subset_error: SubsetError,
+        extra_lines: Vec<String>,
+    ) {
         let tcc = tcc();
         let msg = tcc.kind.format_error(
             &self.for_display(got.clone()),
@@ -1392,6 +1405,9 @@ impl Solver {
             errors.module().name(),
         );
         let mut msg_lines = vec1![msg];
+        for line in extra_lines {
+            msg_lines.push(line);
+        }
         if let Some(subset_error_msg) = subset_error.to_error_msg() {
             msg_lines.push(subset_error_msg);
         }

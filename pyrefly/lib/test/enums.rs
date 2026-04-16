@@ -190,6 +190,21 @@ f("a")  # E: Argument `Literal['a']` is not assignable to parameter `t` with typ
 );
 
 testcase!(
+    test_str_enum_argument_suggestion_through_union,
+    r#"
+from enum import StrEnum
+
+class T(StrEnum):
+    A = "a"
+
+def f(t: T | None) -> None:
+    pass
+
+f("a")  # E: Argument `Literal['a']` is not assignable to parameter `t` with type `T | None` in function `f`\n  Did you mean `T.A`?
+"#,
+);
+
+testcase!(
     test_value_annotation,
     r#"
 from enum import Enum, member, auto

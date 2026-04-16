@@ -62,14 +62,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Union(box crate::types::types::Union { members, .. }) => {
                 let mut suggestion = None;
                 for member in members {
-                    let candidate = self.suggest_enum_member_for_value(member, got)?;
-                    if suggestion
-                        .as_ref()
-                        .is_some_and(|existing: &String| existing != &candidate)
-                    {
-                        return None;
+                    if let Some(candidate) = self.suggest_enum_member_for_value(member, got) {
+                        if suggestion
+                            .as_ref()
+                            .is_some_and(|existing: &String| existing != &candidate)
+                        {
+                            return None;
+                        }
+                        suggestion = Some(candidate);
                     }
-                    suggestion = Some(candidate);
                 }
                 suggestion
             }
@@ -94,14 +95,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn suggest_enum_member_for_class_value(&self, cls: &Class, got: &Type) -> Option<String> {
-        let enum_metadata = self.get_metadata_for_class(cls).enum_metadata()?.clone();
+        let is_django = self.get_metadata_for_class(cls).enum_metadata()?.is_django;
         let mut suggestion = None;
         for lit in self.get_enum_members(cls) {
             let Lit::Enum(lit_enum) = lit else {
                 unreachable!("enum members must be represented as enum literals");
             };
-            let value_ty =
-                self.enum_literal_to_value_type((*lit_enum).clone(), enum_metadata.is_django);
+            let value_ty = self.enum_literal_to_value_type((*lit_enum).clone(), is_django);
             if self.is_subset_eq(got, &value_ty) && self.is_subset_eq(&value_ty, got) {
                 let candidate = format!("{}.{}", lit_enum.class.name(), lit_enum.member);
                 if suggestion
