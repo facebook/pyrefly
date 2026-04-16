@@ -639,6 +639,7 @@ fn resolve_dunder_all(body: &[Stmt], module_info: &Module) -> Option<HashSet<Nam
         module_info.name(),
         module_info.path().is_init(),
         SysInfo::default(),
+        false,
     );
     if !matches!(defs.dunder_all.kind, DunderAllKind::Specified) {
         return None;
