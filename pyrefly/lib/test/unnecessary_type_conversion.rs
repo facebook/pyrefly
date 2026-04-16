@@ -65,6 +65,32 @@ def f(x: bytes) -> None:
 );
 
 testcase!(
+    test_bool_to_bool,
+    r#"
+def f(x: bool) -> None:
+    y = bool(x)  # E: Unnecessary `bool()` call; argument is already of type `bool`
+"#,
+);
+
+testcase!(
+    test_bool_to_bool_in_conditional,
+    r#"
+def f(x: bool) -> None:
+    if bool(x):  # E: Unnecessary `bool()` call; argument is already of type `bool`
+        pass
+"#,
+);
+
+testcase!(
+    test_literal_bool_ok,
+    r#"
+from typing import Literal
+def f(x: Literal[True]) -> None:
+    y = bool(x)  # OK - Literal[True] is not exactly bool
+"#,
+);
+
+testcase!(
     test_no_args_ok,
     r#"
 def f() -> None:
