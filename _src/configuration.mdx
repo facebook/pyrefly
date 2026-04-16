@@ -1056,8 +1056,11 @@ We currently allow the following config options to be overridden in a SubConfig:
 - `infer-return-types`
 - `ignore-errors-in-generated-code`
 
-All SubConfig overrides _replace_ the values appearing in the 'root' or top-level of the
-Pyrefly configuration.
+Most SubConfig overrides _replace_ the values appearing in the 'root' or top-level of the
+Pyrefly configuration. The exception is `errors`: a sub-config's error overrides are _merged_ with
+the root config's error overrides. The sub-config inherits error severities from the root for any
+error codes it doesn't explicitly set, and can override specific error codes on top of the root
+defaults.
 
 Any configs that change the list of files we're type checking, Python environment, or where we look
 for imports cannot be included in SubConfigs. Some other configs we also do not include because

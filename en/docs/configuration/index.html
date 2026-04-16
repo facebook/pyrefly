@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.2ccc2416.css">
-<script src="/assets/js/runtime~main.a30b3e16.js" defer="defer"></script>
-<script src="/assets/js/main.22542cd5.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.7c84ad08.js" defer="defer"></script>
+<script src="/assets/js/main.f6124241.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -939,8 +939,11 @@ that can apply to a given file when the <code>matches</code> glob pattern matche
 <li><code>infer-return-types</code></li>
 <li><code>ignore-errors-in-generated-code</code></li>
 </ul>
-<p>All SubConfig overrides <em>replace</em> the values appearing in the &#x27;root&#x27; or top-level of the
-Pyrefly configuration.</p>
+<p>Most SubConfig overrides <em>replace</em> the values appearing in the &#x27;root&#x27; or top-level of the
+Pyrefly configuration. The exception is <code>errors</code>: a sub-config&#x27;s error overrides are <em>merged</em> with
+the root config&#x27;s error overrides. The sub-config inherits error severities from the root for any
+error codes it doesn&#x27;t explicitly set, and can override specific error codes on top of the root
+defaults.</p>
 <p>Any configs that change the list of files we&#x27;re type checking, Python environment, or where we look
 for imports cannot be included in SubConfigs. Some other configs we also do not include because
 we think they make it difficult to reason about your project type checks, but you can
