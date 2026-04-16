@@ -51,7 +51,10 @@ impl VersionRange {
     }
 
     fn contains(self, version: PythonVersion) -> bool {
-        version >= self.min && self.max.is_none_or(|max| version <= max)
+        version.cmp_ignore_patch(self.min).is_ge()
+            && self
+                .max
+                .is_none_or(|max| version.cmp_ignore_patch(max).is_le())
     }
 }
 
@@ -228,7 +231,7 @@ mod tests {
             typeshed
                 .find_for_python_version(
                     ModuleName::from_str("distutils"),
-                    PythonVersion::new(3, 11, 0)
+                    PythonVersion::new(3, 11, 9)
                 )
                 .is_some()
         );
@@ -236,7 +239,7 @@ mod tests {
             typeshed
                 .find_for_python_version(
                     ModuleName::from_str("distutils"),
-                    PythonVersion::new(3, 12, 0)
+                    PythonVersion::new(3, 12, 1)
                 )
                 .is_none()
         );

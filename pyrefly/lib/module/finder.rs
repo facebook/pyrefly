@@ -796,6 +796,10 @@ pub fn find_import_internal(
     let bundled_typeshed_origin =
         origin.is_some_and(|path| matches!(path.details(), ModulePathDetails::BundledTypeshed(_)));
     let origin = origin.map(|p| p.as_path());
+    // If a stdlib module exists in bundled typeshed but is unavailable for the active
+    // Python version, do not fall through to third-party bundled stubs with the same
+    // top-level name. That would turn a removed stdlib import like `distutils` on 3.12
+    // into a misleading third-party stub result from `setuptools`.
     let unavailable_stdlib_module = matches!(style_filter, Some(ModuleStyle::Interface) | None)
         && typeshed().is_ok_and(|ts| {
             ts.has_module(module)
@@ -860,6 +864,9 @@ pub fn find_import_internal(
                 )))
             },
             |ts| {
+                // Typeshed stubs import each other across version boundaries while we
+                // bootstrap the bundled stdlib. Keep those internal imports connected
+                // instead of applying end-user version filtering inside typeshed itself.
                 (if bundled_typeshed_origin {
                     ts.find(module)
                 } else {
@@ -2590,6 +2597,23 @@ mod tests {
                 .iter()
                 .any(|m| m == &ModuleName::from_str("distutils"))
         );
+    }
+
+    #[test]
+    fn test_find_import_respects_stdlib_versions() {
+        let mut config = get_config(ConfigSource::Synthetic);
+        config.python_environment.python_version = Some(PythonVersion::new(3, 11, 9));
+        config.configure();
+        let result = find_import_filtered(&config, ModuleName::from_str("distutils"), None, None);
+        assert!(matches!(result, FindingOrError::Finding(_)));
+
+        config.python_environment.python_version = Some(PythonVersion::new(3, 12, 1));
+        config.configure();
+        let result = find_import_filtered(&config, ModuleName::from_str("distutils"), None, None);
+        assert!(matches!(
+            result,
+            FindingOrError::Error(FindError::MissingImport(_, _))
+        ));
     }
 
     #[test]

@@ -137,10 +137,12 @@ pub fn bundled_typeshed() -> anyhow::Result<SmallMap<PathBuf, String>> {
 }
 
 pub fn bundled_typeshed_versions() -> anyhow::Result<String> {
-    let (mut versions, _) =
+    let (versions, _) =
         extract_files_from_archive(PathFilter::Stdlib, |path| path == Path::new("VERSIONS"))?;
     versions
-        .shift_remove(Path::new("VERSIONS"))
+        .into_iter()
+        .find(|(path, _)| path == Path::new("VERSIONS"))
+        .map(|(_, contents)| contents)
         .context("Bundled typeshed is missing stdlib/VERSIONS")
 }
 
