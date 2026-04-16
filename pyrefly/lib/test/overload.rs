@@ -1863,3 +1863,21 @@ def test(value: int | float | None) -> str:
     return str(i)
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3161
+testcase!(
+    test_overload_unpacked_tuple_varargs,
+    r#"
+from typing import overload, assert_type
+
+@overload
+def f(*args: *tuple[int]) -> int: ...
+@overload
+def f(*args: *tuple[int, int]) -> tuple[int, int]: ...
+def f(*args) -> int | tuple[int, int]:
+    return 1
+
+assert_type(f(1), int)
+assert_type(f(1, 2), tuple[int, int])
+    "#,
+);

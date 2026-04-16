@@ -874,7 +874,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &unpacked_args_ty,
                 &unpacked_param_tuple,
                 arguments_range,
-                arg_errors,
+                call_errors,
                 &|| {
                     TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
                         true,
