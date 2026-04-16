@@ -177,7 +177,7 @@ impl<'a> PysaResolver<'a> {
     }
 
     #[cfg(test)]
-    pub fn transaction_for_tests(&self) -> &Transaction {
+    pub fn transaction_for_tests(&self) -> &Transaction<'_> {
         self.transaction
     }
 }

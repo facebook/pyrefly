@@ -1134,7 +1134,7 @@ impl Type {
         Type::Callable(Box::new(Callable::concatenate(args, param_spec, ret)))
     }
 
-    pub fn type_form(inner: Type) -> Self {
+    pub fn type_of(inner: Type) -> Self {
         Type::Type(Box::new(inner))
     }
 

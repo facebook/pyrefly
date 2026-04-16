@@ -8,6 +8,9 @@
 use configparser::ini::Ini;
 
 use crate::config::ConfigFile;
+use crate::error::ErrorDisplayConfig;
+use crate::error_kind::ErrorKind;
+use crate::error_kind::Severity;
 use crate::migration::config_option_migrater::ConfigOptionMigrater;
 use crate::migration::mypy::util;
 use crate::migration::mypy::util::MypyErrorConfigFlags;
@@ -46,10 +49,19 @@ impl ConfigOptionMigrater for ErrorCodes {
         };
         let disable_error_code = util::string_to_array(&mypy_cfg.get("mypy", "disable_error_code"));
         let enable_error_code = util::string_to_array(&mypy_cfg.get("mypy", "enable_error_code"));
-        let error_config =
-            util::make_error_config(Some(mypy_flags), disable_error_code, enable_error_code)
-                .ok_or_else(|| anyhow::anyhow!("Failed to create error config"))?;
-        pyrefly_cfg.root.errors = Some(error_config);
+        // Mypy's mutable-override is off by default; disable our equivalent
+        // unless the user explicitly enabled it.
+        let mutable_override_enabled = enable_error_code.iter().any(|c| c == "mutable-override");
+        let mut error_config =
+            util::make_error_config(Some(mypy_flags), disable_error_code, enable_error_code);
+        if !mutable_override_enabled {
+            error_config
+                .get_or_insert_with(ErrorDisplayConfig::default)
+                .set_error_severity(ErrorKind::BadOverrideMutableAttribute, Severity::Ignore);
+        }
+        // error_config is always Some: either make_error_config returned Some (when
+        // mutable-override is enabled), or get_or_insert_with guaranteed Some above.
+        pyrefly_cfg.root.errors = Some(error_config.expect("error config must be set"));
         Ok(())
     }
 
@@ -169,12 +181,43 @@ mod tests {
         let mypy_cfg = Ini::new();
 
         let mut pyrefly_cfg = ConfigFile::default();
-        let default_errors = pyrefly_cfg.root.errors.clone();
 
         let error_codes = ErrorCodes;
-        let _ = error_codes.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+        error_codes
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("migration should succeed");
 
-        assert_eq!(pyrefly_cfg.root.errors, default_errors);
+        // Even with empty mypy config, mutable-override is disabled by default
+        // to match mypy's default behavior.
+        assert!(pyrefly_cfg.root.errors.is_some());
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::BadOverrideMutableAttribute),
+            Severity::Ignore
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_mutable_override_enabled() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set(
+            "mypy",
+            "enable_error_code",
+            Some("mutable-override".to_owned()),
+        );
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        error_codes
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("migration should succeed");
+
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::BadOverrideMutableAttribute),
+            Severity::Error
+        );
     }
 
     #[test]

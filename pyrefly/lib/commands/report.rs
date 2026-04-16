@@ -15,6 +15,7 @@ use pyrefly_build::handle::Handle;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_graph::index::Idx;
+use pyrefly_python::dunder;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::Module;
@@ -41,9 +42,9 @@ use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingExport;
+use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::ClassBinding;
 use crate::binding::binding::ClassFieldDefinition;
-use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
@@ -52,6 +53,7 @@ use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyExport;
+use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::Bindings;
 use crate::commands::check::Handles;
@@ -424,9 +426,19 @@ impl ReportArgs {
     const EXCLUDED_MODULE_DUNDERS: &'static [&'static str] =
         &["__all__", "__dir__", "__doc__", "__getattr__"];
 
-    /// Returns true if the first parameter is self/cls (implicit, excluded from slot counting).
-    fn is_self_or_cls(index: usize, name: &str) -> bool {
-        index == 0 && (name == "self" || name == "cls")
+    /// True if the first parameter is the implicit receiver (`self`/`cls`),
+    /// excluded from slot counting. `__new__` is a staticmethod but still takes cls.
+    fn has_implicit_receiver(
+        fun: &BindingUndecoratedFunction,
+        answers: &Answers,
+        undecorated_idx: Idx<KeyUndecoratedFunction>,
+    ) -> bool {
+        fun.class_key.is_some() && {
+            let is_staticmethod = answers
+                .get_idx(undecorated_idx)
+                .is_some_and(|u| u.metadata.flags.is_staticmethod);
+            !is_staticmethod || fun.def.name.as_str() == dunder::NEW
+        }
     }
 
     /// Returns the ClassBinding if the class owning this field is a schema class (dataclass, enum,
@@ -505,9 +517,7 @@ impl ReportArgs {
                     let is_type_known = annotation_text.is_some()
                         && answers
                             .get_idx(*annot_idx)
-                            .and_then(|awt| {
-                                awt.annotation.ty.as_ref().map(Self::is_type_fully_known)
-                            })
+                            .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
                             .unwrap_or(false);
                     let slots = Self::classify_slot(annotation_text.is_some(), is_type_known);
                     variables.push(Variable {
@@ -699,9 +709,9 @@ impl ReportArgs {
             let is_type_known = annotation_text.is_some()
                 && annotation_idx
                     .and_then(|idx| {
-                        answers.get_idx(idx).and_then(|awt| {
-                            awt.annotation.ty.as_ref().map(Self::is_type_fully_known)
-                        })
+                        answers
+                            .get_idx(idx)
+                            .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
                     })
                     .unwrap_or(false);
             let slots = Self::classify_slot(annotation_text.is_some(), is_type_known);
@@ -811,7 +821,7 @@ impl ReportArgs {
                 let is_return_type_known = return_annotation.is_some()
                     && answers
                         .get_type_at(return_idx)
-                        .is_some_and(|t| Self::is_type_fully_known(&t));
+                        .is_some_and(|t| Self::is_type_known(&t));
 
                 let mut parameters = Vec::new();
                 let all_params = Self::extract_parameters(&fun.def.parameters);
@@ -820,10 +830,8 @@ impl ReportArgs {
                 // Compute slot counts: return + non-self/cls params.
                 // Some dunder methods have implicit return types that don't need
                 // annotation (__init__ → None, __bool__ → bool, __len__ → int, etc.).
-                // Only treat as implicit when the annotation is ABSENT; explicit
-                // annotations (e.g. `-> bool` on `__bool__`) are counted normally.
+                // These are always excluded from coverage, even when explicitly annotated.
                 let has_implicit_return = fun.class_key.is_some()
-                    && return_annotation.is_none()
                     && Self::is_implicit_dunder_return(fun.def.name.as_str());
                 let return_slot = if has_implicit_return {
                     SlotCounts::default()
@@ -832,15 +840,19 @@ impl ReportArgs {
                 };
                 let mut func_slots = return_slot;
                 let mut n_params = 0usize;
+                let fn_name = fun.def.name.as_str();
+                let implicit_receiver =
+                    Self::has_implicit_receiver(fun, answers, decorated.undecorated_idx);
 
                 for (i, param) in all_params.iter().enumerate() {
                     let param_name = param.name.as_str();
+                    let is_self = i == 0 && implicit_receiver;
                     let param_annotation = param
                         .annotation
                         .as_ref()
                         .map(|ann| module.code_at(ann.range()).to_owned());
 
-                    let is_param_type_known = if Self::is_self_or_cls(i, param_name) {
+                    let is_param_type_known = if is_self {
                         true
                     } else if param.annotation.is_some() {
                         let annot_key =
@@ -848,32 +860,23 @@ impl ReportArgs {
                         let annot_idx = bindings.key_to_idx(&annot_key);
                         answers
                             .get_idx(annot_idx)
-                            .and_then(|awt| {
-                                awt.annotation.ty.as_ref().map(Self::is_type_fully_known)
-                            })
+                            .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
                             .unwrap_or(false)
                     } else {
                         false
                     };
 
                     // Check if this non-self param has an implicit type for a dunder method.
-                    // Like implicit returns, only applies when annotation is absent.
-                    let is_implicit_param = !Self::is_self_or_cls(i, param_name)
+                    // These are always excluded from coverage, even when explicitly annotated.
+                    let is_implicit_param = !is_self
                         && fun.class_key.is_some()
-                        && param_annotation.is_none()
-                        && Self::is_implicit_dunder_param(
-                            fun.def.name.as_str(),
-                            i.saturating_sub(1),
-                        );
+                        && Self::is_implicit_dunder_param(fn_name, i.saturating_sub(1));
 
-                    if !is_param_type_known
-                        && !Self::is_self_or_cls(i, param_name)
-                        && !is_implicit_param
-                    {
+                    if !is_param_type_known && !is_self && !is_implicit_param {
                         all_params_type_known = false;
                     }
 
-                    if !Self::is_self_or_cls(i, param_name) && !is_implicit_param {
+                    if !is_self && !is_implicit_param {
                         let param_slot =
                             Self::classify_slot(param_annotation.is_some(), is_param_type_known);
                         func_slots = func_slots.merge(param_slot);
@@ -892,7 +895,7 @@ impl ReportArgs {
                     && parameters
                         .iter()
                         .enumerate()
-                        .all(|(i, p)| Self::is_self_or_cls(i, &p.name) || p.annotation.is_some());
+                        .all(|(i, p)| (i == 0 && implicit_receiver) || p.annotation.is_some());
                 let is_type_known =
                     is_fully_annotated && is_return_type_known && all_params_type_known;
                 let is_property = answers
@@ -954,8 +957,13 @@ impl ReportArgs {
     }
 
     /// Only the first parameter (`self`/`cls`) is allowed to be unannotated.
-    fn is_function_completely_annotated(bindings: &Bindings, func_def: &FunctionDefData) -> bool {
-        let return_key = Key::ReturnType(ShortIdentifier::new(&func_def.name));
+    fn is_function_completely_annotated(
+        bindings: &Bindings,
+        answers: &Answers,
+        undecorated_idx: Idx<KeyUndecoratedFunction>,
+    ) -> bool {
+        let fun = bindings.get(undecorated_idx);
+        let return_key = Key::ReturnType(ShortIdentifier::new(&fun.def.name));
         let return_idx = bindings.key_to_idx(&return_key);
         let has_return_annotation = if let Binding::ReturnType(ret) = bindings.get(return_idx) {
             matches!(
@@ -971,10 +979,10 @@ impl ReportArgs {
             return false;
         }
 
-        // Check all parameters. Only the first parameter named self/cls may be unannotated.
-        let all_params = Self::extract_parameters(&func_def.parameters);
+        let all_params = Self::extract_parameters(&fun.def.parameters);
+        let implicit_receiver = Self::has_implicit_receiver(fun, answers, undecorated_idx);
         for (i, param) in all_params.iter().enumerate() {
-            if Self::is_self_or_cls(i, param.name.as_str()) {
+            if i == 0 && implicit_receiver {
                 continue;
             }
             if param.annotation.is_none() {
@@ -985,9 +993,9 @@ impl ReportArgs {
         true
     }
 
-    /// Returns true if the type contains no `Any` anywhere in its structure.
-    fn is_type_fully_known(ty: &Type) -> bool {
-        !ty.any(|t| t.is_any())
+    /// Only a bare `Any` counts as unknown; container types like `list[Any]` are known.
+    fn is_type_known(ty: &Type) -> bool {
+        !ty.is_any()
     }
 
     /// Dunder methods whose return type is fully determined by the protocol
@@ -1033,7 +1041,6 @@ impl ReportArgs {
     /// Dunder method parameters whose types are fully determined by the
     /// protocol (e.g. `__exit__`'s exception triple, `__getattr__`'s `name: str`).
     /// Positions are 0-indexed after excluding self/cls.
-    /// Only applies when the annotation is absent — explicit annotations count normally.
     fn is_implicit_dunder_param(name: &str, non_self_param_pos: usize) -> bool {
         match name {
             // __exit__/__aexit__(self, exc_type, exc_val, exc_tb)
@@ -1202,13 +1209,19 @@ impl ReportArgs {
                 if let Key::Definition(_id) = bindings.idx_to_key(idx)
                     && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
                 {
-                    let fun = bindings.get(bindings.get(*x).undecorated_idx);
+                    let decorated = bindings.get(*x);
+                    let undecorated_idx = decorated.undecorated_idx;
+                    let fun = bindings.get(undecorated_idx);
                     if let Some(func_class_key) = fun.class_key {
                         if func_class_key != class_idx {
                             continue;
                         }
                         let method_name = fun.def.name.to_string();
-                        if !Self::is_function_completely_annotated(bindings, &fun.def) {
+                        if !Self::is_function_completely_annotated(
+                            bindings,
+                            answers,
+                            undecorated_idx,
+                        ) {
                             incomplete_attributes.push(IncompleteAttribute {
                                 name: method_name.clone(),
                                 declared_in: class_name.clone(),
@@ -1378,6 +1391,10 @@ impl ReportArgs {
                 location: cls.location,
             });
         }
+
+        // Overloads and property accessors produce duplicate names.
+        let mut seen = HashSet::new();
+        names.retain(|n| seen.insert(n.clone()));
 
         // Compute per-module entity counts. Use the derived (file-based)
         // module name for prefix matching, since symbol names are built from
@@ -2011,18 +2028,16 @@ mod tests {
             }
         }
 
-        /// Check if a function is fully annotated. A function is fully annotated if
-        /// it has a return annotation and all parameters have annotations. Only the
-        /// first parameter named `self`/`cls` is exempt.
+        /// Name-based approximation of `has_implicit_receiver` for test convenience.
         fn is_fully_annotated(function: &Function) -> bool {
             if function.return_annotation.is_none() {
                 return false;
             }
-            function
-                .parameters
-                .iter()
-                .enumerate()
-                .all(|(i, p)| ReportArgs::is_self_or_cls(i, &p.name) || p.annotation.is_some())
+            let implicit_receiver = function.name == "__new__";
+            function.parameters.iter().enumerate().all(|(i, p)| {
+                (i == 0 && (p.name == "self" || p.name == "cls" || implicit_receiver))
+                    || p.annotation.is_some()
+            })
         }
 
         // Fully annotated function
@@ -2072,6 +2087,20 @@ mod tests {
             "bad_cls",
             true,
             vec![("x", true), ("cls", false)]
+        )));
+
+        // __new__ first param is exempt regardless of name
+        assert!(is_fully_annotated(&make_function(
+            "__new__",
+            true,
+            vec![("_cls", false), ("x", true)]
+        )));
+
+        // __new__ with standard "cls" name is also exempt
+        assert!(is_fully_annotated(&make_function(
+            "__new__",
+            true,
+            vec![("cls", false), ("x", true)]
         )));
     }
 
@@ -2211,5 +2240,12 @@ mod tests {
     fn test_report_inherited_attrs() {
         let report = build_module_report_for_test("inherited_attrs.py");
         compare_snapshot("inherited_attrs.expected.json", &report);
+    }
+
+    /// `list[Any]` etc. count as typed; only bare `Any` is "any".
+    #[test]
+    fn test_report_partial_any() {
+        let report = build_module_report_for_test("partial_any.py");
+        compare_snapshot("partial_any.expected.json", &report);
     }
 }

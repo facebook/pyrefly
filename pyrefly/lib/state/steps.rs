@@ -35,6 +35,7 @@ use crate::solver::solver::Solver;
 use crate::state::load::Load;
 use crate::state::memory::MemoryFilesLookup;
 use crate::state::require::Require;
+use crate::state::state::TransactionTimingCounters;
 use crate::types::stdlib::Stdlib;
 
 /// Context for pysa data extraction during the Solutions step.
@@ -64,6 +65,8 @@ pub struct Context<'a, Lookup> {
     pub pysa_context: Option<PysaContext<'a>>,
     /// Build compact CinderX solutions during the Solutions step.
     pub cinderx_enabled: bool,
+    /// Timing counters for filesystem stat/read latency tracking.
+    pub timing: Option<&'a TransactionTimingCounters>,
 }
 
 #[derive(Debug, Default, Dupe, Clone)]
@@ -377,7 +380,7 @@ impl Step {
         } else {
             ErrorStyle::Never
         };
-        let (file_contents, self_error) = Load::load_from_path(ctx.path, ctx.memory);
+        let (file_contents, self_error) = Load::load_from_path(ctx.path, ctx.memory, ctx.timing);
         Arc::new(Load::load_from_data(
             ctx.module,
             ctx.path.dupe(),

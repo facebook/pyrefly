@@ -1345,9 +1345,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                     // This can happen with a signature like `(f: Callable[P, None], *args: P.args, **kwargs: P.kwargs)`.
                     // Before we match an argument to `f`, we don't know what `P` is, so we don't have an answer for the Var yet.
+                    // Use to_subset_param to preserve Pos vs PosOnly: prefix params from a
+                    // function definition should remain keyword-passable in direct calls.
                     Type::Var(var) => self.callable_infer_params(
                         callable_name,
-                        &ParamList::new_types(concatenate.into_vec()),
+                        &ParamList::new(concatenate.iter().map(|p| p.to_subset_param()).collect()),
                         Some(var),
                         self_arg,
                         self_qs,

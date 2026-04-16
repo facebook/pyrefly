@@ -27,6 +27,7 @@ use crate::error::context::ErrorContext;
 use crate::module::finder::find_import;
 use crate::module::finder::find_import_filtered;
 use crate::module::finder::suggest_stdlib_import;
+use crate::state::state::TransactionTimingCounters;
 
 #[derive(Debug, Clone, Dupe, PartialEq, Eq)]
 pub enum FindError {
@@ -233,17 +234,19 @@ impl LoaderFindCache {
         &self,
         module: ModuleName,
         origin: Option<&ModulePath>,
+        timing: Option<&TransactionTimingCounters>,
     ) -> FindingOrError<ModulePath> {
         let key = (module.dupe(), origin.cloned());
         match self.executable_cache.get(&key) {
             Some(Some(module)) => FindingOrError::new_finding(module.dupe()),
-            Some(None) => self.find_import(module, origin),
+            Some(None) => self.find_import(module, origin, timing),
             None => {
                 match find_import_filtered(
                     &self.config,
                     module,
                     origin,
                     Some(ModuleStyle::Executable),
+                    timing,
                 ) {
                     FindingOrError::Finding(import) => {
                         self.executable_cache
@@ -252,7 +255,7 @@ impl LoaderFindCache {
                     }
                     FindingOrError::Error(_) => {
                         self.executable_cache.insert(key, None);
-                        self.find_import(module, origin)
+                        self.find_import(module, origin, timing)
                     }
                 }
             }
@@ -263,6 +266,7 @@ impl LoaderFindCache {
         &self,
         module: ModuleName,
         origin: Option<&ModulePath>,
+        timing: Option<&TransactionTimingCounters>,
     ) -> FindingOrError<ModulePath> {
         // When all resolution steps are origin-independent, use None as the
         // cache key. This reduces entries from O(files × modules) to O(modules).
@@ -285,7 +289,7 @@ impl LoaderFindCache {
             .cache
             .ensure(&(module.dupe(), effective_origin.clone()), || {
                 let phantom_paths = Vec::new();
-                let result = find_import(&self.config, module, origin, None);
+                let result = find_import(&self.config, module, origin, None, timing);
                 (result, Arc::new(phantom_paths))
             })
             .0
@@ -310,12 +314,13 @@ impl LoaderFindCache {
         &self,
         module: ModuleName,
         origin: Option<&ModulePath>,
+        timing: Option<&TransactionTimingCounters>,
     ) -> (FindingOrError<ModulePath>, Arc<Vec<PathBuf>>) {
         let cached = self
             .cache
             .ensure(&(module.dupe(), origin.cloned()), || {
                 let phantom_paths = Vec::new();
-                let result = find_import(&self.config, module, origin, None);
+                let result = find_import(&self.config, module, origin, None, timing);
                 (result, Arc::new(phantom_paths))
             })
             .0;

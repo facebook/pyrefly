@@ -3347,13 +3347,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } =>
                 {
                     Some(OverrideError {
-                        kind: ErrorKind::BadParamNameOverride,
+                        kind: ErrorKind::BadOverrideParamName,
                         message: format!("Got parameter name `{child}`, expected `{parent}`"),
                         diff_lines: Vec::new(),
                     })
                 }
                 Err(error) => {
                     let mut diff_lines = Vec::new();
+                    // Invariant = ReadWrite vs ReadWrite type mismatch.
+                    // Contravariant with got_is_property=false = ReadWrite
+                    // overriding a Property with setter (narrowed writable type).
+                    // Both are mutable attribute override violations.
+                    let is_mutable_attribute = matches!(
+                        &*error,
+                        AttrSubsetError::Invariant { .. }
+                            | AttrSubsetError::Contravariant {
+                                got_is_property: false,
+                                want_is_property: true,
+                                ..
+                            }
+                    );
                     if let AttrSubsetError::Covariant { got, want, .. }
                     | AttrSubsetError::Invariant { got, want, .. }
                     | AttrSubsetError::Contravariant { got, want, .. } = &*error
@@ -3387,7 +3400,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
 
                     Some(OverrideError {
-                        kind: ErrorKind::BadOverride,
+                        kind: if is_mutable_attribute {
+                            ErrorKind::BadOverrideMutableAttribute
+                        } else {
+                            ErrorKind::BadOverride
+                        },
                         message: error.to_error_msg(cls.name(), parent.name(), field_name),
                         diff_lines,
                     })
@@ -4152,7 +4169,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .and_then(|ty| {
                     make_bound_method(
                         self.heap,
-                        self.heap.mk_type_form(self.heap.mk_class_type(cls.clone())),
+                        self.heap.mk_type_of(self.heap.mk_class_type(cls.clone())),
                         ty,
                     )
                     .ok()
@@ -4556,22 +4573,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     subset_error,
                 })?;
                 if let Some(want_setter) = want_setter {
-                    // Synthesize a setter method
-                    is_subset(
-                        want_setter,
-                        &self.heap.mk_callable_from_vec(
-                            vec![Param::PosOnly(None, got.clone(), Required::Required)],
-                            self.heap.mk_none(),
-                        ),
-                    )
-                    .map_err(|subset_error| {
-                        Box::new(AttrSubsetError::Contravariant {
-                            want: want_setter.clone(),
-                            got: got.clone(),
-                            got_is_property: true,
-                            subset_error,
+                    // Extract the setter's value param type (the first param
+                    // after self) and check setter_param <: got, i.e. the
+                    // child's ReadWrite type can accept everything the parent's
+                    // setter promises to accept.
+                    // Property setters are always a single function (never an
+                    // overload), so callable_signatures() returns exactly one.
+                    let setter_sigs = want_setter.callable_signatures();
+                    let mut owner = Owner::new();
+                    if let Some(setter_sig) = setter_sigs.first()
+                        && let Some((_, rest)) = setter_sig.split_first_param(&mut owner)
+                        && let Some(setter_value_type) = rest.get_first_param()
+                    {
+                        is_subset(&setter_value_type, got).map_err(|subset_error| {
+                            Box::new(AttrSubsetError::Contravariant {
+                                want: want_setter.clone(),
+                                got: got.clone(),
+                                got_is_property: false,
+                                want_is_property: true,
+                                subset_error,
+                            })
                         })
-                    })
+                    } else {
+                        Ok(())
+                    }
                 } else {
                     Ok(())
                 }
@@ -4596,6 +4621,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 want: want_setter.clone(),
                                 got: got_setter.clone(),
                                 got_is_property: true,
+                                want_is_property: true,
                                 subset_error,
                             })
                         }),

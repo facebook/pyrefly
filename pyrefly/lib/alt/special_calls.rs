@@ -607,7 +607,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::Type(box Type::Union(box Union { members: ts, .. })) => {
                     for t in ts {
-                        f(me, me.heap.mk_type_form(t), res)
+                        f(me, me.heap.mk_type_of(t), res)
                     }
                 }
                 Type::TypeAlias(ta) => f(me, me.get_type_alias(&ta).as_value(me.stdlib), res),

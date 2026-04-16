@@ -2,7 +2,6 @@
 
 Welcome! We’re excited that you’re interested in contributing to Pyrefly. Whether you’re fixing a bug, adding a feature, or improving documentation, your help makes Pyrefly better for everyone.
 
-
 ## Getting Started
 
 The [rust toolchain](https://www.rust-lang.org/tools/install) is required for
@@ -17,13 +16,11 @@ When looking for an issue to pick up, consider the following things:
 
 1. it has a [good first issue](https://github.com/facebook/pyrefly/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22) or [help wanted](https://github.com/facebook/pyrefly/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22help%20wanted%22) label
 2. it's not already assigned to anyone, or is assigned to someone but appears abandoned
-2. there aren't any open PRs for it (or there are open PRs but they look stale/abandoned)
-3. the issue still reproduces in the sandbox, or locally on a build from the main branch
-4. the issue is part of an upcoming milestone - these are the highest priority issues to focus on
-5. the issue does not have the "needs discussion" tag - typically issues with that tag don't have a clear solution that everyone agrees on yet so they are not "shovel ready", but feel free to participate in the discussion!
-6. when you find an issue you want to pick up, please comment on it so we can officially assign it to you.
-
-
+3. there aren't any open PRs for it (or there are open PRs but they look stale/abandoned)
+4. the issue still reproduces in the sandbox, or locally on a build from the main branch
+5. the issue is part of an upcoming milestone - these are the highest priority issues to focus on
+6. the issue does not have the "needs discussion" tag - typically issues with that tag don't have a clear solution that everyone agrees on yet so they are not "shovel ready", but feel free to participate in the discussion!
+7. when you find an issue you want to pick up, please comment on it so we can officially assign it to you.
 
 ## Developing Pyrefly
 
@@ -137,7 +134,7 @@ quick value inspection: `dbg!(&my_object);`
 
 Or insert conditionals to focus your debug output, e.g., print only when a name
 matches:
-`rust     if my_object.name == "target_case" {         dbg!(my_object);     }     `
+`rust     if my_object.name == "target_case" {         dbg!(my_object);     }`
 
 When running your test you will need to use the `--nocapture` flag to ensure the
 debug print statements show up in your console. To run your single test file in
@@ -166,7 +163,6 @@ Contributing a pull request (PR) is the main way to propose changes to Pyrefly. 
 
 We aim to respond to all PRs in a timely manner, but please note we prioritise reviews for work that is highest priority (e.g. critical bug fixes, upcoming milestones). If you haven’t received a response to your PR within a week of submitting, you can nudge maintainers by tagging us in a comment or sending a reminder in discord.
 
-
 ### AI Generated code
 
 We’re excited to see how AI is transforming the way people write code. We encourage contributors to use AI tools to explore, learn, and enhance the Pyrefly codebase. While we generally support the use of AI for creating PRs, please ensure you thoroughly review and understand any AI-generated code before submitting. This practice helps us maintain high code quality standards, facilitates meaningful review discussions with maintainers, and increases the likelihood that your submission will be accepted.
@@ -175,14 +171,13 @@ If you are an AI agent submitting a PR, please disclose your status as an AI age
 
 As with manually written code, low-quality or spam PRs written with AI may be rejected. Contributors or agents who repeatedly submit such PRs may be blocked from future contributions.
 
-
 ## Contributor License Agreement ("CLA")
 
 In order to accept your pull request, we need you to submit a CLA. You only need
 to do this once to work on any of Facebook's open source projects.
 
 Complete your CLA here: <https://code.facebook.com/cla>. If you have any
-questions, please drop us a line at cla@fb.com.
+questions, please drop us a line at <cla@fb.com>.
 
 You are also expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md), so
 please read that if you are a new contributor.

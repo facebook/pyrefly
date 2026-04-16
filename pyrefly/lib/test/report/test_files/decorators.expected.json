@@ -4,9 +4,12 @@
     "test.WithDecorators.static_method",
     "test.WithDecorators.class_method",
     "test.WithDecorators.regular_method",
+    "test.RenamedReceiver.regular_method",
+    "test.RenamedReceiver.class_method",
+    "test.RenamedReceiver",
     "test.WithDecorators"
   ],
-  "line_count": 22,
+  "line_count": 31,
   "symbol_reports": [
     {
       "kind": "function",
@@ -45,6 +48,42 @@
       }
     },
     {
+      "kind": "function",
+      "name": "test.RenamedReceiver.regular_method",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 25,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.RenamedReceiver.class_method",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 28,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.RenamedReceiver",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 24,
+        "column": 1
+      }
+    },
+    {
       "kind": "class",
       "name": "test.WithDecorators",
       "n_typable": 0,
@@ -58,17 +97,17 @@
     }
   ],
   "type_ignores": [],
-  "n_typable": 6,
-  "n_typed": 6,
+  "n_typable": 10,
+  "n_typed": 10,
   "n_any": 0,
   "n_untyped": 0,
   "coverage": 100.0,
   "strict_coverage": 100.0,
   "n_functions": 0,
-  "n_methods": 3,
+  "n_methods": 5,
   "n_function_params": 0,
-  "n_method_params": 3,
-  "n_classes": 1,
+  "n_method_params": 5,
+  "n_classes": 2,
   "n_attrs": 0,
   "n_properties": 0,
   "n_type_ignores": 0

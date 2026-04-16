@@ -678,3 +678,21 @@ class Contra(Generic[T_contra]): ...
 class Foo(Contra[Co[Contra[T_co]]]): ...
 "#,
 );
+
+// A mutable attribute makes the class invariant in the type parameter, even
+// though methods using the same type parameter would make it covariant.
+// This is important because even though pyrefly allows disabling the
+// bad-override-mutable-attribute error, variance must still be inferred correctly.
+testcase!(
+    test_mutable_attribute_makes_class_invariant,
+    r#"
+class A[T]:
+    p: T
+
+    def m(self) -> T:
+        return self.p
+
+def foo(x: A[int]) -> A[int | str]:
+    return x  # E: Returned type `A[int]` is not assignable to declared return type `A[int | str]`
+"#,
+);

@@ -63,7 +63,7 @@ else:
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None, None)
+        let path = find_import(&config_file, name, None, None, None)
             .finding()
             .unwrap();
         Handle::new(name, path, sys_info.dupe())
@@ -96,7 +96,7 @@ fn test_cross_module_literal_promotion() {
     let state = State::new(test_env.config_finder(), TEST_THREAD_COUNT);
     let f = |name: &str| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None, None)
+        let path = find_import(&config_file, name, None, None, None)
             .finding()
             .unwrap();
         Handle::new(name, path, sys_info.dupe())
@@ -156,7 +156,7 @@ fn test_multiple_path() {
     transaction.run(&handles, Require::Everything, None);
     let loads = transaction.get_errors(handles.iter());
     let project_root = PathBuf::new();
-    print_errors(project_root.as_path(), &loads.collect_errors().ordinary);
+    print_errors(project_root.as_path(), &loads.collect_display_errors());
     loads.check_against_expectations().unwrap();
     assert_eq!(loads.collect_errors().ordinary.len(), 3);
 }

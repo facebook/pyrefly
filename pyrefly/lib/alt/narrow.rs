@@ -183,6 +183,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         } else if self.is_subset_eq(left, right) {
             left.clone()
+        } else if let (Type::ClassType(cls), Type::SelfType(self_cls))
+        | (Type::SelfType(self_cls), Type::ClassType(cls)) = (left, right)
+            && self.as_superclass(cls, self_cls.class_object()).as_ref() == Some(self_cls)
+        {
+            // ClassType(C) & SelfType(Parent) simplifies to ClassType(C) when C
+            // is a subclass of Parent with a matching inherited instantiation,
+            // because Self[Parent] represents "Parent or any subclass" and
+            // ClassType(C) is already such a subclass.
+            // Without this, an unsimplified Intersect(ClassType, SelfType) can
+            // leak to downstream consumers that don't handle Intersect types.
+            self.heap.mk_class_type(cls.clone())
         } else if is_literal(left) || is_literal(right) {
             // The only inhabited intersections of literals are things like
             // `Literal[0] & Literal[0]` or `Literal[0] & int` that would have already been
@@ -537,7 +548,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             original.clone()
         } else {
-            self.heap.mk_type_form(instance_result)
+            self.heap.mk_type_of(instance_result)
         }
     }
 
@@ -1043,7 +1054,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             // Convert to type[...] so `x in (int, float)` can
                             // narrow x to type[int] | type[float].
                             Type::ClassDef(cls) => {
-                                literal_types.push(Type::type_form(self.promote_silently(&cls)));
+                                literal_types.push(Type::type_of(self.promote_silently(&cls)));
                             }
                             // Already-wrapped type[X] expressions pass through.
                             Type::Type(box Type::ClassType(_)) => {
@@ -1107,7 +1118,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             // subtracted in the `not in` case (see comment in
                             // distribute_over_union below).
                             Type::ClassDef(cls) => {
-                                literal_types.push(Type::type_form(self.promote_silently(&cls)));
+                                literal_types.push(Type::type_of(self.promote_silently(&cls)));
                             }
                             Type::Type(box Type::ClassType(_)) => {
                                 literal_types.push(expr_ty);

@@ -3496,7 +3496,7 @@ impl Server {
         let path = url
             .to_file_path()
             .or_else(|_| {
-                if url.scheme() == "untitled" {
+                if url.scheme() == "untitled" || url.scheme() == "inmemory" {
                     Ok(self
                         .unsaved_file_tracker
                         .ensure_path_for_open(&url, "python"))

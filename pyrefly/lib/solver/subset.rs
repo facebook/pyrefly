@@ -1721,10 +1721,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 Type::BoundMethod(_) | Type::Callable(_) | Type::Function(_),
             ) => self.is_subset_eq(&self.type_order.constructor_to_callable(got), want),
             (Type::ClassDef(got), Type::BoundMethod(_) | Type::Callable(_) | Type::Function(_)) => {
-                self.is_subset_eq(
-                    &Type::type_form(self.type_order.promote_silently(got)),
-                    want,
-                )
+                self.is_subset_eq(&Type::type_of(self.type_order.promote_silently(got)), want)
             }
             (Type::ClassDef(got), Type::ClassDef(want)) => ok_or(
                 self.type_order.has_superclass(got, want),
@@ -1949,7 +1946,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // type[A | B] <: X if type[A] <: X and type[B] <: X.
             (Type::Type(box Type::Union(box Union { members, .. })), _) => {
                 all(members.iter(), |m| {
-                    self.is_subset_eq(&Type::type_form(m.clone()), want)
+                    self.is_subset_eq(&Type::type_of(m.clone()), want)
                 })
             }
             (Type::Type(_), _) => self.is_subset_eq(

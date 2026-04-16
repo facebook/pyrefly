@@ -149,10 +149,13 @@ def f(p1: P1, p2: P2, p3: P3, p4: P4):
     x4: P2 = p3  # E: `P3` is not assignable to `P2`
     x5: P3 = p1
     x6: P3 = p2
-    # setter type compatibility
-    x7: P4 = p2
+    # setter type compatibility: P2 (x: int) must accept everything the setter promises.
+    # P4 setter accepts object, but P2 only accepts int.
+    x7: P4 = p2  # E: `P2` is not assignable to `P4`
+    # P5 setter accepts str, P2 only accepts int.
     x8: P5 = p2  # E: `P2` is not assignable to `P5`
-    x9: P6 = p2  # E: `P2` is not assignable to `P6`
+    # P6 setter accepts ExtendsInt, and ExtendsInt <: int, so P2 can handle it.
+    x9: P6 = p2
 "#,
 );
 

@@ -50,11 +50,10 @@ pub struct Callable {
 }
 
 impl Callable {
-    /// Returns true if this callable has only *args and **kwargs parameters
-    /// (plus an optional unannotated self/cls at index 0) and no return type
-    /// annotation. Used as a heuristic in decorator type resolution: when a
-    /// decorator returns a union containing such a wrapper, the decorator is
-    /// treated as preserving the original function's signature.
+    /// Returns true if this callable has the `*args: Any, **kwargs: Any -> Any`
+    /// signature (plus an optional unannotated self/cls at index 0).
+    /// Used as a heuristic in decorator type resolution for union-typed
+    /// decorators.
     pub fn is_args_kwargs_wrapper(&self) -> bool {
         if !matches!(&self.ret, Type::Any(AnyStyle::Implicit)) {
             return false;
@@ -72,6 +71,22 @@ impl Callable {
                         _ => false,
                     })
             }
+            _ => false,
+        }
+    }
+
+    /// Returns true if this callable carries no real type information: all
+    /// parameters and the return type are `Any(Implicit)` (i.e. Unknown).
+    pub fn is_fully_unknown(&self) -> bool {
+        if !matches!(&self.ret, Type::Any(AnyStyle::Implicit)) {
+            return false;
+        }
+        match &self.params {
+            Params::List(params) => params
+                .items()
+                .iter()
+                .all(|p| matches!(p.as_type(), Type::Any(AnyStyle::Implicit))),
+            Params::Ellipsis => true,
             _ => false,
         }
     }
@@ -281,9 +296,9 @@ impl PrefixParam {
         }
     }
 
-    /// Convert to a positional-only `Param`. Per the typing spec, params before
-    /// `*args: P.args` are always positional-only at the call site, regardless of
-    /// whether they were originally `Pos` or `PosOnly` in the function definition.
+    /// Convert to a positional-only `Param`. Per the typing spec, params in
+    /// `Concatenate` are positional-only at the call site. This is also appropriate
+    /// for ParamSpec forwarding where prefix params must be passed positionally.
     pub fn into_param(self) -> Param {
         match self {
             Self::PosOnly(name, ty, required) => Param::PosOnly(name, ty, required),
@@ -304,7 +319,8 @@ impl PrefixParam {
     }
 
     /// Convert to a `Param` preserving the Pos vs PosOnly distinction.
-    /// Used for subset/subtype checking where name matching matters.
+    /// Used for subset/subtype checking where name matching matters,
+    /// and for direct calls where prefix params should remain keyword-passable.
     pub fn to_subset_param(&self) -> Param {
         match self {
             Self::PosOnly(name, ty, required) => {

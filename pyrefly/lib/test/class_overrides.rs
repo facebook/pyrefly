@@ -1307,16 +1307,16 @@ class MyString(str):
 );
 
 testcase!(
-    bug = "We raise 4 inconsistent-overload errors where pyright raises 1. We should investigate this.",
+    bug = "We raise 2 inconsistent-overload errors where pyright raises 1. We should investigate this.",
     test_override_all_parent_overloads_inapplicable,
     r#"
 from typing import overload, LiteralString
 
 class Base(str):
     @overload
-    def method(self: LiteralString) -> LiteralString: ...  # E: Implementation signature `(self: Self@Base, x: Unknown | None = None) -> Self@Base` does not accept all arguments that overload signature `(self: LiteralString) -> LiteralString` accepts  # E: Overload return type `LiteralString` is not assignable to implementation return type `Self@Base`
+    def method(self: LiteralString) -> LiteralString: ...  # E: Overload return type `LiteralString` is not assignable to implementation return type `Self@Base`
     @overload
-    def method(self: LiteralString, x: int) -> LiteralString: ...  # E: Implementation signature `(self: Self@Base, x: Unknown | None = None) -> Self@Base` does not accept all arguments that overload signature `(self: LiteralString, x: int) -> LiteralString` accepts  # E: Overload return type `LiteralString` is not assignable to implementation return type `Self@Base`
+    def method(self: LiteralString, x: int) -> LiteralString: ...  # E: Overload return type `LiteralString` is not assignable to implementation return type `Self@Base`
     def method(self, x=None):
         return self
 
@@ -1344,6 +1344,32 @@ class Narrow(Parent):
 
 class Child(Parent):
     def method(self, x: int) -> int:
+        return x
+    "#,
+);
+
+testcase!(
+    test_override_generic_overload_with_inapplicable_cls,
+    r#"
+from typing import overload
+
+class Parent[T]:
+    @classmethod
+    @overload
+    def make(cls: type["Narrow"], x: T) -> T: ...
+    @classmethod
+    @overload
+    def make(cls, x: int) -> int: ...
+    @classmethod
+    def make(cls, x):
+        return x
+
+class Narrow(Parent[int]):
+    pass
+
+class Child(Parent[int]):
+    @classmethod
+    def make(cls, x: int) -> int:
         return x
     "#,
 );
@@ -1391,4 +1417,134 @@ class Child(Parent):
     def __init__(self, x: int) -> None:
         pass
     "#,
+);
+
+testcase!(
+    test_override_mutable_attribute,
+    r#"
+class A:
+    p: int | str
+
+class B(A):
+    p: int  # E: Class member `B.p` overrides parent class `A` in an inconsistent manner
+ "#,
+);
+
+testcase!(
+    test_override_mutable_attribute_suppressed_by_parent_kind,
+    r#"
+class A:
+    p: int | str
+
+class B(A):
+    p: int  # pyrefly: ignore[bad-override]
+ "#,
+);
+
+testcase!(
+    test_override_mutable_attribute_suppressed_by_own_kind,
+    r#"
+class A:
+    p: int | str
+
+class B(A):
+    p: int  # pyrefly: ignore[bad-override-mutable-attribute]
+ "#,
+);
+
+// When a decorator returns a scalar type (not a callable), the decorated method
+// becomes a plain mutable attribute. Overriding it with a narrowed type should
+// be bad-override-mutable-attribute (suppressible with bad-override), not a
+// generic bad-override.
+testcase!(
+    test_override_decorated_method_returning_scalar,
+    r#"
+from typing import Callable, TypeVar
+
+F = TypeVar("F", bound=Callable[..., object])
+
+def returns_int(f: F) -> int:
+    return 0
+
+class Base:
+    @returns_int
+    def x(self) -> str:
+        return ""
+
+class ChildSame(Base):
+    x: int  # OK, same type
+
+class ChildNarrowed(Base):
+    x: bool  # E: Class member `ChildNarrowed.x` overrides parent class `Base` in an inconsistent manner
+
+class ChildNarrowedSuppressed(Base):
+    x: bool  # pyrefly: ignore[bad-override-mutable-attribute]
+ "#,
+);
+
+// Overriding a readwrite property with a plain attribute that narrows the type
+// is a mutable attribute override error: the parent's setter accepts A, but the
+// child's ReadWrite(B) only accepts B.
+testcase!(
+    test_override_readwrite_property_to_attr_narrowed,
+    r#"
+class A: ...
+class B(A): ...
+
+class Base:
+    @property
+    def p(self) -> A:
+        return A()
+
+    @p.setter
+    def p(self, value: A) -> None:
+        pass
+
+class ChildNarrowed(Base):
+    p: B  # E: `ChildNarrowed.p` has type `B`, which is not assignable from `(self: ChildNarrowed, value: A) -> None`, the property setter for `Base.p`
+
+class ChildSuppressed(Base):
+    p: B  # pyrefly: ignore[bad-override-mutable-attribute]
+
+class ChildSameType(Base):
+    p: A  # OK, same type
+
+# Widening: p: object fails on the getter covariance check (object is not a
+# subtype of A), even though the setter check would pass.
+class ChildWidened(Base):
+    p: object  # E: Class member `ChildWidened.p` overrides parent class `Base` in an inconsistent manner
+
+# Property-to-property override with narrowed setter.
+class ChildPropertyNarrowedSetter(Base):
+    @property
+    def p(self) -> A:  # E: The property setter for `ChildPropertyNarrowedSetter.p` has type `(self: ChildPropertyNarrowedSetter, value: B) -> None`, which is not assignable from `(self: ChildPropertyNarrowedSetter, value: A) -> None`, the property setter for `Base.p`
+        return A()
+    @p.setter
+    def p(self, value: B) -> None:
+        pass
+ "#,
+);
+
+testcase!(
+    test_param_name_override_suppressed_by_parent_kind,
+    r#"
+class A:
+    def f(self, x: int):
+        pass
+class B(A):
+    def f(self, x1: int):  # pyrefly: ignore[bad-override]
+        pass
+ "#,
+);
+
+testcase!(
+    test_param_name_override_suppressed_by_deprecated_alias,
+    r#"
+class A:
+    def f(self, x: int):
+        pass
+class B(A):
+    def f(self, x1: int):  # pyrefly: ignore[bad-param-name-override]
+        pass
+ "#,
 );

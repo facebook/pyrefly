@@ -245,7 +245,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(box Type::Union(box Union { members: xs, .. })) => {
                 let union_of_types = self
                     .heap
-                    .mk_union(xs.into_iter().map(|x| self.heap.mk_type_form(x)).collect());
+                    .mk_union(xs.into_iter().map(|x| self.heap.mk_type_of(x)).collect());
                 self.as_call_target_impl(union_of_types, quantified)
             }
             Type::Type(box Type::SelfType(cls)) => CallTargetLookup::Ok(Box::new(
@@ -418,7 +418,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Type(box Type::Intersect(box (_, fallback))) => {
                 // TODO(rechen): implement calling `type[A & B]`
-                self.as_call_target_impl(self.heap.mk_type_form(fallback), quantified)
+                self.as_call_target_impl(self.heap.mk_type_of(fallback), quantified)
             }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Unrestricted => CallTargetLookup::Error(vec![]),
@@ -746,9 +746,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let (overrides_new, dunder_new_has_errors) =
             if let Some(new_method) = self.get_dunder_new(&cls, preserve_self) {
                 let cls_ty = if preserve_self {
-                    self.heap.mk_type_form(self.heap.mk_self_type(cls.clone()))
+                    self.heap.mk_type_of(self.heap.mk_self_type(cls.clone()))
                 } else {
-                    self.heap.mk_type_form(self.heap.mk_class_type(cls.clone()))
+                    self.heap.mk_type_of(self.heap.mk_class_type(cls.clone()))
                 };
                 let full_args = iter::once(CallArg::ty(&cls_ty, arguments_range))
                     .chain(args.iter().cloned())
@@ -1413,7 +1413,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
             DescriptorBase::SelfInstance(classtype) => (
                 self.heap
-                    .mk_type_form(self.heap.mk_self_type(classtype.clone())),
+                    .mk_type_of(self.heap.mk_self_type(classtype.clone())),
                 self.heap.mk_self_type(classtype),
             ),
             DescriptorBase::ClassDef(class_base) => {

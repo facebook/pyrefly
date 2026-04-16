@@ -7110,17 +7110,6 @@
       "severity": "error",
       "stop_column": 19,
       "stop_line": 75
-    },
-    {
-      "code": -2,
-      "column": 13,
-      "concise_description": "Argument `tuple[Literal['1']]` is not assignable to parameter `*args` with type `tuple[int]` in function `func4`",
-      "description": "Argument `tuple[Literal['1']]` is not assignable to parameter `*args` with type `tuple[int]` in function `func4`",
-      "line": 76,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 19,
-      "stop_line": 76
     }
   ],
   "generics_typevartuple_basic.py": [
@@ -7233,28 +7222,6 @@
       "severity": "error",
       "stop_column": 36,
       "stop_line": 67
-    },
-    {
-      "code": -2,
-      "column": 13,
-      "concise_description": "Argument `tuple[float]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`",
-      "description": "Argument `tuple[float]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`",
-      "line": 86,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 19,
-      "stop_line": 86
-    },
-    {
-      "code": -2,
-      "column": 13,
-      "concise_description": "Argument `tuple[Literal['0']]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`",
-      "description": "Argument `tuple[Literal['0']]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`",
-      "line": 90,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 19,
-      "stop_line": 90
     },
     {
       "code": -2,
@@ -8944,17 +8911,6 @@
       "description": "If `@classmethod` is present on any overload or the implementation, it should be on every overload and the implementation.",
       "line": 90,
       "name": "invalid-overload",
-      "severity": "error",
-      "stop_column": 14,
-      "stop_line": 90
-    },
-    {
-      "code": -2,
-      "column": 9,
-      "concise_description": "Implementation signature `(cls: type[Self@C], *args: int | str) -> int | str` does not accept all arguments that overload signature `(self: Self@C, x: str, /) -> str` accepts",
-      "description": "Implementation signature `(cls: type[Self@C], *args: int | str) -> int | str` does not accept all arguments that overload signature `(self: Self@C, x: str, /) -> str` accepts",
-      "line": 90,
-      "name": "inconsistent-overload",
       "severity": "error",
       "stop_column": 14,
       "stop_line": 90
@@ -11756,7 +11712,7 @@
       "concise_description": "Class member `Y1.x` overrides parent class `X1` in an inconsistent manner",
       "description": "Class member `Y1.x` overrides parent class `X1` in an inconsistent manner\n  `Y1.x` has type `int`, which is not consistent with `str` in `X1.x` (the type of read-write attributes cannot be changed)",
       "line": 55,
-      "name": "bad-override",
+      "name": "bad-override-mutable-attribute",
       "severity": "error",
       "stop_column": 5,
       "stop_line": 55

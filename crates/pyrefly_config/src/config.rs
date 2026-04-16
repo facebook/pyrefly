@@ -1169,6 +1169,18 @@ impl ConfigFile {
             self.root.errors = Some(Default::default());
         }
 
+        // Merge root errors into each sub-config's errors so that sub-configs
+        // inherit root-level error severity overrides for codes they don't set.
+        if let Some(root_errors) = &self.root.errors {
+            for sub in &mut self.sub_configs {
+                if let Some(sub_errors) = &mut sub.settings.errors {
+                    let mut merged = root_errors.clone();
+                    merged.merge_from(sub_errors);
+                    *sub_errors = merged;
+                }
+            }
+        }
+
         if self.root.replace_imports_with_any.is_none() {
             self.root.replace_imports_with_any = Some(Default::default());
         }
@@ -2064,6 +2076,116 @@ output-format = "omit-errors"
 
         // test replace_imports_with_any special case None path
         assert!(config.replace_imports_with_any(None, ModuleName::from_str("root")));
+    }
+
+    #[test]
+    fn test_sub_config_errors_inherit_root() {
+        let mut config = ConfigFile {
+            root: ConfigBase {
+                errors: Some(ErrorDisplayConfig::new(HashMap::from([
+                    (ErrorKind::BadAssignment, Severity::Ignore),
+                    (ErrorKind::BadOverride, Severity::Ignore),
+                ]))),
+                ..Default::default()
+            },
+            sub_configs: vec![SubConfig {
+                matches: Glob::new("sub/**".to_owned()).unwrap(),
+                settings: ConfigBase {
+                    errors: Some(ErrorDisplayConfig::new(HashMap::from([(
+                        ErrorKind::BadReturn,
+                        Severity::Ignore,
+                    )]))),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        config.configure();
+
+        // Sub-config inherits root errors and adds its own
+        let sub_errors = config.errors(Path::new("sub/foo.py"));
+        assert_eq!(
+            sub_errors.severity(ErrorKind::BadAssignment),
+            Severity::Ignore
+        );
+        assert_eq!(
+            sub_errors.severity(ErrorKind::BadOverride),
+            Severity::Ignore
+        );
+        assert_eq!(sub_errors.severity(ErrorKind::BadReturn), Severity::Ignore);
+
+        // Root errors unchanged for non-matching paths
+        let root_errors = config.errors(Path::new("other/foo.py"));
+        assert_eq!(
+            root_errors.severity(ErrorKind::BadAssignment),
+            Severity::Ignore
+        );
+        assert_eq!(
+            root_errors.severity(ErrorKind::BadOverride),
+            Severity::Ignore
+        );
+        assert_eq!(root_errors.severity(ErrorKind::BadReturn), Severity::Error);
+    }
+
+    #[test]
+    fn test_sub_config_errors_override_root() {
+        let mut config = ConfigFile {
+            root: ConfigBase {
+                errors: Some(ErrorDisplayConfig::new(HashMap::from([(
+                    ErrorKind::BadAssignment,
+                    Severity::Ignore,
+                )]))),
+                ..Default::default()
+            },
+            sub_configs: vec![SubConfig {
+                matches: Glob::new("strict/**".to_owned()).unwrap(),
+                settings: ConfigBase {
+                    errors: Some(ErrorDisplayConfig::new(HashMap::from([(
+                        ErrorKind::BadAssignment,
+                        Severity::Error,
+                    )]))),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        config.configure();
+
+        // Sub-config overrides root for the same error code
+        let sub_errors = config.errors(Path::new("strict/foo.py"));
+        assert_eq!(
+            sub_errors.severity(ErrorKind::BadAssignment),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_sub_config_without_errors_uses_root() {
+        let mut config = ConfigFile {
+            root: ConfigBase {
+                errors: Some(ErrorDisplayConfig::new(HashMap::from([(
+                    ErrorKind::BadAssignment,
+                    Severity::Ignore,
+                )]))),
+                ..Default::default()
+            },
+            sub_configs: vec![SubConfig {
+                matches: Glob::new("sub/**".to_owned()).unwrap(),
+                settings: ConfigBase {
+                    check_unannotated_defs: Some(false),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        config.configure();
+
+        // Sub-config without errors falls through to root
+        let sub_errors = config.errors(Path::new("sub/foo.py"));
+        assert_eq!(
+            sub_errors.severity(ErrorKind::BadAssignment),
+            Severity::Ignore
+        );
     }
 
     #[test]

@@ -81,6 +81,7 @@ def use_middleware() -> None:
 );
 
 testcase!(
+    bug = "Generic functions don't work with ParamSpec",
     test_param_spec_generic_function,
     r#"
 from typing import Callable, reveal_type
@@ -386,7 +387,6 @@ P1 = ParamSpec("P1")
 P2 = ParamSpec("P2")
 
 def test1(x: Callable[P1, None], y: Callable[P2, None], *args: P1.args, **kwargs: P2.kwargs) -> None: ...  # E: *args and **kwargs must come from the same `ParamSpec`
-
 def test2(x: int, *args: P1.args, **kwargs: P2.kwargs) -> None: ...  # E: Expected a type form, got instance of `ParamSpecArgs` # E: Expected a type form, got instance of `ParamSpecKwargs`
 "#,
 );
@@ -405,9 +405,7 @@ def a_int_b_str(a: int, b: str) -> int:
   return a
 
 twice(a_int_b_str, 1, "A")     # Accepted
-
 twice(a_int_b_str, b="A", a=1) # Accepted
-
 twice(a_int_b_str, "A", 1)     # Rejected # E: `Literal['A']` is not assignable to parameter `a` with type `int` # E: `Literal[1]` is not assignable to parameter `b` with type `str`
 "#,
 );
@@ -431,14 +429,16 @@ testcase!(
     r#"
 from typing import Callable, ParamSpec, Concatenate
 
-P = ParamSpec("P")
-def f(f: Callable[P, int], *args: P.args, **kwargs: P.kwargs) -> int:
-    return f(*args, **kwargs)
-P2 = ParamSpec("P2")
-def g(x: Callable[Concatenate[int, P2], int], *args: P2.args, **kwargs: P2.kwargs):
-    f(x, 1)
-    f(x)  # E: Expected 1 more positional argument in function `f`
-    f(x, 1, 2)  # Not OK, we aren't sure the 2nd param is an int
+def f[**P](h: Callable[P, int], *args: P.args, **kwargs: P.kwargs) -> int:
+    return h(*args, **kwargs)
+
+def g[**P2](h: Callable[Concatenate[int, P2], int], *args: P2.args, **kwargs: P2.kwargs):
+    # This call is valid
+    f(h, 1, *args, **kwargs)
+    # Every one of these is buggy - we're completely dropping the P2 <-> P correspondence
+    f(h, 1)
+    f(h)  # E: Expected 1 more positional argument in function `f`
+    f(h, 1, 2)
 "#,
 );
 
@@ -822,5 +822,51 @@ def bare_fn(a: int) -> str: ...
 
 # Should match BareFn overload, NOT InstanceMethod
 reveal_type(bare_fn) # E: Wrapper[[a: int], str]
+"#,
+);
+
+testcase!(
+    test_paramspec_named_params_before_args,
+    r#"
+from typing import ParamSpec, TypeVar, Callable
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def call_with_retry(
+    f: Callable[P, R],
+    max_attempts: int = 10,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> R:
+    return f(*args, **kwargs)
+
+def write_data() -> None:
+    pass
+
+call_with_retry(write_data, max_attempts=5)
+call_with_retry(write_data, 5)
+
+def compute(x: int, y: str) -> bool:
+    return True
+
+call_with_retry(compute, max_attempts=3, x=1, y="hello")
+call_with_retry(compute, 3, 1, "hello")
+"#,
+);
+
+testcase!(
+    test_paramspec_forwarding_prefix_param_keyword,
+    r#"
+from typing import ParamSpec, Callable
+
+P = ParamSpec("P")
+Q = ParamSpec("Q")
+
+def call_fn(f: Callable[P, None], x: int, *args: P.args, **kwargs: P.kwargs) -> None:
+    f(*args, **kwargs)
+
+def forward(g: Callable[Q, None], *args: Q.args, **kwargs: Q.kwargs) -> None:
+    call_fn(g, x=1, *args, **kwargs)
 "#,
 );

@@ -59,7 +59,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         if arguments.len() == 1 {
             let arg = self.expr_untype(&arguments[0], context, errors);
-            self.heap.mk_type_form(wrap(arg))
+            self.heap.mk_type_of(wrap(arg))
         } else {
             self.error(
                 errors,
@@ -345,14 +345,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 |arg| self.heap.mk_optional(arg),
             ),
-            SpecialForm::Union => self.heap.mk_type_form(self.unions(
+            SpecialForm::Union => self.heap.mk_type_of(self.unions(
                 arguments.map(|arg| self.expr_untype(arg, TypeFormContext::TypeArgument, errors)),
             )),
             SpecialForm::Tuple => match self.check_args_and_construct_tuple(arguments, errors) {
-                Some((tuple, _)) => self.heap.mk_type_form(self.heap.mk_tuple(tuple)),
+                Some((tuple, _)) => self.heap.mk_type_of(self.heap.mk_tuple(tuple)),
                 None => self
                     .heap
-                    .mk_type_form(self.heap.mk_unbounded_tuple(self.heap.mk_any_error())),
+                    .mk_type_of(self.heap.mk_unbounded_tuple(self.heap.mk_any_error())),
             },
             SpecialForm::Literal => {
                 if parens {
@@ -367,7 +367,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 arguments
                     .iter()
                     .for_each(|x| self.apply_literal(x, errors, &mut literals));
-                self.heap.mk_type_form(self.unions(literals))
+                self.heap.mk_type_of(self.unions(literals))
             }
             SpecialForm::Concatenate => {
                 if arguments.len() < 2 {
@@ -406,13 +406,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                     }
                     self.heap
-                        .mk_type_form(Type::Concatenate(args, Box::new(pspec)))
+                        .mk_type_of(Type::Concatenate(args, Box::new(pspec)))
                 }
             }
             SpecialForm::Callable if arguments.len() == 2 => {
                 let callable_error = || {
                     self.heap
-                        .mk_type_form(self.heap.mk_callable_ellipsis(self.heap.mk_any_error()))
+                        .mk_type_of(self.heap.mk_callable_ellipsis(self.heap.mk_any_error()))
                 };
                 let ret = self.expr_untype(
                     &arguments[1],
@@ -423,7 +423,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Expr::List(ExprList { elts, .. }) => {
                         match self.check_args_and_construct_tuple(elts, errors) {
                             Some((tuple, true)) => {
-                                self.heap.mk_type_form(self.heap.mk_callable_from_vec(
+                                self.heap.mk_type_of(self.heap.mk_callable_from_vec(
                                     vec![Param::Varargs(
                                         None,
                                         self.heap.mk_unpack(self.heap.mk_tuple(tuple)),
@@ -432,7 +432,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ))
                             }
                             Some((Tuple::Concrete(elts), false)) => {
-                                self.heap.mk_type_form(self.heap.mk_callable_from_vec(
+                                self.heap.mk_type_of(self.heap.mk_callable_from_vec(
                                     elts.map(|t| {
                                         Param::PosOnly(None, t.clone(), Required::Required)
                                     }),
@@ -452,13 +452,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                     Expr::EllipsisLiteral(_) => {
-                        self.heap.mk_type_form(self.heap.mk_callable_ellipsis(ret))
+                        self.heap.mk_type_of(self.heap.mk_callable_ellipsis(ret))
                     }
                     name @ Expr::Name(_) => {
                         let ty = self.expr_untype(name, TypeFormContext::TypeArgument, errors);
                         if ty.is_kind_param_spec() {
                             self.heap
-                                .mk_type_form(self.heap.mk_callable_param_spec(ty, ret))
+                                .mk_type_of(self.heap.mk_callable_param_spec(ty, ret))
                         } else {
                             self.error(errors, name.range(),ErrorInfo::Kind(ErrorKind::BadSpecialization), format!("Callable types can only have `ParamSpec` in this position, got `{}`", self.for_display(ty)));
                             callable_error()
@@ -469,7 +469,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         match ty {
                             Type::Concatenate(args, pspec) => self
                                 .heap
-                                .mk_type_form(self.heap.mk_callable_concatenate(args, *pspec, ret)),
+                                .mk_type_of(self.heap.mk_callable_concatenate(args, *pspec, ret)),
                             _ => {
                                 self.error(errors, x.range(),ErrorInfo::Kind(ErrorKind::BadSpecialization), format!("Callable types can only have `Concatenate` in this position, got `{}`", self.for_display(ty)));
                                 callable_error()
@@ -498,7 +498,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                 );
                 self.heap
-                    .mk_type_form(self.heap.mk_callable_ellipsis(self.heap.mk_any_error()))
+                    .mk_type_of(self.heap.mk_callable_ellipsis(self.heap.mk_any_error()))
             }
             SpecialForm::TypeGuard => self.apply_unary_special_form(
                 SpecialForm::TypeGuard.to_string(),
@@ -526,7 +526,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         "`Unpack` cannot be applied to an unpacked argument".to_owned(),
                     );
                 }
-                self.heap.mk_type_form(self.heap.mk_unpack(arg))
+                self.heap.mk_type_of(self.heap.mk_unpack(arg))
             }
             SpecialForm::Unpack => self.error(
                 errors,
@@ -543,7 +543,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
                 TypeFormContext::TypeArgumentForType,
                 errors,
-                |arg| self.heap.mk_type_form(arg),
+                |arg| self.heap.mk_type_of(arg),
             ),
             SpecialForm::TypeForm => self.apply_unary_special_form(
                 SpecialForm::TypeForm.to_string(),

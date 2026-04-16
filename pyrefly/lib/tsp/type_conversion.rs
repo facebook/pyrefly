@@ -948,7 +948,7 @@ mod tests {
     #[test]
     fn test_convert_type_wrapper_non_class() {
         // Type(Any) should pass through since the inner isn't a ClassType
-        let ty = PyreflyType::Type(Box::new(PyreflyType::Any(AnyStyle::Explicit)));
+        let ty = PyreflyType::type_of(PyreflyType::Any(AnyStyle::Explicit));
         let tsp = convert_type(&ty);
         // Any wrapped in Type() — inner is BuiltIn, not Class, so it passes through unchanged
         match tsp {

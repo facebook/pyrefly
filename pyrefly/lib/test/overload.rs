@@ -1863,3 +1863,32 @@ def test(value: int | float | None) -> str:
     return str(i)
     "#,
 );
+
+testcase!(
+    bug = "Incorrect overload selection due to buggy type variable solving",
+    test_match_overload_with_unknown_type_from_missing_import,
+    r#"
+from typing import Any, assert_type, overload, TypeVar, TypeAliasType
+from collections.abc import Sequence
+import nonexistent as nmod  # type: ignore
+
+T = TypeVar("T")
+
+Opaque = TypeAliasType("Opaque", nmod.Foo[T], type_params=(T,))
+MyType = TypeAliasType("MyType", Opaque[T] | Sequence[T], type_params=(T,))
+
+class Inexact: ...
+S = TypeVar("S", bound=Inexact)
+
+@overload
+def f(a: MyType[S]) -> S: ...
+@overload
+def f(a: MyType[int]) -> float: ...
+def f(a: object) -> object: ...
+
+x: list[int] = []
+# This agrees with pyright and ty. (Mypy says `Never`.)
+# Because of `Opaque`, we should match the first overload with `S` unsolved.
+assert_type(f(x), Any)  # E: assert_type(float, Any)
+    "#,
+);

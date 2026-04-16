@@ -668,9 +668,9 @@ class E(A):
 
 class C[T]:
     @overload
-    def __init__(self: A, x: Literal[True]) -> None: ...  # E: `__init__` method self type `A` is not a superclass of class `C`  # E: Implementation signature `(self: Self@C, x: Unknown) -> None` does not accept all arguments that overload signature `(self: A, x: Literal[True]) -> None` accepts
+    def __init__(self: A, x: Literal[True]) -> None: ...  # E: `__init__` method self type `A` is not a superclass of class `C`
     @overload
-    def __init__(self: B, x: Literal[False]) -> None: ...  # E: `__init__` method self type `B` is not a superclass of class `C`  # E: Implementation signature `(self: Self@C, x: Unknown) -> None` does not accept all arguments that overload signature `(self: B, x: Literal[False]) -> None` accepts
+    def __init__(self: B, x: Literal[False]) -> None: ...  # E: `__init__` method self type `B` is not a superclass of class `C`
     def __init__(self, x):
         pass
 
@@ -989,6 +989,28 @@ C("5")  # E: Argument `Literal['5']` is not assignable to parameter `x` with typ
     "#,
 );
 
+// Regression test for a problem in networkx: https://github.com/facebook/pyrefly/issues/3121
+testcase!(
+    bug = "Following the typing spec, we may assume unannotated `__new__` returns Self, which would avoid bad behaviors in some complex, dynamically-typed codebases",
+    test_return_type_inference_for_constructors,
+    r#"
+from typing import assert_type
+
+class A:
+    def __new__(cls, x: int | None = None):
+        if x is None:
+            return cls.__new__(cls, 5)
+        else:
+            return object.__new__(cls)
+    
+    def __init__(cls):
+        return "x"
+
+a = A()
+assert_type(a, A)  # E: assert_type(A | Unknown, A)
+"#,
+);
+
 testcase!(
     test_redundant_dict_constructor_call_ok,
     r#"
@@ -1001,5 +1023,38 @@ def g(x: Mapping[Kind, int]) -> None: ...
 
 def f(x: dict[Kind, int]) -> None:
     g(dict(x))
+    "#,
+);
+
+testcase!(
+    test_overloaded_constructor_with_hint,
+    r#"
+from collections.abc import Mapping
+from typing import assert_type, Generic, Never, overload, SupportsInt, TypeVar
+
+_T_co = TypeVar("_T_co", covariant=True)
+_T = TypeVar("_T")
+
+class Box(Generic[_T_co]):
+    @overload
+    def __init__(self: "Box[Never]", val: Mapping[Never, SupportsInt], /) -> None: ...
+    @overload
+    def __init__(self: "Box[_T]", val: Mapping[_T, SupportsInt], /) -> None: ...
+    def __init__(self, val: object, /) -> None:
+        pass
+
+def process(items: Box[_T]) -> "Box[_T]": ...
+
+assert_type(process(Box({1: 1})), Box[int])
+    "#,
+);
+
+testcase!(
+    bug = "False positive",
+    test_construct_list_with_union_input,
+    r#"
+Y = list[int] | list[str] | str
+def f(x: str):
+    y: Y = list(x)  # E: `str` is not assignable to parameter `iterable` with type `Iterable[int]`
     "#,
 );

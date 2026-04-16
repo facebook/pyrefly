@@ -239,13 +239,15 @@ impl ErrorCollector {
         let line = err.display_range().start.line_within_file();
         if let Some((fs_start, fs_end)) = find_containing_range(fstring_ranges, line) {
             let ignore = err.module().ignore();
-            let kind = err.error_kind().to_name();
             let enabled = &error_config.enabled_ignores;
-            if fs_start != line && ignore.is_ignored(fs_start, kind, enabled) {
-                return true;
-            }
-            if fs_end != line && ignore.is_ignored(fs_end, kind, enabled) {
-                return true;
+            // Check both this kind's name and any parent kind's name.
+            for kind in err.error_kind().suppression_names() {
+                if fs_start != line && ignore.is_ignored(fs_start, kind, enabled) {
+                    return true;
+                }
+                if fs_end != line && ignore.is_ignored(fs_end, kind, enabled) {
+                    return true;
+                }
             }
         }
         false

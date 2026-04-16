@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_util"
-version = "0.60.2"
+version = "0.61.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -20,7 +20,7 @@ dupe = "0.9.1"
 equivalent = "1.0.2"
 fxhash = "0.2.1"
 glob = "0.3.2"
-hashbrown = { version = "0.14.5", features = ["ahash", "raw", "serde"] }
+hashbrown = "0.17"
 human_bytes = "0.4.3"
 ignore = "0.4"
 index_vec = "0.1.4"

@@ -219,6 +219,8 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
+    use crate::error_kind::ErrorKind;
+    use crate::error_kind::Severity;
 
     // helper function for ConfigFile::from_file
     fn from_file(path: &Path) -> anyhow::Result<()> {
@@ -467,10 +469,57 @@ files = ["mypy.py"]
         fs_anyhow::write(&original_config_path, b"[mypy]\nfake_option = True\n")?;
         config_migration(&original_config_path, MigrationSource::Auto)?;
         let output = fs_anyhow::read_to_string(&pyrefly_config_path)?;
+        // mutable-override is disabled by default when migrating from mypy
         assert_eq!(
             output.trim(),
-            "check-unannotated-defs = false\ninfer-return-types = \"never\""
+            "check-unannotated-defs = false\ninfer-return-types = \"never\"\n\n[errors]\nbad-override-mutable-attribute = \"ignore\""
         );
+        Ok(())
+    }
+
+    /// Tests that a migrated mypy config with both root-level and per-module
+    /// error codes produces a pyrefly config where the sub-config inherits the
+    /// root's error overrides. Before the sub-config error merging fix, the
+    /// sub-config's error map would completely replace the root's, causing the
+    /// root-level `override` disable to be lost for matching files.
+    #[test]
+    fn test_mypy_subconfig_inherits_root_errors() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let original_config_path = tmp.path().join("mypy.ini");
+        let pyrefly_config_path = tmp.path().join("pyrefly.toml");
+        fs_anyhow::write(
+            &original_config_path,
+            b"[mypy]\ndisable_error_code = override\n\n[mypy-app.models]\ndisable_error_code = name-defined\n",
+        )?;
+        config_migration(&original_config_path, MigrationSource::Auto)?;
+        let output = fs_anyhow::read_to_string(&pyrefly_config_path)?;
+
+        // Parse the generated config and verify
+        let mut config: ConfigFile = toml::from_str(&output)?;
+        config.configure();
+
+        // Sub-config file should inherit root's bad-override=ignore
+        let sub_errors = config.errors(Path::new("app/models/foo.py"));
+        assert_eq!(
+            sub_errors.severity(ErrorKind::BadOverride),
+            Severity::Ignore
+        );
+        assert_eq!(
+            sub_errors.severity(ErrorKind::UnknownName),
+            Severity::Ignore
+        );
+
+        // Non-matching file should only have root errors
+        let root_errors = config.errors(Path::new("other.py"));
+        assert_eq!(
+            root_errors.severity(ErrorKind::BadOverride),
+            Severity::Ignore
+        );
+        assert_eq!(
+            root_errors.severity(ErrorKind::UnknownName),
+            Severity::Error
+        );
+
         Ok(())
     }
 

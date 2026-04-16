@@ -307,7 +307,7 @@ impl GleanState<'_> {
 
     fn gencode_fact(&mut self) -> Option<gencode::GenCode> {
         let generated_pattern = RegexBuilder::new(
-            r"^.*@(?P<tag>(partially-)?generated)( SignedSource<<(?P<sign>[0-9a-f]+)>>)?$",
+            r"^.*@(?P<tag>(partially-)?generated)( (?:SignedSource<<(?P<sign>[0-9a-f]+)>>|<<SignedSource::[^>]+>>))?$",
         )
         .multi_line(true)
         .build()
@@ -648,18 +648,26 @@ impl GleanState<'_> {
         self.resolve_name_use(&identifier, only_resolved_name, definition)
     }
 
-    fn find_definition_for_str_literal(&self, range: TextRange) -> Vec<DefinitionLocation> {
+    fn find_definition_for_str_literal(
+        &self,
+        range: TextRange,
+        base_range: Option<TextRange>,
+    ) -> Vec<DefinitionLocation> {
         let name = self.module.code_at(range);
-        let as_name = join_names(self.module_name.as_str(), name);
-        let identifier = Identifier::new(name, range);
-        let definition = self
-            .transaction
-            .find_definition_for_name_use(self.handle, &identifier, find_preference_glean())
-            .unwrap_or(None);
-        if definition.is_some() || self.names.contains(&as_name) {
-            self.resolve_name_use(&identifier, false, definition)
+        if let Some(base_range) = base_range {
+            self.find_definition_for_typed_attribute(base_range, &Name::new(name))
         } else {
-            vec![]
+            let as_name = join_names(self.module_name.as_str(), name);
+            let identifier = Identifier::new(name, range);
+            let definition = self
+                .transaction
+                .find_definition_for_name_use(self.handle, &identifier, find_preference_glean())
+                .unwrap_or(None);
+            if definition.is_some() || self.names.contains(&as_name) {
+                self.resolve_name_use(&identifier, false, definition)
+            } else {
+                vec![]
+            }
         }
     }
 
@@ -693,13 +701,31 @@ impl GleanState<'_> {
 
         ranges
             .flat_map(|range| {
-                let name = self.module.code_at(range);
-                let definitions = if name == "None" {
-                    vec![self.find_definition_for_literal_symbol(name)]
+                let token = self.module.code_at(range);
+                if token == "None" {
+                    vec![(self.find_definition_for_literal_symbol(token), range)]
                 } else {
-                    self.find_definition_for_str_literal(range)
-                };
-                definitions.into_iter().map(move |def| (def, range))
+                    token
+                        .split('.')
+                        .scan(
+                            (range.start(), None::<TextRange>),
+                            |(pos, base_range), name| {
+                                let name_start = *pos;
+                                let name_end = name_start + TextSize::try_from(name.len()).unwrap();
+                                let name_range = TextRange::new(name_start, name_end);
+
+                                let defs =
+                                    self.find_definition_for_str_literal(name_range, *base_range);
+
+                                *base_range = Some(TextRange::new(range.start(), name_end));
+                                *pos = name_end + TextSize::new(1);
+
+                                Some(defs.into_iter().map(move |def| (def, name_range)))
+                            },
+                        )
+                        .flatten()
+                        .collect()
+                }
             })
             .collect()
     }

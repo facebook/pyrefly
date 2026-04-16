@@ -349,7 +349,7 @@ fn collapse_builtins_type(types: &mut Vec<Type>, heap: &TypeHeap) {
         *(types
             .get_mut(idx)
             .expect("idx out of bounds when collapsing type members in union")) =
-            heap.mk_type_form(heap.mk_union(elts));
+            heap.mk_type_of(heap.mk_union(elts));
     }
 }
 

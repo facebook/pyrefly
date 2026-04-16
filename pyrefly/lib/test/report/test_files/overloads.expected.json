@@ -2,8 +2,6 @@
   "name": "test",
   "names": [
     "test.f",
-    "test.f",
-    "test.WithOverloads.method",
     "test.WithOverloads.method",
     "test.WithOverloads"
   ],

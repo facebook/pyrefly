@@ -553,6 +553,20 @@ def test(x: int):
 );
 
 testcase!(
+    test_dict_infer_error_value,
+    r#"
+# Error-typed values should not cause the anonymous TypedDict to drop
+# fields, which would narrow the value_type and cause false positives
+# on subscript assignment.
+message = {
+    "device_id": "device-id",
+    "device_2": Unknown,  # E: Could not find name `Unknown`
+}
+message["attachment"] = {"image": "thumb-url"}
+"#,
+);
+
+testcase!(
     test_override_classvar,
     r#"
 from typing import ClassVar

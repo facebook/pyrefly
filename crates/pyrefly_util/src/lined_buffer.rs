@@ -285,6 +285,12 @@ impl LinedBuffer {
         } else {
             OneIndexed::from_zero_indexed(position.line as usize)
         };
+        // Clamp line number to the valid range. The LSP client may send a line
+        // number beyond EOF (e.g., when the editor's view is stale after a file
+        // truncation). LineIndex::line_start() only handles row_index ==
+        // line_count (one-past-the-end) but panics for anything beyond that.
+        let max_line = OneIndexed::from_zero_indexed(self.lines.line_count());
+        let line = std::cmp::min(line, max_line);
         // Clamp character offset to the line length per the LSP specification:
         // "If the character value is greater than the line length it defaults
         // back to the line length."
@@ -674,5 +680,28 @@ mod tests {
         let range = TextRange::new(TextSize::new(0), past_eof);
         // This should not panic - it should clamp to the end of the buffer.
         let _lsp_range = lined_buffer.to_lsp_range(range, None);
+    }
+
+    /// Regression test: `from_lsp_position` must not panic when the LSP client
+    /// sends a position with a line number beyond the end of the buffer. This
+    /// can happen when the editor's view of the file is stale (e.g., after a
+    /// DidChangeTextDocument race where the file was truncated). The LSP spec
+    /// says out-of-range positions should be clamped, not crash the server.
+    ///
+    /// This reproduces the crash reported in Pyrefly 0.60 where a
+    /// `textDocument/codeAction` request triggered:
+    ///   "index out of bounds: the len is 13 but the index is 14"
+    /// in `LineIndex::line_start()` via `LinedBuffer::from_lsp_position()`.
+    #[test]
+    fn test_from_lsp_position_out_of_range_line() {
+        let contents = Arc::new("def foo():\n    pass\n".to_owned());
+        let lined_buffer = LinedBuffer::new(Arc::clone(&contents));
+        let position = lsp_types::Position {
+            line: 100,
+            character: 0,
+        };
+        // Should clamp to EOF, not panic.
+        let offset = lined_buffer.from_lsp_position(position, None);
+        assert_eq!(offset, TextSize::new(contents.len() as u32));
     }
 }

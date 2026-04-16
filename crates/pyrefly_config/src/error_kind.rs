@@ -119,8 +119,18 @@ pub enum ErrorKind {
     BadMatch,
     /// A subclass field or method incorrectly overrides a field/method of a parent class.
     BadOverride,
+    /// A subclass field overrides a mutable attribute of a parent class with an incompatible type.
+    /// Mutable (read-write) attributes require invariant types, unlike read-only attributes or
+    /// methods which allow covariant overrides.
+    /// This is a sub-kind of [BadOverride]: suppressing `bad-override` also suppresses this error.
+    BadOverrideMutableAttribute,
     /// A subclass method incorrectly changes the name of a positional parameter while overriding
     /// a method of a parent class.
+    /// This is a sub-kind of [BadOverride]: suppressing `bad-override` also suppresses this error.
+    BadOverrideParamName,
+    /// DEPRECATED: use [BadOverrideParamName] (`bad-override-param-name`) instead.
+    /// Kept so that existing `# pyrefly: ignore[bad-param-name-override]` comments and
+    /// config entries continue to work. This variant is never emitted by the type checker.
     BadParamNameOverride,
     /// Invalid exception or cause in `raise` statement.
     BadRaise,
@@ -333,6 +343,34 @@ impl ErrorKind {
             .unwrap()
             .0
             .as_str()
+    }
+
+    /// Returns the parent error kind, if this is a sub-kind of another error.
+    /// Suppressing the parent kind also suppresses this kind.
+    pub fn parent_kind(self) -> Option<ErrorKind> {
+        match self {
+            ErrorKind::BadOverrideMutableAttribute | ErrorKind::BadOverrideParamName => {
+                Some(ErrorKind::BadOverride)
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns the deprecated alias for this error kind, if any.
+    /// The deprecated name is still accepted in suppressions and config.
+    pub fn deprecated_alias(self) -> Option<ErrorKind> {
+        match self {
+            ErrorKind::BadOverrideParamName => Some(ErrorKind::BadParamNameOverride),
+            _ => None,
+        }
+    }
+
+    /// Returns all names that should match when checking suppressions.
+    /// Includes this kind's name, any parent kind's name, and any deprecated alias.
+    pub fn suppression_names(self) -> impl Iterator<Item = &'static str> {
+        std::iter::once(self.to_name())
+            .chain(self.parent_kind().map(|p| p.to_name()))
+            .chain(self.deprecated_alias().map(|d| d.to_name()))
     }
 
     pub fn default_severity(self) -> Severity {

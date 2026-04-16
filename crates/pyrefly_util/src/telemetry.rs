@@ -175,6 +175,42 @@ pub struct TelemetryTransactionStats {
     pub search_exports_dispatch_time: Duration,
     /// Whether the transaction was cancelled before completing.
     pub cancelled: bool,
+    /// Per-step compute time (wall clock, includes recursive demand).
+    pub step_load_time: Duration,
+    pub step_load_count: usize,
+    pub step_ast_time: Duration,
+    pub step_ast_count: usize,
+    pub step_exports_time: Duration,
+    pub step_exports_count: usize,
+    pub step_answers_time: Duration,
+    pub step_answers_count: usize,
+    pub step_solutions_time: Duration,
+    pub step_solutions_count: usize,
+    /// Time spent in `clean()` at the start of `demand()`.
+    pub clean_time: Duration,
+    pub clean_count: usize,
+    /// Time spent in `find_import()` during compute (imports cache miss).
+    pub find_import_time: Duration,
+    pub find_import_count: usize,
+    /// Time blocked in condvar waiting for another thread to compute a module.
+    pub demand_wait_time: Duration,
+    pub demand_wait_count: usize,
+    /// Number of modules not in committed state (first seen this session).
+    pub cold_modules: usize,
+    /// Number of modules cloned from committed state.
+    pub warm_modules: usize,
+    /// Total filesystem stat calls (is_file, exists, is_dir in finder).
+    pub total_stat_count: usize,
+    /// Stat calls exceeding 1ms (likely EdenFS remote fetch).
+    pub slow_stat_count: usize,
+    /// Cumulative time of slow stat calls.
+    pub slow_stat_time: Duration,
+    /// Total filesystem read calls (read_to_string in load).
+    pub total_read_count: usize,
+    /// Read calls exceeding 1ms (likely EdenFS remote fetch).
+    pub slow_read_count: usize,
+    /// Cumulative time of slow read calls.
+    pub slow_read_time: Duration,
 }
 
 #[derive(Default)]

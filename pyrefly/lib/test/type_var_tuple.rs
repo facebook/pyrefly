@@ -330,7 +330,6 @@ def test[T, *Ts](t1: tuple[T, *Ts], t2: tuple[*Ts, T]):
 );
 
 testcase!(
-    bug = "conformance: TypeVarTuple should allow compatible tuple types when solving (maybe related to issue 105)",
     test_typevartuple_compatible_tuple_types,
     r#"
 from typing import TypeVarTuple
@@ -339,7 +338,7 @@ Ts = TypeVarTuple("Ts")
 
 def func2(arg1: tuple[*Ts], arg2: tuple[*Ts]) -> tuple[*Ts]: ...
 
-func2((0,), (0.0,))  # E: Argument `tuple[float]` is not assignable to parameter `arg2` with type `tuple[int]`
+func2((0,), (0.0,))
 "#,
 );
 
@@ -441,4 +440,24 @@ def test3() -> None:
 infer3 = positional(test3)
 assert_type(infer3, Callable[[], None])
 "#,
+);
+
+testcase!(
+    test_different_types_ok,
+    r#"
+from typing import TypeVarTuple
+Ts = TypeVarTuple('Ts')
+def func(*args: tuple[*Ts]): ...
+func((0,), ("1",))
+    "#,
+);
+
+testcase!(
+    test_different_lengths_error,
+    r#"
+from typing import TypeVarTuple
+Ts = TypeVarTuple('Ts')
+def func(*args: tuple[*Ts]): ...
+func((0,), (1, 2))  # E: `tuple[Literal[1], Literal[2]]` is not assignable to parameter `*args` with type `tuple[int]`
+    "#,
 );

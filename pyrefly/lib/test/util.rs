@@ -459,7 +459,7 @@ impl TestEnv {
             let name = ModuleName::from_str(module);
             Handle::new(
                 name,
-                find_import(&config_file, name, None, None)
+                find_import(&config_file, name, None, None, None)
                     .finding()
                     .unwrap(),
                 config.dupe(),
@@ -711,7 +711,7 @@ pub fn testcase_for_macro(
             t.run(&[h.dupe()], Require::Everything, None);
             let errors = t.get_errors([&h]);
             let project_root = PathBuf::new();
-            print_errors(project_root.as_path(), &errors.collect_errors().ordinary);
+            print_errors(project_root.as_path(), &errors.collect_display_errors());
             check(errors)?;
         } else {
             let (state, handle) = env.clone().to_state();

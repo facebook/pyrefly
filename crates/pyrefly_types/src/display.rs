@@ -1722,7 +1722,7 @@ pub mod tests {
             "None | Literal[True, 'test'] | LiteralString"
         );
         assert_eq!(
-            Type::type_form(Type::Union(Box::new(Union {
+            Type::type_of(Type::Union(Box::new(Union {
                 members: vec![nonlit1, nonlit2],
                 display_name: Some((ModuleName::unknown(), Name::new("MyUnion")))
             })))
@@ -2111,7 +2111,7 @@ pub mod tests {
         );
 
         // Test compact display mode as non-toplevel type (non-hover)
-        let type_form_of_overload = Type::type_form(overload.clone());
+        let type_form_of_overload = Type::type_of(overload.clone());
         let ctx = TypeDisplayContext::new(&[&type_form_of_overload]);
         assert_eq!(
             ctx.display(&type_form_of_overload).to_string(),
@@ -2158,7 +2158,7 @@ def overloaded_func[T](
         );
 
         // Test compact display mode as non-toplevel type (non-hover)
-        let type_form_of_bound_method_overload = Type::type_form(bound_method_overload.clone());
+        let type_form_of_bound_method_overload = Type::type_of(bound_method_overload.clone());
         let ctx = TypeDisplayContext::new(&[&type_form_of_bound_method_overload]);
         assert_eq!(
             ctx.display(&type_form_of_bound_method_overload).to_string(),

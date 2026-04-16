@@ -387,7 +387,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
             && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
         {
-            return self.heap.mk_type_form(self.union(l, r));
+            return self.heap.mk_type_of(self.union(l, r));
         }
 
         if matches!(x.op, Operator::Div | Operator::FloorDiv | Operator::Mod)
@@ -454,7 +454,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
                     && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
                 {
-                    self.heap.mk_type_form(self.union(l, r))
+                    self.heap.mk_type_of(self.union(l, r))
                 } else if x.op == Operator::Add
                     && ((matches!(lhs, Type::LiteralString(_)) && rhs.is_literal_string())
                         || (matches!(rhs, Type::LiteralString(_)) && lhs.is_literal_string()))

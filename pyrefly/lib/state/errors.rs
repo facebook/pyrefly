@@ -161,6 +161,19 @@ impl Errors {
         Self { loads }
     }
 
+    fn merge_display_errors(mut ordinary: Vec<Error>, directives: Vec<Error>) -> Vec<Error> {
+        ordinary.extend(directives);
+        ordinary.sort_by_cached_key(|e| {
+            (
+                e.module().name(),
+                e.path().dupe(),
+                e.range().start(),
+                e.range().end(),
+            )
+        });
+        ordinary
+    }
+
     pub fn collect_errors(&self) -> CollectedErrors {
         let mut errors = CollectedErrors::default();
         for (load, config, ranges) in &self.loads {
@@ -197,6 +210,11 @@ impl Errors {
             processor.process_errors(&mut errors.ordinary, &mut errors.baseline, relative_to);
         }
         errors
+    }
+
+    pub fn collect_display_errors(&self) -> Vec<Error> {
+        let errors = self.collect_errors();
+        Self::merge_display_errors(errors.ordinary, errors.directives)
     }
 
     pub fn collect_ignores(&self) -> SmallMap<&ModulePath, &Ignore> {
@@ -249,16 +267,26 @@ impl Errors {
                 let module_path = error.path();
                 let start_line = error.display_range().start.line_within_file();
                 let end_line = error.display_range().end.line_within_file();
-                let error_code = error.error_kind().to_name().to_owned();
 
                 let module_codes = suppressed_codes_by_module.entry(module_path).or_default();
 
-                // Track the error code for all lines the error spans.
+                // Track both this kind's name and any parent kind's name, so that
+                // e.g. `# pyrefly: ignore[bad-override]` is not reported as unused
+                // when it suppresses a `bad-override-mutable-attribute` error.
+                let error_codes: Vec<String> = error
+                    .error_kind()
+                    .suppression_names()
+                    .map(|s| s.to_owned())
+                    .collect();
+
+                // Track the error codes for all lines the error spans.
                 for line_idx in start_line.to_zero_indexed()..=end_line.to_zero_indexed() {
-                    module_codes
+                    let line_codes = module_codes
                         .entry(LineNumber::from_zero_indexed(line_idx))
-                        .or_default()
-                        .insert(error_code.clone());
+                        .or_default();
+                    for code in &error_codes {
+                        line_codes.insert(code.clone());
+                    }
                 }
 
                 // If the error is inside a multi-line f/t-string, also track
@@ -267,14 +295,13 @@ impl Errors {
                 if let Some(ranges) = fstring_ranges_by_module.get(&module_path)
                     && let Some((fs_start, fs_end)) = find_containing_range(ranges, start_line)
                 {
-                    module_codes
-                        .entry(fs_start)
-                        .or_default()
-                        .insert(error_code.clone());
-                    module_codes
-                        .entry(fs_end)
-                        .or_default()
-                        .insert(error_code.clone());
+                    for code in &error_codes {
+                        module_codes
+                            .entry(fs_start)
+                            .or_default()
+                            .insert(code.clone());
+                        module_codes.entry(fs_end).or_default().insert(code.clone());
+                    }
                 }
             }
         }
@@ -431,9 +458,7 @@ impl Errors {
                 &ranges.ignore_all,
                 &mut result,
             );
-            let mut output_errors = result.ordinary;
-            output_errors.extend(result.directives);
-            output_errors.sort_by_key(|e| (e.range().start(), e.range().end()));
+            let output_errors = Self::merge_display_errors(result.ordinary, result.directives);
             Expectation::parse(load.module_info.dupe(), load.module_info.contents())
                 .check(&output_errors)?;
         }

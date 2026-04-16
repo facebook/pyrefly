@@ -123,6 +123,7 @@ pub enum AttrSubsetError {
         got: Type,
         want: Type,
         got_is_property: bool,
+        want_is_property: bool,
         subset_error: SubsetError,
     },
 }
@@ -212,15 +213,21 @@ impl AttrSubsetError {
                 got,
                 want,
                 got_is_property,
+                want_is_property,
                 subset_error: _,
             } => {
-                let desc = if *got_is_property {
+                let got_desc = if *got_is_property {
                     "The property setter for "
                 } else {
                     ""
                 };
+                let want_desc = if *want_is_property {
+                    ", the property setter for "
+                } else {
+                    ", the type of "
+                };
                 format!(
-                    "{desc}`{child_class}.{attr_name}` has type `{}`, which is not assignable from `{}`, the property getter for `{parent_class}.{attr_name}`",
+                    "{got_desc}`{child_class}.{attr_name}` has type `{}`, which is not assignable from `{}`{want_desc}`{parent_class}.{attr_name}`",
                     got.clone().deterministic_printing(),
                     want.clone().deterministic_printing()
                 )
@@ -547,9 +554,9 @@ impl ClassBase {
         match self {
             ClassBase::ClassDef(c) => heap.mk_class_def(c.into_class_object()),
             ClassBase::ClassType(c) => heap.mk_type(heap.mk_class_type(c)),
-            ClassBase::Quantified(q, _) => heap.mk_type_form(q.to_type(heap)),
-            ClassBase::SelfType(c) => heap.mk_type_form(heap.mk_self_type(c)),
-            ClassBase::Protocol(_, self_type) => heap.mk_type_form(self_type),
+            ClassBase::Quantified(q, _) => heap.mk_type_of(q.to_type(heap)),
+            ClassBase::SelfType(c) => heap.mk_type_of(heap.mk_self_type(c)),
+            ClassBase::Protocol(_, self_type) => heap.mk_type_of(self_type),
         }
     }
 
@@ -2160,7 +2167,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::UntypedAlias(ta) => self.as_attribute_base1(self.untype_alias(&ta), acc),
             Type::Type(box Type::Tuple(tuple)) => self.as_attribute_base1(
                 self.heap
-                    .mk_type_form(self.heap.mk_class_type(self.erase_tuple_type(tuple))),
+                    .mk_type_of(self.heap.mk_class_type(self.erase_tuple_type(tuple))),
                 acc,
             ),
             Type::Type(box Type::ClassType(class)) => {
@@ -2376,7 +2383,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.force_var_for_attribute_base(v, |ty| self.as_attribute_base1(ty, acc))
             }
             Type::Type(box Type::Var(v)) => self.force_var_for_attribute_base(v, |ty| {
-                self.as_attribute_base1(self.heap.mk_type_form(ty), acc)
+                self.as_attribute_base1(self.heap.mk_type_of(ty), acc)
             }),
             Type::SuperInstance(box (cls, obj)) => {
                 acc.push(AttributeBase1::SuperInstance(cls, obj))
@@ -2388,12 +2395,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Type(box Type::Union(box Union { members, .. })) => {
                 for ty in members {
-                    self.as_attribute_base1(self.heap.mk_type_form(ty), acc)
+                    self.as_attribute_base1(self.heap.mk_type_of(ty), acc)
                 }
             }
             Type::Type(box Type::Intersect(box (_, fallback))) => {
                 // TODO(rechen): implement attribute access on `type[A & B]`
-                self.as_attribute_base1(self.heap.mk_type_form(fallback), acc)
+                self.as_attribute_base1(self.heap.mk_type_of(fallback), acc)
             }
             Type::Quantified(quantified) => match quantified.restriction() {
                 Restriction::Bound(ty) => {

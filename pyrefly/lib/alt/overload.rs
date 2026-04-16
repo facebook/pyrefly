@@ -180,7 +180,7 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                     .collect()
             }
             Type::Type(box Type::Union(box Union { members: ts, .. })) => {
-                ts.into_map(|t| self.solver.heap.mk_type_form(t))
+                ts.into_map(|t| self.solver.heap.mk_type_of(t))
             }
             Type::Tuple(Tuple::Concrete(elements)) => {
                 let mut count: usize = 1;
@@ -502,14 +502,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         ctor_targs: &Option<&mut TArgs>,
     ) -> (CalledOverload<'c>, bool) {
-        // Collect partial vars so we can save/restore them around each overload evaluation. This
-        // prevents premature pinning of partial vars on failed overload calls.
-        let partial_vars = self.collect_partial_vars(self_obj, args, keywords);
+        // Collect placeholder vars so we can save/restore them around each overload evaluation. This
+        // prevents premature pinning of vars on failed overload calls.
+        let placeholder_vars = self.collect_placeholder_vars(self_obj, args, keywords);
 
         let mut matched_overloads = Vec::with_capacity(overloads.len());
         let mut closest_unmatched_overload: Option<CalledOverload<'c>> = None;
         for callable in overloads {
-            let snapshot = self.solver().snapshot_vars(&partial_vars);
+            let snapshot = self.solver().snapshot_vars(&placeholder_vars);
             let called_overload = self.call_overload(
                 callable,
                 metadata,
@@ -521,7 +521,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None, // don't use the hint yet, it shouldn't influence overload selection
                 ctor_targs,
             );
-            self.solver().restore_vars(&snapshot);
+            self.solver().restore_vars(snapshot);
             if called_overload.call_errors.is_empty() {
                 matched_overloads.push(called_overload);
             } else {
@@ -630,7 +630,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     matched_overloads
                         .iter()
                         .find_position(|o| {
-                            let snapshot = self.solver().snapshot_vars(&partial_vars);
+                            let snapshot = self.solver().snapshot_vars(&placeholder_vars);
                             let res = self.call_overload(
                                 o.func,
                                 metadata,
@@ -642,7 +642,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 None, // don't use the hint yet, it shouldn't influence overload selection
                                 &None,
                             );
-                            self.solver().restore_vars(&snapshot);
+                            self.solver().restore_vars(snapshot);
                             res.call_errors.is_empty()
                         })
                         .map(|(split_point, _)| split_point + 1)
@@ -747,18 +747,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(candidate)
     }
 
-    /// Collect partial vars from self_obj and Type-valued arguments.
-    fn collect_partial_vars(
+    /// Collect placeholder vars from self_obj and Type-valued arguments.
+    fn collect_placeholder_vars(
         &self,
         self_obj: Option<&Type>,
         args: &[CallArg],
         keywords: &[CallKeyword],
     ) -> Vec<Var> {
-        let mut partial_vars: Vec<Var> = Vec::new();
+        let mut placeholder_vars: Vec<Var> = Vec::new();
         let mut collect = |ty: &Type| {
             for var in ty.collect_maybe_placeholder_vars() {
-                if self.solver().var_is_partial(var) && !partial_vars.contains(&var) {
-                    partial_vars.push(var);
+                if !placeholder_vars.contains(&var) {
+                    placeholder_vars.push(var);
                 }
             }
         };
@@ -777,7 +777,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 collect(ty);
             }
         }
-        partial_vars
+        placeholder_vars
     }
 
     fn call_overload<'c>(

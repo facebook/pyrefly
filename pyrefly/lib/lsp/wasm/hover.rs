@@ -201,13 +201,18 @@ fn get_suppressed_errors_for_line(
         .into_iter()
         .filter(|error| {
             let range = error.display_range();
-            ignore.is_ignored_by_suppression_line(
-                suppression_line,
-                range.start.line_within_file(),
-                range.end.line_within_file(),
-                error.error_kind().to_name(),
-                &Tool::default_enabled(),
-            )
+            // Check both this kind's name and any parent kind's name,
+            // so that e.g. `ignore[bad-override]` shows suppressed
+            // `bad-override-mutable-attribute` errors on hover.
+            error.error_kind().suppression_names().any(|name| {
+                ignore.is_ignored_by_suppression_line(
+                    suppression_line,
+                    range.start.line_within_file(),
+                    range.end.line_within_file(),
+                    name,
+                    &Tool::default_enabled(),
+                )
+            })
         })
         .collect()
 }

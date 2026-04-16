@@ -1179,6 +1179,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             }
+            Type::None if is_new_type => {
+                let base_cls = self.stdlib.none_type().class_object();
+                let metadata = self.get_metadata_for_class(base_cls);
+                BaseClassParseResult::Parsed({
+                    ParsedBaseClass {
+                        class_object: base_cls.dupe(),
+                        range,
+                        metadata,
+                    }
+                })
+            }
             Type::Type(box Type::Any(_)) => {
                 // `type[Any]` is equivalent to `type` or `Type`
                 let type_obj = self.stdlib.builtins_type().class_object();
@@ -1204,6 +1215,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Ignore all type errors here since they'll be reported in `class_bases_of` anyway
                 let errors = ErrorCollector::new(self.module().dupe(), ErrorStyle::Never);
                 let ty = self.base_class_expr_infer_for_metadata(x, &errors);
+                // The value `None` has type `Type::None`, which `untype_opt` passes
+                // through because `None` is both a value and a type. But as a NewType
+                // base, the value `None` is not valid — only the class `NoneType` is.
+                // Reject it here before `untype_opt` erases the distinction.
+                if is_new_type && matches!(&ty, Type::None) {
+                    return BaseClassParseResult::InvalidType(ty, x.range());
+                }
                 match self.untype_opt(ty.clone(), x.range(), &errors) {
                     None => BaseClassParseResult::InvalidType(ty, x.range()),
                     Some(ty) => parse_base_class_type(ty),
@@ -1337,8 +1355,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     metadata,
                 }) => {
-                    if metadata.is_final()
-                        || (metadata.is_enum() && !self.get_enum_members(&class_object).is_empty())
+                    if !is_new_type
+                        && (metadata.is_final()
+                            || (metadata.is_enum()
+                                && !self.get_enum_members(&class_object).is_empty()))
                     {
                         self.error(
                             errors,

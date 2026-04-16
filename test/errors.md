@@ -40,8 +40,9 @@ $ echo "x: str = 12" > $TMPDIR/shown1.py && \
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check --python-version 3.13.0 "$TMPDIR/*" --project-excludes="$TMPDIR/*"
-Pattern * is matched by `project-excludes` or ignore file. (glob)
+ WARN Skipping include pattern `*` because it is matched by `project-excludes` or an ignore file. (glob)
 `project-excludes`: * (glob)
+No Python files matched pattern `*` (glob)
 [1]
 ```
 

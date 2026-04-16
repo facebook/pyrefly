@@ -2337,3 +2337,25 @@ def f(x):
     assert_type(y, Any)
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3048
+testcase!(
+    test_enumerate_reversed,
+    r#"
+from collections.abc import Iterator, Sequence
+
+class Series: ...
+
+class DataFrame:
+    def __iter__(self) -> Iterator[Series]: ...
+    def __reversed__(self) -> Iterator[Series]: ...
+    def __len__(self) -> int: ...
+    def __getitem__(self, key: int | Sequence[int]) -> Series | DataFrame: ...
+
+def func(s: Series) -> None: ...
+
+def main(a: DataFrame) -> None:
+    for i, s in enumerate(reversed(a)):
+        func(s)
+    "#,
+);

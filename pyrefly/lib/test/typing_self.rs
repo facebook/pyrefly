@@ -510,6 +510,60 @@ def test(c: Child) -> None:
     c.method(42).child_method()
 "#,
 );
+
+// Regression test for a previously unhandled crash when computing intersection
+// of SelfType and ClassType (after removing SelfType <: ClassType)
+testcase!(
+    test_classmethod_self_return_with_issubclass_narrowing,
+    r#"
+from typing import Self, assert_type
+
+class Parent:
+    @classmethod
+    def decode(cls, data: dict) -> Self:
+        if issubclass(cls, Child):
+            # This narrowing creates an intersection of a Self type with a concrete type
+            return cls(data, legacy=True)
+        return cls(data)
+
+    def __init__(self, data: dict) -> None:
+        pass
+
+class Child(Parent):
+    def __init__(self, data: dict, legacy: bool = False) -> None:
+        super().__init__(data)
+
+assert_type(Parent.decode({}), Parent)
+assert_type(Child.decode({}), Child)
+"#,
+);
+
+// Regression test for inherited generic instantiations in ClassType & SelfType
+// intersections. This exercises the soundness guard that only collapses
+// `ClassType(Child) & SelfType(Parent[int])` when the upcast back to `Parent`
+// preserves the same inherited instantiation.
+testcase!(
+    test_classmethod_self_return_with_generic_issubclass_narrowing,
+    r#"
+from typing import Self, assert_type
+
+class Parent[T]:
+    @classmethod
+    def decode(cls) -> Self:
+        if issubclass(cls, Child):
+            return cls()
+        return cls()
+
+    def __init__(self) -> None:
+        pass
+
+class Child(Parent[int]):
+    pass
+
+assert_type(Child.decode(), Child)
+"#,
+);
+
 // Regression test: descriptor access on `self` should preserve SelfType in the
 // `owner` argument to `__get__`, so that a descriptor with a generic owner parameter
 // doesn't produce false-positive errors.
@@ -563,4 +617,19 @@ class Base:
     def update(self) -> None:
         self.field = "hello"
 "#,
+);
+
+testcase!(
+    bug = "Should raise error in the overloads when returning concrete class instead of Self",
+    test_overload_returning_self,
+    r#"
+from typing import Self, overload
+
+class C:
+    @overload
+    def clone(self, x: int) -> C: ...
+    @overload
+    def clone(self, x: str) -> C: ...
+    def clone(self, x) -> Self: ...
+    "#,
 );

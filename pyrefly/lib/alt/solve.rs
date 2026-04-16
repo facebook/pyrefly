@@ -1238,7 +1238,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let stored_ty = if let Some(metadata) = annotated_metadata {
             Type::Annotated(Box::new(ty), metadata)
         } else {
-            self.heap.mk_type_form(ty)
+            self.heap.mk_type_of(ty)
         };
         TypeAlias::new(name.clone(), stored_ty, style)
     }
@@ -1668,7 +1668,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             },
         };
-        let base_exception_class_type = self.heap.mk_type_form(
+        let base_exception_class_type = self.heap.mk_type_of(
             self.heap
                 .mk_class_type(self.stdlib.base_exception().clone()),
         );
@@ -3801,7 +3801,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             match self.instantiate(cls) {
                 Type::ClassType(class_type) => {
-                    self.heap.mk_type_form(self.heap.mk_self_type(class_type))
+                    self.heap.mk_type_of(self.heap.mk_self_type(class_type))
                 }
                 ty => self.error(
                     errors,
@@ -5306,8 +5306,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.unions(ts)
             }
             Type::TypeAlias(ta) => self.type_of(self.get_type_alias(&ta).as_type()),
-            Type::Any(style) => self.heap.mk_type_form(style.propagate()),
-            Type::ClassDef(cls) => self.heap.mk_type_form(
+            Type::Any(style) => self.heap.mk_type_of(style.propagate()),
+            Type::ClassDef(cls) => self.heap.mk_type_of(
                 self.heap.mk_class_type(
                     self.get_metadata_for_class(&cls)
                         .metaclass(self.stdlib)

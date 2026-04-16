@@ -524,7 +524,6 @@ def parse(obj):
 );
 
 testcase!(
-    bug = "Partial inference fails due to bug in var snapshot+restore logic",
     test_partial_inference_of_dict_through_overload,
     r#"
 from typing import assert_type, overload, TypeVar
@@ -539,6 +538,6 @@ def f(x: dict[str, int], flag: int) -> None: ...
 def f(x, flag) -> None: ...
 
 f(d, 42)
-assert_type(d, dict[str, int])  # E: assert_type(dict[Unknown, Unknown], dict[str, int])
+assert_type(d, dict[str, int])
     "#,
 );

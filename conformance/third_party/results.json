@@ -1,9 +1,9 @@
 {
   "total": 139,
-  "pass": 126,
-  "fail": 13,
-  "pass_rate": 0.91,
-  "differences": 33,
+  "pass": 128,
+  "fail": 11,
+  "pass_rate": 0.92,
+  "differences": 30,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -72,6 +72,8 @@
     "generics_syntax_infer_variance.py",
     "generics_syntax_scoping.py",
     "generics_type_erasure.py",
+    "generics_typevartuple_args.py",
+    "generics_typevartuple_basic.py",
     "generics_typevartuple_callable.py",
     "generics_typevartuple_concat.py",
     "generics_typevartuple_overloads.py",
@@ -143,8 +145,6 @@
     "generics_scoping.py": 4,
     "generics_self_basic.py": 2,
     "generics_self_usage.py": 1,
-    "generics_typevartuple_args.py": 1,
-    "generics_typevartuple_basic.py": 2,
     "typeforms_typeform.py": 2
   },
   "comment": "@generated"

@@ -748,8 +748,18 @@
                       "xrefs": [
                         {
                           "source": {
-                            "length": 3,
+                            "length": 1,
                             "start": 1
+                          },
+                          "target": {
+                            "id": 0,
+                            "key": "type_lit_str.B"
+                          }
+                        },
+                        {
+                          "source": {
+                            "length": 1,
+                            "start": 3
                           },
                           "target": {
                             "id": 0,
@@ -775,6 +785,46 @@
                       "target": {
                         "id": 0,
                         "key": "int"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 4,
+                        "start": 8
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "type_lit_str.typing.List"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 4,
+                        "start": 8
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "typing.List"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 6,
+                        "start": 1
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "type_lit_str.typing"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 6,
+                        "start": 1
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "typing"
                       }
                     }
                   ]
@@ -1039,8 +1089,18 @@
                   "xrefs": [
                     {
                       "source": {
-                        "length": 3,
+                        "length": 1,
                         "start": 1
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "type_lit_str.B"
+                      }
+                    },
+                    {
+                      "source": {
+                        "length": 1,
+                        "start": 3
                       },
                       "target": {
                         "id": 0,
@@ -1243,6 +1303,10 @@
             {
               "length": 1,
               "start": 119
+            },
+            {
+              "length": 1,
+              "start": 181
             }
           ],
           "target": {
@@ -1264,8 +1328,8 @@
               "start": 123
             },
             {
-              "length": 3,
-              "start": 181
+              "length": 1,
+              "start": 183
             }
           ],
           "target": {
@@ -1340,6 +1404,44 @@
           },
           "spans": [
             {
+              "length": 4,
+              "start": 198
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "type_lit_str.typing.List"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "type_lit_str.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 198
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "typing.List"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "type_lit_str.py"
+          },
+          "spans": [
+            {
               "length": 5,
               "start": 108
             },
@@ -1402,6 +1504,10 @@
           "spans": [
             {
               "length": 6,
+              "start": 191
+            },
+            {
+              "length": 6,
               "start": 32
             },
             {
@@ -1412,6 +1518,25 @@
           "target": {
             "id": 0,
             "key": "typing"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "type_lit_str.py"
+          },
+          "spans": [
+            {
+              "length": 6,
+              "start": 191
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "type_lit_str.typing"
           }
         }
       }
@@ -1478,8 +1603,24 @@
             },
             {
               "source": {
-                "length": 3,
+                "length": 1,
                 "start": 181
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "type_lit_str.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "type_lit_str.B"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 183
               },
               "target": {
                 "file": {
@@ -1542,6 +1683,38 @@
             },
             {
               "source": {
+                "length": 4,
+                "start": 198
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "type_lit_str.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "type_lit_str.typing.List"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 198
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.List"
+                }
+              }
+            },
+            {
+              "source": {
                 "length": 5,
                 "start": 108
               },
@@ -1597,6 +1770,38 @@
                 "name": {
                   "id": 0,
                   "key": "typing.Union"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 191
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "type_lit_str.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "type_lit_str.typing"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 191
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing"
                 }
               }
             },
@@ -1680,8 +1885,18 @@
             },
             {
               "source": {
-                "length": 3,
+                "length": 1,
                 "start": 181
+              },
+              "target": {
+                "id": 0,
+                "key": "type_lit_str.B"
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 183
               },
               "target": {
                 "id": 0,
@@ -1716,6 +1931,26 @@
               "target": {
                 "id": 0,
                 "key": "bool"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 198
+              },
+              "target": {
+                "id": 0,
+                "key": "type_lit_str.typing.List"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 198
+              },
+              "target": {
+                "id": 0,
+                "key": "typing.List"
               }
             },
             {
@@ -1756,6 +1991,26 @@
               "target": {
                 "id": 0,
                 "key": "typing.Union"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 191
+              },
+              "target": {
+                "id": 0,
+                "key": "type_lit_str.typing"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 191
+              },
+              "target": {
+                "id": 0,
+                "key": "typing"
               }
             },
             {
