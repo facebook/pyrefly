@@ -57,6 +57,14 @@ def f(x: Any) -> None:
 );
 
 testcase!(
+    test_bytes_to_bytes,
+    r#"
+def f(x: bytes) -> None:
+    y = bytes(x)  # E: Unnecessary `bytes()` call; argument is already of type `bytes`
+"#,
+);
+
+testcase!(
     test_no_args_ok,
     r#"
 def f() -> None:

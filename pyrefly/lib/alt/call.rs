@@ -1007,7 +1007,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        let builtin_names = ["str", "int", "float"];
+        let builtin_names = ["str", "int", "float", "bytes"];
         if !builtin_names
             .iter()
             .any(|name| cls.has_qname("builtins", name))
