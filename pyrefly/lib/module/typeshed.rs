@@ -16,7 +16,6 @@ use anyhow::Context as _;
 use anyhow::anyhow;
 use dupe::Dupe;
 use pyrefly_bundled::bundled_typeshed;
-use pyrefly_bundled::bundled_typeshed_versions;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::module_name::ModuleName;
@@ -53,7 +52,10 @@ impl VersionRange {
     }
 
     fn contains(self, version: PythonVersion) -> bool {
-        version >= self.min && self.max.is_none_or(|max| version <= max)
+        version.cmp_ignore_patch(self.min).is_ge()
+            && self
+                .max
+                .is_none_or(|max| version.cmp_ignore_patch(max).is_le())
     }
 }
 
@@ -65,8 +67,8 @@ pub struct BundledTypeshedStdlib {
 
 impl BundledStub for BundledTypeshedStdlib {
     fn new() -> anyhow::Result<Self> {
-        let contents = bundled_typeshed()?;
-        let versions = parse_versions(&bundled_typeshed_versions()?)?;
+        let (contents, versions) = bundled_typeshed()?;
+        let versions = parse_versions(&versions)?;
         let provider = contents
             .into_iter()
             .map(|(relative_path, contents)| BundleFile {
@@ -168,6 +170,14 @@ impl BundledTypeshedStdlib {
         self.bundle.find(module).is_some()
     }
 
+    pub fn is_known_but_unavailable_for_python_version(
+        &self,
+        module: ModuleName,
+        version: PythonVersion,
+    ) -> bool {
+        self.has_module(module) && !self.is_available_for_python_version(module, version)
+    }
+
     pub fn is_available_for_python_version(
         &self,
         module: ModuleName,
@@ -258,7 +268,7 @@ mod tests {
             typeshed
                 .find_for_python_version(
                     ModuleName::from_str("distutils"),
-                    PythonVersion::new(3, 11, 0)
+                    PythonVersion::new(3, 11, 9)
                 )
                 .is_some()
         );
@@ -266,7 +276,7 @@ mod tests {
             typeshed
                 .find_for_python_version(
                     ModuleName::from_str("distutils"),
-                    PythonVersion::new(3, 12, 0)
+                    PythonVersion::new(3, 12, 1)
                 )
                 .is_none()
         );
