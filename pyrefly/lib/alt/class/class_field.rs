@@ -2172,7 +2172,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         };
         let call = expr.as_call_expr()?;
-        let callee_errors = self.error_collector();
+        let callee_errors = self.error_swallower();
         let callee_ty = self.expr_infer(&call.func, &callee_errors);
         if !matches!(
             callee_ty.callee_kind(),
@@ -2229,7 +2229,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .then_some(&kw.value)
             })
         })?;
-        let arg_errors = self.error_collector();
+        let arg_errors = self.error_swallower();
         Some(self.expr_infer(arg, &arg_errors))
     }
 
