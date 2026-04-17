@@ -537,6 +537,16 @@ impl ReportArgs {
         }
     }
 
+    /// Classify an annotation slot from resolver output. Bare qualifiers
+    /// (e.g. `Final`) have unresolved annotation types but still count as typed.
+    fn classify_annotation_rank(has_annotation: bool, resolved_is_known: Option<bool>) -> SlotRank {
+        match resolved_is_known {
+            Some(is_known) => SlotRank::classify(true, is_known),
+            None if has_annotation => SlotRank::Typed,
+            None => SlotRank::Untyped,
+        }
+    }
+
     /// Returns true if the name is public: does not start with `_`, or is a dunder (`__x__`).
     /// Matches typestats `is_public_name`.
     fn is_public_name(name: &str) -> bool {
@@ -648,12 +658,12 @@ impl ReportArgs {
                         }
                         _ => None,
                     };
-                    let is_type_known = annotation_text.is_some()
-                        && answers
-                            .get_idx(*annot_idx)
-                            .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
-                            .unwrap_or(false);
-                    let slots = SlotRank::classify(annotation_text.is_some(), is_type_known).into();
+                    let resolved_ty = answers
+                        .get_idx(*annot_idx)
+                        .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known));
+                    let slots =
+                        Self::classify_annotation_rank(annotation_text.is_some(), resolved_ty)
+                            .into();
                     variables.push(Variable {
                         name: qualified_name,
                         annotation: annotation_text,
@@ -844,15 +854,13 @@ impl ReportArgs {
                 }
                 _ => None,
             });
-            let is_type_known = annotation_text.is_some()
-                && annotation_idx
-                    .and_then(|idx| {
-                        answers
-                            .get_idx(idx)
-                            .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
-                    })
-                    .unwrap_or(false);
-            let slots = SlotRank::classify(annotation_text.is_some(), is_type_known).into();
+            let resolved_ty = annotation_idx.and_then(|idx| {
+                answers
+                    .get_idx(idx)
+                    .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
+            });
+            let slots =
+                Self::classify_annotation_rank(annotation_text.is_some(), resolved_ty).into();
 
             attrs.push(Variable {
                 name: qualified_name,
@@ -2429,6 +2437,36 @@ mod tests {
     fn test_report_partial_any() {
         let report = build_module_report_for_test("partial_any.py");
         compare_snapshot("partial_any.expected.json", &report);
+    }
+
+    /// Bare `Final` should be typed, not `Any`
+    #[test]
+    fn test_report_bare_final() {
+        let report = build_module_report_for_test("bare_final.py");
+        let attr_slots = |name: &str| {
+            report
+                .symbol_reports
+                .iter()
+                .find_map(|s| match s {
+                    SymbolReport::Attr { name: n, slots, .. } if n == name => Some(*slots),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no attr symbol named {name}"))
+        };
+
+        for name in [
+            "test.golden",
+            "test.golden_ratio",
+            "test.pi",
+            "test.name",
+            "test.Constants.rate",
+            "test.Constants.count",
+        ] {
+            let slots = attr_slots(name);
+            assert_eq!(slots.n_typable, 1, "{name} should have 1 typable slot");
+            assert_eq!(slots.n_typed, 1, "{name} should be typed");
+            assert_eq!(slots.n_any, 0, "{name} should not be any");
+        }
     }
 
     #[test]
