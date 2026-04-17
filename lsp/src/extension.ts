@@ -235,6 +235,63 @@ export async function activate(context: ExtensionContext) {
   );
   registerCodeLensCommands(context, pythonExtension);
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'pyrefly.findFileUsages',
+      async (...args: unknown[]) => {
+        const payload = args[0] as
+          | {
+              uri?: string;
+              locations?: Array<{
+                uri: string;
+                range: {
+                  start: {line: number; character: number};
+                  end: {line: number; character: number};
+                };
+              }>;
+            }
+          | undefined;
+        if (payload == null || typeof payload.uri !== 'string') {
+          return;
+        }
+        if (!Array.isArray(payload.locations)) {
+          return;
+        }
+
+        const targetUri = vscode.Uri.parse(payload.uri);
+        const locations = payload.locations
+          .map(location => {
+            if (
+              location == null ||
+              typeof location.uri !== 'string' ||
+              location.range == null
+            ) {
+              return null;
+            }
+            const range = new vscode.Range(
+              location.range.start.line,
+              location.range.start.character,
+              location.range.end.line,
+              location.range.end.character,
+            );
+            return new vscode.Location(vscode.Uri.parse(location.uri), range);
+          })
+          .filter(
+            (location): location is vscode.Location => location != null,
+          );
+        if (locations.length === 0) {
+          return;
+        }
+        await vscode.commands.executeCommand(
+          'editor.action.showReferences',
+          targetUri,
+          new vscode.Position(0, 0),
+          locations,
+        );
+      },
+    ),
+  );
+
   // When our extension is activated, make sure ms-python knows
   // TODO(kylei): remove this hack once ms-python has this behavior
   await triggerMsPythonRefreshLanguageServers();

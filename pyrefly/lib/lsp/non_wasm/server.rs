@@ -298,7 +298,7 @@ use crate::lsp::non_wasm::protocol::write_lsp_message;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
-use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
+use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_actions;
 use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
 use crate::lsp::non_wasm::stdlib::no_config_severity_override;
 use crate::lsp::non_wasm::stdlib::should_show_error_for_display_mode;
@@ -4610,13 +4610,13 @@ impl Server {
             record_code_action_telemetry("convert_module_package", start);
         }
         let start = Instant::now();
-        if let Some(action) = safe_delete_file_code_action(
+        if let Some(mut file_actions) = safe_delete_file_code_actions(
             &self.initialize_params.capabilities,
             &self.state,
             transaction,
             uri,
         ) {
-            actions.push(action);
+            actions.append(&mut file_actions);
         }
         record_code_action_telemetry("safe_delete_file", start);
         Ok((!actions.is_empty()).then_some(actions))
