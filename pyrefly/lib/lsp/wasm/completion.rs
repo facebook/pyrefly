@@ -838,11 +838,9 @@ impl Transaction<'_> {
         }
     }
 
-    fn enclosing_class_def_for_completion(
-        ast: &ModModule,
-        position: TextSize,
-    ) -> Option<(&StmtClassDef, bool)> {
-        let covering_nodes = Ast::locate_node(ast, position);
+    fn enclosing_class_def_for_completion<'a>(
+        covering_nodes: &'a [AnyNodeRef<'a>],
+    ) -> Option<(&'a StmtClassDef, bool)> {
         let mut saw_function = false;
         for node in covering_nodes.iter() {
             match node {
@@ -917,16 +915,13 @@ impl Transaction<'_> {
     fn add_class_body_override_completions(
         &self,
         handle: &Handle,
-        position: TextSize,
+        covering_nodes: &[AnyNodeRef],
         identifier: &Identifier,
         allow_inside_function: bool,
         completions: &mut Vec<RankedCompletion>,
     ) {
-        let Some(ast) = self.get_ast(handle) else {
-            return;
-        };
         let Some((class_def, saw_function)) =
-            Self::enclosing_class_def_for_completion(ast.as_ref(), position)
+            Self::enclosing_class_def_for_completion(covering_nodes)
         else {
             return;
         };
@@ -973,9 +968,16 @@ impl Transaction<'_> {
         let mut result: Vec<RankedCompletion> = Vec::new();
         let mut is_incomplete = false;
         let mut allow_function_call_parens = false;
+        let ast = self.get_ast(handle);
+        let covering_nodes = ast
+            .as_ref()
+            .map(|module| Ast::locate_node(module.as_ref(), position));
         // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
         // If the user might be typing the `import` keyword, add that as an autocomplete option.
-        match self.identifier_at(handle, position) {
+        match covering_nodes
+            .as_deref()
+            .and_then(Self::identifier_from_covering_nodes)
+        {
             Some(IdentifierWithContext {
                 identifier,
                 context:
@@ -1122,12 +1124,13 @@ impl Transaction<'_> {
                 if matches!(context, IdentifierContext::MethodDef { .. }) {
                     Self::add_magic_method_completions(&identifier, &mut result);
                 }
-                if matches!(context, IdentifierContext::MethodDef { .. })
-                    || matches!(context, IdentifierContext::Expr(ExprContext::Store))
+                if (matches!(context, IdentifierContext::MethodDef { .. })
+                    || matches!(context, IdentifierContext::Expr(ExprContext::Store)))
+                    && let Some(covering_nodes) = covering_nodes.as_deref()
                 {
                     self.add_class_body_override_completions(
                         handle,
-                        position,
+                        covering_nodes,
                         &identifier,
                         matches!(context, IdentifierContext::MethodDef { .. }),
                         &mut result,
@@ -1169,9 +1172,10 @@ impl Transaction<'_> {
             }
             None => {
                 // todo(kylei): optimization, avoid duplicate ast walkss
-                if let Some(mod_module) = self.get_ast(handle) {
+                if let Some(mod_module) = ast.as_ref() {
                     let expected_type = self.expected_call_argument_type(handle, position);
-                    let nodes = Ast::locate_node(&mod_module, position);
+                    let nodes = covering_nodes
+                        .unwrap_or_else(|| Ast::locate_node(mod_module.as_ref(), position));
                     if nodes.is_empty() {
                         Self::add_keyword_completions(handle, &mut result);
                         self.add_local_variable_completions(

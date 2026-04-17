@@ -682,7 +682,7 @@ impl<'a> Transaction<'a> {
         Self::identifier_from_covering_nodes(&covering_nodes)
     }
 
-    fn identifier_from_covering_nodes(
+    pub(crate) fn identifier_from_covering_nodes(
         covering_nodes: &[AnyNodeRef],
     ) -> Option<IdentifierWithContext> {
         match (
