@@ -986,11 +986,7 @@ impl CheckArgs {
         let collected = loads.collect_errors();
         // Pass pre-collected errors to avoid redundant error collection.
         let unused_ignore_errors = loads.collect_unused_ignore_errors_for_display(&collected);
-        let errors = loads.apply_baseline(
-            collected,
-            self.output.baseline.as_deref(),
-            relative_to.as_path(),
-        );
+        let errors = loads.apply_baseline(collected, self.output.baseline.as_deref());
         let (directives, ordinary_errors) = if let Some(only) = &self.output.only {
             let only = only.iter().collect::<SmallSet<_>>();
             (

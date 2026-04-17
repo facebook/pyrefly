@@ -48,6 +48,7 @@ pub mod owner;
 pub mod panic;
 pub mod prelude;
 pub mod recurser;
+pub mod relativize;
 pub mod ruff_visitors;
 pub mod small_map1;
 pub mod small_set1;
