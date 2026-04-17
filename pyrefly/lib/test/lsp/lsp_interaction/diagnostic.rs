@@ -1769,3 +1769,31 @@ fn test_unused_ignore_diagnostic() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn test_unused_ignore_diagnostic_default_severity() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("unused_ignore_no_config.py");
+
+    // Without `unused-ignore = "error"` in config, the default severity is "ignore", so no
+    // `unused-ignore` diagnostic should appear.
+    interaction
+        .client
+        .diagnostic("unused_ignore_no_config.py")
+        .expect_response(json!({
+            "items": [],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
