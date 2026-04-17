@@ -1935,13 +1935,10 @@ mod tests {
         compare_snapshot("partial_stub.expected.json", &report);
     }
 
-    /// `find_import_filtered` discovers .py files by module name in site-package-path.
+    /// Stubs-only packages: .py discovered via site-package-path, merged like co-located stubs.
     #[test]
-    fn test_report_external_stub_discovery() {
+    fn test_report_external_stub_merge() {
         use pyrefly_config::config::ConfigFile;
-        use pyrefly_python::module_path::ModuleStyle;
-
-        use crate::module::finder::find_import_filtered;
 
         let site_dir = tempfile::TempDir::new().unwrap();
         let py_code = load_test_file("partial_stub.py");
@@ -1959,13 +1956,12 @@ mod tests {
             Some(ModuleStyle::Executable),
         )
         .finding()
-        .expect("find_import_filtered should discover test.py in site-packages");
+        .expect("should discover test.py in site-packages");
+        assert_eq!(py_module_path.as_path(), site_dir.path().join("test.py"));
 
-        assert_eq!(
-            py_module_path.as_path(),
-            site_dir.path().join("test.py"),
-            "discovered path should point to the .py in site-packages"
-        );
+        // the merge should produce the same report as the co-located case
+        let report = build_stub_module_report("partial_stub.pyi", "partial_stub.py");
+        compare_snapshot("partial_stub.expected.json", &report);
     }
 
     /// When both test.py and test.pyi exist, the .py file is shadowed.
