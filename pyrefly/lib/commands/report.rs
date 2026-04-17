@@ -1514,9 +1514,14 @@ impl ReportArgs {
                     .as_ref()
                     .config_finder()
                     .python_file(h.module_kind(), h.path());
-                if let Some(py_module_path) =
-                    find_import_filtered(&config, h.module(), None, Some(ModuleStyle::Executable))
-                        .finding()
+                if let Some(py_module_path) = find_import_filtered(
+                    &config,
+                    h.module(),
+                    None,
+                    Some(ModuleStyle::Executable),
+                    None,
+                )
+                .finding()
                 {
                     let py_handle = config.handle_from_module_path(py_module_path);
                     external_handles.push(py_handle.clone());
@@ -1954,6 +1959,7 @@ mod tests {
             ModuleName::from_str("test"),
             None,
             Some(ModuleStyle::Executable),
+            None,
         )
         .finding()
         .expect("should discover test.py in site-packages");
