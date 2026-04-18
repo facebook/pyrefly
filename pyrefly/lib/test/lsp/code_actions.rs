@@ -4182,6 +4182,76 @@ def f(items):
 }
 
 #[test]
+fn unwrap_block_with_statement() {
+    let code = r#"
+def f():
+    with open("x.txt") as f:
+        print(f.read())
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print(f.read())
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_while_without_else() {
+    let code = r#"
+def f():
+    while True:
+        print("tick")
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print("tick")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_multiline_header() {
+    let code = r#"
+def f():
+    if (
+        True
+    ):
+        print("then")
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print("then")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_header_comment_with_colon() {
+    let code = r#"
+def f():
+    if True:  # comment with :
+        print("then")
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print("then")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn pytest_fixture_type_annotation_code_actions() {
     let conftest = r#"
 import pytest  # type: ignore
