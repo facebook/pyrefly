@@ -704,6 +704,21 @@ class C4(Generic[int]):  # E: Expected a type variable, got `int`
     "#,
 );
 
+testcase!(
+    test_typevar_not_treated_as_bad_implicit_alias,
+    TestEnv::one("_typings", "from typing import TypeVar"),
+    r#"
+import _typings as t
+from typing import assert_type
+
+T = t.TypeVar("T")
+
+def f(x: T) -> T:
+    assert_type(x, T)
+    return x
+    "#,
+);
+
 fn env_exported_type_var() -> TestEnv {
     TestEnv::one(
         "lib",

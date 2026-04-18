@@ -684,6 +684,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if name_assign.annotation.is_some() || name_assign.is_in_function_scope {
                         return None;
                     }
+                    if matches!(
+                        self.expr_infer(&name_assign.expr, &self.error_swallower()),
+                        Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_)
+                    ) {
+                        return None;
+                    }
                     return self.annotation_syntax_problem(&name_assign.expr);
                 }
                 _ => return None,
