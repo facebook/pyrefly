@@ -1,13 +1,7 @@
 @generated
 {
   "aliases_explicit.py": [],
-  "aliases_implicit.py": [
-    "Line 106: Expected 1 errors",
-    "Line 111: Expected 1 errors",
-    "Line 112: Expected 1 errors",
-    "Line 113: Expected 1 errors",
-    "Line 117: Expected 1 errors"
-  ],
+  "aliases_implicit.py": [],
   "aliases_newtype.py": [],
   "aliases_recursive.py": [],
   "aliases_type_statement.py": [],

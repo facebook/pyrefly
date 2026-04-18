@@ -6,6 +6,7 @@
   "differences": 35,
   "passing": [
     "aliases_explicit.py",
+    "aliases_implicit.py",
     "aliases_newtype.py",
     "aliases_recursive.py",
     "aliases_type_statement.py",
@@ -136,7 +137,6 @@
     "typeddicts_usage.py"
   ],
   "failing": {
-    "aliases_implicit.py": 5,
     "annotations_forward_refs.py": 2,
     "callables_annotation.py": 1,
     "constructors_callable.py": 4,

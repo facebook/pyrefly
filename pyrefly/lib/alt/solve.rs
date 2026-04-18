@@ -590,7 +590,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub(crate) fn has_valid_annotation_syntax(&self, x: &Expr, errors: &ErrorCollector) -> bool {
+    fn annotation_syntax_problem(&self, x: &Expr) -> Option<String> {
         // Note that this function only checks for correct syntax.
         // Semantic validation (e.g. that `typing.Self` is used in a class
         // context, or that a string evaluates to a proper type expression) is
@@ -606,7 +606,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Expr::StringLiteral(..)
             | Expr::NoneLiteral(..)
             | Expr::Attribute(..)
-            | Expr::Starred(..) => return true,
+            | Expr::Starred(..) => return None,
             Expr::Subscript(s) => match *s.value {
                 Expr::Name(..)
                 | Expr::BinOp(ExprBinOp {
@@ -616,27 +616,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 | Expr::Named(..)
                 | Expr::StringLiteral(..)
                 | Expr::NoneLiteral(..)
-                | Expr::Attribute(..) => return true,
-                _ => "Invalid subscript expression",
+                | Expr::Attribute(..) => return None,
+                _ => "Invalid subscript expression".to_owned(),
             },
-            Expr::Call(..) => "Function call",
-            Expr::Lambda(..) => "Lambda definition",
-            Expr::List(..) => "List literal",
-            Expr::NumberLiteral(..) => "Number literal",
-            Expr::Tuple(..) => "Tuple literal",
-            Expr::Dict(..) => "Dict literal",
-            Expr::ListComp(..) => "List comprehension",
-            Expr::If(..) => "If expression",
-            Expr::BooleanLiteral(..) => "Bool literal",
-            Expr::BoolOp(..) => "Boolean operation",
-            Expr::FString(..) => "F-string",
-            Expr::TString(..) => "T-string",
-            Expr::UnaryOp(..) => "Unary operation",
-            Expr::BinOp(ExprBinOp { op, .. }) => &format!("Binary operation `{}`", op.as_str()),
+            Expr::Call(..) => "Function call".to_owned(),
+            Expr::Lambda(..) => "Lambda definition".to_owned(),
+            Expr::List(..) => "List literal".to_owned(),
+            Expr::NumberLiteral(..) => "Number literal".to_owned(),
+            Expr::Tuple(..) => "Tuple literal".to_owned(),
+            Expr::Dict(..) => "Dict literal".to_owned(),
+            Expr::ListComp(..) => "List comprehension".to_owned(),
+            Expr::If(..) => "If expression".to_owned(),
+            Expr::BooleanLiteral(..) => "Bool literal".to_owned(),
+            Expr::BoolOp(..) => "Boolean operation".to_owned(),
+            Expr::FString(..) => "F-string".to_owned(),
+            Expr::TString(..) => "T-string".to_owned(),
+            Expr::UnaryOp(..) => "Unary operation".to_owned(),
+            Expr::BinOp(ExprBinOp { op, .. }) => {
+                format!("Binary operation `{}`", op.as_str())
+            }
             // There are many Expr variants. Not all of them are likely to be used
             // in annotations, even accidentally. We can add branches for specific
             // expression constructs if desired.
-            _ => "Expression",
+            _ => "Expression".to_owned(),
+        };
+        Some(problem)
+    }
+
+    pub(crate) fn has_valid_annotation_syntax(&self, x: &Expr, errors: &ErrorCollector) -> bool {
+        let Some(problem) = self.annotation_syntax_problem(x) else {
+            return true;
         };
         self.error(
             errors,
@@ -645,6 +654,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             format!("{problem} cannot be used in annotations"),
         );
         false
+    }
+
+    fn implicit_type_alias_syntax_problem(&self, x: &Expr) -> Option<String> {
+        let Expr::Name(name) = x else {
+            return None;
+        };
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        let mut idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        for _ in 0..100 {
+            match self.bindings().get(idx) {
+                Binding::Forward(next)
+                | Binding::PromoteForward(next)
+                | Binding::ForwardToFirstUse(next)
+                | Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
+                Binding::NameAssign(name_assign) => {
+                    if name_assign.annotation.is_some() || name_assign.is_in_function_scope {
+                        return None;
+                    }
+                    return self.annotation_syntax_problem(&name_assign.expr);
+                }
+                _ => return None,
+            }
+        }
+        None
     }
 
     fn expr_annotation(
@@ -5745,6 +5778,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         type_form_context: TypeFormContext,
         errors: &ErrorCollector,
     ) -> Type {
+        if let Some(problem) = self.implicit_type_alias_syntax_problem(x) {
+            return self.error(
+                errors,
+                x.range(),
+                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                format!("{problem} cannot be used in annotations"),
+            );
+        }
         let result = match x {
             Expr::List(x)
                 if matches!(
