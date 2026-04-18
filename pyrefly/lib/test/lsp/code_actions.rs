@@ -4252,6 +4252,69 @@ def f():
 }
 
 #[test]
+fn unwrap_block_rejects_comment_colon_selection() {
+    let code = r#"
+def f():
+    if True:  # comment with :
+        print("then")
+"#;
+    let comment_colon =
+        TextSize::try_from(code.rfind(':').expect("expected comment colon")).unwrap();
+    let selection = TextRange::new(comment_colon, comment_colon);
+    assert_no_unwrap_block_action(code, selection);
+}
+
+#[test]
+fn unwrap_block_try_selected_except_branch() {
+    let code = r#"
+def f(value):
+    try:
+        print("try")
+    except ValueError:
+        print("value")
+    except TypeError:
+        print("type")
+"#;
+    let selection = find_nth_range(code, ":", 4);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f(value):
+    print("type")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_try_finally_branch() {
+    let code = r#"
+def f():
+    try:
+        print("try")
+    finally:
+        print("cleanup")
+"#;
+    let selection = find_nth_range(code, ":", 3);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print("cleanup")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_rejects_single_line_suite() {
+    let code = r#"
+def f():
+    if True: print("then")
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    assert_no_unwrap_block_action(code, selection);
+}
+
+#[test]
 fn pytest_fixture_type_annotation_code_actions() {
     let conftest = r#"
 import pytest  # type: ignore

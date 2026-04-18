@@ -156,7 +156,72 @@ fn find_unwrap_block_target_in_stmt(
             {
                 return Some(target);
             }
-            find_unwrap_block_target_in_body(&try_stmt.finalbody, source, position)
+            if let Some(target) =
+                find_unwrap_block_target_in_body(&try_stmt.finalbody, source, position)
+            {
+                return Some(target);
+            }
+            for (index, handler) in try_stmt.handlers.iter().enumerate() {
+                let Some(handler) = handler.as_except_handler() else {
+                    continue;
+                };
+                let next_clause_start = try_stmt
+                    .handlers
+                    .get(index + 1)
+                    .and_then(|next| next.as_except_handler())
+                    .map(|next| next.range().start())
+                    .or_else(|| {
+                        try_stmt
+                            .orelse
+                            .first()
+                            .map(Ranged::range)
+                            .map(|range| range.start())
+                    })
+                    .or_else(|| {
+                        try_stmt
+                            .finalbody
+                            .first()
+                            .map(Ranged::range)
+                            .map(|range| range.start())
+                    });
+                if let Some(target) = build_unwrap_block_target(
+                    stmt.range(),
+                    handler.range().start(),
+                    &handler.body,
+                    next_clause_start,
+                    source,
+                    position,
+                ) {
+                    return Some(target);
+                }
+            }
+            let else_start = try_stmt
+                .orelse
+                .first()
+                .map(Ranged::range)
+                .map(|range| range.start());
+            if let Some(target) = build_unwrap_block_target(
+                stmt.range(),
+                stmt.range().start(),
+                &try_stmt.orelse,
+                try_stmt
+                    .finalbody
+                    .first()
+                    .map(Ranged::range)
+                    .map(|range| range.start()),
+                source,
+                position,
+            ) {
+                return Some(target);
+            }
+            build_unwrap_block_target(
+                stmt.range(),
+                else_start.unwrap_or(stmt.range().start()),
+                &try_stmt.finalbody,
+                None,
+                source,
+                position,
+            )
         }
         Stmt::Match(match_stmt) => {
             for case in &match_stmt.cases {
@@ -271,16 +336,11 @@ fn find_suite_colon(
             .map(|index| index + 1)
             .unwrap_or(0);
         let line = source[line_start..line_end].trim_end_matches('\n');
-        if !line.trim().is_empty() {
-            let indent_len = line
-                .chars()
-                .take_while(|ch| *ch == ' ' || *ch == '\t')
-                .map(char::len_utf8)
-                .sum::<usize>();
-            if line.get(..indent_len) == Some(outer_indent) && line.rfind(':').is_some() {
-                let colon = line.rfind(':').expect("checked above");
-                return TextSize::try_from(line_start + colon).ok();
-            }
+        if !line.trim().is_empty()
+            && line.starts_with(outer_indent)
+            && let Some(colon) = find_suite_colon_in_line(line)
+        {
+            return TextSize::try_from(line_start + colon).ok();
         }
         if line_start == 0 {
             break;
@@ -288,6 +348,35 @@ fn find_suite_colon(
         line_end = line_start;
     }
     None
+}
+
+fn find_suite_colon_in_line(line: &str) -> Option<usize> {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut last_colon = None;
+
+    for (index, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if let Some(quote_char) = quote {
+            match ch {
+                '\\' => escaped = true,
+                current if current == quote_char => quote = None,
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '#' => break,
+            ':' => last_colon = Some(index),
+            _ => {}
+        }
+    }
+
+    last_colon
 }
 
 fn range_contains_position(range: TextRange, position: TextSize) -> bool {
