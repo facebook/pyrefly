@@ -2604,12 +2604,14 @@ mod tests {
         let mut config = get_config(ConfigSource::Synthetic);
         config.python_environment.python_version = Some(PythonVersion::new(3, 11, 9));
         config.configure();
-        let result = find_import_filtered(&config, ModuleName::from_str("distutils"), None, None);
+        let result =
+            find_import_filtered(&config, ModuleName::from_str("distutils"), None, None, None);
         assert!(matches!(result, FindingOrError::Finding(_)));
 
         config.python_environment.python_version = Some(PythonVersion::new(3, 12, 1));
         config.configure();
-        let result = find_import_filtered(&config, ModuleName::from_str("distutils"), None, None);
+        let result =
+            find_import_filtered(&config, ModuleName::from_str("distutils"), None, None, None);
         assert!(matches!(
             result,
             FindingOrError::Error(FindError::MissingImport(_, _))
