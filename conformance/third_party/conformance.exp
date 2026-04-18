@@ -6701,10 +6701,10 @@
     {
       "code": -2,
       "column": 17,
-      "concise_description": "Tuple literal cannot be used in annotations",
-      "description": "Tuple literal cannot be used in annotations",
+      "concise_description": "Expected a type form, got instance of `tuple[type[bytes], type[str]]`",
+      "description": "Expected a type form, got instance of `tuple[type[bytes], type[str]]`",
       "line": 71,
-      "name": "invalid-annotation",
+      "name": "not-a-type",
       "severity": "error",
       "stop_column": 19,
       "stop_line": 71
@@ -8174,10 +8174,10 @@
     {
       "code": -2,
       "column": 15,
-      "concise_description": "Number literal cannot be used in annotations",
-      "description": "Number literal cannot be used in annotations",
+      "concise_description": "Expected a type form, got instance of `Literal[3]`",
+      "description": "Expected a type form, got instance of `Literal[3]`",
       "line": 49,
-      "name": "invalid-annotation",
+      "name": "not-a-type",
       "severity": "error",
       "stop_column": 23,
       "stop_line": 49
