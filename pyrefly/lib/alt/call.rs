@@ -1700,7 +1700,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn constructor_param_count(params: &[Param]) -> usize {
-        let params = match params.first() {
+        let params = Self::constructor_params_without_receiver(params);
+        params
+            .iter()
+            .filter(|param| !matches!(param, Param::Varargs(..) | Param::Kwargs(..)))
+            .count()
+    }
+
+    fn constructor_params_without_receiver(params: &[Param]) -> &[Param] {
+        match params.first() {
             Some(first)
                 if first
                     .name()
@@ -1709,11 +1717,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &params[1..]
             }
             _ => params,
-        };
-        params
+        }
+    }
+
+    fn constructor_has_variadic_params(params: &[Param]) -> bool {
+        Self::constructor_params_without_receiver(params)
             .iter()
-            .filter(|param| !matches!(param, Param::Varargs(..) | Param::Kwargs(..)))
-            .count()
+            .any(|param| matches!(param, Param::Varargs(..) | Param::Kwargs(..)))
+    }
+
+    fn constructor_should_merge_inherited_init(callable: &Callable) -> bool {
+        match &callable.params {
+            Params::List(params) => {
+                let params = params.items();
+                Self::constructor_param_count(params) == 0
+                    && Self::constructor_has_variadic_params(params)
+            }
+            _ => false,
+        }
     }
 
     fn constructor_param_insert_index(params: &[Param]) -> usize {
@@ -1857,14 +1878,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             default_constructor.clone()
         };
 
-        let init_callable = self
-            .merged_dunder_init_for_display(cls, &class_type)
-            .or_else(|| {
-                self.get_dunder_init(cls, false).and_then(|init_method| {
-                    self.bind_dunder_init_for_display(init_method, &class_type)
-                        .map(|callable| self.heap.mk_callable_from(callable))
-                })
+        let resolved_init_callable = self.get_dunder_init(cls, false).and_then(|init_method| {
+            self.bind_dunder_init_for_display(init_method, &class_type)
+                .map(|callable| self.heap.mk_callable_from(callable))
+        });
+
+        let init_callable = resolved_init_callable
+            .clone()
+            .and_then(|init_callable| {
+                init_callable
+                    .to_callable()
+                    .filter(Self::constructor_should_merge_inherited_init)
+                    .and_then(|_| self.merged_dunder_init_for_display(cls, &class_type))
             })
+            .or(resolved_init_callable)
             .unwrap_or_else(|| default_constructor.clone());
 
         let init_param_count = init_callable

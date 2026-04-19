@@ -1048,6 +1048,58 @@ Signature Help Result: active=0
 }
 
 #[test]
+fn overriding_constructor_signature_does_not_merge_base_params() {
+    let code = r#"
+class Base:
+    def __init__(self, base: str) -> None: ...
+
+class Child(Base):
+    def __init__(self, child: int) -> None: ...
+
+Child(
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | Child(
+         ^
+Signature Help Result: active=0
+- (self: Child, child: int) -> Child, parameters=[child: int], active parameter = 0
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn forwarding_constructor_signature_merges_inherited_base_params() {
+    let code = r#"
+class Base:
+    def __init__(self, base: str, flag: bool) -> None: ...
+
+class Child(Base):
+    def __init__(self, *args: object, **kwargs: object) -> None: ...
+
+Child(
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | Child(
+         ^
+Signature Help Result: active=0
+- (self: Child, base: str, flag: bool) -> Child, parameters=[base: str, flag: bool], active parameter = 0
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn method_call_signature_unchanged() {
     let code = r#"
 class Foo:

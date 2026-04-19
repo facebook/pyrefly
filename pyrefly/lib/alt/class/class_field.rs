@@ -4125,7 +4125,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.get_dunder_init_helper(&Instance::of_class(cls), get_object_init)
     }
 
-    /// Get every concrete `__init__` definition visible through the MRO, excluding
+    /// Get all concrete `__init__` definitions declared along the MRO, excluding
     /// `object.__init__`, bound to `cls`.
     pub fn get_dunder_init_candidates(&self, cls: &ClassType) -> Vec<Type> {
         let instance = Instance::of_class(cls);
