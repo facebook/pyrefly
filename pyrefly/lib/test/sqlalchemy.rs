@@ -43,6 +43,9 @@ class String(TypeEngine[str]):
 
 class Integer(TypeEngine[int]):
     ...
+
+class Float(TypeEngine[float]):
+    ...
 "#,
     );
     env.add_with_path(
@@ -117,5 +120,28 @@ assert_type(Model.name, Mapped[str | None])
 assert_type(Model.quantity, Mapped[int | None])
 assert_type(Model.sku, Mapped[str])
 assert_type(Model.pk, Mapped[int])
+"#,
+);
+
+testcase!(
+    test_sqlalchemy_mapped_column_respects_explicit_annotation,
+    sqlalchemy_env(),
+    r#"
+from typing import Literal, assert_type
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql.sqltypes import Float, Integer, String
+
+Key = Literal["api_key", "api_secret"]
+
+class Model:
+    key: Mapped[Key] = mapped_column(String(), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ratio: Mapped[float] = mapped_column(Float(), nullable=False)
+    maybe_ratio: Mapped[float | None] = mapped_column(Float())
+
+assert_type(Model.key, Mapped[Key])
+assert_type(Model.quantity, Mapped[int])
+assert_type(Model.ratio, Mapped[float])
+assert_type(Model.maybe_ratio, Mapped[float | None])
 "#,
 );
