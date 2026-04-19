@@ -1002,6 +1002,24 @@ partial(f, 1, "a", 2, "b", 3, "c", 4, "d")  # E: Expected 4 positional arguments
 );
 
 testcase!(
+    test_functools_partial_preserves_partial_object_type,
+    r#"
+from collections.abc import Callable
+from functools import partial
+from typing import Any, assert_type
+
+def f(a: int, b: str) -> bool:
+    return True
+
+g: partial[bool] = partial(f, 1)
+assert_type(g.args, tuple[Any, ...])
+assert_type(g.keywords, dict[str, Any])
+assert_type(g.func, Callable[..., bool])
+g("foo")
+"#,
+);
+
+testcase!(
     bug = "Self in Metaclass should be treated as Any. Any in metaclass call should act like no annot.",
     test_callable_class_substitute_self,
     r#"
