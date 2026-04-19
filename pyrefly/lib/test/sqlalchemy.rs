@@ -83,9 +83,10 @@ class MappedColumn(_DeclarativeMapped[_T]):
         r#"
 from typing import Any
 from sqlalchemy.sql.type_api import TypeEngine
+from .base import Mapped
 from .properties import MappedColumn
 
-__all__ = ["MappedColumn", "mapped_column"]
+__all__ = ["Mapped", "MappedColumn", "mapped_column"]
 
 def mapped_column(
     type_: TypeEngine[Any] | type[TypeEngine[Any]] | None = None,
@@ -103,7 +104,7 @@ testcase!(
     sqlalchemy_env(),
     r#"
 from typing import assert_type
-from sqlalchemy.orm import MappedColumn, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.sqltypes import Integer, String
 
 class Model:
@@ -112,9 +113,9 @@ class Model:
     sku = mapped_column(String(), nullable=False)
     pk = mapped_column(Integer, primary_key=True)
 
-assert_type(Model.name, MappedColumn[str | None])
-assert_type(Model.quantity, MappedColumn[int | None])
-assert_type(Model.sku, MappedColumn[str])
-assert_type(Model.pk, MappedColumn[int])
+assert_type(Model.name, Mapped[str | None])
+assert_type(Model.quantity, Mapped[int | None])
+assert_type(Model.sku, Mapped[str])
+assert_type(Model.pk, Mapped[int])
 "#,
 );

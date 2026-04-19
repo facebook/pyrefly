@@ -443,15 +443,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn apply_sqlalchemy_mapped_python_type(&self, mut ty: Type, python_type: Type) -> Type {
         ty.visit_mut(&mut |inner| {
             if let Type::ClassType(class_type) = inner
-                && class_type
-                    .class_object()
-                    .has_toplevel_qname("sqlalchemy.orm.properties", "MappedColumn")
-                && let Some(slot) = class_type.targs_mut().as_mut().get_mut(0)
+                && let Some(mut mapped_type) = self.sqlalchemy_mapped_descriptor_type(class_type)
+                && let Some(slot) = mapped_type.targs_mut().as_mut().get_mut(0)
             {
                 *slot = python_type.clone();
+                *inner = Type::ClassType(mapped_type);
             }
         });
         ty
+    }
+
+    fn sqlalchemy_mapped_descriptor_type(&self, class_type: &ClassType) -> Option<ClassType> {
+        if !class_type
+            .class_object()
+            .has_toplevel_qname("sqlalchemy.orm.properties", "MappedColumn")
+        {
+            return None;
+        }
+        let substitution = class_type.substitution();
+        self.get_mro_for_class(class_type.class_object())
+            .ancestors_no_object()
+            .iter()
+            .find(|ancestor| ancestor.has_qname("sqlalchemy.orm.base", "Mapped"))
+            .map(|ancestor| ancestor.substitute_with(&substitution))
     }
 
     pub fn call_isinstance(
