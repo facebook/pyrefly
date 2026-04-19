@@ -39,6 +39,17 @@ struct QueryOutput {
 /// version, platform, and site package path. Return an error in the case of failure during
 /// execution, parsing, or deserializing.
 pub fn query(interpreter: &Path) -> anyhow::Result<PythonEnvironment> {
+    query_command(
+        Command::new(interpreter),
+        &format!("Python interpreter (`{}`)", interpreter.display()),
+    )
+}
+
+/// Run the environment-query script with a Python command, including any launcher arguments.
+pub fn query_command(
+    mut command: Command,
+    command_description: &str,
+) -> anyhow::Result<PythonEnvironment> {
     if let Ok(pythonpath) = std::env::var("PYTHONPATH") {
         warn!(
             "PYTHONPATH environment variable is set to `{}`. Checks in other environments may not include these paths.",
@@ -64,24 +75,20 @@ for distribution in importlib.metadata.distributions():
 print(json.dumps({'python_platform': platform, 'python_version': version, 'site_package_path': site_package_path, 'stdlib_paths': stdlib_paths, 'distribution_urls': distribution_urls}))
 ";
 
-    let mut command = Command::new(interpreter);
     command.arg("-c");
     command.arg(script);
 
     let python_info = command.output()?;
 
     let stdout = String::from_utf8(python_info.stdout).with_context(|| {
-        format!(
-            "while parsing Python interpreter (`{}`) stdout for environment configuration",
-            interpreter.display()
-        )
+        format!("while parsing {command_description} stdout for environment configuration")
     })?;
     if !python_info.status.success() {
         let stderr = String::from_utf8(python_info.stderr)
             .unwrap_or("<Failed to parse STDOUT from UTF-8 string>".to_owned());
         return Err(anyhow::anyhow!(
-            "Unable to query interpreter {} for environment info:\nSTDOUT: {}\nSTDERR: {}",
-            interpreter.display(),
+            "Unable to query {} for environment info:\nSTDOUT: {}\nSTDERR: {}",
+            command_description,
             stdout,
             stderr
         ));
@@ -99,7 +106,7 @@ print(json.dumps({'python_platform': platform, 'python_version': version, 'site_
         anyhow!("Expected `site_package_path` from Python interpreter query to be non-empty")
     })?;
     let interpreter_editable_path = editable_paths_from_query(
-        interpreter,
+        command_description,
         &query_output.distribution_urls,
         &interpreter_site_package_path,
     )?;
@@ -118,15 +125,12 @@ print(json.dumps({'python_platform': platform, 'python_version': version, 'site_
 }
 
 fn editable_paths_from_query(
-    interpreter: &Path,
+    command_description: &str,
     distribution_urls: &Value,
     interpreter_paths: &[PathBuf],
 ) -> anyhow::Result<Vec<PathBuf>> {
     let distribution_urls = distribution_urls.as_array().ok_or_else(|| {
-        anyhow!(
-            "Expected `distribution_urls` from Python interpreter (`{}`) query to be an array",
-            interpreter.display()
-        )
+        anyhow!("Expected `distribution_urls` from {command_description} query to be an array")
     })?;
     let editable_roots: HashSet<PathBuf> = distribution_urls
         .iter()
@@ -199,16 +203,19 @@ mod tests {
             {"url": Url::from_file_path(&project).unwrap().to_string()},
         ]);
 
-        let paths =
-            editable_paths_from_query(Path::new("python"), &distribution_urls, &interpreter_paths)
-                .unwrap();
+        let paths = editable_paths_from_query(
+            "Python interpreter (`python`)",
+            &distribution_urls,
+            &interpreter_paths,
+        )
+        .unwrap();
 
         assert_eq!(paths, vec![project_alias, source]);
     }
 
     #[test]
     fn interpreter_query_rejects_missing_distribution_urls() {
-        let message = editable_paths_from_query(Path::new("python"), &Value::Null, &[])
+        let message = editable_paths_from_query("Python interpreter (`python`)", &Value::Null, &[])
             .unwrap_err()
             .to_string();
 
