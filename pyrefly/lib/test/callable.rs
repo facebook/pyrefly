@@ -975,6 +975,33 @@ zoo(partial(bar, b=99))
 );
 
 testcase!(
+    test_functools_partial_preserves_remaining_signature,
+    r#"
+from functools import partial
+
+def f(a: int, b: str) -> bool:
+    return True
+
+g = partial(f, 1)
+g("foo", "bar")  # E: Expected 1 positional argument, got 2
+g(1)  # E: Argument `Literal[1]` is not assignable to parameter `b` with type `str`
+g("foo")
+"#,
+);
+
+testcase!(
+    test_functools_partial_rejects_too_many_bound_args,
+    r#"
+from functools import partial
+
+def f(a: int, b: str, c: int, d: str) -> tuple[int, str]:
+    return (a + c, b + d)
+
+partial(f, 1, "a", 2, "b", 3, "c", 4, "d")  # E: Expected 4 positional arguments, got 8
+"#,
+);
+
+testcase!(
     bug = "Self in Metaclass should be treated as Any. Any in metaclass call should act like no annot.",
     test_callable_class_substitute_self,
     r#"
