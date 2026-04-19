@@ -1069,6 +1069,91 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Like `get_result_type_at`, but when the cursor is on the callee of a call
+    /// expression it preserves the underlying callable shape instead of the
+    /// call-site-resolved trace recorded for hover/signature help.
+    pub fn get_provide_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        let coerce_callee_for_provide_type = |transaction: &Self, ty: Type| {
+            transaction
+                .ad_hoc_solve(handle, "coerce_provide_type_callee", |solver| {
+                    match ty.clone() {
+                        Type::ClassDef(cls)
+                            if !solver.get_metadata_for_class(&cls).is_typed_dict() =>
+                        {
+                            Some(solver.constructor_to_provide_type_callable(
+                                &solver.promote_nontypeddict_silently_to_classtype(&cls),
+                            ))
+                        }
+                        Type::Type(box Type::ClassType(cls)) => {
+                            Some(solver.constructor_to_provide_type_callable(&cls))
+                        }
+                        _ => None,
+                    }
+                })
+                .flatten()
+                .unwrap_or_else(|| transaction.coerce_type_to_callable(handle, ty))
+        };
+        match self.identifier_at(handle, position) {
+            Some(IdentifierWithContext {
+                identifier: id,
+                context: IdentifierContext::Expr(expr_context),
+            }) => {
+                let key = match expr_context {
+                    ExprContext::Store => Key::Definition(ShortIdentifier::new(&id)),
+                    ExprContext::Load | ExprContext::Del | ExprContext::Invalid => {
+                        Key::BoundName(ShortIdentifier::new(&id))
+                    }
+                };
+
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                let mut ty = self.get_type(handle, &key)?;
+                let call_args_range = self.callee_at(handle, position).and_then(
+                    |ExprCall {
+                         func, arguments, ..
+                     }| (func.range() == id.range).then_some(arguments.range),
+                );
+                if call_args_range.is_some() {
+                    ty = coerce_callee_for_provide_type(self, ty);
+                }
+                Some(ty)
+            }
+            Some(IdentifierWithContext {
+                identifier: _,
+                context:
+                    IdentifierContext::ImportedName {
+                        name_after_import, ..
+                    },
+            }) => {
+                let key = Key::Definition(ShortIdentifier::new(&name_after_import));
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                let mut ty = self.get_type(handle, &key)?;
+                let call_args_range = self.callee_at(handle, position).and_then(
+                    |ExprCall {
+                         func, arguments, ..
+                     }| {
+                        (func.range() == name_after_import.range).then_some(arguments.range)
+                    },
+                );
+                if call_args_range.is_some() {
+                    ty = coerce_callee_for_provide_type(self, ty);
+                }
+                Some(ty)
+            }
+            Some(IdentifierWithContext {
+                identifier: _,
+                context: IdentifierContext::Attribute { range, .. },
+            }) => self.get_type_trace(handle, range),
+            Some(_) => self.get_type_at(handle, position),
+            None => self.result_type_from_expression_at(handle, position),
+        }
+    }
+
     /// If `ty` represents a callable instance (e.g., a class with `__call__`), return the
     /// bound `__call__` signature. Otherwise, return the type unchanged.
     ///

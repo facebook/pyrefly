@@ -1799,6 +1799,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
+    pub fn constructor_to_provide_type_callable(&self, cls: &ClassType) -> Type {
+        if let Some(metaclass_call_attr_ty) = self.get_metaclass_dunder_call(cls) {
+            return metaclass_call_attr_ty
+                .clone()
+                .to_callable()
+                .map(|callable| self.heap.mk_callable_from(callable))
+                .unwrap_or(metaclass_call_attr_ty);
+        }
+        if let Some(new_method) = self.get_dunder_new(cls, false) {
+            return new_method
+                .clone()
+                .to_callable()
+                .map(|callable| self.heap.mk_callable_from(callable))
+                .unwrap_or(new_method);
+        }
+        if let Some(init_method) = self.get_dunder_init(cls, false) {
+            return init_method
+                .clone()
+                .to_callable()
+                .map(|callable| self.heap.mk_callable_from(callable))
+                .unwrap_or(init_method);
+        }
+        self.heap.mk_callable_from(Callable::list(
+            ParamList::new(Vec::new()),
+            self.heap.mk_none(),
+        ))
+    }
+
     pub fn constructor_to_display_callable(&self, cls: &ClassType) -> Type {
         let class_type = self.heap.mk_class_type(cls.clone());
         if let Some(metaclass_call_attr_ty) = self.get_metaclass_dunder_call(cls) {
