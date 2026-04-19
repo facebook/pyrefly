@@ -1020,6 +1020,21 @@ g("foo")
 );
 
 testcase!(
+    test_functools_partial_bound_keyword_remains_overrideable,
+    r#"
+from functools import partial
+
+def f(a: int, b: str) -> bool:
+    return True
+
+g = partial(f, b="x")
+g(1)
+g(1, b="y")
+g(1, "y")  # E: Expected 1 positional argument, got 2
+"#,
+);
+
+testcase!(
     bug = "Self in Metaclass should be treated as Any. Any in metaclass call should act like no annot.",
     test_callable_class_substitute_self,
     r#"
