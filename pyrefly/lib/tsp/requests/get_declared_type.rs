@@ -14,7 +14,7 @@ use tsp_types::Type;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::tsp::server::TspServer;
 
-impl<T: TspInterface> TspServer<T> {
+impl<T: TspInterface + 'static> TspServer<T> {
     /// Return the declared type at the given position.
     ///
     /// The declared type is the annotation explicitly written by the user.

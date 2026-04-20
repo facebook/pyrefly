@@ -27,7 +27,7 @@ use crate::tsp::server::TspServer;
 use crate::tsp::validation::invalid_params_error;
 use crate::tsp::validation::parse_file_uri;
 
-impl<T: TspInterface> TspServer<T> {
+impl<T: TspInterface + 'static> TspServer<T> {
     /// Handle a `typeServer/resolveImport` request.
     ///
     /// Converts the TSP [`ResolveImportParams`] into pyrefly's internal

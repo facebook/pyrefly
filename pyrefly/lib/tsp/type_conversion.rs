@@ -739,19 +739,16 @@ mod tests {
 
     #[test]
     fn test_type_flags_bitwise_operations() {
-        // Test BitOr
         let combined = TypeFlags::INSTANCE | TypeFlags::CALLABLE;
         assert!(combined.contains(TypeFlags::INSTANCE));
         assert!(combined.contains(TypeFlags::CALLABLE));
         assert!(!combined.contains(TypeFlags::LITERAL));
 
-        // Test BitOrAssign
         let mut flags = TypeFlags::NONE;
         flags |= TypeFlags::INSTANTIABLE;
         assert!(flags.contains(TypeFlags::INSTANTIABLE));
         assert!(!flags.contains(TypeFlags::INSTANCE));
 
-        // Test with_ builders
         let flags = TypeFlags::new().with_instance().with_callable();
         assert!(flags.contains(TypeFlags::INSTANCE));
         assert!(flags.contains(TypeFlags::CALLABLE));
@@ -760,20 +757,16 @@ mod tests {
 
     #[test]
     fn test_type_flags_serialization() {
-        // INSTANCE = 2
         let json = serde_json::to_value(TypeFlags::INSTANCE).unwrap();
         assert_eq!(json, serde_json::json!(2));
 
-        // CALLABLE = 4
         let json = serde_json::to_value(TypeFlags::CALLABLE).unwrap();
         assert_eq!(json, serde_json::json!(4));
 
-        // Combined flags (INSTANCE | CALLABLE = 6)
         let combined = TypeFlags::INSTANCE | TypeFlags::CALLABLE;
         let json = serde_json::to_value(combined).unwrap();
         assert_eq!(json, serde_json::json!(6));
 
-        // Deserialization
         let flags: TypeFlags = serde_json::from_value(serde_json::json!(6)).unwrap();
         assert!(flags.contains(TypeFlags::INSTANCE));
         assert!(flags.contains(TypeFlags::CALLABLE));

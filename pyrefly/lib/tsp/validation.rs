@@ -86,7 +86,7 @@ pub fn parse_file_uri(uri: &str) -> Result<Url, ResponseError> {
 // Snapshot validation
 // ---------------------------------------------------------------------------
 
-impl<T: TspInterface> TspServer<T> {
+impl<T: TspInterface + 'static> TspServer<T> {
     /// Validate that the client-supplied snapshot matches the server's current
     /// snapshot. Returns `Ok(())` on match or `Err(ResponseError)` on mismatch.
     pub fn validate_snapshot(&self, client_snapshot: i32) -> Result<(), ResponseError> {
@@ -100,12 +100,12 @@ impl<T: TspInterface> TspServer<T> {
 
     /// Send a successful JSON-RPC response for `id` with `result`.
     pub fn send_ok<R: Serialize>(&self, id: RequestId, result: R) {
-        self.inner.send_response(new_response(id, Ok(result)));
+        self.send_response(new_response(id, Ok(result)));
     }
 
     /// Send a JSON-RPC error response for `id`.
     pub fn send_err(&self, id: RequestId, error: ResponseError) {
-        self.inner.send_response(Response {
+        self.send_response(Response {
             id,
             result: None,
             error: Some(error),

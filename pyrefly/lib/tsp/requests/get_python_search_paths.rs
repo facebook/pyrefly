@@ -19,7 +19,7 @@ use crate::tsp::server::TspServer;
 use crate::tsp::validation::internal_error;
 use crate::tsp::validation::parse_file_uri;
 
-impl<T: TspInterface> TspServer<T> {
+impl<T: TspInterface + 'static> TspServer<T> {
     /// Handle a `typeServer/getPythonSearchPaths` request.
     ///
     /// Validates the snapshot, parses the `from_uri`, and delegates to
