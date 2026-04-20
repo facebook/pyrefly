@@ -7,8 +7,8 @@
 
 pub(crate) mod convert_dict;
 pub(crate) mod convert_star_import;
-pub(crate) mod enum_member;
 pub(crate) mod encapsulate_field;
+pub(crate) mod enum_member;
 pub(crate) mod extract_field;
 pub(crate) mod extract_function;
 mod extract_shared;

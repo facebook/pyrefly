@@ -54,6 +54,7 @@ pub(crate) fn encapsulate_field_code_actions(
     let field_name = identifier.identifier.id.to_string();
     let definition = transaction
         .find_definition(handle, position, FindPreference::default())
+        .ok()?
         .into_iter()
         .find(|definition| {
             definition.module.path() == module_info.path()
