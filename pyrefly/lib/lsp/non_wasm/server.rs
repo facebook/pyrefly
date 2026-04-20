@@ -4953,6 +4953,7 @@ impl Server {
         let new_name = params.new_name.clone();
         let new_name_for_text_occurrences = new_name.clone();
         let path_remapper = self.path_remapper.clone();
+        let open_notebooks = self.snapshot_open_notebooks();
 
         self.async_find_from_definition_helper(
             request_id,
@@ -5010,14 +5011,20 @@ impl Server {
                 for (info, mut ranges) in results.references {
                     ranges.sort_by_key(|range| (range.start(), range.end()));
                     ranges.dedup();
-                    if let Some(uri) = module_info_to_uri(&info, path_remapper.as_ref()) {
-                        changes
-                            .entry(uri)
-                            .or_default()
-                            .extend(ranges.into_iter().map(|range| TextEdit {
+                    if let Some(mut uri) = module_info_to_uri(&info, path_remapper.as_ref()) {
+                        for range in ranges {
+                            if let Some(cell_idx) = info.to_cell_for_lsp(range.start())
+                                && let Some(path) = to_real_path(info.path())
+                                && let Some(notebook) = open_notebooks.get(&path)
+                                && let Some(cell_url) = notebook.get_cell_url(cell_idx)
+                            {
+                                uri = cell_url.clone();
+                            }
+                            changes.entry(uri.clone()).or_default().push(TextEdit {
                                 range: info.to_lsp_range(range),
                                 new_text: new_name.clone(),
-                            }));
+                            });
+                        }
                     }
                 }
 
