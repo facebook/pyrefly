@@ -288,6 +288,7 @@ use crate::lsp::non_wasm::module_helpers::ThriftRemapper;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
+use crate::lsp::non_wasm::move_symbol_new_file::move_symbol_to_new_file_code_action;
 use crate::lsp::non_wasm::mru::CompletionMru;
 use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Notification;
@@ -4608,6 +4609,19 @@ impl Server {
                 actions.push(action);
             }
             record_code_action_telemetry("convert_module_package", start);
+            let start = Instant::now();
+            if let Some(action) = move_symbol_to_new_file_code_action(
+                &self.initialize_params.capabilities,
+                transaction,
+                &handle,
+                uri,
+                range,
+                import_format,
+                self.path_remapper.as_ref(),
+            ) {
+                actions.push(action);
+            }
+            record_code_action_telemetry("move_symbol_new_file", start);
         }
         let start = Instant::now();
         if let Some(action) = safe_delete_file_code_action(
