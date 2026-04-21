@@ -78,6 +78,7 @@ use crate::binding::binding::TypeAliasRefBinding;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::metadata::BindingsMetadata;
+use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::scope::Exportable;
@@ -1131,6 +1132,7 @@ impl<'a> BindingsBuilder<'a> {
             FlowStyle::Other
             | FlowStyle::ClassField { .. }
             | FlowStyle::PossiblyUninitialized
+            | FlowStyle::InitializedIfGuardTruthy { .. }
             | FlowStyle::MaybeInitialized(_)
             | FlowStyle::Uninitialized => {
                 self.special_export_from_binding_idx(idx, visited_names, visited_keys)
@@ -1746,6 +1748,11 @@ impl<'a> BindingsBuilder<'a> {
                     Binding::Narrow(initial_idx, Box::new(op.clone()), use_location),
                 );
                 self.scopes.narrow_in_current_flow(name, narrowed_idx);
+                // Correlated-condition analysis: a bare `if <name>:` clears matching
+                // `InitializedIfGuardTruthy` guards.
+                if matches!(op, NarrowOp::Atomic(None, AtomicNarrowOp::IsTruthy)) {
+                    self.scopes.clear_matching_truthy_guard(name.into_key());
+                }
             }
         }
     }

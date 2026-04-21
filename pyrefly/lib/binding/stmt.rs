@@ -991,6 +991,18 @@ impl<'a> BindingsBuilder<'a> {
                 // are in the base flow and visible after the if-statement. This mirrors the
                 // fix for ternary expressions in expr.rs (Expr::If handling).
                 self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
+                // Correlated-condition analysis: for a bare `if <name>:` with no elif/else,
+                // remember the guard so we can mark newly-defined names as
+                // `InitializedIfGuardTruthy` after the merge.
+                let truthy_guard = if x.elif_else_clauses.is_empty()
+                    && let Expr::Name(ref guard_name) = *x.test
+                    && let Some(guard_value_idx) = self.scopes.current_flow_idx(&guard_name.id)
+                {
+                    let pre_fork_names = self.scopes.current_flow_names();
+                    Some((guard_name.id.clone(), guard_value_idx, pre_fork_names))
+                } else {
+                    None
+                };
                 self.start_fork(if_range);
                 // Type narrowing operations that are carried over from one branch to the next. For example, in:
                 //   if x is None:
@@ -1089,6 +1101,11 @@ impl<'a> BindingsBuilder<'a> {
                     self.finish_exhaustive_fork();
                 } else {
                     self.finish_non_exhaustive_fork(&negated_prev_ops, exhaustive_key);
+                }
+                // Post-merge: apply correlated-condition analysis (see `truthy_guard` above).
+                if let Some((guard, guard_value_idx, pre_fork_names)) = truthy_guard {
+                    self.scopes
+                        .upgrade_to_guarded(&guard, guard_value_idx, &pre_fork_names);
                 }
                 // If we have a statically evaluated test like `sys.version_info`, we should set `is_definitely_unreachable` to false
                 // to reduce false positive unreachable errors, since some code paths can still be hit at runtime

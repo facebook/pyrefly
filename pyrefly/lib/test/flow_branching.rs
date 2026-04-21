@@ -1902,6 +1902,79 @@ def f(x: int) -> str:
 "#,
 );
 
+// Correlated-condition analysis: a name defined only on the truthy branch of
+// `if <guard>:` (with no else) is considered initialized inside any later
+// `if <guard>:` block where the guard has not been reassigned.
+testcase!(
+    test_correlated_if_simple,
+    r#"
+def main(a: bool) -> int:
+    if a:
+        b = 3
+    c = 5
+    if a:
+        return b
+    return 9
+"#,
+);
+
+testcase!(
+    test_correlated_if_no_match_without_guard,
+    r#"
+def main(a: bool) -> int:
+    if a:
+        b = 3
+    return b  # E: `b` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_correlated_if_broken_by_reassignment,
+    r#"
+def main(a: bool, other: bool) -> int:
+    if a:
+        b = 3
+    a = other
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+"#,
+);
+
+testcase!(
+    test_correlated_if_does_not_cross_else,
+    r#"
+def main(a: bool) -> int:
+    if a:
+        b = 3
+    else:
+        pass
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+"#,
+);
+
+// When the guard branch contains a NoReturn call, the `MaybeInitialized` termination
+// keys are preserved through `InitializedIfGuardTruthy`, so reads in unrelated code
+// still correctly suppress the error via the Never-check.
+testcase!(
+    test_correlated_if_preserves_noreturn_fallback,
+    r#"
+from typing import NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def main(a: bool) -> int:
+    if a:
+        b = 3
+    else:
+        raises()
+    return b
+"#,
+);
+
 testcase!(
     test_declared_variable_with_noreturn_else_false_positive,
     r#"
