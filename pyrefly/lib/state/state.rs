@@ -33,6 +33,7 @@ use enum_iterator::Sequence;
 use fxhash::FxHashMap;
 use itertools::Itertools;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::ignore::parse_ignore_all;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
@@ -745,10 +746,17 @@ impl<'a> Transaction<'a> {
                 .filter_map(|handle| {
                     self.with_module_config_inner(handle, |config, x| {
                         let load = x.get_load()?;
-                        let mut multi_line = x
-                            .get_ast()
-                            .map(|ast| sorted_multi_line_string_ranges(&ast, &load.module_info))
-                            .unwrap_or_default();
+                        let ast = x.get_ast().unwrap_or_else(|| {
+                            // AST may have been evicted after the Answers step.
+                            // Re-parse to compute multi-line string ranges.
+                            let (ast, _, _) = Ast::parse(
+                                load.module_info.contents(),
+                                load.module_info.source_type(),
+                            );
+                            Arc::new(ast)
+                        });
+                        let mut multi_line =
+                            sorted_multi_line_string_ranges(&ast, &load.module_info);
                         let lines: Vec<&str> = load.module_info.contents().lines().collect();
                         multi_line
                             .extend(sorted_backslash_continuation_ranges(&lines, &multi_line));
@@ -772,10 +780,14 @@ impl<'a> Transaction<'a> {
         /// Extract multi-line ranges and ignore-all directives from the AST
         /// and source text.
         fn module_ranges_from(state: &dyn ModuleStateReader, load: &Load) -> ModuleRanges {
-            let mut multi_line = state
-                .get_ast()
-                .map(|ast| sorted_multi_line_string_ranges(&ast, &load.module_info))
-                .unwrap_or_default();
+            let ast = state.get_ast().unwrap_or_else(|| {
+                // AST may have been evicted after the Answers step.
+                // Re-parse to compute multi-line string ranges.
+                let (ast, _, _) =
+                    Ast::parse(load.module_info.contents(), load.module_info.source_type());
+                Arc::new(ast)
+            });
+            let mut multi_line = sorted_multi_line_string_ranges(&ast, &load.module_info);
             let lines: Vec<&str> = load.module_info.contents().lines().collect();
             multi_line.extend(sorted_backslash_continuation_ranges(&lines, &multi_line));
             multi_line.sort();
