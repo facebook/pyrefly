@@ -708,7 +708,7 @@ testcase!(
     test_typevar_not_treated_as_bad_implicit_alias,
     TestEnv::one(
         "_typings",
-        "from typing import ParamSpec, TypeVar, TypeVarTuple",
+        "from typing import Callable, ParamSpec, TypeVar, TypeVarTuple",
     ),
     r#"
 import _typings as t

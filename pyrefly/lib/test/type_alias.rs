@@ -1133,6 +1133,22 @@ class Foo(BadBase):
 );
 
 testcase!(
+    test_bad_implicit_type_alias_imported,
+    TestEnv::one(
+        "mod_a",
+        r#"
+BadAlias = (lambda: int)()
+"#,
+    ),
+    r#"
+from mod_a import BadAlias
+
+def f(x: BadAlias):  # E: `BadAlias` is not a valid type alias: Function call cannot be used in annotations
+    pass
+"#,
+);
+
+testcase!(
     test_type_alias_variance_conformance,
     r#"
 from typing import Generic, TypeVar, TypeAlias
