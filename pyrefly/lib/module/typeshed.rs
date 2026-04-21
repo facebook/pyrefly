@@ -16,7 +16,6 @@ use anyhow::Context as _;
 use anyhow::anyhow;
 use dupe::Dupe;
 use pyrefly_bundled::bundled_typeshed;
-use pyrefly_bundled::bundled_typeshed_versions;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::module_name::ModuleName;
@@ -67,8 +66,8 @@ pub struct BundledTypeshedStdlib {
 
 impl BundledStub for BundledTypeshedStdlib {
     fn new() -> anyhow::Result<Self> {
-        let contents = bundled_typeshed()?;
-        let versions = parse_versions(&bundled_typeshed_versions()?)?;
+        let (contents, versions) = bundled_typeshed()?;
+        let versions = parse_versions(&versions)?;
         let mut res = Self {
             find: SmallMap::new(),
             load: SmallMap::new(),
@@ -149,6 +148,14 @@ fn parse_versions(contents: &str) -> anyhow::Result<SmallMap<ModuleName, Version
 impl BundledTypeshedStdlib {
     pub fn has_module(&self, module: ModuleName) -> bool {
         self.find.contains_key(&module)
+    }
+
+    pub fn is_known_but_unavailable_for_python_version(
+        &self,
+        module: ModuleName,
+        version: PythonVersion,
+    ) -> bool {
+        self.has_module(module) && !self.is_available_for_python_version(module, version)
     }
 
     pub fn is_available_for_python_version(

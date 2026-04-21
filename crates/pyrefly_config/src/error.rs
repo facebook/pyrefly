@@ -38,15 +38,15 @@ impl ErrorDisplayConfig {
         if let Some(&severity) = self.0.get(&kind) {
             return severity;
         }
-        if let Some(parent) = kind.parent_kind() {
-            if let Some(&severity) = self.0.get(&parent) {
-                return severity;
-            }
+        if let Some(parent) = kind.parent_kind()
+            && let Some(&severity) = self.0.get(&parent)
+        {
+            return severity;
         }
-        if let Some(alias) = kind.deprecated_alias() {
-            if let Some(&severity) = self.0.get(&alias) {
-                return severity;
-            }
+        if let Some(alias) = kind.deprecated_alias()
+            && let Some(&severity) = self.0.get(&alias)
+        {
+            return severity;
         }
         kind.default_severity()
     }

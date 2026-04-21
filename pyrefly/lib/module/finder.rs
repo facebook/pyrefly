@@ -802,8 +802,7 @@ pub fn find_import_internal(
     // into a misleading third-party stub result from `setuptools`.
     let unavailable_stdlib_module = matches!(style_filter, Some(ModuleStyle::Interface) | None)
         && typeshed().is_ok_and(|ts| {
-            ts.has_module(module)
-                && !ts.is_available_for_python_version(module, config.python_version())
+            ts.is_known_but_unavailable_for_python_version(module, config.python_version())
         });
     let typeshed_third_party_result = if unavailable_stdlib_module {
         None
