@@ -643,6 +643,34 @@ impl<'a> BindingsBuilder<'a> {
                 self.check_private_attribute_usage(attr);
                 self.ensure_expr(&mut attr.value, usage);
             }
+            Expr::Subscript(ExprSubscript { value, slice, .. })
+                if matches!(
+                    self.as_special_export(value),
+                    Some(
+                        SpecialExport::Union
+                            | SpecialExport::Optional
+                            | SpecialExport::Annotated
+                            | SpecialExport::Callable
+                            | SpecialExport::BuiltinsDict
+                            | SpecialExport::TypingDict
+                            | SpecialExport::BuiltinsList
+                            | SpecialExport::TypingList
+                            | SpecialExport::BuiltinsTuple
+                            | SpecialExport::TypingTuple
+                            | SpecialExport::BuiltinsType
+                            | SpecialExport::TypingType
+                            | SpecialExport::TypingMapping
+                            | SpecialExport::TypeForm
+                    )
+                ) =>
+            {
+                // These subscripts are (or contain) type expressions even when they appear in a
+                // value context, e.g. `list["A | B"]([x])`. Ensure the slice is bound as a type so
+                // forward-reference strings are parsed and names inside are bound.
+                self.ensure_expr(&mut *value, usage);
+                let mut type_usage = Usage::StaticTypeInformation;
+                self.ensure_type_impl(&mut *slice, &mut None, false, &mut type_usage);
+            }
             Expr::If(x) => {
                 // Ternary operation. We treat it like an if/else statement.
                 // Process the test before forking so walrus-defined names are

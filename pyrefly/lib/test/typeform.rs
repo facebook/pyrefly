@@ -129,3 +129,19 @@ import types
 v: types.UnionType = str | None
     "#,
 );
+
+testcase!(
+    test_typeform_generic_alias_string_type_argument_in_value_context,
+    r#"
+from __future__ import annotations
+
+from typing import assert_type
+
+class Tomato: ...
+class Cucumber: ...
+
+def main(t: Tomato) -> None:
+    a = list["Tomato | Cucumber"]([t])
+    assert_type(a, list[Tomato | Cucumber])
+    "#,
+);
