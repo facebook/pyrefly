@@ -964,10 +964,14 @@ impl ReportArgs {
                     None
                 };
 
-                let is_return_type_known = return_annotation.is_some()
-                    && answers
+                let resolved_return_ty = return_annotation.as_ref().and_then(|_| {
+                    answers
                         .get_type_at(return_idx)
-                        .is_some_and(|t| Self::is_type_known(&t));
+                        .map(|t| Self::is_type_known(&t))
+                });
+                let is_return_type_known =
+                    Self::classify_annotation_rank(return_annotation.is_some(), resolved_return_ty)
+                        == SlotRank::Typed;
 
                 let mut parameters = Vec::new();
                 let implicit_receiver =
@@ -1010,19 +1014,21 @@ impl ReportArgs {
                         .as_ref()
                         .map(|ann| module.code_at(ann.range()).to_owned());
 
-                    let is_param_type_known = if is_self {
-                        true
-                    } else if param.annotation.is_some() {
+                    let resolved_param_ty = if param.annotation.is_some() {
                         let annot_key =
                             KeyAnnotation::Annotation(ShortIdentifier::new(&param.name));
                         let annot_idx = bindings.key_to_idx(&annot_key);
                         answers
                             .get_idx(annot_idx)
                             .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
-                            .unwrap_or(false)
                     } else {
-                        false
+                        None
                     };
+                    let is_param_type_known = is_self
+                        || Self::classify_annotation_rank(
+                            param_annotation.is_some(),
+                            resolved_param_ty,
+                        ) == SlotRank::Typed;
 
                     // Implicit dunder params are always excluded, even when annotated.
                     let is_implicit_param = !is_self
@@ -2467,6 +2473,24 @@ mod tests {
             assert_eq!(slots.n_typed, 1, "{name} should be typed");
             assert_eq!(slots.n_any, 0, "{name} should not be any");
         }
+    }
+
+    #[test]
+    fn test_report_bare_list_annotations() {
+        let report = build_module_report_for_test("bare_list_annotations.py");
+        let function_slots = report
+            .symbol_reports
+            .iter()
+            .find_map(|s| match s {
+                SymbolReport::Function { name, slots, .. } if name == "test.f" => Some(*slots),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no function symbol named test.f"));
+
+        assert_eq!(function_slots.n_typable, 2);
+        assert_eq!(function_slots.n_typed, 2);
+        assert_eq!(function_slots.n_any, 0);
+        assert_eq!(function_slots.n_untyped, 0);
     }
 
     #[test]
