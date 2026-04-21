@@ -136,6 +136,7 @@ testcase!(
 from __future__ import annotations
 
 from typing import assert_type
+from typing import Annotated
 
 class Tomato: ...
 class Cucumber: ...
@@ -143,5 +144,13 @@ class Cucumber: ...
 def main(t: Tomato) -> None:
     a = list["Tomato | Cucumber"]([t])
     assert_type(a, list[Tomato | Cucumber])
+
+    b = set["Tomato | Cucumber"]([t])
+    assert_type(b, set[Tomato | Cucumber])
+
+    c = frozenset["Tomato | Cucumber"]([t])
+    assert_type(c, frozenset[Tomato | Cucumber])
+
+x = Annotated[int, "meta"]
     "#,
 );

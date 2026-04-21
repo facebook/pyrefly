@@ -659,6 +659,8 @@ impl<'a> BindingsBuilder<'a> {
                             | SpecialExport::TypingTuple
                             | SpecialExport::BuiltinsType
                             | SpecialExport::TypingType
+                            | SpecialExport::BuiltinsSet
+                            | SpecialExport::BuiltinsFrozenset
                             | SpecialExport::TypingMapping
                             | SpecialExport::TypeForm
                     )
@@ -667,9 +669,23 @@ impl<'a> BindingsBuilder<'a> {
                 // These subscripts are (or contain) type expressions even when they appear in a
                 // value context, e.g. `list["A | B"]([x])`. Ensure the slice is bound as a type so
                 // forward-reference strings are parsed and names inside are bound.
+                let special_export = self
+                    .as_special_export(value)
+                    .expect("guard already matched");
                 self.ensure_expr(&mut *value, usage);
                 let mut type_usage = Usage::StaticTypeInformation;
-                self.ensure_type_impl(&mut *slice, &mut None, false, &mut type_usage);
+                if special_export == SpecialExport::Annotated
+                    && let Expr::Tuple(tup) = &mut **slice
+                    && !tup.is_empty()
+                {
+                    // Only the first argument to Annotated[...] is a type; the rest are metadata.
+                    self.ensure_type_impl(&mut tup.elts[0], &mut None, false, &mut type_usage);
+                    for elt in tup.elts[1..].iter_mut() {
+                        self.ensure_expr(elt, &mut Usage::StaticTypeInformation);
+                    }
+                } else {
+                    self.ensure_type_impl(&mut *slice, &mut None, false, &mut type_usage);
+                }
             }
             Expr::If(x) => {
                 // Ternary operation. We treat it like an if/else statement.
