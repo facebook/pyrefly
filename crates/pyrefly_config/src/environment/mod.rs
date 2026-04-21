@@ -11,6 +11,7 @@ pub(crate) mod conda;
     clippy::module_inception,
     reason = "environment is both the module group and public API"
 )]
+#[allow(clippy::module_inception)]
 pub mod environment;
 pub(crate) mod finder;
 pub mod interpreters;
