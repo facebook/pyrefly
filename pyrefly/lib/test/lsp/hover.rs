@@ -1103,6 +1103,27 @@ Widget docstring"#
 }
 
 #[test]
+fn hover_on_dict_constructor_is_multiline() {
+    let code = r#"
+x: dict[str, int]
+#  ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(class) dict:"),
+        "Expected dict hover to show class constructor, got: {report}"
+    );
+    assert!(
+        report.contains("Overload[\n  "),
+        "Expected overload constructor signatures to be multi-line in hover, got: {report}"
+    );
+    assert!(
+        report.contains("(\n    "),
+        "Expected callable constructor signatures to include newlines in hover, got: {report}"
+    );
+}
+
+#[test]
 fn hover_on_first_component_of_multi_part_import() {
     let mymod_init = r#"# mymod/__init__.py
 def version() -> str: ...

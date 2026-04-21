@@ -753,7 +753,9 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_builtin("LiteralString", qname)
             }
             Type::Callable(c) => {
-                if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
+                // Hover output should be readable even when callables appear inside unions
+                // (e.g. constructor display that unions __new__ and __init__).
+                if self.lsp_display_mode == LspDisplayMode::Hover {
                     c.fmt_with_type_with_newlines(output, &|t, o| {
                         self.fmt_helper_generic(t, false, o)
                     })
@@ -824,8 +826,16 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str(": ...")
                         }
                     }
-                    _ => signature
-                        .fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o)),
+                    _ => {
+                        if self.lsp_display_mode == LspDisplayMode::Hover {
+                            signature.fmt_with_type_with_newlines(output, &|t, o| {
+                                self.fmt_helper_generic(t, false, o)
+                            })
+                        } else {
+                            signature
+                                .fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
+                        }
+                    }
                 }
             }
             Type::Overload(overload) => {
@@ -838,8 +848,8 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                     Ok(())
                 } else {
-                    let multiline =
-                        is_toplevel && self.lsp_display_mode != LspDisplayMode::ProvideType;
+                    let multiline = self.lsp_display_mode == LspDisplayMode::Hover
+                        || (is_toplevel && self.lsp_display_mode != LspDisplayMode::ProvideType);
                     if multiline {
                         output.write_str("Overload[\n  ")?;
                     } else {
