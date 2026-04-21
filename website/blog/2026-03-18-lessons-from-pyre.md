@@ -40,7 +40,7 @@ This struggle with Pyre's latency in the IDE led to a temporary move to Pyright 
 
 A core design goal for Pyrefly is to create a system flexible enough to handle both throughput-oriented workloads (like CLI type checking) and latency-sensitive workloads (required by the IDE/language server).
 
-Additionally, error-recovery during parsing is much more important for a language server than for a CLI-only type checker. Language servers need to continue working when a you're halfway through an edit, while type checkers are typically run only when you're done with an edit. Pyre had several options for parsing, including a Menhir-based parser and directly calling the CPython parser, but these were not robust to syntax errors. In Pyrefly, we use Astral's excellent [Ruff parser](https://github.com/astral-sh/ruff/tree/main/crates/ruff_python_parser), which is both speedy and battle-tested.
+Additionally, error-recovery during parsing is much more important for a language server than for a CLI-only type checker. Language servers need to continue working when you're halfway through an edit, while type checkers are typically run only when you're done with an edit. Pyre had several options for parsing, including a Menhir-based parser and directly calling the CPython parser, but these were not robust to syntax errors. In Pyrefly, we use Astral's excellent [Ruff parser](https://github.com/astral-sh/ruff/tree/main/crates/ruff_python_parser), which is both speedy and battle-tested.
 
 ## OCaml vs. Rust: When Your Ecosystem Becomes a Ceiling
 
