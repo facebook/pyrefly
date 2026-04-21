@@ -675,6 +675,9 @@ impl ReportArgs {
         report.n_classes = 0;
         report.n_attrs = 0;
         report.n_properties = 0;
+        // `n_type_ignores` is not affected by public filtering since type ignores are always
+        // attached to the module itself, not individual symbols, so we don't need to recalculate
+        // it here.
 
         for sym in &report.symbol_reports {
             report.slots = report.slots.merge(*sym.slots());
