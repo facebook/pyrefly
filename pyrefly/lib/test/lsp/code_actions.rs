@@ -4147,6 +4147,23 @@ def f():
 }
 
 #[test]
+fn unwrap_block_if_header_selection() {
+    let code = r#"
+def f():
+    if True:
+        print(2)
+"#;
+    let selection = find_nth_range(code, "True", 1);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print(2)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn unwrap_block_if_else_branch_after_colon() {
     let code = r#"
 def f():
@@ -4164,6 +4181,27 @@ def f():
 def f():
     # keep this comment
     print("else")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_elif_branch() {
+    let code = r#"
+def f(value):
+    if value == 0:
+        print("zero")
+    elif value == 1:
+        print("one")
+    else:
+        print("other")
+"#;
+    let selection = find_nth_range(code, "value == 1", 1);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f(value):
+    print("one")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4216,6 +4254,44 @@ def f():
 }
 
 #[test]
+fn unwrap_block_outer_nested_if() {
+    let code = r#"
+def f():
+    if True:
+        if True:
+            print("value")
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    if True:
+        print("value")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_inner_nested_if() {
+    let code = r#"
+def f():
+    if True:
+        if True:
+            print("value")
+"#;
+    let selection = find_nth_range(code, ":", 3);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    if True:
+        print("value")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn unwrap_block_multiline_header() {
     let code = r#"
 def f():
@@ -4225,6 +4301,24 @@ def f():
         print("then")
 "#;
     let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print("then")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_multiline_triple_quoted_string_header() {
+    let code = r#"
+def f():
+    if bool("""first:
+second"""):
+        print("then")
+"#;
+    let selection = find_nth_range(code, "second", 1);
     let updated =
         apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
     let expected = r#"
@@ -4265,6 +4359,23 @@ def f():
 }
 
 #[test]
+fn unwrap_block_f_string_format_spec() {
+    let code = r#"
+def f(value):
+    if f"{value:02}":
+        print("then")
+"#;
+    let selection = find_nth_range(code, "value:02", 1);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f(value):
+    print("then")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn unwrap_block_try_selected_except_branch() {
     let code = r#"
 def f(value):
@@ -4302,6 +4413,19 @@ def f():
     print("cleanup")
 "#;
     assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_rejects_try_header_with_finally() {
+    let code = r#"
+def f():
+    try:
+        print("try")
+    finally:
+        print("cleanup")
+"#;
+    let selection = find_nth_range(code, "try", 1);
+    assert_no_unwrap_block_action(code, selection);
 }
 
 #[test]
