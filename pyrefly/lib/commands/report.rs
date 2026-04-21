@@ -273,6 +273,8 @@ enum SymbolReport {
         name: String,
         #[serde(flatten)]
         slots: SlotCounts,
+        #[serde(skip)]
+        n_params: usize,
         location: Location,
     },
     #[serde(rename = "class")]
@@ -584,11 +586,12 @@ impl ReportArgs {
 
     /// True if `fqn` or any class-level prefix of it is in the public set.
     fn is_public_fqn(fqn: &str, module_prefix: &str, public_fqns: &HashSet<String>) -> bool {
-        let start = module_prefix.len();
         public_fqns.contains(fqn)
-            || fqn[start..]
-                .match_indices('.')
-                .any(|(i, _)| public_fqns.contains(&fqn[..start + i]))
+            || std::iter::successors(fqn.rsplit_once('.').map(|(prefix, _)| prefix), |prefix| {
+                prefix.rsplit_once('.').map(|(parent, _)| parent)
+            })
+            .take_while(|prefix| prefix.starts_with(module_prefix))
+            .any(|prefix| public_fqns.contains(prefix))
     }
 
     /// Module-level dunders that typestats always excludes from the report.
@@ -664,34 +667,36 @@ impl ReportArgs {
             .retain(|n| Self::is_public_fqn(n, &module_prefix, public_fqns));
 
         // recompute all aggregates in a single pass
-        let (slots, meth, fun, cls, attr, prop) = report.symbol_reports.iter().fold(
-            (SlotCounts::default(), 0, 0, 0, 0, 0),
-            |(slots, meth, fun, cls, attr, prop), sym| match sym {
-                SymbolReport::Function { name, .. } if Self::is_method(name, &module_prefix) => {
-                    (slots.merge(*sym.slots()), meth + 1, fun, cls, attr, prop)
+        report.slots = SlotCounts::default();
+        report.n_methods = 0;
+        report.n_functions = 0;
+        report.n_method_params = 0;
+        report.n_function_params = 0;
+        report.n_classes = 0;
+        report.n_attrs = 0;
+        report.n_properties = 0;
+
+        for sym in &report.symbol_reports {
+            report.slots = report.slots.merge(*sym.slots());
+            match sym {
+                SymbolReport::Function { name, n_params, .. }
+                    if Self::is_method(name, &module_prefix) =>
+                {
+                    report.n_methods += 1;
+                    report.n_method_params += *n_params;
                 }
-                SymbolReport::Function { .. } => {
-                    (slots.merge(*sym.slots()), meth, fun + 1, cls, attr, prop)
+                SymbolReport::Function { n_params, .. } => {
+                    report.n_functions += 1;
+                    report.n_function_params += *n_params;
                 }
-                SymbolReport::Class { .. } => {
-                    (slots.merge(*sym.slots()), meth, fun, cls + 1, attr, prop)
-                }
-                SymbolReport::Attr { .. } => {
-                    (slots.merge(*sym.slots()), meth, fun, cls, attr + 1, prop)
-                }
-                SymbolReport::Property { .. } => {
-                    (slots.merge(*sym.slots()), meth, fun, cls, attr, prop + 1)
-                }
-            },
-        );
-        report.slots = slots;
-        report.coverage = slots.coverage();
-        report.strict_coverage = slots.strict_coverage();
-        report.n_methods = meth;
-        report.n_functions = fun;
-        report.n_classes = cls;
-        report.n_attrs = attr;
-        report.n_properties = prop;
+                SymbolReport::Class { .. } => report.n_classes += 1,
+                SymbolReport::Attr { .. } => report.n_attrs += 1,
+                SymbolReport::Property { .. } => report.n_properties += 1,
+            }
+        }
+
+        report.coverage = report.slots.coverage();
+        report.strict_coverage = report.slots.strict_coverage();
     }
 
     /// True if the first parameter is the implicit receiver (`self`/`cls`),
@@ -1678,6 +1683,7 @@ impl ReportArgs {
                 symbol_reports.push(SymbolReport::Function {
                     name: func.name.clone(),
                     slots: func.slots,
+                    n_params: func.n_params,
                     location: func.location,
                 });
             }
@@ -2624,6 +2630,7 @@ mod tests {
         assert!(public("pkg.bar"));
         assert!(public("pkg.Foo.method")); // class member of a public class
         assert!(public("pkg.Foo.Inner.attr"));
+        assert!(!public("other.Foo"));
         assert!(!public("pkg.Baz"));
         assert!(!public("pkg.Baz.method"));
     }
@@ -2644,11 +2651,13 @@ mod tests {
                 SymbolReport::Function {
                     name: "pkg.Foo.method".into(),
                     slots: SlotCounts::typed(),
+                    n_params: 2,
                     location: loc(2),
                 },
                 SymbolReport::Function {
                     name: "pkg.bar".into(),
                     slots: SlotCounts::untyped(),
+                    n_params: 1,
                     location: loc(3),
                 },
                 SymbolReport::Attr {
@@ -2663,8 +2672,8 @@ mod tests {
             strict_coverage: 100.0,
             n_functions: 2,
             n_methods: 0,
-            n_function_params: 0,
-            n_method_params: 0,
+            n_function_params: 123,
+            n_method_params: 456,
             n_classes: 1,
             n_attrs: 1,
             n_properties: 0,
@@ -2681,6 +2690,8 @@ mod tests {
         assert_eq!(report.symbol_reports.len(), 3); // Foo, Foo.method, bar
         assert_eq!(report.n_functions, 1);
         assert_eq!(report.n_methods, 1);
+        assert_eq!(report.n_function_params, 1);
+        assert_eq!(report.n_method_params, 2);
         assert_eq!(report.n_classes, 1);
         assert_eq!(report.n_attrs, 0);
     }
