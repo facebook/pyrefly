@@ -50,11 +50,15 @@ fn test_inlay_hints() {
                     (" -> ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -85,11 +89,15 @@ fn test_inlay_hints() {
                     (": ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -118,6 +126,8 @@ fn test_inlay_hints() {
                 hint,
                 &[
                     (" -> ", false),
+                    ("typing", false),
+                    (".", false),
                     ("Literal", true),
                     ("[", false),
                     ("0", false),
@@ -126,6 +136,5 @@ fn test_inlay_hints() {
             )
         })
         .unwrap();
-
     interaction.shutdown().unwrap();
 }
