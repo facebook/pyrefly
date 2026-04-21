@@ -325,21 +325,10 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Function call cannot be used in annotations",
-      "description": "Function call cannot be used in annotations",
-      "line": 106,
-      "name": "invalid-annotation",
-      "severity": "error",
-      "stop_column": 22,
-      "stop_line": 106
-    },
-    {
-      "code": -2,
-      "column": 9,
-      "concise_description": "List literal cannot be used in annotations",
-      "description": "List literal cannot be used in annotations",
+      "concise_description": "Expected a type form, got instance of `list[type[int] | type[str]]`",
+      "description": "Expected a type form, got instance of `list[type[int] | type[str]]`",
       "line": 107,
-      "name": "invalid-annotation",
+      "name": "not-a-type",
       "severity": "error",
       "stop_column": 22,
       "stop_line": 107
@@ -347,10 +336,10 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Tuple literal cannot be used in annotations",
-      "description": "Tuple literal cannot be used in annotations",
+      "concise_description": "Expected a type form, got instance of `tuple[tuple[type[int], type[str]]]`",
+      "description": "Expected a type form, got instance of `tuple[tuple[type[int], type[str]]]`",
       "line": 108,
-      "name": "invalid-annotation",
+      "name": "not-a-type",
       "severity": "error",
       "stop_column": 22,
       "stop_line": 108
@@ -358,10 +347,10 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "List comprehension cannot be used in annotations",
-      "description": "List comprehension cannot be used in annotations",
+      "concise_description": "Expected a type form, got instance of `list[type[int]]`",
+      "description": "Expected a type form, got instance of `list[type[int]]`",
       "line": 109,
-      "name": "invalid-annotation",
+      "name": "not-a-type",
       "severity": "error",
       "stop_column": 22,
       "stop_line": 109
@@ -369,46 +358,13 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Dict literal cannot be used in annotations",
-      "description": "Dict literal cannot be used in annotations",
+      "concise_description": "Expected a type form, got instance of `dict[str, str]`",
+      "description": "Expected a type form, got instance of `dict[str, str]`",
       "line": 110,
-      "name": "invalid-annotation",
+      "name": "not-a-type",
       "severity": "error",
       "stop_column": 22,
       "stop_line": 110
-    },
-    {
-      "code": -2,
-      "column": 9,
-      "concise_description": "Function call cannot be used in annotations",
-      "description": "Function call cannot be used in annotations",
-      "line": 111,
-      "name": "invalid-annotation",
-      "severity": "error",
-      "stop_column": 22,
-      "stop_line": 111
-    },
-    {
-      "code": -2,
-      "column": 9,
-      "concise_description": "Invalid subscript expression cannot be used in annotations",
-      "description": "Invalid subscript expression cannot be used in annotations",
-      "line": 112,
-      "name": "invalid-annotation",
-      "severity": "error",
-      "stop_column": 22,
-      "stop_line": 112
-    },
-    {
-      "code": -2,
-      "column": 9,
-      "concise_description": "If expression cannot be used in annotations",
-      "description": "If expression cannot be used in annotations",
-      "line": 113,
-      "name": "invalid-annotation",
-      "severity": "error",
-      "stop_column": 22,
-      "stop_line": 113
     },
     {
       "code": -2,
@@ -424,10 +380,10 @@
     {
       "code": -2,
       "column": 10,
-      "concise_description": "Bool literal cannot be used in annotations",
-      "description": "Bool literal cannot be used in annotations",
+      "concise_description": "Expected a type form, got instance of `Literal[True]`",
+      "description": "Expected a type form, got instance of `Literal[True]`",
       "line": 115,
-      "name": "invalid-annotation",
+      "name": "not-a-type",
       "severity": "error",
       "stop_column": 24,
       "stop_line": 115
@@ -435,10 +391,10 @@
     {
       "code": -2,
       "column": 10,
-      "concise_description": "Number literal cannot be used in annotations",
-      "description": "Number literal cannot be used in annotations",
+      "concise_description": "Expected a type form, got instance of `Literal[1]`",
+      "description": "Expected a type form, got instance of `Literal[1]`",
       "line": 116,
-      "name": "invalid-annotation",
+      "name": "not-a-type",
       "severity": "error",
       "stop_column": 24,
       "stop_line": 116
@@ -446,21 +402,10 @@
     {
       "code": -2,
       "column": 10,
-      "concise_description": "Boolean operation cannot be used in annotations",
-      "description": "Boolean operation cannot be used in annotations",
-      "line": 117,
-      "name": "invalid-annotation",
-      "severity": "error",
-      "stop_column": 24,
-      "stop_line": 117
-    },
-    {
-      "code": -2,
-      "column": 10,
-      "concise_description": "F-string cannot be used in annotations",
-      "description": "F-string cannot be used in annotations",
+      "concise_description": "Expected a type form, got instance of `Literal['int']`",
+      "description": "Expected a type form, got instance of `Literal['int']`",
       "line": 118,
-      "name": "invalid-annotation",
+      "name": "not-a-type",
       "severity": "error",
       "stop_column": 24,
       "stop_line": 118
@@ -1537,10 +1482,10 @@
     {
       "code": -2,
       "column": 10,
-      "concise_description": "Number literal cannot be used in annotations",
-      "description": "Number literal cannot be used in annotations",
+      "concise_description": "Expected a type form, got instance of `Literal[1]`",
+      "description": "Expected a type form, got instance of `Literal[1]`",
       "line": 49,
-      "name": "invalid-annotation",
+      "name": "not-a-type",
       "severity": "error",
       "stop_column": 14,
       "stop_line": 49
@@ -1884,10 +1829,10 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Number literal cannot be used in annotations",
-      "description": "Number literal cannot be used in annotations",
+      "concise_description": "Expected a type form, got instance of `Literal[3]`",
+      "description": "Expected a type form, got instance of `Literal[3]`",
       "line": 96,
-      "name": "invalid-annotation",
+      "name": "not-a-type",
       "severity": "error",
       "stop_column": 13,
       "stop_line": 96
