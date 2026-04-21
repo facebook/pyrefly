@@ -152,5 +152,8 @@ def main(t: Tomato) -> None:
     assert_type(c, frozenset[Tomato | Cucumber])
 
 x = Annotated[int, "meta"]
+
+# `dict.__dict__` is a runtime mappingproxy; string subscripting is a key lookup.
+dict.__dict__["fromkeys"]
     "#,
 );
