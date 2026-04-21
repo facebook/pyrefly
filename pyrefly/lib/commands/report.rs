@@ -6,7 +6,6 @@
  */
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -35,6 +34,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::Answers;
 use crate::alt::types::class_metadata::ClassMro;
@@ -487,7 +487,7 @@ impl ReportArgs {
             }
         }
 
-        let mut to_remove: HashSet<usize> = HashSet::new();
+        let mut to_remove: SmallSet<usize> = SmallSet::new();
         for indices in groups.into_values().filter(|g| g.len() >= 2) {
             let mut param_slots: HashMap<ParamKey, SlotRank> = HashMap::new();
             let mut return_rank = SlotRank::Skip;
@@ -524,7 +524,7 @@ impl ReportArgs {
             functions[indices[0]].slots = slots;
             functions[indices[0]].n_params = n_params;
             functions[indices[0]].is_type_known = slots.n_untyped == 0 && slots.n_any == 0;
-            to_remove.extend(&indices[1..]);
+            to_remove.extend(indices[1..].iter().copied());
         }
 
         if !to_remove.is_empty() {
@@ -601,7 +601,7 @@ impl ReportArgs {
             String::new()
         };
         // Collect names already reported as functions or classes so we can skip them.
-        let reported_names: HashSet<&str> = functions
+        let reported_names: SmallSet<&str> = functions
             .iter()
             .map(|f| f.name.as_str())
             .chain(classes.iter().map(|c| c.name.as_str()))
@@ -728,7 +728,7 @@ impl ReportArgs {
         module: &Module,
         bindings: &Bindings,
         answers: &Answers,
-        tco_classes: &HashSet<Idx<KeyClass>>,
+        tco_classes: &SmallSet<Idx<KeyClass>>,
     ) -> Vec<Variable> {
         let mut attrs = Vec::new();
         let module_prefix = if module.name() != ModuleName::unknown() {
@@ -870,7 +870,7 @@ impl ReportArgs {
         bindings: &Bindings,
         answers: &Answers,
         exports: &SmallMap<Name, ExportLocation>,
-        tco_classes: &HashSet<Idx<KeyClass>>,
+        tco_classes: &SmallSet<Idx<KeyClass>>,
     ) -> Vec<Function> {
         let mut functions = Vec::new();
         let module_prefix = if module.name() != ModuleName::unknown() {
@@ -1253,8 +1253,8 @@ impl ReportArgs {
     }
 
     /// Collect all class keys that have the `@type_check_only` decorator.
-    fn collect_type_check_only_classes(bindings: &Bindings) -> HashSet<Idx<KeyClass>> {
-        let mut tco_classes = HashSet::new();
+    fn collect_type_check_only_classes(bindings: &Bindings) -> SmallSet<Idx<KeyClass>> {
+        let mut tco_classes = SmallSet::new();
         for idx in bindings.keys::<Key>() {
             if let Binding::ClassDef(class_key, decorators) = bindings.get(idx)
                 && Self::has_type_check_only_decorator(decorators, bindings)
@@ -1318,7 +1318,7 @@ impl ReportArgs {
         answers: &Answers,
         transaction: &Transaction,
         handle: &Handle,
-        tco_classes: &HashSet<Idx<KeyClass>>,
+        tco_classes: &SmallSet<Idx<KeyClass>>,
     ) -> Vec<ReportClass> {
         let mut classes = Vec::new();
         let module_prefix = if module.name() != ModuleName::unknown() {
@@ -1449,7 +1449,7 @@ impl ReportArgs {
 
     /// Returns the set of `.py` paths that should be skipped because a
     /// corresponding `.pyi` file also appears in `handles`.
-    fn py_paths_shadowed_by_pyi(handles: &[Handle]) -> HashSet<PathBuf> {
+    fn py_paths_shadowed_by_pyi(handles: &[Handle]) -> SmallSet<PathBuf> {
         handles
             .iter()
             .filter(|h| h.path().is_interface())
@@ -1468,7 +1468,7 @@ impl ReportArgs {
         py_variables: Vec<Variable>,
         py_classes: Vec<ReportClass>,
     ) {
-        let stub_func_names: HashSet<String> =
+        let stub_func_names: SmallSet<String> =
             stub_functions.iter().map(|f| f.name.clone()).collect();
         for py_func in py_functions {
             if !stub_func_names.contains(&py_func.name) {
@@ -1476,7 +1476,7 @@ impl ReportArgs {
             }
         }
 
-        let stub_var_names: HashSet<String> =
+        let stub_var_names: SmallSet<String> =
             stub_variables.iter().map(|v| v.name.clone()).collect();
         for py_var in py_variables {
             if !stub_var_names.contains(&py_var.name) {
@@ -1484,7 +1484,7 @@ impl ReportArgs {
             }
         }
 
-        let stub_class_names: HashSet<String> =
+        let stub_class_names: SmallSet<String> =
             stub_classes.iter().map(|c| c.name.clone()).collect();
         for py_class in py_classes {
             if !stub_class_names.contains(&py_class.name) {
@@ -1555,7 +1555,7 @@ impl ReportArgs {
         }
 
         // Overloads and property accessors produce duplicate names.
-        let mut seen = HashSet::new();
+        let mut seen = SmallSet::new();
         names.retain(|n| seen.insert(n.clone()));
 
         // Compute per-module entity counts. Use the derived (file-based)
@@ -1642,7 +1642,7 @@ impl ReportArgs {
         let shadowed = if prefer_stubs {
             Self::py_paths_shadowed_by_pyi(&handles)
         } else {
-            HashSet::new()
+            SmallSet::new()
         };
 
         // When prefer_stubs is true, build a mapping from .pyi paths to their
