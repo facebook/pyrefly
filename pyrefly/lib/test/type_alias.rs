@@ -1108,6 +1108,23 @@ def bad_type_aliases(
 );
 
 testcase!(
+    bug = "Imported bad implicit aliases are not yet rejected at the use site",
+    test_bad_implicit_type_alias_imported,
+    TestEnv::one(
+        "mod_a",
+        r#"
+BadAlias = (lambda: int)()
+"#,
+    ),
+    r#"
+from mod_a import BadAlias
+
+def f(x: BadAlias):
+    pass
+"#,
+);
+
+testcase!(
     test_type_alias_variance_conformance,
     r#"
 from typing import Generic, TypeVar, TypeAlias
