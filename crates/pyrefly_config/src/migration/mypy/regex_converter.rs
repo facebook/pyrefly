@@ -26,7 +26,7 @@ impl Ir {
     fn into_strings(self) -> Vec<String> {
         match self {
             // Part is easy: its string is itself.
-            Self::Part(s) => vec![s.clone()],
+            Self::Part(s) => vec![s],
             // For concat, the components are glued together.
             // An Alter in this Concat produces multiple strings:
             // `a(b|c)` -> Concat(a, Alter(b, c)) -> ["ab", "ac"]
