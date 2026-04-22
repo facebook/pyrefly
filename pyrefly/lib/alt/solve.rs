@@ -606,6 +606,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub(crate) fn has_valid_annotation_syntax(&self, x: &Expr, errors: &ErrorCollector) -> bool {
+<<<<<<< HEAD
         if let Some(problem) = Ast::annotation_syntax_problem(x) {
             let message = if let Expr::BinOp(ExprBinOp { op, .. }) = x {
                 format!(
@@ -619,6 +620,119 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             false
         } else {
             true
+||||||| parent of 60c6a145e (type())
+        let Some(problem) = self.annotation_syntax_problem(x) else {
+            return true;
+        };
+        self.error(
+            errors,
+            x.range(),
+            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+            format!("{problem} cannot be used in annotations"),
+        );
+        false
+    }
+
+    fn implicit_type_alias_syntax_problem(&self, x: &Expr) -> Option<String> {
+        let Expr::Name(name) = x else {
+            return None;
+        };
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        let mut idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        let mut visited = SmallSet::new();
+        loop {
+            if !visited.insert(idx) {
+                return None;
+            }
+            match self.bindings().get(idx) {
+                Binding::Forward(next)
+                | Binding::PromoteForward(next)
+                | Binding::ForwardToFirstUse(next)
+                | Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
+                Binding::NameAssign(name_assign) => {
+                    if name_assign.annotation.is_some() || name_assign.is_in_function_scope {
+                        return None;
+                    }
+                    if matches!(
+                        self.expr_infer(&name_assign.expr, &self.error_swallower()),
+                        Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_)
+                    ) {
+                        return None;
+                    }
+                    return self.annotation_syntax_problem(&name_assign.expr);
+                }
+                _ => return None,
+            }
+=======
+        let Some(problem) = self.annotation_syntax_problem(x) else {
+            return true;
+        };
+        self.error(
+            errors,
+            x.range(),
+            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+            format!("{problem} cannot be used in annotations"),
+        );
+        false
+    }
+
+    fn implicit_type_alias_syntax_problem(&self, x: &Expr) -> Option<String> {
+        let Expr::Name(name) = x else {
+            return None;
+        };
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        let mut idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        let mut visited = SmallSet::new();
+        loop {
+            if !visited.insert(idx) {
+                return None;
+            }
+            match self.bindings().get(idx) {
+                Binding::Forward(next)
+                | Binding::PromoteForward(next)
+                | Binding::ForwardToFirstUse(next)
+                | Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
+                Binding::NameAssign(name_assign) => {
+                    if name_assign.annotation.is_some() || name_assign.is_in_function_scope {
+                        return None;
+                    }
+                    if let Expr::Call(call) = name_assign.expr.as_ref()
+                        && self.implicit_alias_call_uses_runtime_type(call)
+                    {
+                        return None;
+                    }
+                    if matches!(
+                        self.expr_infer(&name_assign.expr, &self.error_swallower()),
+                        Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_)
+                    ) {
+                        return None;
+                    }
+                    return self.annotation_syntax_problem(&name_assign.expr);
+                }
+                _ => return None,
+            }
+>>>>>>> 60c6a145e (type())
+        }
+    }
+
+    fn implicit_alias_call_uses_runtime_type(&self, call: &ExprCall) -> bool {
+        let anon_key = Key::Anon(call.range);
+        if let Some(idx) = self
+            .bindings()
+            .key_to_idx_hashed_opt(Hashed::new(&anon_key))
+            && matches!(self.bindings().get(idx), Binding::ClassDef(..))
+        {
+            return true;
+        }
+        self.callable_is_builtin_type(&self.expr_infer(&call.func, &self.error_swallower()))
+    }
+
+    fn callable_is_builtin_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassDef(cls) => cls.is_builtin("type"),
+            Type::ClassType(cls) | Type::SelfType(cls) => cls.has_qname("builtins", "type"),
+            Type::Type(inner) => self.callable_is_builtin_type(inner),
+            _ => false,
         }
     }
 
