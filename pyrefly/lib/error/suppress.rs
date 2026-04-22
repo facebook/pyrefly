@@ -675,6 +675,23 @@ mod tests {
         assert_eq!(removals, expected_removals);
     }
 
+    /// Mimics the `suppress --remove-unused` code path, which delegates to
+    /// `check --remove-unused-ignores` internally. This collects unused ignore
+    /// errors without severity filtering and removes them.
+    fn assert_remove_ignores_via_suppress_command(
+        before: &str,
+        after: &str,
+        expected_removals: usize,
+    ) {
+        let (errors, tdir) = get_errors(before);
+        let collected = errors.collect_errors();
+        let unused_errors = errors.collect_unused_ignore_errors(&collected);
+        let removals = suppress::remove_unused_ignores(unused_errors);
+        let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
+        assert_eq!(after, got_file);
+        assert_eq!(removals, expected_removals);
+    }
+
     fn get_errors(contents: &str) -> (Errors, TempDir) {
         let tdir = tempfile::tempdir().unwrap();
 
@@ -1971,5 +1988,21 @@ x: int = \
     2
 "#,
         );
+    }
+
+    #[test]
+    fn test_suppress_remove_unused_without_config() {
+        // `suppress --remove-unused` should remove unused ignore comments even
+        // without explicit config, matching `check --remove-unused-ignores`.
+        let input = r#"
+def f() -> int:
+    # pyrefly: ignore [bad-return]
+    return 1
+"#;
+        let want = r#"
+def f() -> int:
+    return 1
+"#;
+        assert_remove_ignores_via_suppress_command(input, want, 1);
     }
 }
