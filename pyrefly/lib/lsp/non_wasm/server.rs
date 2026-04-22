@@ -31,6 +31,14 @@ use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
+use interprocess::TryClone;
+#[cfg(unix)]
+use interprocess::local_socket::GenericFilePath;
+use interprocess::local_socket::ToFsName;
+use interprocess::local_socket::prelude::LocalSocketStream;
+use interprocess::local_socket::traits::Stream;
+#[cfg(windows)]
+use interprocess::os::windows::local_socket::NamedPipe;
 use itertools::Itertools;
 use lsp_server::ErrorCode;
 use lsp_server::RequestId;
@@ -393,7 +401,7 @@ impl TypeErrorDisplayStatus {
 }
 
 /// Interface exposed for TSP to interact with the LSP server
-pub trait TspInterface: Send + Sync {
+pub trait TspInterface: Send + Sync + 'static {
     /// Send a response back to the LSP client
     fn send_response(&self, response: Response);
 
@@ -494,6 +502,7 @@ pub struct Connection {
 pub enum MessageReader {
     Channel(Receiver<Message>),
     Stdio(BufReader<Stdin>),
+    Stream(BufReader<Box<dyn std::io::Read + Send>>),
 }
 
 impl MessageReader {
@@ -504,6 +513,7 @@ impl MessageReader {
         match self {
             MessageReader::Channel(r) => r.recv().ok(),
             MessageReader::Stdio(r) => read_lsp_message(r).ok().flatten(),
+            MessageReader::Stream(r) => read_lsp_message(r).ok().flatten(),
         }
     }
 }
@@ -542,6 +552,47 @@ impl Connection {
             MessageReader::Stdio(BufReader::new(std::io::stdin())),
             IoThread { writer },
         )
+    }
+
+    pub fn ipc(pipe_name: &str) -> std::io::Result<(Self, MessageReader, IoThread)> {
+        #[cfg(windows)]
+        let socket_name = pipe_name.to_fs_name::<NamedPipe>()?;
+        #[cfg(unix)]
+        let socket_name = pipe_name.to_fs_name::<GenericFilePath>()?;
+
+        let stream = LocalSocketStream::connect(socket_name)?;
+        let reader_stream = stream.try_clone()?;
+        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded();
+        let writer = std::thread::spawn(move || {
+            let mut output = stream;
+            while let Ok(msg) = writer_receiver.recv() {
+                write_lsp_message(&mut output, msg)?;
+            }
+            Ok(())
+        });
+        Ok((
+            Self {
+                sender: writer_sender,
+                channel_receiver: None,
+            },
+            MessageReader::Stream(BufReader::new(Box::new(reader_stream))),
+            IoThread { writer },
+        ))
+    }
+
+    pub fn from_transport(transport: &str) -> std::io::Result<(Self, MessageReader, IoThread)> {
+        if transport == "stdio" {
+            return Ok(Self::stdio());
+        }
+
+        if let Some(pipe_name) = transport.strip_prefix("ipc://") {
+            return Self::ipc(pipe_name);
+        }
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Unsupported TSP transport: {transport}"),
+        ))
     }
 
     pub fn memory() -> ((Self, MessageReader), (Self, MessageReader)) {
@@ -1080,6 +1131,12 @@ pub struct ServerCapabilitiesWithTypeHierarchy {
     base: ServerCapabilities,
     #[serde(skip_serializing_if = "Option::is_none")]
     type_hierarchy_provider: Option<bool>,
+}
+
+impl ServerCapabilitiesWithTypeHierarchy {
+    pub fn set_experimental(&mut self, value: serde_json::Value) {
+        self.base.experimental = Some(value);
+    }
 }
 
 #[derive(Serialize)]
