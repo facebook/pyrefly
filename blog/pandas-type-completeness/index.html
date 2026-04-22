@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.2ccc2416.css">
-<script src="/assets/js/runtime~main.7b7ed52d.js" defer="defer"></script>
-<script src="/assets/js/main.e219c71e.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.5ff79a58.js" defer="defer"></script>
+<script src="/assets/js/main.95409638.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -62,7 +62,7 @@
 </ul>
 <p>We therefore amend Pyright&#x27;s calculation to exclude these &quot;technically public but not really&quot; paths. This gave us a more useful measure of what part of the pandas API which users are expected to interact with is actually type-annotated.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="moving-the-needle-in-pandas">Moving the needle in pandas<a href="#moving-the-needle-in-pandas" class="hash-link" aria-label="Direct link to Moving the needle in pandas" title="Direct link to Moving the needle in pandas">​</a></h2>
-<p>Investigating sources of missing type-completeness in pandas was quite a circular exercise. For example, suppose that <code>DataFrame</code> and <code>Series</code> were type-complete, but <code>Index</code> had an untyped attribute. Here is what would would happen:</p>
+<p>Investigating sources of missing type-completeness in pandas was quite a circular exercise. For example, suppose that <code>DataFrame</code> and <code>Series</code> were type-complete, but <code>Index</code> had an untyped attribute. Here is what would happen:</p>
 <ul>
 <li><code>Index</code> would be reported as &quot;partially unknown&quot; because of its untyped attribute.</li>
 <li><code>DataFrame</code> would be reported as &quot;partially unknown&quot; because its method <code>.index</code> returns <code>Index</code>, which is partially unknown.</li>
