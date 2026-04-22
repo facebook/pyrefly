@@ -2059,6 +2059,15 @@ impl Scopes {
         Some(self.current().flow.get_info(name)?.value()?.idx)
     }
 
+    pub fn current_flow_narrow_idxs(&self) -> Vec<Idx<Key>> {
+        self.current()
+            .flow
+            .info
+            .iter()
+            .filter_map(|(_, info)| info.narrow.as_ref().map(|narrow| narrow.idx))
+            .collect()
+    }
+
     /// Get the flow idx for `name` in the current fork's **base** flow (the flow captured
     /// at `start_fork` time, before any branches were started).
     ///

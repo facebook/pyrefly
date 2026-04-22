@@ -130,6 +130,18 @@ def f(x: str):
 );
 
 testcase!(
+    test_assigned_name_in_never_branch,
+    r#"
+from typing import Literal, assert_never, reveal_type
+def main(some: Literal['a']) -> None:
+    if some != 'a':
+        assigned = 'b'
+        reveal_type(assigned)  # E: revealed type: Never
+        assert_never(assigned)
+    "#,
+);
+
+testcase!(
     test_is_not_bool_literal,
     r#"
 from typing import assert_type, Literal, Never

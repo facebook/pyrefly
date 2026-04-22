@@ -560,6 +560,7 @@ impl<'a> BindingsBuilder<'a> {
                 expr: value,
                 legacy_tparams: tparams,
                 is_in_function_scope: self.scopes.in_function_scope(),
+                flow_narrow_exhaustive: self.current_flow_narrow_exhaustive_key(name.range),
                 first_use: FirstUse::Undetermined,
                 def_idx: if uses_first_use { Some(def_idx) } else { None },
             }))
