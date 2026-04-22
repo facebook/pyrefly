@@ -1125,6 +1125,18 @@ def f(x: BadAlias):
 );
 
 testcase!(
+    test_implicit_alias_runtime_type_call,
+    r#"
+DynClass = type("DynClass", (), {})
+
+def f(x: DynClass) -> None:
+    y = DynClass()
+    _ = x
+    _ = y
+"#,
+);
+
+testcase!(
     test_type_alias_variance_conformance,
     r#"
 from typing import Generic, TypeVar, TypeAlias

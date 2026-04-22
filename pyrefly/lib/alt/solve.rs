@@ -688,6 +688,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if name_assign.annotation.is_some() || name_assign.is_in_function_scope {
                         return None;
                     }
+                    if let Expr::Call(call) = name_assign.expr.as_ref()
+                        && self.implicit_alias_call_uses_runtime_type(call)
+                    {
+                        return None;
+                    }
                     if matches!(
                         self.expr_infer(&name_assign.expr, &self.error_swallower()),
                         Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_)
@@ -698,6 +703,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 _ => return None,
             }
+        }
+    }
+
+    fn implicit_alias_call_uses_runtime_type(&self, call: &ExprCall) -> bool {
+        let anon_key = Key::Anon(call.range);
+        if let Some(idx) = self
+            .bindings()
+            .key_to_idx_hashed_opt(Hashed::new(&anon_key))
+            && matches!(self.bindings().get(idx), Binding::ClassDef(..))
+        {
+            return true;
+        }
+        self.callable_is_builtin_type(&self.expr_infer(&call.func, &self.error_swallower()))
+    }
+
+    fn callable_is_builtin_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassDef(cls) => cls.is_builtin("type"),
+            Type::ClassType(cls) | Type::SelfType(cls) => cls.has_qname("builtins", "type"),
+            Type::Type(inner) => self.callable_is_builtin_type(inner),
+            _ => false,
         }
     }
 
