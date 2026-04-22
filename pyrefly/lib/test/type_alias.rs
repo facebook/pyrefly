@@ -1137,6 +1137,20 @@ def f(x: DynClass) -> None:
 );
 
 testcase!(
+    test_implicit_alias_functional_typed_dict_and_named_tuple,
+    r#"
+from typing import NamedTuple
+from typing_extensions import TypedDict
+
+Point = NamedTuple("Point", [("x", int), ("y", int)])
+Config = TypedDict("Config", {"x": int})
+
+def f(p: Point, c: Config) -> tuple[Point, Config]:
+    return p, c
+"#,
+);
+
+testcase!(
     test_type_alias_variance_conformance,
     r#"
 from typing import Generic, TypeVar, TypeAlias
