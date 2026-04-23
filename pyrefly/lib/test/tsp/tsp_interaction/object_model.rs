@@ -480,6 +480,7 @@ impl TspInteraction {
         let args = TspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
             workspace_indexing_limit: 0,
+            transport: "stdio".to_owned(),
         };
 
         let args = args.clone();
