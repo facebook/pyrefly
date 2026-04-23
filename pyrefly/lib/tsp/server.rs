@@ -10,11 +10,13 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use lsp_server::RequestId;
+use lsp_server::ResponseError;
 use lsp_types::InitializeParams;
 use pyrefly_util::telemetry::QueueName;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
+use serde::Serialize;
 use tracing::info;
 use tracing::warn;
 use tsp_types::GetTypeParams;
@@ -22,6 +24,7 @@ use tsp_types::TSPNotificationMethods;
 use tsp_types::TSPRequests;
 
 use crate::commands::lsp::IndexingMode;
+use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
@@ -35,6 +38,8 @@ use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 use crate::tsp::type_conversion::convert_type_with_resolver;
+use crate::tsp::validation::invalid_params_error;
+use crate::tsp::validation::snapshot_outdated_error;
 
 /// TSP server that delegates to LSP server infrastructure while handling only TSP requests
 pub struct TspConnection<T: TspInterface> {
@@ -57,6 +62,31 @@ impl<T: TspInterface> TspConnection<T> {
         let resolver =
             |func_id: &pyrefly_types::callable::FuncId| self.inner.resolve_func_def_range(func_id);
         convert_type_with_resolver(ty, &resolver)
+    }
+
+    /// Send a successful JSON-RPC response for `id` with `result`.
+    pub(crate) fn send_ok<R: Serialize>(&self, id: RequestId, result: R) {
+        self.inner.send_response(new_response(id, Ok(result)));
+    }
+
+    /// Send a JSON-RPC error response for `id`.
+    pub(crate) fn send_err(&self, id: RequestId, error: ResponseError) {
+        self.inner.send_response(Response {
+            id,
+            result: None,
+            error: Some(error),
+        });
+    }
+
+    /// Validate that the client-supplied snapshot matches the server's current
+    /// snapshot. Returns `Ok(())` on match or `Err(ResponseError)` on mismatch.
+    pub(crate) fn validate_snapshot(&self, client_snapshot: i32) -> Result<(), ResponseError> {
+        let current = self.get_snapshot();
+        if client_snapshot != current {
+            Err(snapshot_outdated_error(client_snapshot, current))
+        } else {
+            Ok(())
+        }
     }
 
     pub fn process_event<'a>(
@@ -146,15 +176,7 @@ impl<T: TspInterface> TspConnection<T> {
         ide_transaction_manager: &mut TransactionManager<'a>,
         request: &Request,
     ) -> anyhow::Result<bool> {
-        // Convert the request into a TSPRequests enum
-        let wrapper = serde_json::json!({
-            "method": request.method,
-            "id": request.id,
-            "params": request.params
-        });
-
-        let Ok(msg) = serde_json::from_value::<TSPRequests>(wrapper) else {
-            // Not a TSP request
+        let Some(msg) = parse_tsp_request(request) else {
             return Ok(false);
         };
 
@@ -217,10 +239,7 @@ impl<T: TspInterface> TspConnection<T> {
         let params: GetTypeParams = match serde_json::from_value::<GetTypeParams>(raw_params) {
             Ok(p) => p,
             Err(e) => {
-                self.send_err(
-                    id,
-                    crate::tsp::validation::invalid_params_error(&e.to_string()),
-                );
+                self.send_err(id, invalid_params_error(&e.to_string()));
                 return;
             }
         };
@@ -233,6 +252,16 @@ impl<T: TspInterface> TspConnection<T> {
             }
         }
     }
+}
+
+/// Try to parse a request as a `TSPRequests` enum variant.
+fn parse_tsp_request(request: &Request) -> Option<TSPRequests> {
+    let wrapper = serde_json::json!({
+        "method": request.method,
+        "id": request.id,
+        "params": request.params
+    });
+    serde_json::from_value::<TSPRequests>(wrapper).ok()
 }
 
 pub fn tsp_loop(
