@@ -943,7 +943,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return Some(NameAssignTypeForm::RuntimeTypeValue);
 >>>>>>> d1be9bab0 (clean)
         }
-        Some(NameAssignTypeForm::InvalidImplicitAlias(problem))
+        Some(NameAssignTypeForm::InvalidImplicitAlias(problem.into()))
     }
 
     fn expr_annotation(
