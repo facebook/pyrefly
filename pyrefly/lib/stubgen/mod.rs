@@ -254,4 +254,27 @@ class C:
             actual.trim(),
         );
     }
+
+    /// Instance fields assigned in `__init__` (without class-level annotations) appear in the stub
+    /// using inferred types. See <https://github.com/facebook/pyrefly/issues/3208>.
+    #[test]
+    fn test_stubgen_instance_fields_from_init() {
+        let actual = run_stubgen(
+            r#"
+class A:
+    def __init__(self, name: str) -> None:
+        self.name = name
+"#,
+        );
+        pretty_assertions::assert_str_eq!(
+            r#"
+class A:
+    name: str
+
+    def __init__(self, name: str) -> None: ...
+"#
+            .trim(),
+            actual.trim(),
+        );
+    }
 }
