@@ -15,11 +15,11 @@ use lsp_server::RequestId;
 use tsp_types::protocol::GetPythonSearchPathsParams;
 
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::tsp::server::TspServer;
+use crate::tsp::server::TspConnection;
 use crate::tsp::validation::internal_error;
 use crate::tsp::validation::parse_file_uri;
 
-impl<T: TspInterface> TspServer<T> {
+impl<T: TspInterface> TspConnection<T> {
     /// Handle a `typeServer/getPythonSearchPaths` request.
     ///
     /// Validates the snapshot, parses the `from_uri`, and delegates to
@@ -38,7 +38,7 @@ impl<T: TspInterface> TspServer<T> {
 
         // --- 2. Parse from_uri and delegate ---
         match parse_file_uri(&params.from_uri) {
-            Ok(url) => match self.inner.get_python_search_paths(&url) {
+            Ok(url) => match self.inner().get_python_search_paths(&url) {
                 Ok(paths) => self.send_ok(id, paths),
                 Err(detail) => self.send_err(id, internal_error(&detail)),
             },

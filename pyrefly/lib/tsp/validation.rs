@@ -15,15 +15,8 @@
 //! - Response dispatch (success or error, routed through `TspInterface`)
 
 use lsp_server::ErrorCode;
-use lsp_server::RequestId;
 use lsp_server::ResponseError;
 use lsp_types::Url;
-use serde::Serialize;
-
-use crate::lsp::non_wasm::lsp::new_response;
-use crate::lsp::non_wasm::protocol::Response;
-use crate::lsp::non_wasm::server::TspInterface;
-use crate::tsp::server::TspServer;
 
 // ---------------------------------------------------------------------------
 // Canonical TSP error constructors
@@ -80,37 +73,6 @@ pub fn parse_file_uri(uri: &str) -> Result<Url, ResponseError> {
         return Err(invalid_params_error("URI must use the file:// scheme"));
     }
     Ok(url)
-}
-
-// ---------------------------------------------------------------------------
-// Snapshot validation
-// ---------------------------------------------------------------------------
-
-impl<T: TspInterface> TspServer<T> {
-    /// Validate that the client-supplied snapshot matches the server's current
-    /// snapshot. Returns `Ok(())` on match or `Err(ResponseError)` on mismatch.
-    pub fn validate_snapshot(&self, client_snapshot: i32) -> Result<(), ResponseError> {
-        let current = self.get_snapshot();
-        if client_snapshot != current {
-            Err(snapshot_outdated_error(client_snapshot, current))
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Send a successful JSON-RPC response for `id` with `result`.
-    pub fn send_ok<R: Serialize>(&self, id: RequestId, result: R) {
-        self.inner.send_response(new_response(id, Ok(result)));
-    }
-
-    /// Send a JSON-RPC error response for `id`.
-    pub fn send_err(&self, id: RequestId, error: ResponseError) {
-        self.inner.send_response(Response {
-            id,
-            result: None,
-            error: Some(error),
-        });
-    }
 }
 
 #[cfg(test)]
