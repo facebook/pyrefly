@@ -89,63 +89,6 @@ impl<T: TspInterface> TspConnection<T> {
         }
     }
 
-    pub fn process_event<'a>(
-        &'a self,
-        ide_transaction_manager: &mut TransactionManager<'a>,
-        canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &'a impl Telemetry,
-        telemetry_event: &mut TelemetryEvent,
-        subsequent_mutation: bool,
-        event: LspEvent,
-    ) -> anyhow::Result<ProcessEvent> {
-        // Remember if this event should increment the snapshot after processing
-        let should_increment_snapshot = match &event {
-            LspEvent::RecheckFinished => true,
-            // Increment on DidChange since it affects type checker state via synchronous validation
-            LspEvent::DidChangeTextDocument(_) => true,
-            // Don't increment on DidChangeWatchedFiles directly since it triggers RecheckFinished
-            // LspEvent::DidChangeWatchedFiles => true,
-            // Don't increment on DidOpen since it triggers RecheckFinished events that will increment
-            // LspEvent::DidOpenTextDocument(_) => true,
-            _ => false,
-        };
-
-        // For TSP requests, handle them specially
-        if let LspEvent::LspRequest(ref request) = event {
-            if self.handle_tsp_request(ide_transaction_manager, request)? {
-                return Ok(ProcessEvent::Continue);
-            }
-            // If it's not a TSP request, let the LSP server reject it since TSP server shouldn't handle LSP requests
-            self.inner.send_response(Response::new_err(
-                request.id.clone(),
-                lsp_server::ErrorCode::MethodNotFound as i32,
-                format!("TSP server does not support LSP method: {}", request.method),
-            ));
-            return Ok(ProcessEvent::Continue);
-        }
-
-        // For all other events (notifications, responses, etc.), delegate to inner server
-        let result = self.inner.process_event(
-            ide_transaction_manager,
-            canceled_requests,
-            telemetry,
-            telemetry_event,
-            subsequent_mutation,
-            event,
-        )?;
-
-        // Increment snapshot after the inner server has processed the event
-        if should_increment_snapshot && let Ok(mut current) = self.current_snapshot.lock() {
-            let old_snapshot = *current;
-            *current += 1;
-            let new_snapshot = *current;
-            drop(current); // Release the lock before sending the notification
-            self.send_snapshot_changed_notification(old_snapshot, new_snapshot);
-        }
-
-        Ok(result)
-    }
-
     /// Send a `typeServer/snapshotChanged` notification to the client.
     ///
     /// Called whenever the snapshot counter increments, so the client knows
@@ -243,6 +186,65 @@ impl<T: TspInterface> TspConnection<T> {
                 self.send_err(id, err);
             }
         }
+    }
+}
+
+impl<T: TspInterface> TspConnection<T> {
+    pub fn process_event<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        canceled_requests: &mut HashSet<RequestId>,
+        telemetry: &'a impl Telemetry,
+        telemetry_event: &mut TelemetryEvent,
+        subsequent_mutation: bool,
+        event: LspEvent,
+    ) -> anyhow::Result<ProcessEvent> {
+        // Remember if this event should increment the snapshot after processing
+        let should_increment_snapshot = match &event {
+            LspEvent::RecheckFinished => true,
+            // Increment on DidChange since it affects type checker state via synchronous validation
+            LspEvent::DidChangeTextDocument(_) => true,
+            // Don't increment on DidChangeWatchedFiles directly since it triggers RecheckFinished
+            // LspEvent::DidChangeWatchedFiles => true,
+            // Don't increment on DidOpen since it triggers RecheckFinished events that will increment
+            // LspEvent::DidOpenTextDocument(_) => true,
+            _ => false,
+        };
+
+        // For TSP requests, handle them specially
+        if let LspEvent::LspRequest(ref request) = event {
+            if self.handle_tsp_request(ide_transaction_manager, request)? {
+                return Ok(ProcessEvent::Continue);
+            }
+            // If it's not a TSP request, let the LSP server reject it since TSP server shouldn't handle LSP requests
+            self.inner.send_response(Response::new_err(
+                request.id.clone(),
+                lsp_server::ErrorCode::MethodNotFound as i32,
+                format!("TSP server does not support LSP method: {}", request.method),
+            ));
+            return Ok(ProcessEvent::Continue);
+        }
+
+        // For all other events (notifications, responses, etc.), delegate to inner server
+        let result = self.inner.process_event(
+            ide_transaction_manager,
+            canceled_requests,
+            telemetry,
+            telemetry_event,
+            subsequent_mutation,
+            event,
+        )?;
+
+        // Increment snapshot after the inner server has processed the event
+        if should_increment_snapshot && let Ok(mut current) = self.current_snapshot.lock() {
+            let old_snapshot = *current;
+            *current += 1;
+            let new_snapshot = *current;
+            drop(current); // Release the lock before sending the notification
+            self.send_snapshot_changed_notification(old_snapshot, new_snapshot);
+        }
+
+        Ok(result)
     }
 }
 
