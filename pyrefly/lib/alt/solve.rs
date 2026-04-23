@@ -22,6 +22,7 @@ use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_alias::TypeAliasRef;
 use pyrefly_types::type_info::JoinStyle;
+use pyrefly_types::type_info::NameAssignTypeForm;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::Union;
@@ -105,6 +106,7 @@ use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
+use crate::binding::binding::NameAssign;
 use crate::binding::binding::NoneIfRecursive;
 use crate::binding::binding::PrivateAttributeAccessCheck;
 use crate::binding::binding::RaisedException;
@@ -668,44 +670,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         false
     }
 
-    fn implicit_type_alias_syntax_problem(&self, x: &Expr) -> Option<String> {
-        let Expr::Name(name) = x else {
-            return None;
-        };
-        let key = Key::BoundName(ShortIdentifier::expr_name(name));
-        let mut idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
-        let mut visited = SmallSet::new();
-        loop {
-            if !visited.insert(idx) {
-                return None;
-            }
-            match self.bindings().get(idx) {
-                Binding::Forward(next)
-                | Binding::PromoteForward(next)
-                | Binding::ForwardToFirstUse(next)
-                | Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
-                Binding::NameAssign(name_assign) => {
-                    if name_assign.annotation.is_some() || name_assign.is_in_function_scope {
-                        return None;
-                    }
-                    if let Expr::Call(call) = name_assign.expr.as_ref()
-                        && self.implicit_alias_call_uses_runtime_type(call)
-                    {
-                        return None;
-                    }
-                    if matches!(
-                        self.expr_infer(&name_assign.expr, &self.error_swallower()),
-                        Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_)
-                    ) {
-                        return None;
-                    }
-                    return self.annotation_syntax_problem(&name_assign.expr);
-                }
-                _ => return None,
-            }
-        }
-    }
-
     fn implicit_alias_call_uses_runtime_type(&self, call: &ExprCall) -> bool {
         if matches!(
             self.call_targets_special_export(&call.func),
@@ -739,6 +703,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(inner) => self.callable_is_builtin_type(inner),
             _ => false,
         }
+    }
+
+    fn classify_name_assign_type_form(
+        &self,
+        annotation: Option<(AnnotationStyle, Idx<KeyAnnotation>)>,
+        expr: &Expr,
+        ty: &Type,
+        is_in_function_scope: bool,
+    ) -> Option<NameAssignTypeForm> {
+        if annotation.is_some() || is_in_function_scope {
+            return None;
+        }
+        if let Expr::Call(call) = expr
+            && self.implicit_alias_call_uses_runtime_type(call)
+        {
+            return Some(NameAssignTypeForm::RuntimeTypeValue);
+        }
+        if matches!(
+            ty,
+            Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_)
+        ) {
+            return Some(NameAssignTypeForm::RuntimeTypeValue);
+        }
+        self.annotation_syntax_problem(expr)
+            .map(NameAssignTypeForm::InvalidImplicitAlias)
     }
 
     fn call_targets_special_export(&self, expr: &Expr) -> Option<SpecialExport> {
@@ -4591,14 +4580,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     #[inline(never)]
     fn binding_to_type_info_name_assign(
         &self,
+        name_assign: &NameAssign,
         binding: &Binding,
-        expr: &Expr,
         errors: &ErrorCollector,
     ) -> TypeInfo {
         let ty = self.binding_to_type(binding, errors);
-        let mut type_info = TypeInfo::of_ty(ty);
+        let mut type_info = TypeInfo::of_ty(ty.clone());
+        if let Some(name_assign_type_form) = self.classify_name_assign_type_form(
+            name_assign.annotation,
+            name_assign.expr.as_ref(),
+            &ty,
+            name_assign.is_in_function_scope,
+        ) {
+            type_info = type_info.with_name_assign_type_form(name_assign_type_form);
+        }
         let mut prefix = Vec::new();
-        self.populate_dict_literal_facets(&mut type_info, &mut prefix, expr);
+        self.populate_dict_literal_facets(&mut type_info, &mut prefix, name_assign.expr.as_ref());
         type_info
     }
 
@@ -4627,9 +4624,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.binding_to_type_info_phi(join_style, branches)
             }
             Binding::LoopPhi(default, ks) => self.binding_to_type_info_loop_phi(*default, ks),
-            Binding::NameAssign(x) => {
-                self.binding_to_type_info_name_assign(binding, x.expr.as_ref(), errors)
-            }
+            Binding::NameAssign(x) => self.binding_to_type_info_name_assign(x, binding, errors),
             Binding::AssignToAttribute(x) => self.binding_to_type_info_assign_to_attribute(
                 &x.attr,
                 &x.value,
@@ -5952,7 +5947,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         if type_form_context.reports_implicit_alias_syntax_at_use_site()
-            && let Some(problem) = self.implicit_type_alias_syntax_problem(x)
+            && let Expr::Name(name) = x
+            && let Some(NameAssignTypeForm::InvalidImplicitAlias(problem)) = self
+                .get(&Key::BoundName(ShortIdentifier::expr_name(name)))
+                .name_assign_type_form()
         {
             return self.error(
                 errors,
