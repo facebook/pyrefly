@@ -2917,6 +2917,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         path: Option<&ModulePath>,
         k: &KeyExport,
     ) -> Arc<Type> {
+        Arc::new(self.get_from_export_type_info(module, path, k).ty().clone())
+    }
+
+    pub fn get_from_export_type_info(
+        &self,
+        module: ModuleName,
+        path: Option<&ModulePath>,
+        k: &KeyExport,
+    ) -> Arc<TypeInfo> {
         self.get_from_module(module, path, k).unwrap_or_else(|| {
             panic!("We should have checked Exports before calling this, {module} {k:?}")
         })

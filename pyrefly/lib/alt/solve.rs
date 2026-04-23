@@ -714,6 +714,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(NameAssignTypeForm::InvalidImplicitAlias(problem.into()))
     }
 
+    fn annotation_name_assign_type_form(
+        &self,
+        name: &ruff_python_ast::ExprName,
+    ) -> Option<NameAssignTypeForm> {
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        self.get(&key).name_assign_type_form().cloned()
+    }
+
     fn expr_annotation(
         &self,
         x: &Expr,
@@ -4411,7 +4419,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range_if_scoped_params_exist: &Option<TextRange>,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        let ty = match &*self.get_idx(key) {
+        let lookup = self.get_idx(key);
+        let ty = match &*lookup {
             LegacyTypeParameterLookup::Parameter(p) => {
                 // This class or function has scoped (PEP 695) type parameters. Mixing legacy-style parameters is an error.
                 if let Some(r) = range_if_scoped_params_exist {
@@ -4443,7 +4452,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     module
                 }
             }
-            BindingLegacyTypeParam::ParamKeyed(_) => TypeInfo::of_ty(ty),
+            BindingLegacyTypeParam::ParamKeyed(idx) => match &*lookup {
+                LegacyTypeParameterLookup::NotParameter(_) => self.get_idx(*idx).arc_clone(),
+                LegacyTypeParameterLookup::Parameter(_) => TypeInfo::of_ty(ty),
+            },
         }
     }
 
@@ -4512,6 +4524,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range_if_scoped_params_exist,
                     errors,
                 ),
+            Binding::Import(x) => self
+                .get_from_export_type_info(x.0, None, &KeyExport(x.1.clone()))
+                .as_ref()
+                .clone(),
             _ => {
                 // All other Bindings model `Type` level operations where we do not
                 // propagate any attribute narrows.
@@ -5820,9 +5836,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         if type_form_context.reports_implicit_alias_syntax_at_use_site()
             && let Expr::Name(name) = x
-            && let Some(NameAssignTypeForm::InvalidImplicitAlias(problem)) = self
-                .get(&Key::BoundName(ShortIdentifier::expr_name(name)))
-                .name_assign_type_form()
+            && let Some(NameAssignTypeForm::InvalidImplicitAlias(problem)) =
+                self.annotation_name_assign_type_form(name)
         {
             return self.error(
                 errors,

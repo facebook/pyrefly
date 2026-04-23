@@ -1108,7 +1108,6 @@ def bad_type_aliases(
 );
 
 testcase!(
-    bug = "Imported bad implicit aliases are not yet rejected at the use site",
     test_bad_implicit_type_alias_imported,
     TestEnv::one(
         "mod_a",
@@ -1119,7 +1118,7 @@ BadAlias = (lambda: int)()
     r#"
 from mod_a import BadAlias
 
-def f(x: BadAlias):
+def f(x: BadAlias):  # E: Function call cannot be used in annotations
     pass
 "#,
 );

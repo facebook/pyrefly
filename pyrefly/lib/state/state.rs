@@ -140,6 +140,7 @@ use crate::types::class::Class;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFields;
 use crate::types::stdlib::Stdlib;
+use crate::types::type_info::TypeInfo;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
@@ -1572,7 +1573,7 @@ impl<'a> Transaction<'a> {
         }
 
         let t = self.lookup_answer(module_data, &KeyExport(name.clone()), thread_state);
-        let class = match t.as_deref() {
+        let class = match t.as_deref().map(TypeInfo::ty) {
             Some(Type::ClassDef(cls)) => Some(cls.dupe()),
             ty => {
                 self.add_error(

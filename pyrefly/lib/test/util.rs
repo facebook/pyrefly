@@ -739,7 +739,7 @@ pub fn mk_state(code: &str) -> (Handle, State) {
 pub fn get_class(name: &str, handle: &Handle, state: &State) -> Class {
     let solutions = state.transaction().get_solutions(handle).unwrap();
 
-    match &**solutions.get(&KeyExport(Name::new(name))) {
+    match solutions.get(&KeyExport(Name::new(name))).ty() {
         Type::ClassDef(cls) => cls.dupe(),
         _ => unreachable!(),
     }

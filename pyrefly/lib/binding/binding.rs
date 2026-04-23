@@ -591,7 +591,7 @@ impl Keyed for KeyVarianceCheck {
 impl Keyed for KeyExport {
     const EXPORTED: bool = true;
     type Value = BindingExport;
-    type Answer = Type;
+    type Answer = TypeInfo;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyExport(idx)
     }
