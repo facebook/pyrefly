@@ -194,6 +194,11 @@ impl<T: TspInterface> TspServer<T> {
                 });
                 Ok(true)
             }
+            TSPRequests::ConnectionRequest { .. } => {
+                // Multi-connection management is handled at the transport layer,
+                // not inside the TSP request loop.
+                unreachable!("ConnectionRequest should be handled before reaching the TSP server")
+            }
         }
     }
 
