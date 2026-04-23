@@ -23,11 +23,11 @@ use tsp_types::protocol::ResolveImportParams;
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
-use crate::tsp::server::TspServer;
+use crate::tsp::server::TspConnection;
 use crate::tsp::validation::invalid_params_error;
 use crate::tsp::validation::parse_file_uri;
 
-impl<T: TspInterface> TspServer<T> {
+impl<T: TspInterface> TspConnection<T> {
     /// Handle a `typeServer/resolveImport` request.
     ///
     /// Converts the TSP [`ResolveImportParams`] into pyrefly's internal

@@ -12,9 +12,9 @@ use tsp_types::GetTypeParams;
 use tsp_types::Type;
 
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::tsp::server::TspServer;
+use crate::tsp::server::TspConnection;
 
-impl<T: TspInterface> TspServer<T> {
+impl<T: TspInterface> TspConnection<T> {
     /// Return the declared type at the given position.
     ///
     /// The declared type is the annotation explicitly written by the user.

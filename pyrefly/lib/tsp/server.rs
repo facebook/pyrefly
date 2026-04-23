@@ -37,13 +37,13 @@ use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 use crate::tsp::type_conversion::convert_type_with_resolver;
 
 /// TSP server that delegates to LSP server infrastructure while handling only TSP requests
-pub struct TspServer<T: TspInterface> {
+pub struct TspConnection<T: TspInterface> {
     pub inner: T,
     /// Current snapshot version, updated on RecheckFinished events
     pub(crate) current_snapshot: Arc<Mutex<i32>>,
 }
 
-impl<T: TspInterface> TspServer<T> {
+impl<T: TspInterface> TspConnection<T> {
     pub fn new(lsp_server: T) -> Self {
         Self {
             inner: lsp_server,
@@ -241,7 +241,7 @@ pub fn tsp_loop(
     _initialization: InitializeInfo,
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
-    let server = TspServer::new(lsp_server);
+    let server = TspConnection::new(lsp_server);
 
     std::thread::scope(|scope| {
         // Start the recheck queue thread to process async tasks

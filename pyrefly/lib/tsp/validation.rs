@@ -23,7 +23,7 @@ use serde::Serialize;
 use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::tsp::server::TspServer;
+use crate::tsp::server::TspConnection;
 
 // ---------------------------------------------------------------------------
 // Canonical TSP error constructors
@@ -86,7 +86,7 @@ pub fn parse_file_uri(uri: &str) -> Result<Url, ResponseError> {
 // Snapshot validation
 // ---------------------------------------------------------------------------
 
-impl<T: TspInterface> TspServer<T> {
+impl<T: TspInterface> TspConnection<T> {
     /// Validate that the client-supplied snapshot matches the server's current
     /// snapshot. Returns `Ok(())` on match or `Err(ResponseError)` on mismatch.
     pub fn validate_snapshot(&self, client_snapshot: i32) -> Result<(), ResponseError> {
