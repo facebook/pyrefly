@@ -405,6 +405,11 @@ impl ReportArgs {
         thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
         self.config_override.validate()?;
+
+        if self.public_only && self.module.is_some() {
+            anyhow::bail!("--module and --public-only cannot be combined");
+        }
+
         let (files_to_check, config_finder) = self.files.resolve(self.config_override, wrapper)?;
         Self::run_inner(
             files_to_check,
@@ -584,8 +589,15 @@ impl ReportArgs {
         module.as_str().split('.').all(Self::is_public_name)
     }
 
-    /// True if `fqn` or any class-level prefix of it is in the public set.
+    /// True if `fqn` or a class-level prefix is public, and every segment below the module is
+    /// itself a public name (no private nested leaks).
     fn is_public_fqn(fqn: &str, module_prefix: &str, public_fqns: &HashSet<String>) -> bool {
+        if let Some(relative) = fqn.strip_prefix(module_prefix)
+            && !relative.split('.').all(Self::is_public_name)
+        {
+            return false;
+        }
+
         public_fqns.contains(fqn)
             || std::iter::successors(fqn.rsplit_once('.').map(|(prefix, _)| prefix), |prefix| {
                 prefix.rsplit_once('.').map(|(parent, _)| parent)
@@ -597,6 +609,37 @@ impl ReportArgs {
     /// Module-level dunders that typestats always excludes from the report.
     const EXCLUDED_MODULE_DUNDERS: &'static [&'static str] =
         &["__all__", "__dir__", "__doc__", "__getattr__"];
+
+    /// Walk re-exports to the defining module's FQN, `None` on cycle/miss.
+    fn trace_export_origin(
+        handle: &Handle,
+        mut cur_name: Name,
+        transaction: &Transaction,
+    ) -> Option<String> {
+        let mut seen = SmallSet::new();
+        let mut cur_handle = handle.clone();
+
+        loop {
+            let module_name = cur_handle.module();
+            if !seen.insert((module_name, cur_name.clone())) {
+                return None;
+            }
+
+            match transaction.get_exports(&cur_handle).get(&cur_name) {
+                Some(ExportLocation::ThisModule(_)) | None => {
+                    return Some(format!("{module_name}.{cur_name}"));
+                }
+                Some(ExportLocation::OtherModule(other_module, alias)) => {
+                    if let Some(alias) = alias {
+                        cur_name = alias.clone();
+                    }
+                    cur_handle = transaction
+                        .import_handle(&cur_handle, *other_module, None)
+                        .finding()?;
+                }
+            }
+        }
+    }
 
     /// Collect origin FQNs of all publicly exported names across public modules.
     fn compute_public_fqns(handles: &[Handle], transaction: &Transaction) -> HashSet<String> {
@@ -623,33 +666,15 @@ impl ReportArgs {
                             .collect()
                     };
 
-                // follow re-export chains to the origin FQN
+                // emit both the local FQN and the traced origin FQN so a file-scoped run matches
+                // whichever module was requested
                 names
                     .into_iter()
                     .filter(|n| !Self::EXCLUDED_MODULE_DUNDERS.contains(&n.as_str()))
-                    .filter_map(move |mut cur_name| {
-                        let mut seen = HashSet::new();
-                        let mut cur_handle = handle.clone();
-                        loop {
-                            let module_name = cur_handle.module();
-                            if !seen.insert((module_name, cur_name.clone())) {
-                                return None;
-                            }
-                            let cur_exports = transaction.get_exports(&cur_handle);
-                            match cur_exports.get(&cur_name) {
-                                Some(ExportLocation::ThisModule(_)) | None => {
-                                    return Some(format!("{module_name}.{cur_name}"));
-                                }
-                                Some(ExportLocation::OtherModule(other_module, alias)) => {
-                                    if let Some(alias) = alias {
-                                        cur_name = alias.clone();
-                                    }
-                                    cur_handle = transaction
-                                        .import_handle(&cur_handle, *other_module, None)
-                                        .finding()?;
-                                }
-                            }
-                        }
+                    .flat_map(move |name| {
+                        let local = format!("{}.{}", handle.module(), name);
+                        let origin = Self::trace_export_origin(handle, name, transaction);
+                        std::iter::once(local).chain(origin)
                     })
             })
             .collect()
@@ -2636,6 +2661,10 @@ mod tests {
         assert!(!public("other.Foo"));
         assert!(!public("pkg.Baz"));
         assert!(!public("pkg.Baz.method"));
+        // Private nested members do not leak through a public parent.
+        assert!(!public("pkg.Foo._private"));
+        assert!(!public("pkg.Foo._Inner.attr"));
+        assert!(!public("pkg._Hidden.Foo"));
     }
 
     #[test]
@@ -2713,7 +2742,8 @@ mod tests {
             ReportArgs::compute_public_fqns(&handles, &transaction)
         };
 
-        // Re-export from a private module traces to its origin FQN
+        // Re-export from a private module keeps both the local alias and the
+        // traced origin, so reports covering either module stay non-empty.
         let fqns = compute(
             &[
                 (
@@ -2729,8 +2759,8 @@ mod tests {
             ],
             &["pkg", "pkg._internal"],
         );
+        assert!(fqns.contains("pkg.Foo"));
         assert!(fqns.contains("pkg._internal.Foo"));
-        assert!(!fqns.contains("pkg.Foo"));
 
         // Without __all__, non-underscore local names are exported
         let fqns = compute(
