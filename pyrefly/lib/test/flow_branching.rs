@@ -1902,45 +1902,8 @@ def f(x: int) -> str:
 "#,
 );
 
-// Correlated-condition analysis: a name defined only on the truthy branch of
-// `if <guard>:` (with no else) is considered initialized inside any later
-// `if <guard>:` block where the guard has not been reassigned.
-testcase!(
-    test_correlated_if_simple,
-    r#"
-def main(a: bool) -> int:
-    if a:
-        b = 3
-    c = 5
-    if a:
-        return b
-    return 9
-"#,
-);
-
-testcase!(
-    test_correlated_if_no_match_without_guard,
-    r#"
-def main(a: bool) -> int:
-    if a:
-        b = 3
-    return b  # E: `b` may be uninitialized
-"#,
-);
-
-testcase!(
-    test_correlated_if_broken_by_reassignment,
-    r#"
-def main(a: bool, other: bool) -> int:
-    if a:
-        b = 3
-    a = other
-    if a:
-        return b  # E: `b` may be uninitialized
-    return 9
-"#,
-);
-
+// An `else` branch means the name's uninitialized-ness survives the merge via
+// paths that are not controlled by `<guard>`, so the guarded upgrade is skipped.
 testcase!(
     test_correlated_if_does_not_cross_else,
     r#"
@@ -2480,7 +2443,6 @@ for x in range(10):
 // `if a:`, the variable is guaranteed to be initialized because the same
 // condition guards both the definition and the use.
 testcase!(
-    bug = "false positive: b is always initialized when a is truthy",
     test_guarded_initialization_basic,
     r#"
 def f(a: bool) -> int:
@@ -2488,7 +2450,7 @@ def f(a: bool) -> int:
         b = 3
     c = 5
     if a:
-        return b  # E: `b` may be uninitialized
+        return b
     return 9
     "#,
 );
@@ -2518,7 +2480,6 @@ def f(a: bool, c: bool) -> int:
 );
 
 testcase!(
-    bug = "false positive: b and c are always initialized when a is truthy",
     test_guarded_initialization_multiple_variables,
     r#"
 def f(a: bool) -> int:
@@ -2526,13 +2487,12 @@ def f(a: bool) -> int:
         b = 3
         c = 4
     if a:
-        return b + c  # E: `b` may be uninitialized  # E: `c` may be uninitialized
+        return b + c
     return 0
     "#,
 );
 
 testcase!(
-    bug = "false positive: b is always initialized when a is truthy",
     test_guarded_initialization_with_intermediate_statements,
     r#"
 def f(a: bool) -> int:
@@ -2541,7 +2501,7 @@ def f(a: bool) -> int:
     x = 5
     y = x + 1
     if a:
-        return b  # E: `b` may be uninitialized
+        return b
     return 9
     "#,
 );
@@ -2561,14 +2521,13 @@ def f(a: bool) -> int:
 );
 
 testcase!(
-    bug = "false positive: b is always initialized when a is truthy",
     test_guarded_initialization_repeated_use,
     r#"
 def f(a: bool) -> None:
     if a:
         b = 3
     if a:
-        print(b)  # E: `b` may be uninitialized
+        print(b)
     if a:
         print(b)
     "#,
