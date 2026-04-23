@@ -234,7 +234,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
         binding: &BindingExport,
         range: TextRange,
         errors: &ErrorCollector,
-    ) -> Arc<Type> {
+    ) -> Arc<TypeInfo> {
         let inner = match binding {
             BindingExport::Forward(idx) => Binding::Forward(*idx),
             BindingExport::PromoteForward(idx) => Binding::PromoteForward(*idx),
@@ -242,7 +242,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
                 Binding::AnnotatedType(*ann, Box::new(Binding::Forward(*idx)))
             }
         };
-        Arc::new(answers.solve_binding(&inner, range, errors).arc_clone_ty())
+        answers.solve_binding(&inner, range, errors)
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
@@ -252,7 +252,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
         // returning Unknown here avoids leaking a Var across module boundaries
         // in iterative-fixpoint SCC solving (where cross-module back-edges on
         // KeyExport would otherwise return a Type::Var from a foreign solver).
-        Type::Any(AnyStyle::Implicit)
+        TypeInfo::of_ty(Type::Any(AnyStyle::Implicit))
     }
 }
 

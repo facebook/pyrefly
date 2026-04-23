@@ -635,43 +635,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             true
         }
     }
-<<<<<<< HEAD
-    fn implicit_alias_call_uses_runtime_type(&self, call: &ExprCall) -> bool {
-        if matches!(
-            self.call_targets_special_export(&call.func),
-            Some(
-                SpecialExport::TypeVar
-                    | SpecialExport::ParamSpec
-                    | SpecialExport::TypeVarTuple
-                    | SpecialExport::TypedDict
-                    | SpecialExport::TypingNamedTuple
-                    | SpecialExport::CollectionsNamedTuple
-                    | SpecialExport::BuiltinsType
-            )
-        ) {
-            return true;
-        }
-||||||| parent of d1be9bab0 (clean)
-
-    fn implicit_alias_call_uses_runtime_type(&self, call: &ExprCall) -> bool {
-        if matches!(
-            self.call_targets_special_export(&call.func),
-            Some(
-                SpecialExport::TypeVar
-                    | SpecialExport::ParamSpec
-                    | SpecialExport::TypeVarTuple
-                    | SpecialExport::TypedDict
-                    | SpecialExport::TypingNamedTuple
-                    | SpecialExport::CollectionsNamedTuple
-                    | SpecialExport::BuiltinsType
-            )
-        ) {
-            return true;
-        }
-=======
-
     fn call_has_synthesized_runtime_type(&self, call: &ExprCall) -> bool {
->>>>>>> d1be9bab0 (clean)
         let anon_key = Key::Anon(call.range);
         self.bindings()
             .key_to_idx_hashed_opt(Hashed::new(&anon_key))
@@ -697,243 +661,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if annotation.is_some() || is_in_function_scope {
             return None;
         }
-        let problem = self.annotation_syntax_problem(expr)?;
+        let problem = Ast::annotation_syntax_problem(expr)?;
         if matches!(
             ty,
             Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_)
         ) {
             return Some(NameAssignTypeForm::RuntimeTypeValue);
         }
-<<<<<<< HEAD
-        Ast::annotation_syntax_problem(expr)
-            .map(str::to_owned)
-            .map(NameAssignTypeForm::InvalidImplicitAlias)
-    }
-
-    fn call_targets_special_export(&self, expr: &Expr) -> Option<SpecialExport> {
-        let mut visited_names = SmallSet::new();
-        let mut visited_keys = SmallSet::new();
-        self.call_targets_special_export_inner(expr, &mut visited_names, &mut visited_keys)
-    }
-
-    fn call_targets_special_export_inner(
-        &self,
-        expr: &Expr,
-        visited_names: &mut SmallSet<Name>,
-        visited_keys: &mut SmallSet<Idx<Key>>,
-    ) -> Option<SpecialExport> {
-        match expr {
-            Expr::Name(name) => {
-                if !visited_names.insert(name.id.clone()) {
-                    return None;
-                }
-                let key = Key::BoundName(ShortIdentifier::expr_name(name));
-                self.bindings()
-                    .key_to_idx_hashed_opt(Hashed::new(&key))
-                    .and_then(|idx| {
-                        self.special_export_from_binding_idx(idx, visited_names, visited_keys)
-                    })
-                    .or_else(|| {
-                        SpecialExport::new(&name.id)
-                            .filter(|export| *export == SpecialExport::BuiltinsType)
-                    })
-            }
-            Expr::Attribute(attr) if let Expr::Name(base) = attr.value.as_ref() => {
-                let module = self.bound_name_module(base)?;
-                let export = SpecialExport::new(&attr.attr.id)?;
-                if export.defined_in(module)
-                    || matches!(
-                        export,
-                        SpecialExport::TypeVar
-                            | SpecialExport::ParamSpec
-                            | SpecialExport::TypeVarTuple
-                    )
-                {
-                    Some(export)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
-    fn special_export_from_binding_idx(
-        &self,
-        mut idx: Idx<Key>,
-        visited_names: &mut SmallSet<Name>,
-        visited_keys: &mut SmallSet<Idx<Key>>,
-    ) -> Option<SpecialExport> {
-        loop {
-            if !visited_keys.insert(idx) {
-                return None;
-            }
-            match self.bindings().get(idx) {
-                Binding::Forward(next)
-                | Binding::PromoteForward(next)
-                | Binding::ForwardToFirstUse(next)
-                | Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
-                Binding::NameAssign(name_assign) => {
-                    return self.call_targets_special_export_inner(
-                        &name_assign.expr,
-                        visited_names,
-                        visited_keys,
-                    );
-                }
-                Binding::Import(import) => {
-                    return SpecialExport::new(&import.name)
-                        .filter(|export| export.defined_in(import.module));
-                }
-                Binding::ClassDef(class_idx, _) => {
-                    let Some(cls) = &self.get_idx(*class_idx).0 else {
-                        return None;
-                    };
-                    return SpecialExport::new(cls.name());
-                }
-                _ => return None,
-            }
-        }
-    }
-
-    fn bound_name_module(&self, name: &ruff_python_ast::ExprName) -> Option<ModuleName> {
-        let key = Key::BoundName(ShortIdentifier::expr_name(name));
-        let mut idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
-        let mut visited = SmallSet::new();
-        loop {
-            if !visited.insert(idx) {
-                return None;
-            }
-            match self.bindings().get(idx) {
-                Binding::Forward(next)
-                | Binding::PromoteForward(next)
-                | Binding::ForwardToFirstUse(next)
-                | Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
-                Binding::Module(module) => return Some(module.0),
-                Binding::NameAssign(name_assign)
-                    if let Expr::Name(alias) = name_assign.expr.as_ref() =>
-                {
-                    let alias_key = Key::BoundName(ShortIdentifier::expr_name(alias));
-                    idx = self
-                        .bindings()
-                        .key_to_idx_hashed_opt(Hashed::new(&alias_key))?;
-                }
-                _ => return None,
-            }
-||||||| parent of d1be9bab0 (clean)
-        self.annotation_syntax_problem(expr)
-            .map(NameAssignTypeForm::InvalidImplicitAlias)
-    }
-
-    fn call_targets_special_export(&self, expr: &Expr) -> Option<SpecialExport> {
-        let mut visited_names = SmallSet::new();
-        let mut visited_keys = SmallSet::new();
-        self.call_targets_special_export_inner(expr, &mut visited_names, &mut visited_keys)
-    }
-
-    fn call_targets_special_export_inner(
-        &self,
-        expr: &Expr,
-        visited_names: &mut SmallSet<Name>,
-        visited_keys: &mut SmallSet<Idx<Key>>,
-    ) -> Option<SpecialExport> {
-        match expr {
-            Expr::Name(name) => {
-                if !visited_names.insert(name.id.clone()) {
-                    return None;
-                }
-                let key = Key::BoundName(ShortIdentifier::expr_name(name));
-                self.bindings()
-                    .key_to_idx_hashed_opt(Hashed::new(&key))
-                    .and_then(|idx| {
-                        self.special_export_from_binding_idx(idx, visited_names, visited_keys)
-                    })
-                    .or_else(|| {
-                        SpecialExport::new(&name.id)
-                            .filter(|export| *export == SpecialExport::BuiltinsType)
-                    })
-            }
-            Expr::Attribute(attr) if let Expr::Name(base) = attr.value.as_ref() => {
-                let module = self.bound_name_module(base)?;
-                let export = SpecialExport::new(&attr.attr.id)?;
-                if export.defined_in(module)
-                    || matches!(
-                        export,
-                        SpecialExport::TypeVar
-                            | SpecialExport::ParamSpec
-                            | SpecialExport::TypeVarTuple
-                    )
-                {
-                    Some(export)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
-    fn special_export_from_binding_idx(
-        &self,
-        mut idx: Idx<Key>,
-        visited_names: &mut SmallSet<Name>,
-        visited_keys: &mut SmallSet<Idx<Key>>,
-    ) -> Option<SpecialExport> {
-        loop {
-            if !visited_keys.insert(idx) {
-                return None;
-            }
-            match self.bindings().get(idx) {
-                Binding::Forward(next)
-                | Binding::PromoteForward(next)
-                | Binding::ForwardToFirstUse(next)
-                | Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
-                Binding::NameAssign(name_assign) => {
-                    return self.call_targets_special_export_inner(
-                        &name_assign.expr,
-                        visited_names,
-                        visited_keys,
-                    );
-                }
-                Binding::Import(import) => {
-                    return SpecialExport::new(&import.name)
-                        .filter(|export| export.defined_in(import.module));
-                }
-                Binding::ClassDef(class_idx, _) => {
-                    let Some(cls) = &self.get_idx(*class_idx).0 else {
-                        return None;
-                    };
-                    return SpecialExport::new(cls.name());
-                }
-                _ => return None,
-            }
-        }
-    }
-
-    fn bound_name_module(&self, name: &ruff_python_ast::ExprName) -> Option<ModuleName> {
-        let key = Key::BoundName(ShortIdentifier::expr_name(name));
-        let mut idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
-        let mut visited = SmallSet::new();
-        loop {
-            if !visited.insert(idx) {
-                return None;
-            }
-            match self.bindings().get(idx) {
-                Binding::Forward(next)
-                | Binding::PromoteForward(next)
-                | Binding::ForwardToFirstUse(next)
-                | Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
-                Binding::Module(module) => return Some(module.0),
-                Binding::NameAssign(name_assign)
-                    if let Expr::Name(alias) = name_assign.expr.as_ref() =>
-                {
-                    let alias_key = Key::BoundName(ShortIdentifier::expr_name(alias));
-                    idx = self
-                        .bindings()
-                        .key_to_idx_hashed_opt(Hashed::new(&alias_key))?;
-                }
-                _ => return None,
-            }
-=======
         if let Expr::Call(call) = expr
             && (self.call_has_synthesized_runtime_type(call)
                 || self.callable_is_builtin_type(
@@ -941,9 +675,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ))
         {
             return Some(NameAssignTypeForm::RuntimeTypeValue);
->>>>>>> d1be9bab0 (clean)
         }
         Some(NameAssignTypeForm::InvalidImplicitAlias(problem.into()))
+    }
+
+    fn annotation_name_assign_type_form(
+        &self,
+        name: &ruff_python_ast::ExprName,
+    ) -> Option<NameAssignTypeForm> {
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        self.get(&key).name_assign_type_form().cloned()
     }
 
     fn expr_annotation(
@@ -4856,7 +4597,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range_if_scoped_params_exist: &Option<TextRange>,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        let ty = match &*self.get_idx(key) {
+        let lookup = self.get_idx(key);
+        let ty = match &*lookup {
             LegacyTypeParameterLookup::Parameter(p) => {
                 // This class or function has scoped (PEP 695) type parameters. Mixing legacy-style parameters is an error.
                 if let Some(r) = range_if_scoped_params_exist {
@@ -4888,7 +4630,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     module
                 }
             }
-            BindingLegacyTypeParam::ParamKeyed(_) => TypeInfo::of_ty(ty),
+            BindingLegacyTypeParam::ParamKeyed(idx) => match &*lookup {
+                LegacyTypeParameterLookup::NotParameter(_) => self.get_idx(*idx).arc_clone(),
+                LegacyTypeParameterLookup::Parameter(_) => TypeInfo::of_ty(ty),
+            },
         }
     }
 
@@ -4969,6 +4714,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range_if_scoped_params_exist,
                     errors,
                 ),
+            Binding::Import(x) => self
+                .get_from_export_type_info(x.0, None, &KeyExport(x.1.clone()))
+                .as_ref()
+                .clone(),
             _ => {
                 // All other Bindings model `Type` level operations where we do not
                 // propagate any attribute narrows.
@@ -6359,9 +6108,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         if type_form_context.reports_implicit_alias_syntax_at_use_site()
             && let Expr::Name(name) = x
-            && let Some(NameAssignTypeForm::InvalidImplicitAlias(problem)) = self
-                .get(&Key::BoundName(ShortIdentifier::expr_name(name)))
-                .name_assign_type_form()
+            && let Some(NameAssignTypeForm::InvalidImplicitAlias(problem)) =
+                self.annotation_name_assign_type_form(name)
         {
             return self.error(
                 errors,
