@@ -151,21 +151,13 @@ impl<T: TspInterface> TspConnection<T> {
     /// Called whenever the snapshot counter increments, so the client knows
     /// any previously-returned types are stale.
     fn send_snapshot_changed_notification(&self, old_snapshot: i32, new_snapshot: i32) {
-        let method = serde_json::to_value(TSPNotificationMethods::TypeServerSnapshotChanged)
-            .expect("TSPNotificationMethods serialization is infallible");
-        let method_str = method
-            .as_str()
-            .expect("TSPNotificationMethods serializes to a string")
-            .to_owned();
-
-        if let Err(e) = self
-            .inner
-            .sender()
-            .send(Message::Notification(Notification {
-                method: method_str,
-                params: serde_json::json!({ "old": old_snapshot, "new": new_snapshot }),
-                activity_key: None,
-            }))
+        if let Err(e) =
+            self.inner
+                .sender()
+                .send(Message::Notification(snapshot_changed_notification(
+                    old_snapshot,
+                    new_snapshot,
+                )))
         {
             warn!("Failed to send snapshotChanged notification: {e}");
         }
@@ -251,6 +243,21 @@ impl<T: TspInterface> TspConnection<T> {
                 self.send_err(id, err);
             }
         }
+    }
+}
+
+/// Build a `typeServer/snapshotChanged` notification.
+fn snapshot_changed_notification(old_snapshot: i32, new_snapshot: i32) -> Notification {
+    let method = serde_json::to_value(TSPNotificationMethods::TypeServerSnapshotChanged)
+        .expect("TSPNotificationMethods serialization is infallible");
+    let method_str = method
+        .as_str()
+        .expect("TSPNotificationMethods serializes to a string")
+        .to_owned();
+    Notification {
+        method: method_str,
+        params: serde_json::json!({ "old": old_snapshot, "new": new_snapshot }),
+        activity_key: None,
     }
 }
 
