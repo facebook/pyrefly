@@ -38,7 +38,7 @@ impl<T: TspInterface> TspConnection<T> {
 
         // --- 2. Parse from_uri and delegate ---
         match parse_file_uri(&params.from_uri) {
-            Ok(url) => match self.inner.get_python_search_paths(&url) {
+            Ok(url) => match self.inner().get_python_search_paths(&url) {
                 Ok(paths) => self.send_ok(id, paths),
                 Err(detail) => self.send_err(id, internal_error(&detail)),
             },

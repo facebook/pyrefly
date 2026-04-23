@@ -17,10 +17,13 @@ impl<T: TspInterface> TspConnection<T> {
     /// It changes whenever files are modified, configuration changes,
     /// or any other event that would trigger a recomputation.
     pub fn get_snapshot(&self) -> i32 {
-        *self.current_snapshot.lock().unwrap_or_else(|poisoned| {
-            // In case of poisoned mutex, recover and return the value
-            eprintln!("TSP: Warning - snapshot mutex was poisoned, recovering");
-            poisoned.into_inner()
-        })
+        *self
+            .server
+            .current_snapshot
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                eprintln!("TSP: Warning - snapshot mutex was poisoned, recovering");
+                poisoned.into_inner()
+            })
     }
 }

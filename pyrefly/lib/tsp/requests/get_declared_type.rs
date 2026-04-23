@@ -31,7 +31,7 @@ impl<T: TspInterface> TspConnection<T> {
         self.validate_snapshot(params.snapshot)?;
         let position = params.position();
         let ty = self
-            .inner
+            .inner()
             .get_type_at_position(params.uri(), position.line, position.character);
         Ok(ty.map(|t| self.convert_type(&t)))
     }

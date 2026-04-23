@@ -64,7 +64,7 @@ impl<T: TspInterface> TspConnection<T> {
 
         // --- 3. Build source handle and resolve the module name ---
         let source_module_path = ModulePath::filesystem(source_path.clone());
-        let source_handle = self.inner.handle_from_module_path(source_module_path);
+        let source_handle = self.inner().handle_from_module_path(source_module_path);
 
         let module_name = match resolve_module_name(
             &params.module_descriptor.name_parts,
@@ -84,7 +84,7 @@ impl<T: TspInterface> TspConnection<T> {
 
         // --- 4. Resolve the import via existing infrastructure ---
         let transaction = self
-            .inner
+            .inner()
             .non_committable_transaction(ide_transaction_manager);
         let result = transaction.import_handle(&source_handle, module_name, None);
 
