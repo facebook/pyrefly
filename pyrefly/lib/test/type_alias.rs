@@ -1137,6 +1137,15 @@ def f(x: DynClass) -> None:
 );
 
 testcase!(
+    test_implicit_alias_runtime_type_call_minimal,
+    r#"
+DynClass = type("DynClass", (), {})
+def f(x: DynClass) -> None:
+    pass
+"#,
+);
+
+testcase!(
     test_implicit_alias_functional_typed_dict_and_named_tuple,
     r#"
 from typing import NamedTuple
