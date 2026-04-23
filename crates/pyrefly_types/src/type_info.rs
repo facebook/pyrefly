@@ -90,7 +90,7 @@ pub struct TypeInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Visit, VisitMut, TypeEq)]
 pub enum NameAssignTypeForm {
     RuntimeTypeValue,
-    InvalidImplicitAlias(String),
+    InvalidImplicitAlias(Box<str>),
 }
 
 impl TypeInfo {
