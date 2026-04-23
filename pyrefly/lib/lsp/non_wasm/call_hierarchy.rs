@@ -39,6 +39,7 @@ use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::ast_helpers::find_containing_function_def;
 use crate::state::state::CancellableTransaction;
 
 pub struct CallerInfo {
@@ -83,28 +84,26 @@ pub fn find_containing_function_for_call(
     ast: &ModModule,
     position: TextSize,
 ) -> (String, TextRange, TextRange, SymbolKind) {
-    let covering_nodes = Ast::locate_node(ast, position);
-
-    for (i, node) in covering_nodes.iter().enumerate() {
-        if let AnyNodeRef::StmtFunctionDef(func_def) = node {
-            if let Some(AnyNodeRef::StmtClassDef(class_def)) = covering_nodes.get(i + 1) {
-                let name = format!("{}.{}.{}", module_name, class_def.name.id, func_def.name.id);
-                return (
-                    name,
-                    func_def.range(),
-                    func_def.name.range(),
-                    SymbolKind::METHOD,
-                );
-            } else {
-                let name = format!("{}.{}", module_name, func_def.name.id);
-                return (
-                    name,
-                    func_def.range(),
-                    func_def.name.range(),
-                    SymbolKind::FUNCTION,
-                );
-            }
+    if let Some(containing) = find_containing_function_def(ast, position) {
+        if let Some(class_def) = containing.class_def {
+            let name = format!(
+                "{}.{}.{}",
+                module_name, class_def.name.id, containing.function_def.name.id
+            );
+            return (
+                name,
+                containing.function_def.range(),
+                containing.function_def.name.range(),
+                SymbolKind::METHOD,
+            );
         }
+        let name = format!("{}.{}", module_name, containing.function_def.name.id);
+        return (
+            name,
+            containing.function_def.range(),
+            containing.function_def.name.range(),
+            SymbolKind::FUNCTION,
+        );
     }
 
     let name = format!("{}.<module>", module_name);
