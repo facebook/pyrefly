@@ -1402,6 +1402,17 @@ def test1(x: object) -> None:
 
 This check is relatively conservative and only warns on limited cases where the comparison is highly likely to be redundant.
 
+## unnecessary-type-conversion
+
+This warning is raised when a builtin type constructor (`str`, `int`, `float`, `bool`, or `bytes`) is called on a value that is already of that type, making the conversion redundant.
+
+The default severity of this diagnostic is `warn`.
+
+```python
+def f(x: str) -> None:
+    y = str(x)  # unnecessary-type-conversion: `x` is already of type `str`
+```
+
 ## unreachable
 
 This error is raised when a `return` or `yield` can never be reached because it comes
