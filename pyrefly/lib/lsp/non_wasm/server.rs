@@ -474,6 +474,17 @@ pub trait TspInterface: Send + Sync {
         &self,
         func_id: &pyrefly_types::callable::FuncId,
     ) -> Option<TextRange>;
+
+    /// Resolve a URI to a filesystem path.
+    ///
+    /// Handles both `file://` URIs (via [`Url::to_file_path`]) and notebook
+    /// cell URIs (via the `open_notebook_cells` map). Returns `None` when
+    /// the URI cannot be mapped to a path.
+    fn resolve_uri_to_path(&self, uri: &Url) -> Option<PathBuf>;
+
+    /// Return the cell index if `uri` is an open notebook cell, or `None`
+    /// for regular file URIs.
+    fn maybe_get_cell_index(&self, uri: &Url) -> Option<usize>;
 }
 
 pub struct Connection {
@@ -6277,15 +6288,14 @@ impl TspInterface for Server {
         let url = Url::parse(uri)
             .ok()
             .or_else(|| Url::from_file_path(uri).ok())?;
-        let path = url.to_file_path().ok()?;
+        let path = self.path_for_uri_or_notebook_cell(&url)?;
+        let notebook_cell = self.maybe_get_cell_index(&url);
 
         let handle = make_open_handle(&self.state, &path);
         let transaction = self.state.transaction();
         let module_info = transaction.get_module_info(&handle)?;
-        let position = module_info.from_lsp_position(
-            lsp_types::Position { line, character },
-            /* notebook_cell */ None,
-        );
+        let position =
+            module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
         transaction.get_type_at(&handle, position)
     }
 
@@ -6300,5 +6310,13 @@ impl TspInterface for Server {
         let key = KeyUndecoratedFunctionRange(def_index);
         let idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
         Some(bindings.get(idx).0.range())
+    }
+
+    fn resolve_uri_to_path(&self, uri: &Url) -> Option<PathBuf> {
+        self.path_for_uri_or_notebook_cell(uri)
+    }
+
+    fn maybe_get_cell_index(&self, uri: &Url) -> Option<usize> {
+        Self::maybe_get_cell_index(self, uri)
     }
 }
