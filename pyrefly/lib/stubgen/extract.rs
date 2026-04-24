@@ -136,7 +136,7 @@ pub fn extract_module_stub(
         dunder_all: &dunder_all,
     };
 
-    let items = extract_stmts(&ast.body, &mut ctx, false);
+    let items = extract_stmts(&ast.body, &mut ctx, false, false);
 
     Some(ModuleStub {
         items,
@@ -158,7 +158,12 @@ struct ExtractionContext<'a> {
     dunder_all: &'a Option<HashSet<Name>>,
 }
 
-fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) -> Vec<StubItem> {
+fn extract_stmts(
+    stmts: &[Stmt],
+    ctx: &mut ExtractionContext,
+    in_class: bool,
+    in_dataclass: bool,
+) -> Vec<StubItem> {
     let mut items = Vec::new();
     let overloaded = collect_overloaded_names(stmts);
 
@@ -187,7 +192,7 @@ fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) ->
                 items.push(StubItem::Import(StubImport { text }));
             }
             Stmt::AnnAssign(ann_assign) => {
-                if let Some(item) = extract_ann_assign(ann_assign, ctx, in_class) {
+                if let Some(item) = extract_ann_assign(ann_assign, ctx, in_class, in_dataclass) {
                     items.push(StubItem::Variable(item));
                 }
             }
@@ -219,7 +224,7 @@ fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) ->
             }
             Stmt::If(if_stmt) => {
                 if is_type_checking_guard(&if_stmt.test) {
-                    items.extend(extract_stmts(&if_stmt.body, ctx, in_class));
+                    items.extend(extract_stmts(&if_stmt.body, ctx, in_class, in_dataclass));
                 }
             }
             _ => {}
@@ -534,7 +539,12 @@ fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Optio
         .as_ref()
         .map(|tp| source_text(ctx.module_info, tp.range()).to_owned());
 
-    let body = extract_stmts(&class_def.body, ctx, true);
+    let body = extract_stmts(
+        &class_def.body,
+        ctx,
+        true,
+        has_dataclass_decorator(class_def),
+    );
 
     Some(StubClass {
         name: name.to_owned(),
@@ -550,6 +560,7 @@ fn extract_ann_assign(
     ann_assign: &ruff_python_ast::StmtAnnAssign,
     ctx: &mut ExtractionContext,
     in_class: bool,
+    in_dataclass: bool,
 ) -> Option<StubVariable> {
     let name = match ann_assign.target.as_ref() {
         Expr::Name(n) => n.id.as_str(),
@@ -561,10 +572,10 @@ fn extract_ann_assign(
 
     let annotation = source_text(ctx.module_info, ann_assign.annotation.range()).to_owned();
 
-    let value = ann_assign
-        .value
-        .as_deref()
-        .and_then(|v| simple_value_text(v, ctx.module_info));
+    let value = ann_assign.value.as_deref().and_then(|v| {
+        simple_value_text(v, ctx.module_info)
+            .or_else(|| in_dataclass.then_some("...".to_owned()))
+    });
 
     Some(StubVariable {
         name: name.to_owned(),
@@ -696,6 +707,22 @@ fn should_include_name(
         return false;
     }
     true
+}
+
+fn has_dataclass_decorator(class_def: &StmtClassDef) -> bool {
+    class_def
+        .decorator_list
+        .iter()
+        .any(|d| is_dataclass_decorator_expr(&d.expression))
+}
+
+fn is_dataclass_decorator_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Name(name) => name.id == "dataclass",
+        Expr::Attribute(attr) => attr.attr.as_str() == "dataclass",
+        Expr::Call(call) => is_dataclass_decorator_expr(&call.func),
+        _ => false,
+    }
 }
 
 /// Matches `@overload`, `@typing.overload`, and `@typing_extensions.overload`.
