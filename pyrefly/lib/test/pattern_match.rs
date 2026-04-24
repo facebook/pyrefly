@@ -737,7 +737,9 @@ def test(a: list[int] | None, b: list[int] | None) -> None:
             pass
         case _, None:
             assert_type(a, list[int])
+            assert_type(b, None)
         case None, _:
+            assert_type(a, None)
             assert_type(b, list[int])
         case _:
             assert_type(a, list[int])
