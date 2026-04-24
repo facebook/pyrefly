@@ -184,6 +184,11 @@ mod tests {
     }
 
     #[test]
+    fn test_stubgen_instance_attrs() {
+        assert_stubgen_snapshot("instance_attrs");
+    }
+
+    #[test]
     fn test_stubgen_docstrings() {
         let input = r#"
 def greet(name: str) -> str:

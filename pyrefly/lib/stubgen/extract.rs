@@ -32,6 +32,8 @@ use ruff_text_size::TextRange;
 use crate::alt::answers::Answers;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::export::definitions::Definitions;
@@ -524,7 +526,8 @@ fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Optio
         .as_ref()
         .map(|tp| source_text(ctx.module_info, tp.range()).to_owned());
 
-    let body = extract_stmts(&class_def.body, ctx, true);
+    let mut body = extract_stmts(&class_def.body, ctx, true);
+    insert_instance_attributes(class_def, &mut body, ctx);
 
     Some(StubClass {
         name: name.to_owned(),
@@ -534,6 +537,92 @@ fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Optio
         body,
         docstring,
     })
+}
+
+/// Adds attributes that pyrefly inferred from `self.x = ...` assignments in
+/// `__init__` (and other recognized attribute-defining methods) when they
+/// were not already declared in the class body. In Python, `__init__` is
+/// often the source of truth for available instance attributes, so a stub
+/// that omits them would be misleading.
+///
+/// New variables are inserted before the first method/nested-class so the
+/// stub keeps the conventional "attributes first, methods last" layout.
+fn insert_instance_attributes(
+    class_def: &StmtClassDef,
+    body: &mut Vec<StubItem>,
+    ctx: &mut ExtractionContext,
+) {
+    let key_class = KeyClass(ShortIdentifier::new(&class_def.name));
+    let Some(class_idx) = ctx
+        .bindings
+        .key_to_idx_hashed_opt(starlark_map::Hashed::new(&key_class))
+    else {
+        return;
+    };
+    let Some(class_answer) = ctx.answers.get_idx(class_idx) else {
+        return;
+    };
+    let Some(class) = class_answer.0.as_ref() else {
+        return;
+    };
+    let Some(fields) = ctx.bindings.get_class_fields(class.index()).cloned() else {
+        return;
+    };
+
+    let existing: HashSet<&str> = body.iter().filter_map(stub_item_name).collect();
+
+    let mut new_vars = Vec::new();
+    for (name, props) in fields.iter() {
+        if props.is_defined_in_class_body() {
+            continue;
+        }
+        let name_str = name.as_str();
+        if existing.contains(name_str)
+            || !should_include_name(name_str, ctx.config, true, ctx.dunder_all)
+        {
+            continue;
+        }
+        let field_key = KeyClassField(class.index(), name.clone());
+        let Some(field_idx) = ctx
+            .bindings
+            .key_to_idx_hashed_opt(starlark_map::Hashed::new(&field_key))
+        else {
+            continue;
+        };
+        let Some(field) = ctx.answers.get_idx(field_idx) else {
+            continue;
+        };
+        // Only emit "plain" instance attributes; methods and properties live
+        // elsewhere in the class body and should not be re-emitted as variables.
+        if !field.is_simple_instance_attribute() {
+            continue;
+        }
+        let annotation = format_type(&field.ty(), ctx);
+        new_vars.push(StubItem::Variable(StubVariable {
+            name: name_str.to_owned(),
+            annotation,
+            value: None,
+        }));
+    }
+
+    if new_vars.is_empty() {
+        return;
+    }
+
+    let insert_at = body
+        .iter()
+        .position(|item| matches!(item, StubItem::Function(_) | StubItem::Class(_)))
+        .unwrap_or(body.len());
+    body.splice(insert_at..insert_at, new_vars);
+}
+
+fn stub_item_name(item: &StubItem) -> Option<&str> {
+    match item {
+        StubItem::Variable(v) => Some(&v.name),
+        StubItem::Function(f) => Some(&f.name),
+        StubItem::Class(c) => Some(&c.name),
+        StubItem::Import(_) | StubItem::TypeAlias(_) => None,
+    }
 }
 
 fn extract_ann_assign(
