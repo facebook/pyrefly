@@ -66,6 +66,7 @@ use lsp_types::request::Shutdown;
 use lsp_types::request::SignatureHelpRequest;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
+use lsp_types::request::WorkspaceSymbolRequest;
 use pretty_assertions::assert_eq;
 use pyrefly::commands::lsp::IndexingMode;
 use pyrefly::commands::lsp::LspArgs;
@@ -597,6 +598,13 @@ impl TestClient {
                 "includeDeclaration": include_declaration
             },
         }))
+    }
+
+    pub fn send_workspace_symbol(
+        &self,
+        query: &str,
+    ) -> ClientRequestHandle<'_, WorkspaceSymbolRequest> {
+        self.send_request(json!({ "query": query }))
     }
 
     pub fn inlay_hint(

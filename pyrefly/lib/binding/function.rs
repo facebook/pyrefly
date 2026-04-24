@@ -413,6 +413,7 @@ impl<'a> BindingsBuilder<'a> {
     fn analyze_return_type(
         &mut self,
         func_name: &Identifier,
+        class_key: Option<Idx<KeyClass>>,
         is_async: bool,
         yields_and_returns: YieldsAndReturns,
         return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>)>,
@@ -422,6 +423,12 @@ impl<'a> BindingsBuilder<'a> {
     ) {
         let is_generator = yields_and_returns.is_generator;
         let return_ann = return_ann_with_range.as_ref().map(|(_, key)| *key);
+        let implicit_dunder_new_self =
+            if func_name.id == dunder::NEW && return_ann_with_range.is_none() {
+                class_key
+            } else {
+                None
+            };
 
         // Collect the keys of explicit returns.
         let return_keys = yields_and_returns
@@ -508,7 +515,11 @@ impl<'a> BindingsBuilder<'a> {
                     }
                 }
             };
-            Binding::ReturnType(Box::new(ReturnType { kind, is_async }))
+            Binding::ReturnType(Box::new(ReturnType {
+                kind,
+                is_async,
+                implicit_dunder_new_self,
+            }))
         };
         self.insert_binding(
             Key::ReturnType(ShortIdentifier::new(func_name)),
@@ -516,7 +527,28 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
-    fn mark_as_returns_any(&mut self, func_name: &Identifier) {
+    fn mark_as_returns_any(
+        &mut self,
+        func_name: &Identifier,
+        class_key: Option<Idx<KeyClass>>,
+        is_async: bool,
+    ) {
+        // Even when body analysis is skipped, an unannotated __new__ still defaults to Self.
+        if func_name.id == dunder::NEW
+            && let Some(class_key) = class_key
+        {
+            self.insert_binding(
+                Key::ReturnType(ShortIdentifier::new(func_name)),
+                Binding::ReturnType(Box::new(ReturnType {
+                    kind: ReturnTypeKind::ShouldReturnAny {
+                        is_generator: false,
+                    },
+                    is_async,
+                    implicit_dunder_new_self: Some(class_key),
+                })),
+            );
+            return;
+        }
         self.insert_binding(
             Key::ReturnType(ShortIdentifier::new(func_name)),
             // TODO(grievejia): traverse the function body and calculate the `is_generator` flag, then
@@ -642,7 +674,7 @@ impl<'a> BindingsBuilder<'a> {
         let self_assignments = if decorators.has_no_type_check
             || (is_unannotated && !self.analyze_unannotated_for_ide)
         {
-            self.mark_as_returns_any(func_name);
+            self.mark_as_returns_any(func_name, class_key, is_async);
             self.unchecked_function_body_scope(
                 parameters,
                 body,
@@ -669,6 +701,7 @@ impl<'a> BindingsBuilder<'a> {
             );
             self.analyze_return_type(
                 func_name,
+                class_key,
                 is_async,
                 yields_and_returns,
                 return_ann_with_range,
@@ -704,6 +737,7 @@ impl<'a> BindingsBuilder<'a> {
             };
             self.analyze_return_type(
                 func_name,
+                class_key,
                 is_async,
                 yields_and_returns,
                 return_ann_with_range,

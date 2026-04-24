@@ -1211,6 +1211,65 @@ Completion Results:
 }
 
 #[test]
+fn completion_class_override_members() {
+    let code = r#"
+from typing import *
+from abc import ABC, abstractmethod
+
+class A(ABC):
+    @property
+    @abstractmethod
+    def error_message(self):
+        """
+        Child classes must provide an error message string.
+        """
+        ...
+
+class B(A):
+    erro = ""
+#   ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
+    assert!(
+        completions.iter().any(|item| item.label == "error_message"),
+        "Expected inherited override completion, got {:?}",
+        completions
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn attribute_completion_remains_unfiltered() {
+    let code = r#"
+class A:
+    name = 1
+
+a = A()
+a.zz
+#  ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
+    assert!(
+        completions.iter().any(|item| item.label == "name"),
+        "Expected normal attribute completions to remain unfiltered, got {:?}",
+        completions
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn builtins_doesnt_autoimport() {
     let code = r#"
 isins

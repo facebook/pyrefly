@@ -21,18 +21,6 @@
     },
     {
       "kind": "function",
-      "name": "test.f",
-      "n_typable": 2,
-      "n_typed": 2,
-      "n_any": 0,
-      "n_untyped": 0,
-      "location": {
-        "line": 16,
-        "column": 1
-      }
-    },
-    {
-      "kind": "function",
       "name": "test.WithOverloads.method",
       "n_typable": 2,
       "n_typed": 2,
@@ -40,18 +28,6 @@
       "n_untyped": 0,
       "location": {
         "line": 25,
-        "column": 5
-      }
-    },
-    {
-      "kind": "function",
-      "name": "test.WithOverloads.method",
-      "n_typable": 2,
-      "n_typed": 2,
-      "n_any": 0,
-      "n_untyped": 0,
-      "location": {
-        "line": 28,
         "column": 5
       }
     },
@@ -69,16 +45,16 @@
     }
   ],
   "type_ignores": [],
-  "n_typable": 8,
-  "n_typed": 8,
+  "n_typable": 4,
+  "n_typed": 4,
   "n_any": 0,
   "n_untyped": 0,
   "coverage": 100.0,
   "strict_coverage": 100.0,
-  "n_functions": 2,
-  "n_methods": 2,
-  "n_function_params": 2,
-  "n_method_params": 2,
+  "n_functions": 1,
+  "n_methods": 1,
+  "n_function_params": 1,
+  "n_method_params": 1,
   "n_classes": 1,
   "n_attrs": 0,
   "n_properties": 0,

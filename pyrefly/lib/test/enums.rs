@@ -1016,6 +1016,79 @@ assert_type(Planet.MERCURY.value, float)
     "#,
 );
 
+// A non-data-type mixin (no __new__) should not affect .value type inference.
+testcase!(
+    test_mixin_not_data_type,
+    r#"
+from enum import Enum, IntEnum
+from typing import assert_type, Literal
+
+class Meta:
+    def some_method(self) -> str:
+        return "hello"
+
+class MyEnum(Meta, Enum):
+    pass
+
+class MyIntEnum(Meta, IntEnum):
+    pass
+
+class Foo(MyEnum):
+    bar = 1
+
+class Bar(MyIntEnum):
+    foo = 1
+
+assert_type(Foo.bar.value, Literal[1])
+assert_type(Bar.foo.value, Literal[1])
+    "#,
+);
+
+// A data type mixin (str) should still work when combined with a non-data-type mixin.
+testcase!(
+    test_mixin_data_type_with_regular_mixin,
+    r#"
+from enum import Enum
+from typing import assert_type, Literal
+
+class Meta:
+    pass
+
+class MyStrEnum(Meta, str, Enum):
+    pass
+
+class Baz(MyStrEnum):
+    x = "hello"
+
+assert_type(Baz.x.value, Literal["hello"])
+    "#,
+);
+
+// A subclass of a data type (e.g. MyStr(str)) inherits __new__ and should
+// still be treated as a data type mixin.
+testcase!(
+    test_mixin_inherited_data_type,
+    r#"
+from enum import auto, Enum
+from typing import assert_type
+
+class MyStr(str):
+    pass
+
+class MyInt(int):
+    pass
+
+class StrEnum(MyStr, Enum):
+    X = auto()
+
+class IntEnum2(MyInt, Enum):
+    Y = auto()
+
+assert_type(StrEnum.X.value, MyStr)
+assert_type(IntEnum2.Y.value, MyInt)
+    "#,
+);
+
 fn frozen_enum_members_env() -> TestEnv {
     TestEnv::one(
         "foo",

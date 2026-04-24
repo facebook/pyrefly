@@ -14,12 +14,9 @@ description: Configure Pyrefly settings and options
 
 # Pyrefly Configuration
 
-Pyrefly has a basic configuration that can (or will) allow you to customize your
+Pyrefly has a configuration system that allows you to customize your
 Pyrefly runs without having to specify all of your arguments on the command
 line.
-
-NOTE: this is early in its development, so the options listed here are subject
-to change in name, usage, type, quantity, and structure.
 
 Configurations can be specified in a [TOML file](https://toml.io/en/) at the root of
 your project (or elsewhere, as long as the path-based config options point to the right place) named
@@ -899,6 +896,48 @@ and values that can be overridden here.
 - Default: `[]`
 - Flag equivalent: none
 - Equivalent configs: `executionEnvironments` in Pyright, per-module config options in mypy
+
+### `tensor-shapes`
+
+:::warning
+This feature is experimental and may change without notice.
+:::
+
+Enable tensor shape type inference. Supports both native (`Tensor[N, M]`) and
+jaxtyping (`Float[Tensor, "batch channels"]`) syntax.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--tensor-shapes`
+
+### `spec-compliant-overloads`
+
+:::warning
+This flag is temporary. It will be removed once the upstream Python typing specification discussion on
+[ambiguous arguments in overload call evaluation](https://discuss.python.org/t/spec-change-ambiguous-arguments-in-overload-call-evaluation/106891)
+is resolved and one of the two overload evaluation modes is removed.
+:::
+
+Controls whether Pyrefly uses spec-compliant overload evaluation semantics.
+When `false` (the default), Pyrefly attempts to resolve ambiguous calls
+precisely. When `true`, overload evaluation follows the typing spec exactly,
+falling back to `Any` more frequently.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: none
+
+### `extra-file-extensions`
+
+Additional file extensions to treat as Python source files. Used for Python
+dialects that use non-standard extensions (e.g., Cinder's `.cinc` files).
+Unlike standard Python extensions (`.py`, `.pyi`), these extensions become part
+of the module name — for example, a file `foo.cinc` has module name `foo.cinc`,
+not `foo`.
+
+- Type: list of strings
+- Default: `[]`
+- Flag equivalent: none
 
 ### `recursion-depth-limit`
 

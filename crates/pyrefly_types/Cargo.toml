@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_types"
-version = "0.61.0"
+version = "0.62.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -12,7 +12,7 @@ license = "MIT"
 compact_str = { version = "0.9.0", features = ["serde"] }
 dupe = "0.9.1"
 itertools = "0.14.0"
-num-bigint = { version = "0.4.6", features = ["rand"] }
+num-bigint = { version = "0.4.6", features = ["rand", "serde"] }
 num-traits = { version = "0.2.19", default-features = false }
 parse-display = "0.8.2"
 pyrefly_derive = { path = "../pyrefly_derive" }

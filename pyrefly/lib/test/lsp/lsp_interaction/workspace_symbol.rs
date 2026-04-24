@@ -7,7 +7,6 @@
 
 use lsp_types::Url;
 use lsp_types::WorkspaceSymbolResponse;
-use lsp_types::request::WorkspaceSymbolRequest;
 use serde_json::json;
 
 use crate::object_model::InitializeSettings;
@@ -33,11 +32,7 @@ fn test_workspace_symbol() {
 
     interaction
         .client
-        .send_request::<WorkspaceSymbolRequest>(
-            json!({
-                "query": "this_is_a_very_long_function_name_so_we_can"
-            }),
-        )
+        .send_workspace_symbol("this_is_a_very_long_function_name_so_we_can")
         .expect_response(json!([
             {
                 "kind": 12,
@@ -88,7 +83,7 @@ fn test_workspace_symbol_prefers_non_init_result() {
 
     interaction
         .client
-        .send_request::<WorkspaceSymbolRequest>(json!({ "query": symbol_name }))
+        .send_workspace_symbol(symbol_name)
         .expect_response_with(|result| {
             let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
                 panic!("Unexpected workspace symbol response: {result:?}");
@@ -108,6 +103,47 @@ fn test_workspace_symbol_prefers_non_init_result() {
                 .expect("expected at least one non-__init__.py result");
 
             assert!(last_non_init_index < first_init_index);
+            true
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3041
+#[test]
+fn test_workspace_symbol_multibyte_no_panic() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("tests_requiring_config");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking"}]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("workspace_symbol_multibyte/__init__.py");
+    interaction
+        .client
+        .did_open("workspace_symbol_multibyte/impl_mod.py");
+
+    interaction
+        .client
+        .send_workspace_symbol("workspace_symbol_multibyte_repro")
+        .expect_response_with(|result| {
+            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                panic!("Unexpected workspace symbol response: {result:?}");
+            };
+            assert!(
+                !symbols.is_empty(),
+                "Expected at least one result for workspace_symbol_multibyte_repro"
+            );
             true
         })
         .unwrap();

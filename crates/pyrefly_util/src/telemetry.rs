@@ -274,7 +274,25 @@ pub struct TelemetryExternalReferencesStats {
     pub find_repo_ms: Option<Duration>,
     pub angle_query_ms: Option<Duration>,
     pub cas_init_error: Option<String>,
+    /// Wall time of the entire resolve step (envelope around the phase
+    /// timers below).
     pub resolve_locations_ms: Option<Duration>,
+    /// Sum of `fs::read_to_string` time across all result files.
+    pub resolve_disk_read_ms: Option<Duration>,
+    /// Sum of blake3 hashing time across all result files.
+    pub resolve_hash_ms: Option<Duration>,
+    /// Time spent in the batched CAS download for stale (changed) files.
+    pub resolve_cas_download_ms: Option<Duration>,
+    /// Sum of `similar::TextDiff::from_lines` (build + materialize) time
+    /// across all stale (digest, file) pairs.
+    pub resolve_textdiff_ms: Option<Duration>,
+    /// Result files whose on-disk hash matched the Glean-indexed digest.
+    pub resolve_unchanged_file_count: usize,
+    /// Result files whose on-disk content has drifted from the indexed
+    /// version and therefore went through the CAS+diff remap path.
+    pub resolve_changed_file_count: usize,
+    /// Result files that could not be read from disk.
+    pub resolve_unreadable_file_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

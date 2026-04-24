@@ -30,7 +30,7 @@ use crate::alt::class::class_field::ClassField;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
-use crate::alt::unwrap::HintRef;
+use crate::alt::unwrap::HintRefOld;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -159,7 +159,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let partial_td_ty = self.heap.mk_partial_typed_dict(typed_dict.clone());
                 let item_ty = self.expr_infer_with_hint(
                     &x.value,
-                    Some(HintRef::soft(&partial_td_ty)),
+                    Some(HintRefOld::soft(&partial_td_ty)),
                     item_errors,
                 );
                 let subset_result = self.is_subset_eq_with_reason(&item_ty, &partial_td_ty);

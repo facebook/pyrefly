@@ -633,3 +633,103 @@ class C:
     def clone(self, x) -> Self: ...
     "#,
 );
+
+testcase!(
+    test_method_bad_receiver,
+    r#"
+class A: ...
+class D:
+    def __init__(self: A): pass  # E: `__init__` method self type `A` is not a superclass of class `D`
+    def f(self: A): pass  # E: `f` method self type `A` is not a superclass of class `D`
+    def g(self: type[A]): pass  # E: `g` method self type `type[A]` is not a superclass of class `D`
+    def h(self: D): pass # Ok
+    "#,
+);
+
+testcase!(
+    test_method_type_of_defining_class_self,
+    r#"
+class D:
+    def f(self: type[D]): pass # No error: type[D] where D is the defining class
+    "#,
+);
+
+testcase!(
+    test_overloaded_method_self_narrowing,
+    r#"
+from typing import overload
+class A: ...
+class D:
+    @overload
+    def f(self: A, x: int) -> int: ...  # No error: overload variants are not checked
+    @overload
+    def f(self, x: str) -> str: ...
+    def f(self, x):
+        return x
+    "#,
+);
+
+testcase!(
+    test_classmethod_bad_receiver,
+    r#"
+class A: ...
+class D:
+    @classmethod
+    def f(cls: A): pass  # E: `f` method cls type `A` is not a valid `type[...]` annotation
+    @classmethod
+    def g(cls: type[A]): pass  # E: `g` method cls type `type[A]` is not a superclass of class `D`
+    @classmethod
+    def h(cls: type[D]): pass # Ok
+"#,
+);
+
+testcase!(
+    test_classmethod_bare_typevar_receiver,
+    r#"
+from typing import TypeVar
+TCls = TypeVar("TCls", bound=type["D"])
+class D:
+    @classmethod
+    def f(cls: TCls): pass # No error: bare TypeVar with type[X] bound is allowed
+    "#,
+);
+
+testcase!(
+    test_protocol_self_annotation,
+    r#"
+from typing import Protocol
+
+class Proto(Protocol):
+    def method(self) -> int: ...
+
+class Impl:
+    def method(self) -> int:
+        return 0
+
+    @classmethod
+    def create(cls: type[Proto]) -> Proto:  # No error: Proto is a protocol
+        return cls()
+
+    def update(self: Proto) -> None:  # No error: Proto is a protocol
+        pass
+    "#,
+);
+
+testcase!(
+    bug = "Should ideally check structural subtyping for protocol self/cls annotations",
+    test_protocol_self_annotation_not_satisfied,
+    r#"
+from typing import Protocol
+
+class Proto(Protocol):
+    def method(self) -> int: ...
+
+class NotImpl:
+    @classmethod
+    def create(cls: type[Proto]) -> Proto:  # No error, but NotImpl does not satisfy Proto
+        return cls()
+
+    def update(self: Proto) -> None:  # No error, but NotImpl does not satisfy Proto
+        pass
+    "#,
+);

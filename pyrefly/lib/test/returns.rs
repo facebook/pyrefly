@@ -848,7 +848,6 @@ class B(A):
 );
 
 testcase!(
-    bug = "https://github.com/facebook/pyrefly/issues/2912 - list(dict.items()) incorrectly errors when returned directly with a union return type",
     test_return_list_dict_items_union_return_type,
     r#"
 from typing import Sequence
@@ -857,7 +856,7 @@ def _process_null_values(
     null_values: dict[str, str],
 ) -> Sequence[str] | list[tuple[str, str]]:
     if isinstance(null_values, dict):
-        return list(null_values.items())  # E: Argument `dict_items[str, str]` is not assignable to parameter `iterable` with type `Iterable[str]` in function `list.__init__`
+        return list(null_values.items())
     return ['a', 'b']
 "#,
 );

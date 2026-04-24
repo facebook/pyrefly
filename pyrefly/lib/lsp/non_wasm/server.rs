@@ -2963,10 +2963,10 @@ impl Server {
                 diags.insert(handle_path_buf, Vec::new());
             }
         }
-        let collected = transaction.get_errors(handles).collect_errors();
-        let mut output_errors = collected.ordinary;
-        output_errors.extend(collected.directives);
-        for e in output_errors {
+        for e in transaction
+            .get_errors(handles)
+            .collect_display_errors_with_unused_ignores()
+        {
             if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
                 diags.entry(path.to_owned()).or_default().push(diag);
             }
@@ -5410,10 +5410,10 @@ impl Server {
         let handle = make_open_handle(&self.state, &path);
         let mut items = Vec::new();
         let open_files = &self.open_files.read();
-        let collected = transaction.get_errors(once(&handle)).collect_errors();
-        let mut output_errors = collected.ordinary;
-        output_errors.extend(collected.directives);
-        for e in output_errors {
+        for e in transaction
+            .get_errors(once(&handle))
+            .collect_display_errors_with_unused_ignores()
+        {
             if let Some((_, diag)) = self.get_diag_if_shown(&e, open_files, cell_uri) {
                 items.push(diag);
             }

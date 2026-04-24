@@ -1686,7 +1686,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             _ => acc.found_class_attribute(no_access, base),
                         }
                     }
-                    Some(attr) => acc.found_class_attribute(attr, base),
+                    Some(attr) => {
+                        // When the class defines a @property, class-level access converts it
+                        // to ReadWrite (the raw getter). Check the metaclass for a property
+                        // with the same name — it takes precedence per the descriptor protocol.
+                        if self
+                            .get_class_member(class.class_object(), attr_name)
+                            .is_some_and(|field| field.is_property())
+                        {
+                            let metadata = self.get_metadata_for_class(class.class_object());
+                            let metaclass = metadata.metaclass(self.stdlib);
+                            if !metaclass.class_object().is_builtin("type") {
+                                let metaclass_attr =
+                                    self.get_metaclass_attribute(class, metaclass, attr_name);
+                                match metaclass_attr {
+                                    Some(meta_attr)
+                                        if meta_attr.is_data_descriptor()
+                                            || matches!(
+                                                meta_attr,
+                                                ClassAttribute::Property(_, _, _)
+                                            ) =>
+                                    {
+                                        acc.found_class_attribute(meta_attr, base)
+                                    }
+                                    _ => acc.found_class_attribute(attr, base),
+                                }
+                            } else {
+                                acc.found_class_attribute(attr, base)
+                            }
+                        } else {
+                            acc.found_class_attribute(attr, base)
+                        }
+                    }
                     None => {
                         // Classes are instances of their metaclass, which defaults to `builtins.type`.
                         // NOTE(grievejia): This lookup serves as fallback for normal class attribute lookup for regular

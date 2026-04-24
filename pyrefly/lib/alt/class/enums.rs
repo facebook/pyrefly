@@ -263,6 +263,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// If this enum mixes in a data type by inheriting from it, return the mixed-in type.
     /// Searches all bases, not just the first, to handle cases like
     /// `IntegerChoices(Choices, IntEnum)` where the data type comes from `IntEnum`.
+    /// A non-enum base is only treated as a data type if it has `__new__`
+    /// inherited from a class other than `object`, which is how Python
+    /// distinguishes data type mixins (`int`, `str`, `float`, and their
+    /// subclasses like `MyStr(str)`) from regular method mixins.
     fn mixed_in_enum_data_type(&self, class: &Class) -> Option<Type> {
         let bases = self.get_base_types_for_class(class);
         let enum_class = self.stdlib.enum_class();
@@ -274,7 +278,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return Some(ty);
                 }
             } else {
-                return Some(self.heap.mk_class_type(base.clone()));
+                let is_data_type = self
+                    .get_class_member_with_defining_class(base.class_object(), &dunder::NEW)
+                    .is_some_and(|field| {
+                        !field
+                            .defining_class
+                            .has_toplevel_qname("builtins", "object")
+                    });
+                if is_data_type {
+                    return Some(self.heap.mk_class_type(base.clone()));
+                }
             }
         }
         None

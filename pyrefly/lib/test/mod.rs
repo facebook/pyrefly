@@ -78,6 +78,7 @@ mod typed_dict;
 mod typeform;
 mod typing_self;
 mod unnecessary_comparison;
+mod unnecessary_type_conversion;
 mod untyped_def_behaviors;
 pub mod util;
 mod var_resolution;

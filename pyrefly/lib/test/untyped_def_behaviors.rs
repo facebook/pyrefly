@@ -492,6 +492,23 @@ assert_type(f(0), Any)
 "#,
 );
 
+testcase!(
+    test_no_type_check_dunder_new_preserves_self_default,
+    r#"
+from typing import no_type_check, assert_type
+
+class C:
+    @no_type_check
+    def __new__(cls):
+        return super().__new__(cls)
+
+class D(C): ...
+
+assert_type(C.__new__(C), C)
+assert_type(C.__new__(D), D)
+"#,
+);
+
 /// Verifies that `analyze_unannotated_for_ide` is gated on `Require` level:
 /// - `Require::Errors` (batch/CLI): unannotated bodies are skipped, no body errors.
 /// - `Require::Everything` (IDE): unannotated bodies are analyzed, body errors reported.

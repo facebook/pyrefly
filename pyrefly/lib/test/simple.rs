@@ -1029,15 +1029,13 @@ z: " T" = 1  # E: Expected a type form, got instance of `Literal[' T']`
 );
 
 testcase!(
-    test_no_backtracking,
+    test_backtracking,
     r#"
 from typing import assert_type
 def foo(x: tuple[list[int], list[int]] | tuple[list[str], list[str]]) -> None: ...
 def test(x: list[str]) -> None:
     y = ([], x)
-    # Because we pin down the `[]` first, we end up with a type error.
-    # If we had backtracking we wouldn't.
-    foo(y)  # E: Argument `tuple[list[int], list[str]]` is not assignable to parameter `x` with type `tuple[list[int], list[int]] | tuple[list[str], list[str]]`
+    foo(y)
 "#,
 );
 
@@ -1073,6 +1071,16 @@ assert_type(type(x5), type[str])
 class TD(TypedDict): ...
 x6: TD = {}
 assert_type(type(x6), type[dict])
+"#,
+);
+
+testcase!(
+    test_builtins_type_constructor_union,
+    r#"
+from typing import assert_type
+def f(x: int | str) -> None:
+    assert_type(type(x), type[int] | type[str])
+    assert_type(type(x), type[int | str])
 "#,
 );
 
@@ -1846,6 +1854,20 @@ async def bar():
     await foo()  # ok
     x = foo()  # ok
     not_async()  # ok
+"#,
+);
+
+testcase!(
+    test_unused_coroutine_after_await,
+    r#"
+from typing import Any, Coroutine
+async def inner() -> int:
+    return 1
+class Engine:
+    async def call_flow_fn(self) -> Coroutine[Any, Any, int]:
+        return inner()
+async def run(engine: Engine) -> None:
+    await engine.call_flow_fn()  # E: Result of `await` is itself a coroutine that is silently discarded. Either `await` it again or pass it to a consumer, or if the `Coroutine[...]` return annotation was a mistake, simplify it to the inner type (e.g. `int` instead of `Coroutine[Any, Any, int]`).
 "#,
 );
 

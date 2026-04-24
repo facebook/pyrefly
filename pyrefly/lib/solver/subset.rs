@@ -9,6 +9,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::iter;
 
+use itertools::Either;
 use itertools::EitherOrBoth;
 use itertools::Itertools;
 use itertools::izip;
@@ -31,6 +32,7 @@ use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::Union;
+use pyrefly_types::types::Var;
 use pyrefly_util::owner::Owner;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -44,6 +46,7 @@ use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetCacheEntry;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypedDictSubsetError;
+use crate::solver::solver::VarSnapshot;
 use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
@@ -126,6 +129,23 @@ fn any<T>(
         }
     }
     Err(err.unwrap_or(SubsetError::Other))
+}
+
+/// Result of `with_snapshot`, which performs an `is_subset_eq` call with var snapshotting.
+enum SubsetWithSnapshotResult {
+    /// `is_subset_eq` call was successful.
+    Ok,
+    /// `is_subset_eq` call was successful aside from instantiation errors.
+    /// Holds a snapshot of the vars with the instantiation errors.
+    InstantiationErrors(VarSnapshot),
+    /// `is_subset_eq` call failed.
+    Err(SubsetError),
+}
+
+impl SubsetWithSnapshotResult {
+    fn is_ok(&self) -> bool {
+        matches!(self, SubsetWithSnapshotResult::Ok)
+    }
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
@@ -1245,6 +1265,36 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         res
     }
 
+    /// Snapshots the given vars, calls `f`, and rolls back the vars if the call fails.
+    /// Note that this only rolls back the var state and not:
+    /// * `Ok` entries left in `subset_cache` (the rollback in `is_subset_eq_impl` only fires on
+    ///   `Err` from the speculative call, not on `Ok`-with-instantiation-errors), or
+    /// * `coinductive_assumptions_used`, which is one-way.
+    fn with_snapshot(
+        &mut self,
+        vars: &[Var],
+        f: impl FnOnce(&mut Subset<Ans>) -> Result<(), SubsetError>,
+    ) -> SubsetWithSnapshotResult {
+        if vars.is_empty() {
+            // Fast path - no var snapshotting needed.
+            return f(self).map_or_else(SubsetWithSnapshotResult::Err, |_| {
+                SubsetWithSnapshotResult::Ok
+            });
+        }
+        let snapshot = self.solver.snapshot_vars(vars);
+        let res = match (f(self), self.solver.has_new_instantiation_errors(&snapshot)) {
+            (Ok(()), false) => SubsetWithSnapshotResult::Ok,
+            (Ok(()), true) => {
+                SubsetWithSnapshotResult::InstantiationErrors(self.solver.snapshot_vars(vars))
+            }
+            (Err(e), _) => SubsetWithSnapshotResult::Err(e),
+        };
+        if !res.is_ok() {
+            self.solver.restore_vars(snapshot);
+        }
+        res
+    }
+
     fn is_subset_eq_no_recursive_check(
         &mut self,
         got: &Type,
@@ -1323,15 +1373,23 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // Therefore try these quantified cases, but only pick them if they work.
             (Type::Quantified(q), u)
                 if let Restriction::Bound(bound) = q.restriction()
-                    && self.is_subset_eq(bound, u).is_ok() =>
+                    && self
+                        .with_snapshot(&u.collect_maybe_placeholder_vars(), |me| {
+                            me.is_subset_eq(bound, u)
+                        })
+                        .is_ok() =>
             {
                 Ok(())
             }
             (Type::Quantified(q), u)
                 if let Restriction::Constraints(constraints) = q.restriction()
-                    && constraints
-                        .iter()
-                        .all(|constraint| self.is_subset_eq(constraint, u).is_ok()) =>
+                    && self
+                        .with_snapshot(&u.collect_maybe_placeholder_vars(), |me| {
+                            all(constraints.iter(), |constraint| {
+                                me.is_subset_eq(constraint, u)
+                            })
+                        })
+                        .is_ok() =>
             {
                 Ok(())
             }
@@ -1436,18 +1494,61 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             },
             (l, Type::Intersect(u)) => all(u.0.iter(), |u| self.is_subset_eq(l, u)),
             (l, Type::Union(box Union { members: us, .. })) => {
-                // Check var and non-var elements separately, so that if we match a non-var, we
+                // Check non-var elements before var elements, so that if we match a non-var, we
                 // don't pin the vars. Within var-containing members, try wrapped vars (e.g.
                 // `type[T]`) before bare vars (e.g. `T`), so that more specific patterns are
                 // tried first. This prevents cases like `T | type[T]` from incorrectly matching
                 // bare `T` when `type[T]` would produce a better (bound-satisfying) solution.
-                let (vars, nonvars): (Vec<_>, Vec<_>) =
-                    us.iter().partition(|u| u.may_contain_placeholder_var());
-                let (bare_vars, wrapped_vars): (Vec<_>, Vec<_>) =
-                    vars.into_iter().partition(|u| matches!(u, Type::Var(_)));
-                any(nonvars.iter(), |u| self.is_subset_eq(l, u))
-                    .or_else(|_| any(wrapped_vars.iter(), |u| self.is_subset_eq(l, u)))
-                    .or_else(|_| any(bare_vars.iter(), |u| self.is_subset_eq(l, u)))
+                let (vars, nonvars): (Vec<_>, Vec<_>) = us.iter().partition_map(|u| {
+                    let vs = u.collect_maybe_placeholder_vars();
+                    if !vs.is_empty() {
+                        Either::Left((u, vs))
+                    } else {
+                        Either::Right((u, vs))
+                    }
+                });
+                let (bare_vars, wrapped_vars): (Vec<_>, Vec<_>) = vars
+                    .into_iter()
+                    .partition(|(u, _)| matches!(u, Type::Var(_)));
+                let ordered_us = nonvars.into_iter().chain(wrapped_vars).chain(bare_vars);
+                let mut res_with_instantiation_errors = None;
+                let mut error = None;
+                let l_vs = l.collect_maybe_placeholder_vars();
+                // Take the first successful match.
+                for (u, vs) in ordered_us {
+                    let all_vs = l_vs.iter().copied().chain(vs).collect::<Vec<_>>();
+                    match self.with_snapshot(&all_vs, |me| me.is_subset_eq(l, u)) {
+                        SubsetWithSnapshotResult::Ok => return Ok(()),
+                        SubsetWithSnapshotResult::InstantiationErrors(snapshot) => {
+                            if res_with_instantiation_errors.is_none() {
+                                res_with_instantiation_errors = Some(snapshot);
+                            }
+                        }
+                        SubsetWithSnapshotResult::Err(e) => {
+                            if error.is_none() {
+                                error = Some(e);
+                            }
+                        }
+                    }
+                }
+                if let Some(snapshot) = res_with_instantiation_errors {
+                    // If there was no fully successful match, take the first match that was
+                    // successful aside from instantiation errors. This ensures that we get
+                    // specific [bad-specialization] errors when the only issue is a violation of a
+                    // type variable's upper bound, rather than generic "not assignable" errors.
+                    self.solver.restore_vars(snapshot);
+                    Ok(())
+                } else if let Type::Type(box Type::Union(box Union { members, .. })) = l {
+                    // type[A | B] <: X | Y: distribute into type[A] <: X | Y and
+                    // type[B] <: X | Y. This fires as a fallback after per-member matching
+                    // fails, because type[A | B] isn't a subtype of any single X or Y,
+                    // but each distributed type[A] and type[B] may match a member.
+                    all(members.iter(), |m| {
+                        self.is_subset_eq(&Type::type_of(m.clone()), want)
+                    })
+                } else {
+                    Err(error.unwrap_or(SubsetError::Other))
+                }
             }
             (l, Type::Overload(overload)) => {
                 let has_any_args_kwargs = match l {

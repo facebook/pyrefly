@@ -63,7 +63,7 @@ use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
 use crate::alt::types::yields::YieldResult;
-use crate::alt::unwrap::HintRef;
+use crate::alt::unwrap::HintRefOld;
 use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationStyle;
 use crate::binding::binding::AnnotationTarget;
@@ -3187,13 +3187,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             self.check_final_reassignment(annot, expr.range(), errors);
         }
-        let is_bare_annotated = matches!(expr, Expr::Name(_) | Expr::Attribute(_))
+        let is_bare_special_form = matches!(expr, Expr::Name(_) | Expr::Attribute(_))
             && matches!(
                 &ty,
-                Type::Type(inner)
-                    if matches!(inner.as_ref(), Type::SpecialForm(SpecialForm::Annotated))
+                Type::Type(inner) if matches!(inner.as_ref(), Type::SpecialForm(_))
             );
-        if !is_bare_annotated
+        if !is_bare_special_form
             && annot.is_none()
             && self.may_be_implicit_type_alias(&ty)
             && !is_in_function_scope
@@ -3220,7 +3219,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
     #[inline(never)]
     fn binding_to_type_return_type(&self, x: &ReturnType, errors: &ErrorCollector) -> Type {
-        match &x.kind {
+        let ty = match &x.kind {
             ReturnTypeKind::ShouldValidateAnnotation {
                 range,
                 annotation,
@@ -3335,6 +3334,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return_ty
                 }
             }
+        };
+        if let Some(class_key) = x.implicit_dunder_new_self {
+            let class = &*self.get_idx(class_key);
+            let Some(cls) = &class.0 else {
+                unreachable!("implicit __new__ return type must point at a class");
+            };
+            self.heap.mk_self_type(self.as_class_type_unchecked(cls))
+        } else {
+            ty
         }
     }
 
@@ -3610,7 +3618,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
             });
             let iterable =
-                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRef::soft), errors);
+                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRefOld::soft), errors);
             self.async_iterate(&iterable, e.range(), errors)
         } else {
             let infer_hint = ann.clone().and_then(|x| {
@@ -3618,7 +3626,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .map(|ty| self.heap.mk_class_type(self.stdlib.iterable(ty.clone())))
             });
             let iterable =
-                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRef::soft), errors);
+                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRefOld::soft), errors);
             self.iterate(&iterable, e.range(), errors, None)
         };
         let value = self.get_produced_type(iterables);
@@ -3989,11 +3997,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && self.is_coroutine(&result)
             && !self.extends_any(cls.class_object())
         {
+            let msg = if matches!(e, Expr::Await(_)) {
+                "Result of `await` is itself a coroutine that is silently discarded. Either `await` it again or pass it to a consumer, or if the `Coroutine[...]` return annotation was a mistake, simplify it to the inner type (e.g. `int` instead of `Coroutine[Any, Any, int]`).".to_owned()
+            } else {
+                "Result of async function call is unused. Did you forget to `await`?".to_owned()
+            };
             self.error(
                 errors,
                 e.range(),
                 ErrorInfo::Kind(ErrorKind::UnusedCoroutine),
-                "Result of async function call is unused. Did you forget to `await`?".to_owned(),
+                msg,
             );
         }
         result

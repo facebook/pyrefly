@@ -132,3 +132,22 @@ d = {
 x: dict[str, str | None] = d
 "#,
 );
+
+testcase!(
+    bug = "False positives (see in-line comments)",
+    test_dict_literal_should_be_typeddict,
+    r#"
+from typing import assert_type, TypedDict
+class TD(TypedDict):
+    x: int
+def f[T: TD](x: T) -> T:
+    return x
+
+d = {"x": 0}
+# We represent d as an anonymous TypedDict, so the `f` call succeeds, but the returned type is wrong.
+assert_type(f(d), TD)  # E: assert_type(dict[str, int], TD)
+
+# This `f` call incorrectly fails, and the returned type is wrong.
+assert_type(f({"x": 0}), TD)  # E: `dict[str, int]` is not assignable to upper bound `TD`  # E: assert_type(dict[str, int], TD)
+    "#,
+);

@@ -4106,7 +4106,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 Instance::of_class(cls)
             };
-            Arc::unwrap_or_clone(new_member.value).as_raw_special_method_type(self.heap, &instance)
+            let new_ty = Arc::unwrap_or_clone(new_member.value)
+                .as_raw_special_method_type(self.heap, &instance)?;
+            Some(new_ty)
         }
     }
 

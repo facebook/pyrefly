@@ -530,6 +530,26 @@ Z = Optional["Y"]
 );
 
 testcase!(
+    test_bare_special_form_assignment_alias,
+    r#"
+import typing
+from typing import Literal, assert_type
+
+MyOptional = typing.Optional
+AlsoOptional = MyOptional
+MyLiteral = typing.Literal
+
+x: AlsoOptional[int] = None
+y: AlsoOptional[int] = 1
+z: MyLiteral[1] = 1
+
+assert_type(x, int | None)
+assert_type(y, int | None)
+assert_type(z, Literal[1])
+"#,
+);
+
+testcase!(
     test_type_alias_recursive,
     r#"
 type X = int | list["X"]

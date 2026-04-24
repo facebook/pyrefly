@@ -286,6 +286,8 @@ pub enum ErrorKind {
     /// Identity comparison (`is` or `is not`) between types that are provably disjoint
     /// or between literals whose comparison result is statically known.
     UnnecessaryComparison,
+    /// Warning when calling a builtin type constructor (str, int, float, bool, bytes) on a value that is already of that type.
+    UnnecessaryTypeConversion,
     /// A return or yield that can never be reached.
     /// This occurs when a return/yield follows a statement that always exits,
     /// such as return, raise, break, or continue.
@@ -397,6 +399,7 @@ impl ErrorKind {
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
+            ErrorKind::UnnecessaryTypeConversion => Severity::Warn,
             ErrorKind::Unreachable => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
             ErrorKind::UntypedImport => Severity::Warn,

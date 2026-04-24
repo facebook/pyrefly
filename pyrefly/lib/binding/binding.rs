@@ -1855,6 +1855,11 @@ impl ReturnTypeKind {
 pub struct ReturnType {
     pub kind: ReturnTypeKind,
     pub is_async: bool,
+    /// Per the constructor typing spec, an unannotated `__new__` is assumed to
+    /// return `Self`. We track that here so `Key::ReturnType` can expose the
+    /// effective return type without pretending the function was explicitly
+    /// annotated.
+    pub implicit_dunder_new_self: Option<Idx<KeyClass>>,
 }
 
 #[derive(Clone, Debug)]

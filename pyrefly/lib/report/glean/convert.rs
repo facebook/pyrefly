@@ -144,11 +144,20 @@ fn to_span(range: TextRange) -> src::ByteSpan {
 
 /// Create a Glean file fact from module info, using forward slashes for
 /// cross-platform consistency regardless of the OS path separator.
+/// Symlinks are resolved so the same physical file always gets the same key.
 fn file_fact(module_info: &ModuleInfo) -> src::File {
     let file_path = module_info.path().as_path();
-    let relative_path = file_path
-        .strip_prefix(current_dir().unwrap_or_default())
-        .unwrap_or(file_path)
+    let cwd = current_dir().unwrap_or_default();
+    let (resolved_path, resolved_cwd) = match (
+        std::fs::canonicalize(file_path),
+        std::fs::canonicalize(&cwd),
+    ) {
+        (Ok(p), Ok(c)) => (p, c),
+        _ => (file_path.to_path_buf(), cwd),
+    };
+    let relative_path = resolved_path
+        .strip_prefix(&resolved_cwd)
+        .unwrap_or(&resolved_path)
         .to_str()
         .unwrap();
 

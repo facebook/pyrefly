@@ -66,6 +66,14 @@
   "directives_assert_type.py": [],
   "directives_cast.py": [],
   "directives_deprecated.py": [],
+  "directives_disjoint_base.py": [
+    "Line 69: Expected 1 errors",
+    "Line 73: Expected 1 errors",
+    "Line 77: Expected 1 errors",
+    "Line 118: Expected 1 errors",
+    "Line 123: Expected 1 errors",
+    "Line 60: Unexpected errors ['Named tuples do not support multiple inheritance']"
+  ],
   "directives_no_type_check.py": [],
   "directives_reveal_type.py": [],
   "directives_type_checking.py": [],
@@ -84,9 +92,7 @@
     "Line 57: Unexpected errors ['assert_type(str, int | str) failed']"
   ],
   "generics_base_class.py": [],
-  "generics_basic.py": [
-    "Line 44: Unexpected errors ['Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`']"
-  ],
+  "generics_basic.py": [],
   "generics_defaults.py": [],
   "generics_defaults_referential.py": [],
   "generics_defaults_specialization.py": [],

@@ -2657,7 +2657,8 @@ mod tests {
         config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
         config.configure();
 
-        let result = find_import_filtered(&config, ModuleName::from_str("dateutil"), None, None);
+        let result =
+            find_import_filtered(&config, ModuleName::from_str("dateutil"), None, None, None);
 
         if let FindingOrError::Finding(finding) = &result {
             let error = finding

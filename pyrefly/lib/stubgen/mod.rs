@@ -233,4 +233,25 @@ class MyClass:
             "Class docstring should not appear with include_docstrings=false:\n{without}"
         );
     }
+
+    #[test]
+    fn test_stubgen_unannotated_dunder_new_uses_self() {
+        let actual = run_stubgen(
+            r#"
+class C:
+    def __new__(cls):
+        return super().__new__(cls)
+"#,
+        );
+        pretty_assertions::assert_str_eq!(
+            r#"
+from typing import Self
+
+class C:
+    def __new__(cls) -> Self: ...
+"#
+            .trim(),
+            actual.trim(),
+        );
+    }
 }

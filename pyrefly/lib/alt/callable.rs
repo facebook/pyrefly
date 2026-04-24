@@ -38,7 +38,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::solve::Iterable;
-use crate::alt::unwrap::HintRef;
+use crate::alt::unwrap::HintRefOld;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -874,7 +874,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &unpacked_args_ty,
                 &unpacked_param_tuple,
                 arguments_range,
-                arg_errors,
+                call_errors,
                 &|| {
                     TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
                         true,
@@ -1230,7 +1230,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        hint: Option<HintRef>,
+        hint: Option<HintRefOld>,
         mut ctor_targs: Option<&mut TArgs>,
     ) -> (
         Type,
@@ -1251,9 +1251,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If we have a hint, we want to try to instantiate against it first, so we can contextually type
             // arguments. If we don't match the hint, we need to throw away any instantiations we might have made.
             // By invariant, hint will be None if we are calling a constructor.
-            if let Some(hint) = hint
-                && !self.solver().is_partial(hint.ty())
-            {
+            if let Some(hint) = hint {
                 let (qs, callable_) = self.instantiate_fresh_callable(tparams, callable.clone());
                 if self.is_subset_eq(&callable_.ret, hint.ty())
                     && !self.solver().has_instantiation_errors(&qs)

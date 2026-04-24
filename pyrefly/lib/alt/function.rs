@@ -704,10 +704,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Callable::list(ParamList::new(def.params.clone()), ret)
         };
         if let Some(cls) = &def.defining_cls {
-            if stmt.name.id == dunder::INIT {
-                self.validate_init_self_annotation(cls, &callable, def.id_range(), errors);
-            } else if is_dunder_new {
-                self.validate_new_cls_annotation(cls, &callable, def.id_range(), errors);
+            // Constructors are always validated per spec. For other methods,
+            // skip overload variants because self/cls annotations in overloads
+            // are a valid pattern for type narrowing.
+            let is_constructor = stmt.name.id == dunder::INIT || is_dunder_new;
+            let should_validate = is_constructor || !def.metadata.flags.is_overload;
+            if should_validate {
+                if def.metadata.flags.is_classmethod || is_dunder_new {
+                    self.validate_cls_annotation(
+                        cls,
+                        &stmt.name.id,
+                        &callable,
+                        def.id_range(),
+                        errors,
+                    );
+                } else if !def.metadata.flags.is_staticmethod {
+                    self.validate_self_annotation(
+                        cls,
+                        &stmt.name.id,
+                        &callable,
+                        def.id_range(),
+                        errors,
+                    );
+                }
             }
         }
         // Extend tparams with any implicit jaxtyping dimension TypeVars found
@@ -2224,13 +2243,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Validate the self annotation on `__init__`.
-    /// Per spec: https://typing.python.org/en/latest/spec/constructors.html#init-method
-    /// - The self type must be the defining class or a superclass of it.
-    /// - Class-scoped type variables should not be used in the self annotation.
-    fn validate_init_self_annotation(
+    /// Validate the self annotation on methods.
+    /// The self type must be the defining class or a superclass of it.
+    /// For `__init__`, class-scoped type variables should not be used in the self annotation
+    /// (per spec: https://typing.python.org/en/latest/spec/constructors.html#init-method).
+    fn validate_self_annotation(
         &self,
         cls: &Class,
+        method_name: &Name,
         callable: &Callable,
         range: TextRange,
         errors: &ErrorCollector,
@@ -2238,53 +2258,83 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Params::List(param_list) = &callable.params
             && let Some(Param::PosOnly(_, self_ty, _) | Param::Pos(_, self_ty, _)) =
                 param_list.items().first()
-            && let Type::ClassType(cls_ty) = self_ty
         {
             let cls_name = cls.name();
-            // The self type must be the defining class itself or a superclass of it.
-            if !self.type_order().has_superclass(cls, cls_ty.class_object()) {
-                errors.add(
-                    range,
-                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
-                    vec1![format!(
-                        "`__init__` method self type `{}` is not a superclass of class `{cls_name}`",
-                        self.for_display(self_ty.clone()),
-                    )],
-                );
-                return;
-            }
-            let tparams_names = cls_ty.tparams().iter().collect::<SmallSet<_>>();
-            let mut class_scoped_tvars = SmallSet::new();
-            for (_, ty) in cls_ty.targs().iter_paired() {
-                ty.collect_quantifieds(&mut class_scoped_tvars);
-            }
-            class_scoped_tvars.retain(|q| tparams_names.contains(q));
-            // FIXME: We're supressing invalid type variables errors for all
-            // interfaces here, because they are used in a few places in
-            // typeshed stdlib (with pyright-ignore lines).
-            if !class_scoped_tvars.is_empty() && !errors.module().path().is_interface() {
-                let targs = class_scoped_tvars
-                    .iter()
-                    .map(|q| format!("`{}`", q.name()))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                errors.add(
-                    range,
-                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
-                    vec1![format!(
-                        "`__init__` method self type cannot reference class {} {targs}",
-                        pluralize(class_scoped_tvars.len(), "type parameter")
-                    )],
-                );
+            match self_ty {
+                Type::ClassType(cls_ty) => {
+                    // The self type must be the defining class itself or a superclass of it.
+                    // Skipping validation for protocols is on par with Pyright's behavior.
+                    // TODO: we could consider checking structural subtyping here.
+                    if !self.type_order().has_superclass(cls, cls_ty.class_object())
+                        && !self.type_order().is_protocol(cls_ty.class_object())
+                    {
+                        errors.add(
+                            range,
+                            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                            vec1![format!(
+                                "`{method_name}` method self type `{}` is not a superclass of class `{cls_name}`",
+                                self.for_display(self_ty.clone()),
+                            )],
+                        );
+                        return;
+                    }
+                    // Class-scoped type variables check (only for __init__).
+                    if *method_name == dunder::INIT {
+                        let tparams_names = cls_ty.tparams().iter().collect::<SmallSet<_>>();
+                        let mut class_scoped_tvars = SmallSet::new();
+                        for (_, ty) in cls_ty.targs().iter_paired() {
+                            ty.collect_quantifieds(&mut class_scoped_tvars);
+                        }
+                        class_scoped_tvars.retain(|q| tparams_names.contains(q));
+                        // FIXME: We're suppressing invalid type variables errors for all
+                        // interfaces here, because they are used in a few places in
+                        // typeshed stdlib (with pyright-ignore lines).
+                        if !class_scoped_tvars.is_empty() && !errors.module().path().is_interface()
+                        {
+                            let targs = class_scoped_tvars
+                                .iter()
+                                .map(|q| format!("`{}`", q.name()))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            errors.add(
+                                range,
+                                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                                vec1![format!(
+                                    "`__init__` method self type cannot reference class {} {targs}",
+                                    pluralize(class_scoped_tvars.len(), "type parameter")
+                                )],
+                            );
+                        }
+                    }
+                }
+                // type[ClassType] where the ClassType is not a superclass is invalid.
+                // Protocol types are exempt because they use structural subtyping.
+                Type::Type(inner) => {
+                    if let Type::ClassType(cls_ty) = &**inner
+                        && !self.type_order().has_superclass(cls, cls_ty.class_object())
+                        && !self.type_order().is_protocol(cls_ty.class_object())
+                    {
+                        errors.add(
+                            range,
+                            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                            vec1![format!(
+                                "`{method_name}` method self type `{}` is not a superclass of class `{cls_name}`",
+                                self.for_display(self_ty.clone()),
+                            )],
+                        );
+                    }
+                }
+                _ => {}
             }
         }
     }
 
-    /// Validate the cls annotation on `__new__`.
+    /// Validate the cls annotation on `__new__` and classmethods.
     /// The cls type must be `type[X]` where `X` is the defining class or a superclass of it.
-    fn validate_new_cls_annotation(
+    fn validate_cls_annotation(
         &self,
         cls: &Class,
+        method_name: &Name,
         callable: &Callable,
         range: TextRange,
         errors: &ErrorCollector,
@@ -2296,30 +2346,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let cls_name = cls.name();
             match cls_ty {
                 Type::Type(box Type::ClassType(inner_cls)) => {
+                    // Skipping validation for protocols is on par with Pyright's behavior.
+                    // TODO: we could consider checking structural subtyping here.
                     if inner_cls.name() != cls_name
                         && !self
                             .type_order()
                             .has_superclass(cls, inner_cls.class_object())
+                        && !self.type_order().is_protocol(inner_cls.class_object())
                     {
                         errors.add(
                             range,
                             ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                             vec1![format!(
-                                "`__new__` method cls type `{}` is not a superclass of class `{cls_name}`",
+                                "`{method_name}` method cls type `{}` is not a superclass of class `{cls_name}`",
                                 self.for_display(cls_ty.clone()),
                             )],
                         );
                     }
                 }
-                // allow Any, type[Any], type[Self] and type[TypeVar]
+                // allow Any, type[Any], type[Self], type[TypeVar], and bare TypeVar
+                // (bare TypeVar is allowed because it may have a `type[X]` bound,
+                // e.g. `TCls = TypeVar("TCls", bound=type["Foo"])`)
                 Type::Type(box Type::SelfType(_) | box Type::Quantified(_) | box Type::Any(_))
-                | Type::Any(_) => {}
+                | Type::Any(_)
+                | Type::Quantified(_) => {}
                 _ => {
                     errors.add(
                         range,
                         ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                         vec1![format!(
-                            "`__new__` method cls type `{}` is not a valid `type[...]` annotation",
+                            "`{method_name}` method cls type `{}` is not a valid `type[...]` annotation",
                             self.for_display(cls_ty.clone()),
                         )],
                     );

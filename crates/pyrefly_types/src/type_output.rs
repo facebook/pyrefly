@@ -63,7 +63,8 @@ impl<'a, 'b, 'f> TypeOutput for DisplayOutput<'a, 'b, 'f> {
     }
 
     fn write_targs(&mut self, targs: &TArgs) -> fmt::Result {
-        self.context.fmt_targs(targs, self.formatter)
+        let ctx = self.context;
+        ctx.fmt_targs(targs, self)
     }
 
     fn write_type(&mut self, ty: &Type) -> fmt::Result {
@@ -138,21 +139,10 @@ impl TypeOutput for OutputWithLocations<'_> {
     }
 
     fn write_targs(&mut self, targs: &TArgs) -> fmt::Result {
-        // Write each type argument separately with its own location
-        // This ensures that each type in a union (e.g., int | str) gets its own
-        // clickable part with a link to its definition
-        let display_count = targs.display_count();
-        if display_count > 0 {
-            self.write_str("[")?;
-            for (i, ty) in targs.as_slice().iter().take(display_count).enumerate() {
-                if i > 0 {
-                    self.write_str(", ")?;
-                }
-                self.write_type(ty)?;
-            }
-            self.write_str("]")?;
-        }
-        Ok(())
+        // Delegate to fmt_targs so TypeVarTuple-aware formatting (e.g. *Shape) is
+        // applied here too, not only on the plain Display path.
+        let ctx = self.context;
+        ctx.fmt_targs(targs, self)
     }
 
     fn write_type(&mut self, ty: &Type) -> fmt::Result {

@@ -55,16 +55,19 @@ impl LinedBuffer {
         self.buffer.lines()
     }
 
-    /// The parser can emit ranges whose end extends past EOF (e.g. unterminated
-    /// triple-quoted strings). Clamp to the maximum valid offset so we can still
-    /// render a useful location instead of panicking (see #1698).
+    /// Clamp a byte offset so it is safe to pass to `LineIndex::source_location`.
+    /// Handles offsets past EOF (#1698) and offsets inside multi-byte UTF-8
+    /// characters (#3041).
     pub fn clamp_position(&self, offset: TextSize) -> TextSize {
         let buffer_len = self.buffer.len();
-        if offset.to_usize() > buffer_len {
-            TextSize::try_from(buffer_len).unwrap()
-        } else {
-            offset
+        let mut pos = offset.to_usize();
+        if pos > buffer_len {
+            pos = buffer_len;
         }
+        while pos > 0 && !self.buffer.is_char_boundary(pos) {
+            pos -= 1;
+        }
+        TextSize::try_from(pos).unwrap()
     }
 
     pub fn display_pos(&self, offset: TextSize, notebook: Option<&Notebook>) -> DisplayPos {

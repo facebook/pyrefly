@@ -682,7 +682,7 @@ impl<'a> Transaction<'a> {
         Self::identifier_from_covering_nodes(&covering_nodes)
     }
 
-    fn identifier_from_covering_nodes(
+    pub(crate) fn identifier_from_covering_nodes(
         covering_nodes: &[AnyNodeRef],
     ) -> Option<IdentifierWithContext> {
         match (
@@ -3451,7 +3451,13 @@ impl<'a> Transaction<'a> {
                                     || (exports_data.is_explicit_reexport(&name)
                                         && Self::allows_explicit_reexport(handle)))
                             {
-                                results.push((handle.dupe(), export));
+                                // Use handle (re-exporting module) so completions
+                                // generate the re-export import path, but zero out the
+                                // location because export.location is a byte range in
+                                // the canonical module's file, not this module's file.
+                                let mut reexport = export;
+                                reexport.location = TextRange::default();
+                                results.push((handle.dupe(), reexport));
                             }
                             results
                         } else {
@@ -3491,7 +3497,13 @@ impl<'a> Transaction<'a> {
                                 || (exports_data.is_explicit_reexport(name)
                                     && Self::allows_explicit_reexport(handle)))
                         {
-                            results.push((score, handle.dupe(), name_str.to_owned(), export));
+                            // Use handle (re-exporting module) so completions
+                            // generate the re-export import path, but zero out the
+                            // location because export.location is a byte range in
+                            // the canonical module's file, not this module's file.
+                            let mut reexport = export;
+                            reexport.location = TextRange::default();
+                            results.push((score, handle.dupe(), name_str.to_owned(), reexport));
                         }
                     }
                 }

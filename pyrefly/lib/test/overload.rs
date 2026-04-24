@@ -566,7 +566,7 @@ class C:
     @overload
     def f3(x: str) -> str: ...
     @classmethod
-    def f3(x: int | str):
+    def f3(x: int | str):  # E: `f3` method cls type `int | str` is not a valid `type[...]` annotation
         return x
 
     # missing from implementation
@@ -586,7 +586,7 @@ class C:
     @overload
     def f5(x: str) -> str: ...  # E: If `@classmethod` is present on any overload or the implementation, it should be on every overload and the implementation
     @classmethod
-    def f5(x: int | str):
+    def f5(x: int | str):  # E: `f5` method cls type `int | str` is not a valid `type[...]` annotation
         return x
     "#,
 );
@@ -1865,7 +1865,6 @@ def test(value: int | float | None) -> str:
 );
 
 testcase!(
-    bug = "Incorrect overload selection due to buggy type variable solving",
     test_match_overload_with_unknown_type_from_missing_import,
     r#"
 from typing import Any, assert_type, overload, TypeVar, TypeAliasType
@@ -1889,6 +1888,41 @@ def f(a: object) -> object: ...
 x: list[int] = []
 # This agrees with pyright and ty. (Mypy says `Never`.)
 # Because of `Opaque`, we should match the first overload with `S` unsolved.
-assert_type(f(x), Any)  # E: assert_type(float, Any)
+assert_type(f(x), Any)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3161
+testcase!(
+    test_overload_unpacked_tuple_varargs,
+    r#"
+from typing import overload, assert_type
+
+@overload
+def f(*args: *tuple[int]) -> int: ...
+@overload
+def f(*args: *tuple[int, int]) -> tuple[int, int]: ...
+def f(*args) -> int | tuple[int, int]:
+    return 1
+
+assert_type(f(1), int)
+assert_type(f(1, 2), tuple[int, int])
+    "#,
+);
+
+testcase!(
+    test_reject_overload_with_specialization_error,
+    r#"
+from typing import overload
+
+@overload
+def f[T: str](x: T) -> T: ...
+@overload
+def f(x: int) -> int: ...
+def f(x):
+    return x
+
+def g(x: float):
+    f(x)  # E: No matching overload
     "#,
 );

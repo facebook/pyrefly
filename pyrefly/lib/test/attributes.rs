@@ -787,6 +787,26 @@ assert_type(C.x, int)
 );
 
 testcase!(
+    test_metaclass_property_precedence,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    @property
+    def f(cls) -> str:
+        return "1"
+
+class C(metaclass=Meta):
+    @property
+    def f(self) -> str:
+        return type(self).f
+
+# C.f should resolve to the metaclass property, returning str
+assert_type(C.f, str)
+    "#,
+);
+
+testcase!(
     test_metaclass_method_cls_typetype,
     r#"
 from typing import assert_type
@@ -1161,6 +1181,30 @@ def test(stack: ThemeStack) -> None:
 );
 
 testcase!(
+    test_generic_function_as_closure_default_arg,
+    r#"
+import bisect
+
+class Worker:
+    def __init__(self) -> None:
+        self.heartbeats: list[float] = []
+        self.event = self._create_event_handler()
+
+    def _create_event_handler(self):
+        heartbeats = self.heartbeats
+
+        def event(
+            timestamp: float | None = None,
+            insort = bisect.insort,
+        ) -> None:
+            if timestamp is not None:
+                insort(heartbeats, timestamp)
+
+        return event
+"#,
+);
+
+testcase!(
     test_attr_unknown,
     r#"
 class Op:
@@ -1189,7 +1233,7 @@ class C:
         if orig_func is None:
             return super().__new__(cls)
 def f():
-    with C():  # E: `NoneType` has no attribute `__enter__`  # E: `NoneType` has no attribute `__exit__`
+    with C():
         pass
     "#,
 );

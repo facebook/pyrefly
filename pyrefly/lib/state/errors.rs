@@ -217,6 +217,14 @@ impl Errors {
         Self::merge_display_errors(errors.ordinary, errors.directives)
     }
 
+    pub fn collect_display_errors_with_unused_ignores(&self) -> Vec<Error> {
+        let collected = self.collect_errors();
+        let unused = self.collect_unused_ignore_errors_for_display(&collected);
+        let mut ordinary = collected.ordinary;
+        ordinary.extend(unused.ordinary);
+        Self::merge_display_errors(ordinary, collected.directives)
+    }
+
     pub fn collect_ignores(&self) -> SmallMap<&ModulePath, &Ignore> {
         let mut ignore_collection: SmallMap<&ModulePath, &Ignore> = SmallMap::new();
         for (load, _, _) in &self.loads {

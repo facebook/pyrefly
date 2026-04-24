@@ -695,25 +695,36 @@ x4: tuple[TD1] | tuple[TD2, ...] = ({"x": 0}, {"y": "a"})  # E: `tuple[TD1, TD2]
 testcase!(
     test_sequence_hint_in_typevar_bound,
     r#"
-from typing import Sequence, TypedDict
-class TD(TypedDict):
-    x: int
-def f[T: Sequence[TD]](x: T) -> T:
+from typing import Sequence
+class A: ...
+class B(A): ...
+def f[T: Sequence[list[A]]](x: T) -> T:
     return x
-f(({"x": 0},))
+# When the top-level hint is a Var, we ignore it, so the Var restriction isn't used as a hint.
+f(([B()],))  # E: `tuple[list[B]]` is not assignable to upper bound `Sequence[list[A]]`
     "#,
 );
 
+// Contrast this with test_sequence_hint_in_typevar_bound.
+// Because we don't need to filter out wrapped Vars, we are able to use their restrictions as hints.
 testcase!(
-    bug = "`TD` should be used as a hint when typing `{'x': 0}`",
-    test_typed_dict_hint_in_typevar_bound,
+    test_list_hint_in_typevar_bound,
     r#"
-from typing import TypedDict
-class TD(TypedDict):
-    x: int
-def f[T: TD](x: tuple[T, ...]) -> T:
+from typing import Sequence
+class A: ...
+class B(A): ...
+
+def f1[T: list[A]](x: tuple[T, ...]) -> T:
     return x[0]
-f(({"x": 0},))  # E: `dict[str, int]` is not assignable to upper bound `TD`
+f1(([B()],))
+
+def f2[T: list[A]](x: tuple[T]) -> T:
+    return x[0]
+f2(([B()],))
+
+def f3[T: list[A]](x: Sequence[T]) -> T:
+    return x[0]
+f3(([B()],))
     "#,
 );
 
@@ -732,5 +743,18 @@ class B: ...
 
 def test_vec_concat(left: Vec[A], right: Vec[B]) -> None:
     _0: Vec[A | B] = concat_vecs(left, right)
+    "#,
+);
+
+testcase!(
+    test_list_construction_with_union_hint,
+    r#"
+from typing import Protocol, TypeVar
+_T_co = TypeVar("_T_co", covariant=True)
+class Seq(Protocol[_T_co]):
+    def __getitem__(self, index: int, /) -> _T_co: ...
+U = Seq[str] | Seq[int]
+def f(x: U) -> None: ...
+f(list())
     "#,
 );

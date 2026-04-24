@@ -957,113 +957,91 @@
     },
     {
       "code": -2,
-      "column": 6,
-      "concise_description": "Cannot redefine existing type alias `BadTypeAlias14`",
-      "description": "Cannot redefine existing type alias `BadTypeAlias14`",
-      "line": 52,
-      "name": "redefinition",
-      "severity": "error",
-      "stop_column": 20,
-      "stop_line": 52
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "`type` statement is not allowed in this context",
-      "description": "`type` statement is not allowed in this context",
-      "line": 56,
-      "name": "invalid-syntax",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 56
-    },
-    {
-      "code": -2,
       "column": 15,
       "concise_description": "Type parameters used in `TA1` but not declared",
       "description": "Type parameters used in `TA1` but not declared",
-      "line": 62,
+      "line": 53,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 25,
-      "stop_line": 62
+      "stop_line": 53
     },
     {
       "code": -2,
       "column": 12,
       "concise_description": "Type parameters used in `TA2` but not declared",
       "description": "Type parameters used in `TA2` but not declared",
-      "line": 67,
+      "line": 58,
       "name": "invalid-type-var",
       "severity": "error",
       "stop_column": 20,
-      "stop_line": 67
+      "stop_line": 58
     },
     {
       "code": -2,
       "column": 7,
       "concise_description": "`str` is not assignable to upper bound `int` of type variable `S`",
       "description": "`str` is not assignable to upper bound `int` of type variable `S`",
-      "line": 77,
+      "line": 68,
       "name": "bad-specialization",
       "severity": "error",
       "stop_column": 41,
-      "stop_line": 77
+      "stop_line": 68
     },
     {
       "code": -2,
       "column": 7,
       "concise_description": "`int` is not assignable to upper bound `str` of type variable `T`",
       "description": "`int` is not assignable to upper bound `str` of type variable `T`",
-      "line": 79,
+      "line": 70,
       "name": "bad-specialization",
       "severity": "error",
       "stop_column": 41,
-      "stop_line": 79
+      "stop_line": 70
     },
     {
       "code": -2,
       "column": 28,
       "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias3`",
       "description": "Found cyclic self-reference in `RecursiveTypeAlias3`",
-      "line": 82,
+      "line": 73,
       "name": "invalid-type-alias",
       "severity": "error",
       "stop_column": 47,
-      "stop_line": 82
+      "stop_line": 73
     },
     {
       "code": -2,
       "column": 31,
       "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias4`",
       "description": "Found cyclic self-reference in `RecursiveTypeAlias4`",
-      "line": 84,
+      "line": 75,
       "name": "invalid-type-alias",
       "severity": "error",
       "stop_column": 59,
-      "stop_line": 84
+      "stop_line": 75
     },
     {
       "code": -2,
       "column": 28,
       "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias6`",
       "description": "Found cyclic self-reference in `RecursiveTypeAlias6`",
-      "line": 88,
+      "line": 79,
       "name": "invalid-type-alias",
       "severity": "error",
       "stop_column": 47,
-      "stop_line": 88
+      "stop_line": 79
     },
     {
       "code": -2,
       "column": 28,
       "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias7`",
       "description": "Found cyclic self-reference in `RecursiveTypeAlias7`",
-      "line": 89,
+      "line": 80,
       "name": "invalid-type-alias",
       "severity": "error",
       "stop_column": 47,
-      "stop_line": 89
+      "stop_line": 80
     }
   ],
   "aliases_typealiastype.py": [
@@ -4836,6 +4814,52 @@
       "stop_line": 98
     }
   ],
+  "directives_disjoint_base.py": [
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Named tuples do not support multiple inheritance",
+      "description": "Named tuples do not support multiple inheritance",
+      "line": 60,
+      "name": "invalid-inheritance",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 60
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Named tuples do not support multiple inheritance",
+      "description": "Named tuples do not support multiple inheritance",
+      "line": 81,
+      "name": "invalid-inheritance",
+      "severity": "error",
+      "stop_column": 17,
+      "stop_line": 81
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Class `IncompatibleSlots` has multiple base classes with non-empty `__slots__` (`SlotBase1`, `SlotBase2`), which causes a TypeError at runtime",
+      "description": "Class `IncompatibleSlots` has multiple base classes with non-empty `__slots__` (`SlotBase1`, `SlotBase2`), which causes a TypeError at runtime",
+      "line": 105,
+      "name": "invalid-inheritance",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 105
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "`() -> None` is not assignable to upper bound `type[object]` of type variable `_TC`",
+      "description": "`() -> None` is not assignable to upper bound `type[object]` of type variable `_TC`",
+      "line": 113,
+      "name": "bad-specialization",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 113
+    }
+  ],
   "directives_no_type_check.py": [
     {
       "code": -2,
@@ -5390,17 +5414,6 @@
       "severity": "error",
       "stop_column": 16,
       "stop_line": 41
-    },
-    {
-      "code": -2,
-      "column": 15,
-      "concise_description": "Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`",
-      "description": "Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`",
-      "line": 44,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 16,
-      "stop_line": 44
     },
     {
       "code": -2,
@@ -7116,8 +7129,8 @@
     {
       "code": -2,
       "column": 34,
-      "concise_description": "Argument `Height` is not assignable to parameter `shape` with type `tuple[Height, Width]` in function `Array.__init__`",
-      "description": "Argument `Height` is not assignable to parameter `shape` with type `tuple[Height, Width]` in function `Array.__init__`",
+      "concise_description": "Argument `Height` is not assignable to parameter `shape` with type `tuple[*@_]` in function `Array.__init__`",
+      "description": "Argument `Height` is not assignable to parameter `shape` with type `tuple[*@_]` in function `Array.__init__`",
       "line": 42,
       "name": "bad-argument-type",
       "severity": "error",
@@ -7126,25 +7139,25 @@
     },
     {
       "code": -2,
-      "column": 41,
-      "concise_description": "Argument `tuple[Batch, Width]` is not assignable to parameter `shape` with type `tuple[Batch, Height, Width]` in function `Array.__init__`",
-      "description": "Argument `tuple[Batch, Width]` is not assignable to parameter `shape` with type `tuple[Batch, Height, Width]` in function `Array.__init__`",
+      "column": 35,
+      "concise_description": "`Array[Batch, Width]` is not assignable to `Array[Batch, Height, Width]`",
+      "description": "`Array[Batch, Width]` is not assignable to `Array[Batch, Height, Width]`",
       "line": 43,
-      "name": "bad-argument-type",
+      "name": "bad-assignment",
       "severity": "error",
-      "stop_column": 61,
+      "stop_column": 62,
       "stop_line": 43
     },
     {
       "code": -2,
-      "column": 5,
-      "concise_description": "Argument `tuple[Time, Batch, Width, Height]` is not assignable to parameter `shape` with type `tuple[Time, Batch, Height, Width]` in function `Array.__init__`",
-      "description": "Argument `tuple[Time, Batch, Width, Height]` is not assignable to parameter `shape` with type `tuple[Time, Batch, Height, Width]` in function `Array.__init__`",
-      "line": 45,
-      "name": "bad-argument-type",
+      "column": 41,
+      "concise_description": "`Array[Time, Batch, Width, Height]` is not assignable to `Array[Time, Batch, Height, Width]`",
+      "description": "`Array[Time, Batch, Width, Height]` is not assignable to `Array[Time, Batch, Height, Width]`",
+      "line": 44,
+      "name": "bad-assignment",
       "severity": "error",
-      "stop_column": 45,
-      "stop_line": 45
+      "stop_column": 2,
+      "stop_line": 46
     },
     {
       "code": -2,
@@ -7982,13 +7995,24 @@
     },
     {
       "code": -2,
-      "column": 51,
-      "concise_description": "Argument `str` is not assignable to parameter `value` with type `LiteralString` in function `Container.__init__`",
-      "description": "Argument `str` is not assignable to parameter `value` with type `LiteralString` in function `Container.__init__`",
+      "column": 41,
+      "concise_description": "`Container[str]` is not assignable to `Container[LiteralString]`",
+      "description": "`Container[str]` is not assignable to `Container[LiteralString]`",
       "line": 133,
-      "name": "bad-argument-type",
+      "name": "bad-assignment",
       "severity": "error",
-      "stop_column": 52,
+      "stop_column": 53,
+      "stop_line": 133
+    },
+    {
+      "code": -2,
+      "column": 50,
+      "concise_description": "`str` is not assignable to upper bound `LiteralString` of type variable `T`",
+      "description": "`str` is not assignable to upper bound `LiteralString` of type variable `T`",
+      "line": 133,
+      "name": "bad-specialization",
+      "severity": "error",
+      "stop_column": 53,
       "stop_line": 133
     },
     {

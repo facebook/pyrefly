@@ -477,6 +477,9 @@ impl Solver {
 
     /// Snapshot the current state of the given vars so they can be restored later.
     pub fn snapshot_vars(&self, vars: &[Var]) -> VarSnapshot {
+        if vars.is_empty() {
+            return VarSnapshot(Vec::new()); // avoid acquiring locks
+        }
         let variables = self.variables.lock();
         let errors = self.instantiation_errors.read();
         VarSnapshot(
@@ -497,6 +500,9 @@ impl Solver {
 
     /// Restore vars to a previously saved snapshot.
     pub fn restore_vars(&self, snapshot: VarSnapshot) {
+        if snapshot.0.is_empty() {
+            return; // avoid acquiring locks
+        }
         let variables = self.variables.lock();
         let mut errors = self.instantiation_errors.write();
         for (var, state) in snapshot.0 {
@@ -507,7 +513,9 @@ impl Solver {
                     errors.insert(var, e);
                 }
                 None => {
-                    errors.shift_remove(&var);
+                    if errors.contains_key(&var) {
+                        errors.shift_remove(&var);
+                    }
                 }
             }
         }
@@ -973,6 +981,15 @@ impl Solver {
     pub fn has_instantiation_errors(&self, vs: &QuantifiedHandle) -> bool {
         let lock = self.instantiation_errors.read();
         vs.0.iter().any(|v| lock.contains_key(v))
+    }
+
+    /// Have these vars picked up any new instantiation errors since they were snapshotted?
+    pub fn has_new_instantiation_errors(&self, snapshot: &VarSnapshot) -> bool {
+        let lock = self.instantiation_errors.read();
+        snapshot
+            .0
+            .iter()
+            .any(|(v, state)| state.error.is_none() && lock.contains_key(v))
     }
 
     /// Returns true if the given type is a Var that points to a partial
@@ -1461,14 +1478,7 @@ impl Solver {
     }
 
     /// Record a variable that is used recursively.
-    pub fn record_recursive<Ans: LookupAnswer>(
-        &self,
-        var: Var,
-        ty: Type,
-        type_order: TypeOrder<Ans>,
-        errors: &ErrorCollector,
-        range: TextRange,
-    ) -> Type {
+    pub fn record_recursive(&self, var: Var, ty: Type) -> Type {
         fn expand(
             t: Type,
             variables: &Variables,
@@ -1501,34 +1511,14 @@ impl Solver {
         let variable = lock.get(var);
         match &*variable {
             Variable::Answer(forced) => {
+                // An answer was already forced - use it, not the type from analysis.
+                //
+                // This can only happen in a fixpoint, and we'll catch it with a fixpoint non-convergence
+                // error if it does not eventually converge.
                 let forced = forced.clone();
                 drop(variable);
                 drop(lock);
-                // We got forced into choosing a type to satisfy a subset constraint, so check we are OK with that.
-                // Since we have already used `forced`, and will continue to do so, important that what we expect
-                // is more restrictive (so the `forced` is an over-approximation).
-                if self.is_subset_eq(&ty, &forced, type_order).is_err() {
-                    // Poor error message, but overall, this is a terrible experience for users.
-                    self.error(
-                        &ty,
-                        &forced,
-                        errors,
-                        range,
-                        &|| TypeCheckContext::of_kind(TypeCheckKind::CycleBreaking),
-                        SubsetError::Other,
-                    );
-                }
-                // In order to minimize the blast radius of poor cycle-handling, we currently produce
-                // inconsistent results - any other binding that saved an answer which depended on
-                // this one sees the forced type, but anything downstream of this sees the computed
-                // type.
-                //
-                // This is both highly unpredictable in terms of end user experience, and nondeterministic
-                // because we can definitely get non-idempotent errors in some cases.
-                //
-                // TODO(stroxler): Probably remove this - it regresses a CRTP example, so we should
-                // remove it in a dedicated diff.
-                ty
+                forced
             }
             _ => {
                 drop(variable);
@@ -1893,6 +1883,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         ty: &Type,
         constraints: &'c [Type],
     ) -> Option<&'c Type> {
+        if ty.is_any() {
+            return None;
+        }
         let matching: Vec<&Type> = constraints
             .iter()
             .filter(|c| self.is_subset_eq(ty, c).is_ok())

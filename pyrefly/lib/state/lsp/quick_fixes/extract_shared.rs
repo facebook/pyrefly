@@ -5,7 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::symbol_kind::SymbolKind;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprContext;
@@ -20,6 +22,12 @@ use ruff_python_ast::visitor::walk_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
+
+use crate::ModuleInfo;
+use crate::state::lsp::FindDefinitionItemWithDocstring;
+use crate::state::lsp::FindPreference;
+use crate::state::lsp::Transaction;
 
 pub(super) fn split_selection<'a>(
     selection_text: &'a str,
@@ -482,4 +490,24 @@ pub(super) fn reindent_statement(
         text.push('\n');
     }
     text
+}
+
+/// Resolves the definition at `position` to the single matching local definition
+/// (same module as `module_info`) whose symbol kind passes `kind_filter`.
+/// Returns `None` if no matching definition exists.
+pub(super) fn find_local_definition(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+    module_info: &ModuleInfo,
+    kind_filter: impl Fn(Option<SymbolKind>) -> bool,
+) -> Option<FindDefinitionItemWithDocstring> {
+    transaction
+        .find_definition(handle, position, FindPreference::default())
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|def| {
+            def.module.path() == module_info.path() && kind_filter(def.metadata.symbol_kind())
+        })
 }

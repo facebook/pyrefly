@@ -19,6 +19,7 @@ use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::Param;
+use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Operator;
@@ -45,6 +46,7 @@ pub struct ModuleStub {
     /// Whether any item uses `Incomplete` (so we know whether to
     /// emit `from _typeshed import Incomplete`).
     pub uses_incomplete: bool,
+    pub uses_self: bool,
 }
 
 pub enum StubItem {
@@ -129,6 +131,7 @@ pub fn extract_module_stub(
         module_info: &module_info,
         config,
         uses_incomplete: false,
+        uses_self: false,
         function_map: &function_map,
         dunder_all: &dunder_all,
     };
@@ -138,6 +141,7 @@ pub fn extract_module_stub(
     Some(ModuleStub {
         items,
         uses_incomplete: ctx.uses_incomplete,
+        uses_self: ctx.uses_self,
     })
 }
 
@@ -147,6 +151,7 @@ struct ExtractionContext<'a> {
     module_info: &'a Module,
     config: &'a ExtractConfig,
     uses_incomplete: bool,
+    uses_self: bool,
     function_map: &'a HashMap<TextRange, DecoratedFunction>,
     /// When `__all__` is explicitly defined, only these names are exported
     /// at module level. `None` means no explicit `__all__` — use convention.
@@ -412,7 +417,12 @@ fn format_type(ty: &Type, ctx: &mut ExtractionContext) -> Option<String> {
         ctx.uses_incomplete = true;
         return Some("Incomplete".to_owned());
     }
-    let s = ty.to_string();
+    if ty.any(|sub_type| matches!(sub_type, Type::SelfType(_))) {
+        ctx.uses_self = true;
+    }
+    let mut display = TypeDisplayContext::new(&[ty]);
+    display.render_self_type_as_self();
+    let s = display.display(ty).to_string();
     if s.contains("@") || s.contains("Unknown") {
         ctx.uses_incomplete = true;
         return Some("Incomplete".to_owned());

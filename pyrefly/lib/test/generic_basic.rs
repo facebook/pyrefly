@@ -359,6 +359,24 @@ def test(m: MyStr, s: str):
 "#,
 );
 
+testcase!(
+    test_constrained_typevar_any_does_not_pin_constraint,
+    r#"
+from typing import Any, TypeVar, assert_type
+
+AnyStr = TypeVar("AnyStr", str, bytes)
+
+def concat(x: AnyStr, y: AnyStr) -> AnyStr:
+    return x + y
+
+def test(s: str, b: bytes, a: Any):
+    concat(s, a)
+    concat(a, b)
+    concat(a, s)
+    concat(a, a)
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/245
 testcase!(
     test_dict_update,

@@ -428,9 +428,9 @@ impl<To> Visit<To> for DefaultValue
 where
     Type: Visit<To>,
 {
-    const RECURSE_CONTAINS: bool = <Type as Visit<To>>::RECURSE_CONTAINS;
+    const RECURSE_CONTAINS: bool = <Type as Visit<To>>::VISIT_CONTAINS;
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
-        self.ty.recurse(f);
+        self.ty.visit(f);
     }
 }
 
@@ -438,9 +438,9 @@ impl<To> VisitMut<To> for DefaultValue
 where
     Type: VisitMut<To>,
 {
-    const RECURSE_CONTAINS: bool = <Type as VisitMut<To>>::RECURSE_CONTAINS;
+    const RECURSE_CONTAINS: bool = <Type as VisitMut<To>>::VISIT_CONTAINS;
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
-        self.ty.recurse_mut(f);
+        self.ty.visit_mut(f);
     }
 }
 
@@ -1233,13 +1233,21 @@ pub fn unexpected_keyword(error: &dyn Fn(String), func: &str, keyword: &Keyword)
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_util::uniques::UniqueFactory;
+    use pyrefly_util::visit::Visit;
+    use pyrefly_util::visit::VisitMut;
     use ruff_python_ast::name::Name;
 
     use crate::callable::Callable;
+    use crate::callable::DefaultValue;
     use crate::callable::Param;
     use crate::callable::ParamList;
     use crate::callable::PrefixParam;
     use crate::callable::Required;
+    use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedKind;
+    use crate::type_var::PreInferenceVariance;
+    use crate::type_var::Restriction;
     use crate::types::Type;
 
     #[test]
@@ -1370,5 +1378,48 @@ mod tests {
         assert_eq!(counts.positional.max, None);
         assert_eq!(counts.keyword.min, 0);
         assert_eq!(counts.keyword.max, None);
+    }
+
+    #[test]
+    fn test_default_value_visit_delegates_to_ty() {
+        let uniques = UniqueFactory::new();
+        let q = Quantified::new(
+            uniques.fresh(),
+            Name::new("T"),
+            QuantifiedKind::TypeVar,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
+        );
+        let quantified_ty = Type::Quantified(Box::new(q));
+        let default = DefaultValue::with_display(quantified_ty.clone(), "default".to_owned());
+
+        // Visit should yield the inner type from ty, not the display metadata.
+        let mut visited = Vec::new();
+        default.visit(&mut |ty: &Type| visited.push(ty.clone()));
+        assert_eq!(visited, vec![quantified_ty]);
+    }
+
+    #[test]
+    fn test_default_value_visit_mut_delegates_to_ty() {
+        let uniques = UniqueFactory::new();
+        let q = Quantified::new(
+            uniques.fresh(),
+            Name::new("T"),
+            QuantifiedKind::TypeVar,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
+        );
+        let mut default =
+            DefaultValue::with_display(Type::Quantified(Box::new(q)), "default".to_owned());
+
+        // VisitMut should be able to mutate the inner type.
+        default.visit_mut(&mut |ty: &mut Type| {
+            *ty = Type::None;
+        });
+        assert_eq!(default.ty, Type::None);
+        // Display metadata should be unaffected.
+        assert_eq!(default.display, Some("default".to_owned()));
     }
 }

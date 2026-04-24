@@ -2114,7 +2114,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // mutates solver state (force_var) and must happen during computation,
             // not at batch commit.
             let answer = if let Some(var) = self.stack().get_iteration_placeholder(&current) {
-                self.finalize_recursive_answer::<K>(idx, var, raw_answer, &local_errors)
+                self.finalize_recursive_answer::<K>(var, raw_answer)
             } else {
                 raw_answer
             };
@@ -2271,7 +2271,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // solver, so a subsequent deep-force correctly resolves it. Reversing
         // the order would leave the placeholder Var unresolved during forcing.
         let answer = if let Some(var) = self.stack().get_iteration_placeholder(&current) {
-            self.finalize_recursive_answer::<K>(idx, var, raw_answer, &local_errors)
+            self.finalize_recursive_answer::<K>(var, raw_answer)
         } else {
             raw_answer
         };
@@ -2736,17 +2736,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///   placeholder used by some kinds of bindings that aren't Types) in this step.
     fn finalize_recursive_answer<K: Solve<Ans>>(
         &self,
-        idx: Idx<K>,
         var: Var,
         answer: Arc<K::Answer>,
-        errors: &ErrorCollector,
     ) -> Arc<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        let range = K::range_with(idx, self.bindings());
-        let final_answer = K::record_recursive(self, range, answer, var, errors);
+        let final_answer = K::record_recursive(self, answer, var);
         if var != Var::ZERO {
             self.solver().force_var(var);
         }
@@ -2977,15 +2974,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.solver().recurse(var, self.recurser)
     }
 
-    pub fn record_recursive(
-        &self,
-        loc: TextRange,
-        ty: Type,
-        recursive: Var,
-        errors: &ErrorCollector,
-    ) -> Type {
-        self.solver()
-            .record_recursive::<Ans>(recursive, ty, self.type_order(), errors, loc)
+    pub fn record_recursive(&self, ty: Type, recursive: Var) -> Type {
+        self.solver().record_recursive(recursive, ty)
     }
 
     /// Check if `got` matches `want`, returning `want` if the check fails.

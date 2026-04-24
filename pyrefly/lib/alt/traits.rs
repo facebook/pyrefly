@@ -113,10 +113,8 @@ pub trait Solve<Ans: LookupAnswer>: Keyed {
     /// Record that recursive value along with the answer.
     fn record_recursive(
         _answers: &AnswersSolver<Ans>,
-        _range: TextRange,
         answer: Arc<Self::Answer>,
         _recursive: Var,
-        _errors: &ErrorCollector,
     ) -> Arc<Self::Answer> {
         answer
     }
@@ -157,14 +155,12 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
 
     fn record_recursive(
         answers: &AnswersSolver<Ans>,
-        range: TextRange,
         answer: Arc<TypeInfo>,
         recursive: Var,
-        errors: &ErrorCollector,
     ) -> Arc<TypeInfo> {
         let ty_info = answer
             .arc_clone()
-            .map_ty(|ty| answers.record_recursive(range, ty, recursive, errors));
+            .map_ty(|ty| answers.record_recursive(ty, recursive));
         Arc::new(ty_info)
     }
 

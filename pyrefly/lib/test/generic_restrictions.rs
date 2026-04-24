@@ -1042,7 +1042,6 @@ def go() -> None:
 );
 
 testcase!(
-    bug = "Fails to catch TypeVar bound violation",
     test_nested_call_of_overloaded_function_preserves_bound,
     r#"
 from typing import Any, overload
@@ -1057,7 +1056,7 @@ def bounded_str[T: str](x: T) -> T:
     return x
 
 def go() -> None:
-    bounded_str(unbounded(1, 2))  # Should error: `int` is not assignable to upper bound `str` of type variable `T`
+    bounded_str(unbounded(1, 2))  # E: `int` is not assignable to upper bound `str` of type variable `T`
     "#,
 );
 
@@ -1213,7 +1212,6 @@ assert_type(f(b"hi"), bytes)
 );
 
 testcase!(
-    bug = "Should not produce a type error; https://github.com/facebook/pyrefly/issues/2644",
     test_anystr_none_passthrough_classmethod,
     r#"
 from typing import AnyStr
@@ -1223,7 +1221,7 @@ class A:
     def create(cls, x: AnyStr | None): ...
 
 def test(x: AnyStr | None):
-    A.create(x)  # E: Argument `AnyStr | None` is not assignable to parameter `x` with type `str | None` in function `A.create`
+    A.create(x)
     "#,
 );
 
@@ -1260,7 +1258,6 @@ def main(left: DataFrame, right: DataFrame) -> None:
 );
 
 testcase!(
-    bug = "https://github.com/facebook/pyrefly/issues/3047",
     test_bound_violation_in_union_member,
     r#"
 from typing import Iterable, Iterator, TypeVar
@@ -1269,11 +1266,16 @@ class DataFrame:
     def __iter__(self) -> Iterator[Series]: ...
 FrameType = TypeVar("FrameType", bound="DataFrame")
 def main(left: DataFrame, right: DataFrame) -> None:
-    def func(*a: FrameType | Iterable[FrameType]) -> None:
+
+    def func1(*a: FrameType | Iterable[FrameType]) -> None:
         return None
     # `DataFrame` is not assignable to `Iterable[FrameType]` because `Series` violates the upper
     # bound `DataFrame` of `FrameType`. However, this call should still succeed because we can
     # match `FrameType` instead.
-    func(left, right)  # E: `Series` is not assignable to upper bound `DataFrame`
+    func1(left, right)
+
+    def func2(*a: Iterable[FrameType] | None) -> None:
+        return None
+    func2(left, right)  # E: `Series` is not assignable to upper bound `DataFrame`
     "#,
 );
