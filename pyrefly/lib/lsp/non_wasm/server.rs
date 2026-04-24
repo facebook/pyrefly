@@ -1279,7 +1279,11 @@ const PYTHON_SECTION: &str = "python";
 const SOURCE_FIX_ALL_PYREFLY: &str = "source.fixAll.pyrefly";
 
 fn is_fix_all_code_action_kind_requested(kind: &CodeActionKind) -> bool {
-    kind == &CodeActionKind::SOURCE_FIX_ALL || kind.as_str() == SOURCE_FIX_ALL_PYREFLY
+    let requested = kind.as_str();
+    requested == SOURCE_FIX_ALL_PYREFLY
+        || SOURCE_FIX_ALL_PYREFLY
+            .strip_prefix(requested)
+            .is_some_and(|suffix| suffix.starts_with('.'))
 }
 
 struct TypeHierarchyTarget {
