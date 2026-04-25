@@ -99,6 +99,8 @@ struct Inner {
     known_modules: SmallSet<ModuleName>,
     /// Which file suffixes have we seen and should we watch?
     watched_patterns: SmallSet<WatchPatternPart>,
+    /// Non-Python file suffixes referenced in the sourcedb.
+    extra_filetypes: SmallSet<String>,
 }
 
 impl Inner {
@@ -109,6 +111,7 @@ impl Inner {
             package_lookup: SmallMap::new(),
             known_modules: SmallSet::new(),
             watched_patterns: SmallSet::new(),
+            extra_filetypes: SmallSet::new(),
         }
     }
 }
@@ -140,9 +143,9 @@ impl QuerySourceDatabase {
 
     fn update_with_target_manifest(&self, raw_db: TargetManifestDatabase) -> (bool, Duration) {
         let start = Instant::now();
-        let new_db = raw_db.produce_map();
+        let (new_db, extra_filetypes) = raw_db.produce_map();
         let read = self.inner.read();
-        if new_db == read.db {
+        if new_db == read.db && extra_filetypes == read.extra_filetypes {
             debug!("No source DB changes from Buck query");
             return (false, start.elapsed());
         }
@@ -192,6 +195,10 @@ impl QuerySourceDatabase {
             }
             append_pattern(&manifest.buildfile_path)
         }
+        // Add extra file types discovered by the BXL script to file watching patterns.
+        for suffix in &extra_filetypes {
+            known_extensions.insert(suffix.clone());
+        }
         watched_patterns.extend(
             known_extensions
                 .into_iter()
@@ -206,6 +213,7 @@ impl QuerySourceDatabase {
         let _old_package_lookup = mem::replace(&mut write.package_lookup, package_lookup);
         let _old_known_modules = mem::replace(&mut write.known_modules, known_modules);
         let _old_patterns = mem::replace(&mut write.watched_patterns, watched_patterns);
+        let _old_extra_filetypes = mem::replace(&mut write.extra_filetypes, extra_filetypes);
         drop(write);
         debug!("Finished updating source DB with Buck response");
         (true, start.elapsed())
@@ -292,7 +300,7 @@ impl QuerySourceDatabase {
 }
 
 impl SourceDatabase for QuerySourceDatabase {
-    fn modules_to_check(&self) -> Vec<crate::handle::Handle> {
+    fn modules_to_check(&self) -> Vec<Handle> {
         // TODO(connernilsen): implement modules_to_check
         vec![]
     }
@@ -400,11 +408,13 @@ impl SourceDatabase for QuerySourceDatabase {
                 build_duration,
                 parse_duration,
                 stdout_size,
+                exit_reason,
             } = self.querier.query_source_db(&includes, &self.repo_root);
             stats.build_id = build_id;
             stats.build_time = build_duration;
             stats.parse_time = parse_duration;
             stats.raw_size = stdout_size;
+            stats.exit_reason = exit_reason.as_ref().map(|r| r.to_string());
             let raw_db = raw_db?;
             info!("Finished querying Buck for source DB");
             let (changed, process_duration) = self.update_with_target_manifest(raw_db);
@@ -482,6 +492,7 @@ mod tests {
                 build_duration: None,
                 parse_duration: None,
                 stdout_size: None,
+                exit_reason: None,
             }
         }
 
@@ -558,7 +569,7 @@ mod tests {
                 Target::from_string("//implicit_package/test:lib".to_owned()),
             InternedPath::new(PathBuf::from("/path/to/another/repository/package/external_package/main.py")) =>
                 Target::from_string("//external:package".to_owned()),
-            InternedPath::new(PathBuf::from("/path/to/another/repository/package/external_package/non_python_file.thrift")) =>
+            InternedPath::new(PathBuf::from("/path/to/another/repository/package/external_package/non_python_file.so")) =>
                 Target::from_string("//external:package".to_owned()),
             InternedPath::new(root.join("generated/main.py")) => Target::from_string("//generated:main".to_owned()),
             InternedPath::new(root.join("build-out/materialized/generated/__init__.py")) => Target::from_string("//generated:lib".to_owned()),
@@ -903,7 +914,7 @@ mod tests {
             },
             root.clone(),
         );
-        let manifest_db = manifest.clone().produce_map();
+        let (manifest_db, _) = manifest.clone().produce_map();
         assert!(db.update_with_target_manifest(manifest).0);
         let inner = db.inner.read();
         assert_eq!(inner.db, manifest_db);
@@ -951,12 +962,21 @@ mod tests {
 
     #[test]
     fn test_get_paths_to_watch() {
-        let (db, root) = get_db();
+        let mut raw_db = TargetManifestDatabase::get_test_database();
+        let root = raw_db.root.to_path_buf();
+        let files = smallset! {
+            root.join("pyre/client/log/log.py"),
+            root.join("pyre/client/log/log.pyi"),
+        };
+        raw_db.extra_filetypes = smallset! {"thrift".to_owned()};
+
+        let db = QuerySourceDatabase::from_target_manifest_db(raw_db, &root, &files);
 
         let expected = smallset! {
             WatchPattern::root(InternedPath::from_path(&root), "**/*.py".to_owned()),
             WatchPattern::root(InternedPath::from_path(&root), "**/*.pyi".to_owned()),
             WatchPattern::root(InternedPath::from_path(&root), "**/*.ipynb".to_owned()),
+            WatchPattern::root(InternedPath::from_path(&root), "**/*.so".to_owned()),
             WatchPattern::root(InternedPath::from_path(&root), "**/*.thrift".to_owned()),
             WatchPattern::root(InternedPath::from_path(&root), "**/BUCK".to_owned()),
         };

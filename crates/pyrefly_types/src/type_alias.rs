@@ -45,21 +45,15 @@ pub struct TypeAlias {
     pub name: Box<Name>,
     ty: Box<Type>,
     pub style: TypeAliasStyle,
-    annotated_metadata: Box<[Type]>,
 }
 
 impl TypeAlias {
-    pub fn new(name: Name, ty: Type, style: TypeAliasStyle, annotated_metadata: Vec<Type>) -> Self {
+    pub fn new(name: Name, ty: Type, style: TypeAliasStyle) -> Self {
         Self {
             name: Box::new(name),
             ty: Box::new(ty),
             style,
-            annotated_metadata: annotated_metadata.into_boxed_slice(),
         }
-    }
-
-    pub fn annotated_metadata(&self) -> &[Type] {
-        &self.annotated_metadata
     }
 
     /// Gets the type contained within the type alias for use in a value
@@ -113,16 +107,11 @@ impl TypeAlias {
     }
 
     pub fn error(name: Name, style: TypeAliasStyle) -> Self {
-        Self::new(name, Type::any_error(), style, Vec::new())
+        Self::new(name, Type::any_error(), style)
     }
 
     pub fn unknown(name: Name) -> Self {
-        Self::new(
-            name,
-            Type::any_implicit(),
-            TypeAliasStyle::LegacyImplicit,
-            Vec::new(),
-        )
+        Self::new(name, Type::any_implicit(), TypeAliasStyle::LegacyImplicit)
     }
 }
 

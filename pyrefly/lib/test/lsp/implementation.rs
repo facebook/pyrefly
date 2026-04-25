@@ -10,6 +10,7 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::TextRangeWithModule;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use crate::state::lsp::FindPreference;
 use crate::state::state::State;
@@ -24,6 +25,8 @@ fn get_implementations_report(state: &State, handle: &Handle, position: TextSize
     let Some(def_item) = transaction
         .as_ref()
         .find_definition(handle, position, FindPreference::default())
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
         .into_iter()
         .next()
     else {
@@ -33,7 +36,7 @@ fn get_implementations_report(state: &State, handle: &Handle, position: TextSize
     let definition = TextRangeWithModule::new(def_item.module.clone(), def_item.definition_range);
 
     let impls = match transaction
-        .find_global_implementations_from_definition(handle.sys_info(), definition)
+        .find_global_implementations_from_definition(*handle.sys_info(), definition)
     {
         Ok(impls) => impls,
         Err(_) => return "Implementation Result: Cancelled".to_owned(),

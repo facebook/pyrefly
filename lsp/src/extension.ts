@@ -24,6 +24,7 @@ import {
 import {PythonExtension} from '@vscode/python-extension';
 import {updateStatusBar, getStatusBarItem} from './status-bar';
 import {runDocstringFoldingCommand} from './docstring';
+import {registerCodeLensCommands} from './codeLens';
 import {
   triggerMsPythonRefreshLanguageServers,
   disableWindsurfPyrightIfInstalled,
@@ -232,6 +233,7 @@ export async function activate(context: ExtensionContext) {
       await runDocstringFoldingCommand(client, outputChannel, 'editor.unfold');
     }),
   );
+  registerCodeLensCommands(context, pythonExtension);
 
   // When our extension is activated, make sure ms-python knows
   // TODO(kylei): remove this hack once ms-python has this behavior

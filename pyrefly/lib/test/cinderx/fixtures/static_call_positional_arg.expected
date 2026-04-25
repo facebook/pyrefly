@@ -1,0 +1,6 @@
+  9:11-16: typing.Type[__static__.int64]
+  9:21-25: None
+  13:0-7: None
+  13:0-3: static_call_positional_arg.foo(__static__.int64) -> None
+  13:4-6: Literal[42] -> builtins.int
+    contextual: __static__.int64

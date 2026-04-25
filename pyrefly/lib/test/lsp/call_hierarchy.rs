@@ -10,6 +10,7 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::TextRangeWithModule;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use crate::state::lsp::FindPreference;
 use crate::state::state::State;
@@ -36,6 +37,8 @@ fn get_callers_report(state: &State, handle: &Handle, position: TextSize) -> Str
     let Some(def_item) = transaction
         .as_ref()
         .find_definition(handle, position, FindPreference::default())
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
         .into_iter()
         .next()
     else {
@@ -45,7 +48,7 @@ fn get_callers_report(state: &State, handle: &Handle, position: TextSize) -> Str
     let definition = TextRangeWithModule::new(def_item.module.clone(), def_item.definition_range);
 
     let callers = match transaction.find_global_incoming_calls_from_function_definition(
-        handle.sys_info(),
+        *handle.sys_info(),
         def_item.metadata.clone(),
         &definition,
     ) {
@@ -57,11 +60,14 @@ fn get_callers_report(state: &State, handle: &Handle, position: TextSize) -> Str
         callers
             .into_iter()
             .flat_map(|(module_info, calls)| {
-                calls
-                    .into_iter()
-                    .map(move |(call_range, caller_name, _caller_range)| {
-                        format_call_site("Caller", &caller_name, module_info.contents(), call_range)
-                    })
+                calls.into_iter().map(move |caller| {
+                    format_call_site(
+                        "Caller",
+                        &caller.name,
+                        module_info.contents(),
+                        caller.call_range,
+                    )
+                })
             })
             .join("\n")
     } else {

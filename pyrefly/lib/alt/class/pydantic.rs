@@ -150,7 +150,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let params = vec![self.class_self_param(cls, false), root_param];
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT, None),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -184,7 +184,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Helper function to find inherited keyword values from parent dataclass metadata
+    /// Helper function to find inherited keyword values from parent pydantic model metadata.
+    /// Only inherits from parents that are themselves pydantic models, not from arbitrary
+    /// dataclass parents whose config values (e.g. strict) may have different defaults.
     fn find_inherited_keyword_value<T>(
         &self,
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
@@ -192,6 +194,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<T> {
         bases_with_metadata
             .iter()
+            .filter(|(_, metadata)| metadata.is_pydantic_model())
             .find_map(|(_, metadata)| metadata.dataclass_metadata().map(&extractor))
     }
 

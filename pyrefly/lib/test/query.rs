@@ -17,7 +17,9 @@ use tempfile::TempDir;
 
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
+use crate::query::PythonASTRange;
 use crate::query::Query;
+use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::init_test;
 
 /// Helper to create a Query with a ConfigFinder that doesn't use sourcedb.
@@ -27,12 +29,12 @@ fn create_query() -> Query {
     config.python_environment.set_empty_to_default();
     config.configure();
     let config = ArcId::new(config);
-    Query::new(ConfigFinder::new_constant(config))
+    Query::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT)
 }
 
 /// Convert the result of get_types_in_file to a pretty-printed JSON string.
 /// This format makes test failures easy to patch by copy-pasting the actual output.
-fn types_to_json_string(types: Vec<(crate::query::PythonASTRange, String)>) -> String {
+fn types_to_json_string(types: Vec<(PythonASTRange, String)>) -> String {
     let entries: Vec<serde_json::Value> = types
         .into_iter()
         .map(|(range, type_str)| {
@@ -87,7 +89,7 @@ fn test_simple_int_annotation() {
       "start_col": 3,
       "start_line": 1
     },
-    "type": "type[builtins.int]"
+    "type": "builtins.type[builtins.int]"
   },
   {
     "location": {
@@ -151,7 +153,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 7,
       "start_line": 3
     },
-    "type": "type[builtins.int | None]"
+    "type": "builtins.type[builtins.int | None]"
   },
   {
     "location": {
@@ -160,7 +162,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 7,
       "start_line": 3
     },
-    "type": "type[builtins.int]"
+    "type": "builtins.type[builtins.int]"
   },
   {
     "location": {
@@ -178,7 +180,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 12,
       "start_line": 4
     },
-    "type": "type[builtins.list[main.Foo]]"
+    "type": "builtins.type[builtins.list[main.Foo]]"
   },
   {
     "location": {
@@ -187,7 +189,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 12,
       "start_line": 4
     },
-    "type": "type[builtins.list]"
+    "type": "builtins.type[builtins.list]"
   },
   {
     "location": {
@@ -196,7 +198,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 17,
       "start_line": 4
     },
-    "type": "type[main.Foo]"
+    "type": "builtins.type[main.Foo]"
   },
   {
     "location": {
@@ -205,7 +207,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 26,
       "start_line": 4
     },
-    "type": "type[builtins.int]"
+    "type": "builtins.type[builtins.int]"
   },
   {
     "location": {
@@ -250,7 +252,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 9,
       "start_line": 6
     },
-    "type": "type[builtins.set]"
+    "type": "builtins.type[builtins.set]"
   },
   {
     "location": {
@@ -304,7 +306,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 12,
       "start_line": 9
     },
-    "type": "(self: builtins.set[builtins.int], element: builtins.int, /) -> None"
+    "type": "BoundMethod[builtins.set[builtins.int], (self: builtins.set[builtins.int], element: builtins.int, /) -> None]"
   },
   {
     "location": {
@@ -399,4 +401,182 @@ def f(foos: list[Foo]) -> int:
 ]"#;
 
     assert_eq!(expected, actual);
+}
+
+#[test]
+fn test_lambda_param_var_leak_regression() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    // Minimal reproducer from mypy-primer: a lambda used as an argument can
+    // leave a Binding::LambdaParameter Var that is not present in the solving
+    // thread's Variables map.
+    let code = r#"
+from typing import Callable
+
+def find_self_type(t: object, f: Callable[[str], object]) -> bool:
+    return True
+
+class A:
+    def m(self, t: object) -> None:
+        if find_self_type(t, lambda name: name):
+            pass
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    // This currently panics with:
+    // "Internal error: a variable has leaked across thread boundaries."
+    // Keep as a regression to ensure lambda-parameter Vars cannot leak.
+    let _ = query.get_types_in_file(module_name, path).unwrap();
+}
+
+/// Regression test: legacy implicit type alias to a builtin container must not
+/// produce double-qualified names like `typing.builtins.type[...]` in query mode.
+#[test]
+fn test_legacy_implicit_type_alias_no_double_qualification() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"
+from typing import Any
+RawData = dict[str, Any]
+def f(x: RawData) -> None:
+    pass
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let types = query.get_types_in_file(module_name, path).unwrap();
+    let actual = types_to_json_string(types);
+
+    // The type of `x` should NOT contain "typing.builtins." — that's double-qualification.
+    assert!(
+        !actual.contains("typing.builtins."),
+        "Double-qualified 'typing.builtins.' found in output:\n{actual}",
+    );
+}
+
+/// Regression test: `Annotated` type alias must not produce double-qualified
+/// names like `typing.typing.Annotated[...]` in query mode.
+#[test]
+fn test_annotated_type_alias_no_double_qualification() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"
+from typing import Annotated, TypeAlias
+PrimitiveIntID = Annotated[int, "metadata"]
+def f(x: PrimitiveIntID) -> None:
+    pass
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let types = query.get_types_in_file(module_name, path).unwrap();
+    let actual = types_to_json_string(types);
+
+    // The output should NOT contain "typing.typing." — that's double-qualification.
+    assert!(
+        !actual.contains("typing.typing."),
+        "Double-qualified 'typing.typing.' found in output:\n{actual}",
+    );
+}
+
+/// Explicit TypeAlias should show `typing.TypeAlias[...]`, not
+/// `typing.typing.TypeAlias[...]`.
+#[test]
+fn test_explicit_type_alias_no_double_qualification() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"
+from typing import Any, TypeAlias
+MyDict: TypeAlias = dict[str, Any]
+def f(x: MyDict) -> None:
+    pass
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let types = query.get_types_in_file(module_name, path).unwrap();
+    let actual = types_to_json_string(types);
+
+    // Should not have double-qualified typing prefix.
+    assert!(
+        !actual.contains("typing.typing."),
+        "Double-qualified 'typing.typing.' found in output:\n{actual}",
+    );
+    // Should not have typing.builtins. either.
+    assert!(
+        !actual.contains("typing.builtins."),
+        "Double-qualified 'typing.builtins.' found in output:\n{actual}",
+    );
+}
+
+#[test]
+fn test_callees_annotated_type() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    // A type alias whose body is Annotated[Foo, ...] stores Type::Annotated
+    // internally. Calling the alias as a value makes callee_from_type recurse
+    // into the TypeAlias body, reaching Type::Annotated.
+    let code = r#"
+from typing import Annotated, TypeAlias
+
+class Foo:
+    def bar(self) -> int:
+        return 42
+
+MyType: TypeAlias = Annotated[Foo, "metadata"]
+
+def f() -> None:
+    MyType()
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(
+        !errors.is_empty(),
+        "Annotated[Foo, ...] is not callable, expected errors"
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("not-callable")),
+        "Expected a not-callable error, got: {errors:?}",
+    );
+
+    // get_callees_with_location triggers callee_from_type which must handle
+    // Type::Annotated rather than panicking. Annotated is not callable, so
+    // MyType() should produce no callees.
+    let callees = query
+        .get_callees_with_location(module_name, path, None)
+        .unwrap();
+    assert!(
+        callees.is_empty(),
+        "Annotated is not callable, expected no callees"
+    );
 }

@@ -49,6 +49,9 @@ pub enum SizeExpr {
 
     /// Floor division: N // M
     FloorDiv(Box<Type>, Box<Type>),
+
+    /// Exponentiation: N ** M (for geometric progressions)
+    Pow(Box<Type>, Box<Type>),
 }
 
 impl SizeExpr {
@@ -83,6 +86,10 @@ impl SizeExpr {
 
     pub fn floor_div(left: Type, right: Type) -> Self {
         Self::FloorDiv(Box::new(left), Box::new(right))
+    }
+
+    pub fn pow(left: Type, right: Type) -> Self {
+        Self::Pow(Box::new(left), Box::new(right))
     }
 
     /// Convert a Type to a SizeExpr (used for extracting literal dimensions).
@@ -126,121 +133,10 @@ impl Display for SizeExpr {
                     write!(f, "({} // {})", left, right)
                 }
             }
-        }
-    }
-}
-
-// ============================================================================
-// Simplification
-// ============================================================================
-
-/// Simplify a dimension expression to canonical form.
-///
-/// This applies algebraic simplifications:
-/// - Constant folding: 2 + 3 → 5
-/// - Identity elimination: N + 0 → N, N * 1 → N
-/// - Zero propagation: N * 0 → 0
-/// - Any propagation: expressions containing Any become Any
-///
-/// Any subexpression with only literal leaves is evaluated.
-pub fn simplify(ty: Type) -> Type {
-    match ty {
-        Type::Size(dim) => {
-            if contains_any_in_sizeexpr(&dim) {
-                return Type::Any(AnyStyle::Explicit);
-            }
-            simplify_sizeexpr(dim)
-        }
-        // Quantified, Var, Any, Dim are already canonical
-        other => other,
-    }
-}
-
-/// Inner simplification that skips the Any check.
-/// Called after the top-level `simplify` has already verified no Any is present.
-fn simplify_inner(ty: Type) -> Type {
-    match ty {
-        Type::Size(dim) => simplify_sizeexpr(dim),
-        other => other,
-    }
-}
-
-fn simplify_sizeexpr(dim: SizeExpr) -> Type {
-    match dim {
-        // Addition: N + M
-        SizeExpr::Add(left, right) => {
-            let left = simplify_inner(*left);
-            let right = simplify_inner(*right);
-
-            match (left.as_shape_literal(), right.as_shape_literal()) {
-                // Both literal - evaluate
-                (Some(a), Some(b)) => Type::Size(SizeExpr::Literal(a + b)),
-                // N + 0 = N
-                (_, Some(0)) => left,
-                // 0 + N = N
-                (Some(0), _) => right,
-                // Can't simplify further
-                _ => Type::Size(SizeExpr::Add(Box::new(left), Box::new(right))),
+            Self::Pow(left, right) => {
+                write!(f, "({} ** {})", left, right)
             }
         }
-
-        // Subtraction: N - M
-        SizeExpr::Sub(left, right) => {
-            let left = simplify_inner(*left);
-            let right = simplify_inner(*right);
-
-            match (left.as_shape_literal(), right.as_shape_literal()) {
-                // Both literal (only simplify if result is non-negative)
-                (Some(a), Some(b)) if a >= b => Type::Size(SizeExpr::Literal(a - b)),
-                // N - 0 = N
-                (_, Some(0)) => left,
-                // Can't simplify further
-                _ => Type::Size(SizeExpr::Sub(Box::new(left), Box::new(right))),
-            }
-        }
-
-        // Multiplication: N * M
-        SizeExpr::Mul(left, right) => {
-            let left = simplify_inner(*left);
-            let right = simplify_inner(*right);
-            let left_lit = left.as_shape_literal();
-            let right_lit = right.as_shape_literal();
-
-            match (left_lit, right_lit) {
-                // Both literal - evaluate
-                (Some(a), Some(b)) => Type::Size(SizeExpr::Literal(a * b)),
-                // N * 0 = 0 or 0 * N = 0
-                (Some(0), _) | (_, Some(0)) => Type::Size(SizeExpr::Literal(0)),
-                // N * 1 = N
-                (_, Some(1)) => left,
-                // 1 * N = N
-                (Some(1), _) => right,
-                // Can't simplify further
-                _ => Type::Size(SizeExpr::Mul(Box::new(left), Box::new(right))),
-            }
-        }
-
-        // Floor Division: N // M
-        SizeExpr::FloorDiv(left, right) => {
-            let left = simplify_inner(*left);
-            let right = simplify_inner(*right);
-            let left_lit = left.as_shape_literal();
-            let right_lit = right.as_shape_literal();
-
-            match (left_lit, right_lit) {
-                // Both literal (avoid division by zero)
-                (Some(a), Some(b)) if b != 0 => Type::Size(SizeExpr::Literal(a / b)),
-                // N / 1 = N
-                (_, Some(1)) => left,
-                // 0 / N = 0
-                (Some(0), _) => Type::Size(SizeExpr::Literal(0)),
-                // Can't simplify further
-                _ => Type::Size(SizeExpr::FloorDiv(Box::new(left), Box::new(right))),
-            }
-        }
-
-        // Literal - already canonical
-        SizeExpr::Literal(_) => Type::Size(dim),
     }
 }
 
@@ -264,7 +160,7 @@ pub fn canonicalize(ty: Type) -> Type {
         Type::Size(dim) => {
             // Check for Any - if present anywhere, entire expression becomes Any
             if contains_any_in_sizeexpr(&dim) {
-                return Type::Any(AnyStyle::Implicit);
+                return Type::Any(AnyStyle::Explicit);
             }
             canonicalize_sizeexpr(dim)
         }
@@ -296,7 +192,8 @@ fn contains_any_in_sizeexpr(dim: &SizeExpr) -> bool {
         SizeExpr::Add(left, right)
         | SizeExpr::Sub(left, right)
         | SizeExpr::Mul(left, right)
-        | SizeExpr::FloorDiv(left, right) => contains_any(left) || contains_any(right),
+        | SizeExpr::FloorDiv(left, right)
+        | SizeExpr::Pow(left, right) => contains_any(left) || contains_any(right),
         SizeExpr::Literal(_) => false,
     }
 }
@@ -314,6 +211,7 @@ fn canonicalize_sizeexpr(dim: SizeExpr) -> Type {
         }
         SizeExpr::Mul(left, right) => canonicalize_product(*left, *right),
         SizeExpr::FloorDiv(left, right) => canonicalize_division(*left, *right),
+        SizeExpr::Pow(left, right) => canonicalize_pow(*left, *right),
     }
 }
 
@@ -333,7 +231,7 @@ fn canonicalize_sum(left: Type, right: Type) -> Type {
     let mut term_map: HashMap<Type, i64> = HashMap::new();
 
     for term in terms {
-        let (coeff, non_literal_part) = extract_coefficient(term.clone());
+        let (coeff, non_literal_part) = extract_coefficient(term);
         *term_map.entry(non_literal_part).or_insert(0) += coeff;
     }
 
@@ -478,19 +376,112 @@ fn canonicalize_product(left: Type, right: Type) -> Type {
     }
 
     // Step 4: Separate literals from non-literals
-    let (literal_product, mut non_literal_factors) = separate_literal_factors(factors);
+    let (mut literal_product, mut non_literal_factors) = separate_literal_factors(factors);
 
-    // Step 5: Sort factors by canonical order
+    // Step 4b: Group same-base Pow factors and absorb matching literals.
+    // For example: 2 * 2**(I-1) → 2**(I-1+1) → 2**I
+    // Literal factors that equal a Pow base are converted to base**1 and merged.
+    if non_literal_factors
+        .iter()
+        .any(|f| matches!(f, Type::Size(SizeExpr::Pow(_, _))))
+    {
+        #[allow(clippy::mutable_key_type)]
+        let mut pow_groups: HashMap<Type, Vec<Type>> = HashMap::new();
+        let mut remaining = Vec::new();
+
+        for factor in non_literal_factors.drain(..) {
+            if let Type::Size(SizeExpr::Pow(base, exp)) = factor {
+                pow_groups.entry(*base).or_default().push(*exp);
+            } else {
+                remaining.push(factor);
+            }
+        }
+
+        // Check if literal_product matches any Pow base
+        for (base, exponents) in &mut pow_groups {
+            if let Some(base_val) = base.as_shape_literal()
+                && literal_product != 1
+                && base_val != 0
+            {
+                let (k, remainder) = extract_base_power(literal_product, base_val);
+                if k > 0 {
+                    exponents.push(Type::Size(SizeExpr::Literal(k)));
+                    literal_product = remainder;
+                }
+            }
+        }
+
+        // Rebuild: combine each group into base ** sum(exponents)
+        non_literal_factors = remaining;
+        for (base, exponents) in pow_groups {
+            // Build raw sum of exponents; canonicalize_pow will canonicalize it
+            // via canonicalize_inner on the exponent
+            let exp_sum = exponents
+                .into_iter()
+                .reduce(|acc, e| Type::Size(SizeExpr::Add(Box::new(acc), Box::new(e))))
+                .unwrap();
+            let combined = canonicalize_pow(base, exp_sum);
+            match &combined {
+                Type::Size(SizeExpr::Literal(n)) => {
+                    literal_product *= n;
+                }
+                _ => {
+                    non_literal_factors.push(combined);
+                }
+            }
+        }
+    }
+
+    // Step 5: Distributive law — coeff * (a + b) → coeff*a + coeff*b
+    // When any factor (literal, symbolic, or both) multiplies a sum, distribute
+    // across the sum terms. This enables like-term cancellation at the caller's
+    // sum level. For example:
+    //   4 * (N + 2)       → 4*N + 8           (literal coefficient)
+    //   GR * (I + (-1))   → GR*I + (-1)*GR    (symbolic coefficient)
+    //   2 * GR * (I + 3)  → 2*GR*I + 6*GR     (mixed coefficient)
+    if let Some(sum_idx) = non_literal_factors
+        .iter()
+        .position(|f| matches!(f, Type::Size(SizeExpr::Add(_, _))))
+    {
+        // Only distribute if there's at least one other factor to distribute
+        let has_other_factors = literal_product != 1 || non_literal_factors.len() > 1;
+        if has_other_factors {
+            let sum = non_literal_factors.remove(sum_idx);
+
+            // Build coefficient from literal and remaining non-literal factors
+            let mut coeff_factors = Vec::new();
+            if literal_product != 1 {
+                coeff_factors.push(Type::Size(SizeExpr::Literal(literal_product)));
+            }
+            coeff_factors.extend(non_literal_factors);
+            let coeff = rebuild_product(coeff_factors);
+
+            // Distribute coefficient across each sum term
+            let mut terms = Vec::new();
+            collect_terms(sum, &mut terms);
+            let distributed_terms: Vec<Type> = terms
+                .into_iter()
+                .map(|term| {
+                    let product =
+                        Type::Size(SizeExpr::Mul(Box::new(coeff.clone()), Box::new(term)));
+                    canonicalize_inner(product)
+                })
+                .collect();
+            return rebuild_sum(distributed_terms);
+        }
+    }
+
+    // Step 6: Sort factors by canonical order
     non_literal_factors.sort_by(compare_type);
 
-    // Step 6: Add literal coefficient if not 1
+    // Step 7: Add literal coefficient if not 1
     let mut all_factors = Vec::new();
     if literal_product != 1 {
         all_factors.push(Type::Size(SizeExpr::Literal(literal_product)));
     }
     all_factors.extend(non_literal_factors);
 
-    // Step 7: Build result
+    // Step 8: Build result
     if all_factors.is_empty() {
         Type::Size(SizeExpr::Literal(1))
     } else {
@@ -544,6 +535,72 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
             Type::Size(SizeExpr::Literal(n / d))
         }
 
+        // Literal term extraction from sum numerator:
+        // (a + k*d + b) // d  →  k + (a + b) // d
+        // Sound because (k*d + r) // d = k + r // d for all integers k, d, r (d ≠ 0).
+        // Enables: (H - 2) // 2 + 1  →  -1 + H // 2 + 1  →  H // 2
+        (Type::Size(SizeExpr::Add(_, _)), Type::Size(SizeExpr::Literal(d))) if *d != 0 => {
+            let d = *d;
+            let mut terms = Vec::new();
+            collect_terms(canonical_num, &mut terms);
+            let original_count = terms.len();
+
+            // Partition into extractable (literal multiples of d) and remaining
+            let mut extracted_sum: i64 = 0;
+            let mut remaining = Vec::new();
+            for term in terms {
+                if let Type::Size(SizeExpr::Literal(n)) = &term
+                    && n % d == 0
+                {
+                    extracted_sum += n / d;
+                    continue;
+                }
+                remaining.push(term);
+            }
+
+            if extracted_sum == 0 && remaining.len() == original_count {
+                // Nothing extracted — fall through to cancellation
+                let (new_num, new_den) =
+                    try_cancel_common_factors(rebuild_sum(remaining), canonical_den);
+                if matches!(new_den, Type::Size(SizeExpr::Literal(1))) {
+                    new_num
+                } else {
+                    Type::Size(SizeExpr::FloorDiv(Box::new(new_num), Box::new(new_den)))
+                }
+            } else if remaining.is_empty() {
+                // All terms extracted — result is just the extracted literal
+                Type::Size(SizeExpr::Literal(extracted_sum))
+            } else {
+                // Some terms extracted: extracted_sum + remaining // d
+                let remainder_div = Type::Size(SizeExpr::FloorDiv(
+                    Box::new(rebuild_sum(remaining)),
+                    Box::new(Type::Size(SizeExpr::Literal(d))),
+                ));
+                if extracted_sum == 0 {
+                    remainder_div
+                } else {
+                    canonicalize_sum(Type::Size(SizeExpr::Literal(extracted_sum)), remainder_div)
+                }
+            }
+        }
+
+        // Sum numerator, non-literal denominator: try un-distributing the sum.
+        // The distributive law in canonicalize_product expands B*(2*A-1) into
+        // -B + 2*A*B. When this sum is divided by (2*A-1), we need to factor
+        // the common factor B back out to recover B*(2*A-1) and cancel.
+        (Type::Size(SizeExpr::Add(_, _)), _) => {
+            if let Some(result) = try_factor_sum_and_cancel(&canonical_num, &canonical_den) {
+                result
+            } else {
+                let (new_num, new_den) = try_cancel_common_factors(canonical_num, canonical_den);
+                if matches!(new_den, Type::Size(SizeExpr::Literal(1))) {
+                    new_num
+                } else {
+                    Type::Size(SizeExpr::FloorDiv(Box::new(new_num), Box::new(new_den)))
+                }
+            }
+        }
+
         // Try cancellation
         _ => {
             let (new_num, new_den) = try_cancel_common_factors(canonical_num, canonical_den);
@@ -555,6 +612,51 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
                 Type::Size(SizeExpr::FloorDiv(Box::new(new_num), Box::new(new_den)))
             }
         }
+    }
+}
+
+/// Canonicalize an exponentiation expression.
+///
+/// Rules (checked in this order):
+/// 1. Exponent 0 → 1 (for any base)
+/// 2. Exponent 1 → base (avoids allocation, reuses canon_base)
+/// 3. Both concrete → compute the literal (e.g., 2**3 → 8), with overflow check
+/// 4. Nested Pow: (a**b)**c → a**(b*c)
+/// 5. Otherwise: Pow(canon_base, canon_exponent)
+fn canonicalize_pow(base: Type, exp: Type) -> Type {
+    let canon_base = canonicalize_inner(base);
+    let canon_exp = canonicalize_inner(exp);
+
+    match (&canon_base, &canon_exp) {
+        // a ** 0 = 1
+        (_, Type::Size(SizeExpr::Literal(0))) => Type::Size(SizeExpr::Literal(1)),
+
+        // a ** 1 = a
+        (_, Type::Size(SizeExpr::Literal(1))) => canon_base,
+
+        // Both literals: compute base^exp with overflow protection
+        (Type::Size(SizeExpr::Literal(b)), Type::Size(SizeExpr::Literal(e))) => {
+            if *e >= 0 && *e <= 63 {
+                match b.checked_pow(*e as u32) {
+                    Some(result) => Type::Size(SizeExpr::Literal(result)),
+                    None => {
+                        // Overflow: keep symbolic
+                        Type::Size(SizeExpr::Pow(Box::new(canon_base), Box::new(canon_exp)))
+                    }
+                }
+            } else {
+                // Negative exponent: not meaningful for integer dimensions
+                Type::Size(SizeExpr::Pow(Box::new(canon_base), Box::new(canon_exp)))
+            }
+        }
+
+        // (a ** b) ** c = a ** (b * c)
+        (Type::Size(SizeExpr::Pow(inner_base, inner_exp)), _) => {
+            let new_exp = Type::Size(SizeExpr::Mul(inner_exp.clone(), Box::new(canon_exp)));
+            canonicalize_pow(*inner_base.clone(), new_exp)
+        }
+
+        _ => Type::Size(SizeExpr::Pow(Box::new(canon_base), Box::new(canon_exp))),
     }
 }
 
@@ -603,6 +705,103 @@ fn try_cancel_common_factors(num: Type, den: Type) -> (Type, Type) {
     (new_num, new_den)
 }
 
+/// Try to factor a common factor out of a sum numerator and cancel with the denominator.
+///
+/// When canonicalize_product distributes B*(2*A-1) into -B + 2*A*B, this function
+/// reverses the expansion inside division context:
+///   (-B + 2*A*B) // (-1 + 2*A)
+///   → terms: [-1*B, 2*A*B], common non-literal factor: B
+///   → B * (-1 + 2*A) // (-1 + 2*A) → B
+///
+/// Only simplifies when ALL sum terms share the common factor (exact divisibility).
+fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
+    let mut terms = Vec::new();
+    collect_terms(num.clone(), &mut terms);
+
+    if terms.len() < 2 {
+        return None;
+    }
+
+    // For each term, extract literal coefficient and non-literal factors.
+    let term_factorizations: Vec<(i64, Vec<Type>)> = terms
+        .iter()
+        .map(|term| {
+            let mut factors = Vec::new();
+            collect_factors(term.clone(), &mut factors);
+            separate_literal_factors(factors)
+        })
+        .collect();
+
+    // Find common non-literal factors across ALL terms (set intersection).
+    let mut common_factors: Vec<Type> = term_factorizations[0].1.clone();
+    for (_, non_lit_factors) in &term_factorizations[1..] {
+        let mut remaining = non_lit_factors.clone();
+        common_factors.retain(|cf| {
+            if let Some(pos) = remaining.iter().position(|f| f == cf) {
+                remaining.remove(pos);
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    if common_factors.is_empty() {
+        return None;
+    }
+
+    // Factor out common factors from each term, rebuilding quotient terms.
+    let quotient_terms: Vec<Type> = term_factorizations
+        .iter()
+        .map(|(coeff, non_lit_factors)| {
+            let mut remaining = non_lit_factors.clone();
+            for cf in &common_factors {
+                if let Some(pos) = remaining.iter().position(|f| f == cf) {
+                    remaining.remove(pos);
+                }
+            }
+            let mut all_factors = Vec::new();
+            if *coeff != 1 {
+                all_factors.push(Type::Size(SizeExpr::Literal(*coeff)));
+            }
+            all_factors.extend(remaining);
+            rebuild_product(all_factors)
+        })
+        .collect();
+
+    // Canonicalize the quotient sum so it can be compared structurally with the denominator.
+    let quotient_sum = rebuild_sum(quotient_terms);
+    let canonical_quotient = canonicalize_inner(quotient_sum);
+
+    // Numerator = common_factors * canonical_quotient (as a product).
+    // Try cancelling this product with the denominator.
+    let mut all_num_factors = common_factors;
+    all_num_factors.push(canonical_quotient);
+    let factored_num = rebuild_product(all_num_factors);
+
+    let (new_num, new_den) = try_cancel_common_factors(factored_num, den.clone());
+    if matches!(new_den, Type::Size(SizeExpr::Literal(1))) {
+        Some(new_num)
+    } else {
+        None
+    }
+}
+
+/// Decompose `value` as `base^k * remainder` where k is maximized.
+/// Returns (k, remainder). For example: extract_base_power(8, 2) = (3, 1),
+/// extract_base_power(12, 2) = (2, 3), extract_base_power(7, 2) = (0, 7).
+fn extract_base_power(mut value: i64, base: i64) -> (i64, i64) {
+    if base.abs() <= 1 {
+        return (0, value);
+    }
+    let mut k = 0;
+    while value != 0 && value % base == 0 {
+        value /= base;
+        k += 1;
+    }
+    (k, value)
+}
+
 fn gcd(mut a: i64, mut b: i64) -> i64 {
     while b != 0 {
         let temp = b;
@@ -613,23 +812,32 @@ fn gcd(mut a: i64, mut b: i64) -> i64 {
 }
 
 /// Compare types for canonical ordering.
-/// Ordering: Literal < Quantified < SizeExpr(FloorDiv) < SizeExpr(Mul) < SizeExpr(Add) < SizeExpr(Sub)
+/// Ordering: Literal < Quantified < Var < SizeExpr(FloorDiv) < SizeExpr(Mul) < SizeExpr(Add) < SizeExpr(Sub)
 fn compare_type(a: &Type, b: &Type) -> Ordering {
     match (a, b) {
         // Literals: compare numerically
         (Type::Size(SizeExpr::Literal(n1)), Type::Size(SizeExpr::Literal(n2))) => n1.cmp(n2),
 
-        // Type ordering
+        // Literals come first
         (Type::Size(SizeExpr::Literal(_)), _) => Ordering::Less,
         (_, Type::Size(SizeExpr::Literal(_))) => Ordering::Greater,
 
-        // Quantified
+        // Quantified (type parameters)
         (Type::Quantified(q1), Type::Quantified(q2)) => q1.cmp(q2),
-        (Type::Quantified(_), Type::Size(_)) => Ordering::Less,
-        (Type::Size(_), Type::Quantified(_)) => Ordering::Greater,
+        (Type::Quantified(_), _) => Ordering::Less,
+        (_, Type::Quantified(_)) => Ordering::Greater,
+
+        // Var (solver variables, created during generic instantiation)
+        (Type::Var(v1), Type::Var(v2)) => v1.cmp(v2),
+        (Type::Var(_), _) => Ordering::Less,
+        (_, Type::Var(_)) => Ordering::Greater,
 
         // SizeExpr variants
         (Type::Size(d1), Type::Size(d2)) => compare_sizeexpr(d1, d2),
+
+        // Size expressions come after non-Size types
+        (Type::Size(_), _) => Ordering::Greater,
+        (_, Type::Size(_)) => Ordering::Less,
 
         // Fallback: types that shouldn't appear in dimension expressions
         _ => Ordering::Equal,
@@ -641,12 +849,15 @@ fn compare_sizeexpr(a: &SizeExpr, b: &SizeExpr) -> Ordering {
     match (a, b) {
         (Literal(n1), Literal(n2)) => n1.cmp(n2),
 
-        // Type ordering: Literal < FloorDiv < Mul < Add < Sub
+        // Type ordering: Literal < FloorDiv < Pow < Mul < Add < Sub
         (Literal(_), _) => Ordering::Less,
         (_, Literal(_)) => Ordering::Greater,
 
-        (FloorDiv(_, _), Mul(_, _) | Add(_, _) | Sub(_, _)) => Ordering::Less,
-        (Mul(_, _) | Add(_, _) | Sub(_, _), FloorDiv(_, _)) => Ordering::Greater,
+        (FloorDiv(_, _), Pow(_, _) | Mul(_, _) | Add(_, _) | Sub(_, _)) => Ordering::Less,
+        (Pow(_, _) | Mul(_, _) | Add(_, _) | Sub(_, _), FloorDiv(_, _)) => Ordering::Greater,
+
+        (Pow(_, _), Mul(_, _) | Add(_, _) | Sub(_, _)) => Ordering::Less,
+        (Mul(_, _) | Add(_, _) | Sub(_, _), Pow(_, _)) => Ordering::Greater,
 
         (Mul(_, _), Add(_, _) | Sub(_, _)) => Ordering::Less,
         (Add(_, _) | Sub(_, _), Mul(_, _)) => Ordering::Greater,
@@ -656,6 +867,7 @@ fn compare_sizeexpr(a: &SizeExpr, b: &SizeExpr) -> Ordering {
 
         // Same variant: compare lexicographically
         (FloorDiv(n1, d1), FloorDiv(n2, d2))
+        | (Pow(n1, d1), Pow(n2, d2))
         | (Mul(n1, d1), Mul(n2, d2))
         | (Add(n1, d1), Add(n2, d2))
         | (Sub(n1, d1), Sub(n2, d2)) => match compare_type(n1, n2) {
@@ -676,7 +888,8 @@ impl pyrefly_util::visit::Visit<Type> for SizeExpr {
             SizeExpr::Add(left, right)
             | SizeExpr::Sub(left, right)
             | SizeExpr::Mul(left, right)
-            | SizeExpr::FloorDiv(left, right) => {
+            | SizeExpr::FloorDiv(left, right)
+            | SizeExpr::Pow(left, right) => {
                 f(left);
                 f(right);
             }
@@ -691,7 +904,8 @@ impl pyrefly_util::visit::VisitMut<Type> for SizeExpr {
             SizeExpr::Add(left, right)
             | SizeExpr::Sub(left, right)
             | SizeExpr::Mul(left, right)
-            | SizeExpr::FloorDiv(left, right) => {
+            | SizeExpr::FloorDiv(left, right)
+            | SizeExpr::Pow(left, right) => {
                 f(left);
                 f(right);
             }
@@ -711,8 +925,13 @@ pub enum ShapeError {
     /// Tensor ranks don't match
     RankMismatch { got: usize, want: usize },
 
-    /// Invalid dimension value (e.g., negative or zero)
+    /// Invalid dimension value (e.g., negative or zero).
+    /// `value` is the offending dimension index; `reason` explains why it's invalid.
     InvalidDimension { value: i64, reason: String },
+
+    /// General shape computation error from a meta-shape function or broadcasting.
+    /// The message is self-contained (no "Invalid dimension value N:" prefix).
+    ShapeComputation { message: String },
 
     /// Structural mismatch between dimension types
     StructuralMismatch {
@@ -726,6 +945,16 @@ pub enum ShapeError {
     /// For example: passing Dim[(A * B) // 2] to parameter Dim[X // 2]
     /// X appears in a nested position (inside // 2) and cannot be inferred
     NestedTypeVarNotInferred,
+
+    /// Cannot index a scalar (rank-0) tensor
+    ScalarIndex,
+
+    /// Too many indices for tensor rank
+    TooManyIndices { got: usize, max: usize },
+
+    /// Operation not supported on variadic shapes.
+    /// Triggers fixture fallback instead of a user-visible error.
+    Unsupported { message: String },
 }
 
 impl Display for ShapeError {
@@ -741,6 +970,9 @@ impl Display for ShapeError {
             Self::InvalidDimension { value, reason } => {
                 write!(f, "Invalid dimension value {}: {}", value, reason)
             }
+            Self::ShapeComputation { message } => {
+                write!(f, "{}", message)
+            }
             Self::StructuralMismatch {
                 got: _,
                 got_canonical,
@@ -755,6 +987,19 @@ impl Display for ShapeError {
             }
             Self::NestedTypeVarNotInferred => {
                 write!(f, "Type variable cannot be inferred from a nested position")
+            }
+            Self::ScalarIndex => {
+                write!(f, "Cannot index scalar tensor (rank 0)")
+            }
+            Self::TooManyIndices { got, max } => {
+                write!(
+                    f,
+                    "Too many indices for tensor: got {}, expected at most {}",
+                    got, max
+                )
+            }
+            Self::Unsupported { message } => {
+                write!(f, "Unsupported: {}", message)
             }
         }
     }
@@ -806,9 +1051,8 @@ fn contains_var_in_size_expr(dim: &SizeExpr) -> bool {
         SizeExpr::Add(left, right)
         | SizeExpr::Sub(left, right)
         | SizeExpr::Mul(left, right)
-        | SizeExpr::FloorDiv(left, right) => {
-            contains_var_in_type(left) || contains_var_in_type(right)
-        }
+        | SizeExpr::FloorDiv(left, right)
+        | SizeExpr::Pow(left, right) => contains_var_in_type(left) || contains_var_in_type(right),
         _ => false,
     }
 }

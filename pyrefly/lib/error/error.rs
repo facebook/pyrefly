@@ -14,6 +14,7 @@ use std::path::Path;
 use itertools::Itertools;
 use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
+use lsp_types::DiagnosticTag;
 use lsp_types::Url;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::Module;
@@ -36,6 +37,14 @@ use yansi::Paint;
 use crate::config::error_kind::ErrorKind;
 use crate::config::error_kind::Severity;
 
+/// A secondary annotation that labels a span in the same file as the primary error.
+/// Used to show additional context, e.g. the types of both operands in a binary operation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SecondaryAnnotation {
+    pub range: TextRange,
+    pub label: Box<str>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Error {
     module: Module,
@@ -48,6 +57,8 @@ pub struct Error {
     /// The rest of the error message after the first line.
     /// Note that this is formatted for pretty-printing, with two spaces at the beginning and after every newline.
     msg_details: Option<Box<str>>,
+    /// Additional labeled spans in the same file for richer diagnostics.
+    secondary_annotations: Vec<SecondaryAnnotation>,
 }
 
 impl Ranged for Error {
@@ -131,28 +142,43 @@ impl Error {
     }
 
     fn get_source_snippet<'a>(&'a self, origin: &'a str) -> Message<'a> {
-        // Maximum number of lines to print in the snippet.
-        const MAX_LINES: u32 = 5;
+        // Maximum number of lines to show in a single snippet. Annotations further apart
+        // than this are shown as separate snippets rather than dumping all lines in between.
+        // The primary span is also capped to this many lines for very large multi-line spans.
+        const MAX_LINES: u32 = 10;
 
-        // Warning: The SourceRange is char indexed, while the snippet is byte indexed.
-        //          Be careful in the conversion.
-        let source = self.module.lined_buffer().content_in_line_range(
-            self.display_range.start.line_within_file(),
-            cmp::min(
-                LineNumber::from_zero_indexed(
-                    self.display_range
-                        .start
-                        .line_within_file()
-                        .to_zero_indexed()
-                        + MAX_LINES,
-                ),
-                self.display_range.end.line_within_file(),
-            ),
+        // Partition secondary annotations into nearby (shown inline with the primary span)
+        // and distant (shown as separate snippets to avoid printing excessive context).
+        let primary_start_line = self.display_range.start.line_within_file();
+        let primary_end_line = self.display_range.end.line_within_file();
+        let mut start_line = primary_start_line;
+        // Cap the primary span to MAX_LINES to avoid dumping huge multi-line spans.
+        let mut end_line = cmp::min(
+            LineNumber::from_zero_indexed(primary_start_line.to_zero_indexed() + MAX_LINES),
+            primary_end_line,
         );
-        let line_start = self
-            .module
-            .lined_buffer()
-            .line_start(self.display_range.start.line_within_file());
+        let mut nearby_annotations = Vec::new();
+        let mut distant_annotations = Vec::new();
+        for ann in &self.secondary_annotations {
+            let ann_display = self.module.display_range(ann.range);
+            let ann_start = ann_display.start.line_within_file();
+            let ann_end = ann_display.end.line_within_file();
+            let is_nearby = ann_start
+                .to_zero_indexed()
+                .abs_diff(primary_end_line.to_zero_indexed())
+                <= MAX_LINES
+                && ann_end
+                    .to_zero_indexed()
+                    .abs_diff(primary_start_line.to_zero_indexed())
+                    <= MAX_LINES;
+            if is_nearby {
+                start_line = cmp::min(start_line, ann_start);
+                end_line = cmp::max(end_line, ann_end);
+                nearby_annotations.push(ann);
+            } else {
+                distant_annotations.push((ann, ann_display));
+            }
+        }
 
         let level = match self.severity {
             Severity::Error => Level::Error,
@@ -160,14 +186,72 @@ impl Error {
             Severity::Info => Level::Info,
             Severity::Ignore => Level::None,
         };
-        let span_start = (self.range.start() - line_start).to_usize();
-        let span_end = cmp::min(span_start + self.range.len().to_usize(), source.len());
-        Level::None.title("").snippet(
-            Snippet::source(source)
-                .line_start(self.display_range.start.line_within_cell().get() as usize)
-                .origin(origin)
-                .annotation(level.span(span_start..span_end)),
-        )
+
+        // Primary snippet with nearby annotations inline.
+        let primary_snippet = self.make_snippet(
+            origin,
+            start_line,
+            end_line,
+            Some((self.range, level)),
+            &nearby_annotations,
+        );
+
+        // Distant annotations each get their own snippet covering their full span.
+        let mut message = Level::None.title("").snippet(primary_snippet);
+        for (ann, ann_display) in &distant_annotations {
+            let ann_start_line = ann_display.start.line_within_file();
+            let ann_end_line = ann_display.end.line_within_file();
+            message = message.snippet(self.make_snippet(
+                origin,
+                ann_start_line,
+                ann_end_line,
+                None,
+                &[ann],
+            ));
+        }
+        message
+    }
+
+    /// Build a source snippet for a line range with an optional primary annotation and
+    /// secondary annotations. Used for both the main error snippet and distant annotation snippets.
+    fn make_snippet<'a>(
+        &'a self,
+        origin: &'a str,
+        from_line: LineNumber,
+        to_line: LineNumber,
+        primary: Option<(TextRange, Level)>,
+        annotations: &[&'a SecondaryAnnotation],
+    ) -> Snippet<'a> {
+        // Warning: The SourceRange is char indexed, while the snippet is byte indexed.
+        let source = self
+            .module
+            .lined_buffer()
+            .content_in_line_range(from_line, to_line);
+        let line_start = self.module.lined_buffer().line_start(from_line);
+        let cell_line = self
+            .module
+            .display_range(TextRange::new(line_start, line_start))
+            .start
+            .line_within_cell()
+            .get() as usize;
+        let mut snippet = Snippet::source(source).line_start(cell_line).origin(origin);
+        if let Some((range, lvl)) = primary {
+            let start = (range.start() - line_start).to_usize();
+            let end = cmp::min(start + range.len().to_usize(), source.len());
+            snippet = snippet.annotation(lvl.span(start..end));
+        }
+        for ann in annotations {
+            let start = ann
+                .range
+                .start()
+                .to_usize()
+                .saturating_sub(line_start.to_usize());
+            let end = cmp::min(start + ann.range.len().to_usize(), source.len());
+            if start <= end && end <= source.len() {
+                snippet = snippet.annotation(Level::Warning.span(start..end).label(&ann.label));
+            }
+        }
+        snippet
     }
 
     pub fn with_severity(&self, severity: Severity) -> Self {
@@ -186,6 +270,8 @@ impl Error {
         let code_description = Url::parse(&self.error_kind().docs_url())
             .ok()
             .map(|href| CodeDescription { href });
+        // TODO: Map secondary_annotations to DiagnosticRelatedInformation for LSP clients.
+        // This requires constructing a Url from the module path, which may not always succeed.
         Diagnostic {
             range: self.module.to_lsp_range(self.range()),
             severity: Some(match self.severity() {
@@ -199,7 +285,11 @@ impl Error {
             message: self.msg().to_owned(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
-            tags: None,
+            tags: if self.error_kind() == ErrorKind::Deprecated {
+                Some(vec![DiagnosticTag::DEPRECATED])
+            } else {
+                None
+            },
             ..Default::default()
         }
     }
@@ -262,7 +352,18 @@ impl Error {
             severity: error_kind.default_severity(),
             msg_header,
             msg_details,
+            secondary_annotations: Vec::new(),
         }
+    }
+
+    /// Add a secondary labeled annotation to this error. These appear as additional
+    /// underlined spans with labels in the source snippet.
+    pub fn with_annotation(mut self, range: TextRange, label: String) -> Self {
+        self.secondary_annotations.push(SecondaryAnnotation {
+            range,
+            label: label.into_boxed_str(),
+        });
+        self
     }
 
     pub fn display_range(&self) -> &DisplayRange {
@@ -299,15 +400,21 @@ impl Error {
         if self.error_kind == ErrorKind::UnusedIgnore {
             return false;
         }
-        self.module.is_ignored(
-            &self.display_range,
-            self.error_kind.to_name(),
-            enabled_ignores,
-        )
+        // Check both this kind's name and any parent kind's name, so that e.g.
+        // `# pyrefly: ignore[bad-override]` also suppresses `bad-override-mutable-attribute`.
+        self.error_kind.suppression_names().any(|name| {
+            self.module
+                .is_ignored(&self.display_range, name, enabled_ignores)
+        })
     }
 
     pub fn error_kind(&self) -> ErrorKind {
         self.error_kind
+    }
+
+    /// Return the secondary annotations attached to this error.
+    pub fn secondary_annotations(&self) -> &[SecondaryAnnotation] {
+        &self.secondary_annotations
     }
 }
 
@@ -322,6 +429,7 @@ mod tests {
     use vec1::vec1;
 
     use super::*;
+    use crate::test::util::TestEnv;
 
     #[test]
     fn test_error_render() {
@@ -385,17 +493,89 @@ mod tests {
         assert_eq!(
             str::from_utf8(&output).unwrap(),
             r#"ERROR oops [bad-return]
+  --> test.py:1:1
+   |
+ 1 | / Start
+ 2 | | X
+ 3 | | X
+ 4 | | X
+ 5 | | X
+ 6 | | X
+ 7 | | X
+ 8 | | X
+ 9 | | X
+10 | | X
+11 | | X
+   | |__^
+   |
+"#,
+        );
+    }
+
+    #[test]
+    fn test_error_with_secondary_annotations() {
+        // Source: "val * 2" where val is at bytes 0..3, * at 4, 2 at 6
+        let source = "val * 2";
+        let module_info = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("test.py")),
+            Arc::new(source.to_owned()),
+        );
+        let error = Error::new(
+            module_info,
+            // Primary span covers the whole expression
+            TextRange::new(TextSize::new(0), TextSize::new(7)),
+            vec1!["`*` is not supported between `int | str` and `int`".to_owned()],
+            ErrorKind::UnsupportedOperation,
+        )
+        .with_annotation(
+            TextRange::new(TextSize::new(0), TextSize::new(3)),
+            "has type `int | str`".to_owned(),
+        )
+        .with_annotation(
+            TextRange::new(TextSize::new(6), TextSize::new(7)),
+            "has type `int`".to_owned(),
+        );
+        let root = PathBuf::new();
+        let mut output = Vec::new();
+        error
+            .write_line(&mut Cursor::new(&mut output), root.as_path(), true)
+            .unwrap();
+
+        assert_eq!(
+            str::from_utf8(&output).unwrap(),
+            r#"ERROR `*` is not supported between `int | str` and `int` [unsupported-operation]
  --> test.py:1:1
   |
-1 | / Start
-2 | | X
-3 | | X
-4 | | X
-5 | | X
-6 | | X
-  | |__^
+1 | val * 2
+  | ---^^^-
+  | |     |
+  | |     has type `int`
+  | has type `int | str`
   |
 "#,
         );
+    }
+
+    /// Integration test: verify that binary operator errors from the type checker
+    /// produce secondary annotations labeling both operands with their types.
+    #[test]
+    fn test_binop_error_has_type_annotations() {
+        let code = r#"
+def f(x: None) -> None:
+    y = x * 2  # E: `*` is not supported between `None` and `Literal[2]`
+"#;
+        let (state, handle) = TestEnv::one("main", code).to_state();
+        let errors = state
+            .transaction()
+            .get_errors(&[handle("main")])
+            .collect_errors()
+            .ordinary;
+        assert_eq!(errors.len(), 1);
+        let err = &errors[0];
+        let annotations = err.secondary_annotations();
+        assert_eq!(annotations.len(), 2);
+        assert_eq!(&*annotations[0].label, "has type `None`");
+        assert_eq!(&*annotations[1].label, "has type `Literal[2]`");
     }
 }

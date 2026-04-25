@@ -91,6 +91,26 @@ y = list([1, 2, 3])
 }
 
 #[test]
+fn test_dunder_new_implicit_self_return_inlay_hint() {
+    let code = r#"
+class A:
+    def __new__(cls, x: int | None = None):
+        if x is None:
+            return cls.__new__(cls, 5)
+        return super().__new__(cls)
+"#;
+    assert_eq!(
+        r#"
+# main.py
+3 |     def __new__(cls, x: int | None = None):
+                                              ^ inlay-hint: ` -> Self@A`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
 fn test_enum_literal_inlay_hint() {
     let code = r#"
 from enum import Enum

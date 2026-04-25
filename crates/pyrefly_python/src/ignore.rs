@@ -26,9 +26,6 @@
 //! We are permissive with whitespace, allowing `#type:ignore[code]` and
 //! `#  type:  ignore  [  code  ]`, but do not allow a space before the colon.
 
-use std::iter::Peekable;
-use std::str::CharIndices;
-
 use clap::ValueEnum;
 use dupe::Dupe;
 use enum_iterator::Sequence;
@@ -42,36 +39,56 @@ use starlark_map::smallset;
 /// Finds the byte offset of the first '#' character that starts a comment, tracking
 /// whether we're inside a multi-line triple-quoted string.
 ///
+/// All interesting characters (`#`, `'`, `"`, `\`) are ASCII, so we operate
+/// on bytes directly — UTF-8 guarantees these never appear inside multi-byte
+/// sequences.
+///
 /// `in_triple_quote` should be `Some('"')` or `Some('\'')` if the line begins
 /// inside an open triple-quoted string from a previous line, or `None` otherwise.
 ///
 /// Returns `(comment_start, new_triple_quote_state)`.
-fn find_comment_start(line: &str, in_triple_quote: Option<char>) -> (Option<usize>, Option<char>) {
-    let mut chars = line.char_indices().peekable();
-    let mut triple_quote = in_triple_quote;
-    let mut single_quote = None;
-
-    let advance_if_matches = |chars: &mut Peekable<CharIndices>, q| {
-        if chars.peek().is_some_and(|(_, next)| *next == q) {
-            chars.next();
-            true
-        } else {
-            false
+pub fn find_comment_start(
+    line: &str,
+    in_triple_quote: Option<char>,
+) -> (Option<usize>, Option<char>) {
+    // Fast path: when not inside a triple-quoted string, scan for the first
+    // byte that requires string-aware parsing (#, ', ", \). If the first such
+    // byte is '#', it is the comment start — no further analysis is needed.
+    // This avoids the per-byte state machine for the common case of plain code
+    // lines like `x = foo(bar)  # comment`.
+    if in_triple_quote.is_none() {
+        let bytes = line.as_bytes();
+        match bytes
+            .iter()
+            .position(|&b| b == b'#' || b == b'\'' || b == b'"' || b == b'\\')
+        {
+            None => return (None, None),
+            Some(pos) if bytes[pos] == b'#' => return (Some(pos), None),
+            _ => {} // quote or backslash found — need full parser
         }
-    };
+    }
 
-    while let Some((idx, ch)) = chars.next() {
+    find_comment_start_slow(line, in_triple_quote)
+}
+
+/// Full string-aware comment finder. Handles triple-quoted strings, single-quoted
+/// strings, and escape sequences.
+fn find_comment_start_slow(
+    line: &str,
+    in_triple_quote: Option<char>,
+) -> (Option<usize>, Option<char>) {
+    let mut bytes = line.bytes().enumerate().peekable();
+    let mut triple_quote: Option<u8> = in_triple_quote.map(|c| c as u8);
+    let mut single_quote: Option<u8> = None;
+
+    while let Some((idx, b)) = bytes.next() {
         if let Some(q) = triple_quote {
-            // Inside triple-quoted string
-            if ch == '\\' {
-                // Skip next char if escaped
-                chars.next();
-            } else if ch == q
-                // This check consumes zero, one, or two additional chars:
-                // - zero or one: this is a single quote or a pair of quotes, not interesting
-                // - two: this is the end of a triple-quoted string
-                && advance_if_matches(&mut chars, q)
-                && advance_if_matches(&mut chars, q)
+            // Inside triple-quoted string.
+            if b == b'\\' {
+                bytes.next(); // Skip escaped character.
+            } else if b == q
+                && bytes.next_if(|&(_, next)| next == q).is_some()
+                && bytes.next_if(|&(_, next)| next == q).is_some()
             {
                 triple_quote = None;
             }
@@ -79,34 +96,32 @@ fn find_comment_start(line: &str, in_triple_quote: Option<char>) -> (Option<usiz
         }
 
         if let Some(q) = single_quote {
-            // Inside regular string
-            if ch == '\\' {
-                // Skip next char if escaped
-                chars.next();
-            } else if ch == q {
+            // Inside regular string.
+            if b == b'\\' {
+                bytes.next(); // Skip escaped character.
+            } else if b == q {
                 single_quote = None;
             }
             continue;
         }
 
         // Normal code.
-        match ch {
-            '"' | '\'' => {
-                if advance_if_matches(&mut chars, ch) {
-                    if advance_if_matches(&mut chars, ch) {
-                        triple_quote = Some(ch);
-                    } else {
-                        // We've advanced past the opening and closing quotes of an empty string
+        match b {
+            b'"' | b'\'' => {
+                if bytes.next_if(|&(_, next)| next == b).is_some() {
+                    if bytes.next_if(|&(_, next)| next == b).is_some() {
+                        triple_quote = Some(b);
                     }
+                    // else: empty string ("" or ''), both quotes already consumed.
                 } else {
-                    single_quote = Some(ch);
+                    single_quote = Some(b);
                 }
             }
-            '#' => return (Some(idx), None),
+            b'#' => return (Some(idx), None),
             _ => {}
         }
     }
-    (None, triple_quote)
+    (None, triple_quote.map(|b| b as char))
 }
 
 /// Finds the byte offset of the first '#' character that starts a comment.
@@ -260,54 +275,13 @@ pub struct Ignore {
     /// The line number here represents the line that the suppression applies to,
     /// not the line of the suppression comment.
     ignores: SmallMap<LineNumber, Vec<Suppression>>,
-    /// All the tools with an ignore-all directive, with the line number that the directive is on.
-    ignore_all: SmallMap<Tool, LineNumber>,
 }
 
 impl Ignore {
     pub fn new(code: &str) -> Self {
         Self {
             ignores: Self::parse_ignores(code),
-            ignore_all: Self::parse_ignore_all(code),
         }
-    }
-
-    /// All the errors that were ignored, and the line number that ignore happened.
-    fn parse_ignore_all(code: &str) -> SmallMap<Tool, LineNumber> {
-        // process top level comments
-        let mut res = SmallMap::new();
-        let mut prev_ignore = None;
-        for (line, x) in code
-            .lines()
-            .map(|x| x.trim())
-            .take_while(|x| x.is_empty() || x.starts_with('#'))
-            .enumerate()
-        {
-            let line = LineNumber::from_zero_indexed(line as u32);
-            if let Some((tool, line)) = prev_ignore {
-                // We consider any `# type: ignore` followed by a line with code to be a
-                // normal suppression, not an ignore-all directive.
-                res.entry(tool).or_insert(line);
-                prev_ignore = None;
-            }
-
-            let mut lex = Lexer(x);
-            if !lex.starts_with("#") {
-                continue;
-            }
-            lex.trim_start();
-            if lex.starts_with("pyre-ignore-all-errors") {
-                res.entry(Tool::Pyre).or_insert(line);
-            } else if let Some(tool) = lex.starts_with_tool() {
-                lex.trim_start();
-                if lex.starts_with("ignore-errors") && lex.blank() {
-                    res.entry(tool).or_insert(line);
-                } else if lex.starts_with("ignore") && lex.blank() {
-                    prev_ignore = Some((tool, line));
-                }
-            }
-        }
-        res
     }
 
     fn parse_ignores(code: &str) -> SmallMap<LineNumber, Vec<Suppression>> {
@@ -393,12 +367,6 @@ impl Ignore {
         kind: &str,
         enabled_ignores: &SmallSet<Tool>,
     ) -> bool {
-        if enabled_ignores
-            .iter()
-            .any(|tool| self.ignore_all.contains_key(tool))
-        {
-            return true;
-        }
         if let Some(suppressions) = self.ignores.get(&start_line)
             && suppressions.iter().any(|supp| {
                 enabled_ignores.contains(&supp.tool)
@@ -475,8 +443,90 @@ impl Ignore {
 
     /// Returns true if there are no suppressions.
     pub fn is_empty(&self) -> bool {
-        self.ignores.is_empty() && self.ignore_all.is_empty()
+        self.ignores.is_empty()
     }
+}
+
+/// Returns true if `line` falls inside one of the sorted multiline string ranges.
+fn is_in_multiline_string(
+    multiline_string_ranges: &[(LineNumber, LineNumber)],
+    line: LineNumber,
+) -> bool {
+    let idx = multiline_string_ranges.partition_point(|(start, _)| *start <= line);
+    idx > 0 && {
+        let (start, end) = multiline_string_ranges[idx - 1];
+        line >= start && line <= end
+    }
+}
+
+/// Parse top-level `ignore-errors` / `ignore-all-errors` / `type: ignore` directives.
+///
+/// Scans the beginning of the file for comment-only lines (including blank lines
+/// and lines inside multiline strings like docstrings). Returns the map of tools
+/// with ignore-all directives and the line number where each directive appears.
+///
+/// After a docstring, only `ignore-errors` directives are recognized — bare
+/// `# type: ignore` is not, since it could plausibly be meant as a per-line
+/// suppression for code that follows.
+pub fn parse_ignore_all(
+    code: &str,
+    multiline_string_ranges: &[(LineNumber, LineNumber)],
+) -> SmallMap<Tool, LineNumber> {
+    let mut res = SmallMap::new();
+    let mut prev_ignore = None;
+    let mut seen_docstring = false;
+
+    for (idx, raw_line) in code.lines().enumerate() {
+        let line = LineNumber::from_zero_indexed(idx as u32);
+        let trimmed = raw_line.trim();
+
+        // Lines inside a multiline string (e.g. a module docstring) are not
+        // code — skip them but record that we've passed through a docstring.
+        if is_in_multiline_string(multiline_string_ranges, line) {
+            seen_docstring = true;
+            continue;
+        }
+
+        // Lines that open/close a triple-quoted string are also part of the
+        // preamble — skip them.
+        if trimmed.starts_with("\"\"\"") || trimmed.starts_with("'''") {
+            seen_docstring = true;
+            continue;
+        }
+
+        // Stop at the first non-empty, non-comment line (i.e. actual code).
+        // A pending `# type: ignore` followed directly by code is a per-line
+        // suppression, not an ignore-all directive, so we discard it.
+        if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            break;
+        }
+
+        if let Some((tool, prev_line)) = prev_ignore {
+            // The previous `# type: ignore` was followed by another comment or
+            // blank line, so it is a whole-file suppression.
+            res.entry(tool).or_insert(prev_line);
+            prev_ignore = None;
+        }
+
+        let mut lex = Lexer(trimmed);
+        if !lex.starts_with("#") {
+            continue;
+        }
+        lex.trim_start();
+        if lex.starts_with("pyre-ignore-all-errors") {
+            res.entry(Tool::Pyre).or_insert(line);
+        } else if let Some(tool) = lex.starts_with_tool() {
+            lex.trim_start();
+            if lex.starts_with("ignore-errors") && lex.blank() {
+                res.entry(tool).or_insert(line);
+            } else if !seen_docstring && lex.starts_with("ignore") && lex.blank() {
+                // After a docstring, bare `# type: ignore` is not recognized
+                // as an ignore-all directive.
+                prev_ignore = Some((tool, line));
+            }
+        }
+    }
+    res
 }
 
 #[cfg(test)]
@@ -651,7 +701,7 @@ x = """
     fn test_parse_ignore_all() {
         fn f(x: &str, ignores: &[(Tool, u32)]) {
             assert_eq!(
-                Ignore::parse_ignore_all(x),
+                parse_ignore_all(x, &[]),
                 ignores
                     .iter()
                     .map(|x| (x.0, LineNumber::new(x.1).unwrap()))
@@ -686,5 +736,49 @@ x = """
         f("# pyrefly: ignore-errors because I want to\nx = 5", &[]);
         f("# pyrefly: ignore-errors # because I want to\nx = 5", &[]);
         f("# pyrefly: ignore-errors \nx = 5", &[(Tool::Pyrefly, 1)]);
+    }
+
+    #[test]
+    fn test_parse_ignore_all_with_docstring() {
+        fn f(x: &str, ranges: &[(LineNumber, LineNumber)], ignores: &[(Tool, u32)]) {
+            assert_eq!(
+                parse_ignore_all(x, ranges),
+                ignores
+                    .iter()
+                    .map(|x| (x.0, LineNumber::new(x.1).unwrap()))
+                    .collect(),
+                "{x:?}"
+            );
+        }
+
+        // ignore-errors after a docstring should work
+        f(
+            "\"\"\"\nmodule docstring\n\"\"\"\n# pyrefly: ignore-errors\nx = 5",
+            &[(
+                LineNumber::from_zero_indexed(0),
+                LineNumber::from_zero_indexed(2),
+            )],
+            &[(Tool::Pyrefly, 4)],
+        );
+
+        // bare `# type: ignore` after docstring should NOT be recognized
+        f(
+            "\"\"\"\nmodule docstring\n\"\"\"\n# type: ignore\n\nx = 5",
+            &[(
+                LineNumber::from_zero_indexed(0),
+                LineNumber::from_zero_indexed(2),
+            )],
+            &[],
+        );
+
+        // ignore-errors before a docstring should still work
+        f(
+            "# pyrefly: ignore-errors\n\"\"\"\nmodule docstring\n\"\"\"\nx = 5",
+            &[(
+                LineNumber::from_zero_indexed(1),
+                LineNumber::from_zero_indexed(3),
+            )],
+            &[(Tool::Pyrefly, 1)],
+        );
     }
 }

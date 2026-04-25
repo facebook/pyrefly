@@ -16,6 +16,7 @@ use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::tensor::TensorShape;
 use pyrefly_types::types::Union;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -98,12 +99,13 @@ pub struct VarianceResult {
     pub violations: Vec<VarianceViolation>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct InferenceStatus {
     inferred_variance: Variance,
     has_variance_inferred: bool,
     specified_variance: Option<Variance>,
 }
+
 type InferenceMap = SmallMap<Name, InferenceStatus>;
 
 // A map from class name to tparam environment
@@ -167,8 +169,8 @@ fn on_type(
                     // Unknown params
                 }
                 Params::ParamSpec(prefix, param_spec) => {
-                    for (ty, _) in prefix.iter() {
-                        on_type(variance.inv(), inj, ty, on_edge, on_var);
+                    for p in prefix.iter() {
+                        on_type(variance.inv(), inj, p.ty(), on_edge, on_var);
                     }
                     on_type(variance.inv(), inj, param_spec, on_edge, on_var);
                 }
@@ -217,6 +219,34 @@ fn on_type(
                 on_type(variance, inj, &sig.as_type(), on_edge, on_var);
             }
         }
+        Type::Tensor(tensor) => {
+            // Tensor dimensions are invariant - Tensor[2, 3] is not a subtype of Tensor[3, 2]
+            let mut visit_dim = |ty: &Type| {
+                on_type(Variance::Invariant, inj, ty, on_edge, on_var);
+            };
+            match &tensor.shape {
+                TensorShape::Concrete(dims) => {
+                    for dim in dims {
+                        visit_dim(dim);
+                    }
+                }
+                TensorShape::Unpacked(box (prefix, middle, suffix)) => {
+                    for dim in prefix {
+                        visit_dim(dim);
+                    }
+                    visit_dim(middle);
+                    for dim in suffix {
+                        visit_dim(dim);
+                    }
+                }
+            }
+        }
+        Type::NNModule(module) => {
+            // NNModule fields are invariant
+            for (_, ty) in module.fields.iter() {
+                on_type(Variance::Invariant, inj, ty, on_edge, on_var);
+            }
+        }
         Type::Callable(t) => {
             // Walk return type covariantly
             on_type(variance, inj, &t.ret, on_edge, on_var);
@@ -233,8 +263,8 @@ fn on_type(
                     // Unknown params
                 }
                 Params::ParamSpec(prefix, param_spec) => {
-                    for (ty, _) in prefix.iter() {
-                        on_type(variance.inv(), inj, ty, on_edge, on_var);
+                    for p in prefix.iter() {
+                        on_type(variance.inv(), inj, p.ty(), on_edge, on_var);
                     }
                     on_type(variance.inv(), inj, param_spec, on_edge, on_var);
                 }
@@ -265,7 +295,8 @@ fn on_type(
                 SizeExpr::Add(l, r)
                 | SizeExpr::Sub(l, r)
                 | SizeExpr::Mul(l, r)
-                | SizeExpr::FloorDiv(l, r) => {
+                | SizeExpr::FloorDiv(l, r)
+                | SizeExpr::Pow(l, r) => {
                     on_type(Variance::Invariant, inj, l, on_edge, on_var);
                     on_type(Variance::Invariant, inj, r, on_edge, on_var);
                 }
@@ -292,8 +323,14 @@ fn on_class(
     }
 
     for base_type in get_class_bases(class).iter() {
+        // Base classes are walked at Bivariant position because Bivariant is
+        // the identity for compose: compose(Bi, x) = x. This directly
+        // propagates the base class's type parameter variance without adding
+        // any positional contribution. Using Covariant here would be wrong
+        // because compose(Co, Bi) = Co, which introduces a spurious Covariant
+        // constraint when the base class's variance is still unresolved (Bi).
         on_type(
-            Variance::Covariant,
+            Variance::Bivariant,
             true,
             &heap.mk_class_type(base_type.clone()),
             on_edge,
@@ -321,6 +358,12 @@ fn on_class(
                 Variance::Invariant
             };
         on_type(variance, true, ty, on_edge, on_var);
+
+        // For properties with both a getter and setter, the stored type is the setter function,
+        // but the getter is stored separately. Walk it so its covariant contribution is counted.
+        if let Some(getter) = ty.is_property_setter_with_getter() {
+            on_type(Variance::Covariant, true, &getter, on_edge, on_var);
+        }
     }
 }
 
@@ -543,6 +586,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.fixpoint(environment)
     }
 
+    /// Run the fixpoint to convergence. Each iteration clones the previous
+    /// inferred variances and unions new constraints on top, which is
+    /// monotonic (variance can only increase in the lattice) and therefore
+    /// guaranteed to converge. The lattice has height 3
+    /// (Bivariant < {Covariant, Contravariant} < Invariant), so convergence
+    /// is fast.
     fn fixpoint(&self, mut env: VarianceEnv) -> VarianceEnv {
         let mut changed = true;
 
@@ -551,7 +600,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut new_environment: VarianceEnv = SmallMap::new();
 
             for (my_class, params) in env.iter() {
-                let mut new_params = params.clone();
+                let mut new_params: InferenceMap = params.clone();
 
                 let mut on_var = |name: &Name,
                                   variance: Variance,
@@ -559,22 +608,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                   _: PreInferenceVariance| {
                     if let Some(old_status) = new_params.get_mut(name) {
                         let new_inferred_variance = variance.union(old_status.inferred_variance);
-                        // Mark as inferred if:
-                        // 1. It was already marked as inferred, OR
-                        // 2. The caller says this is an injective (reliable) constraint, OR
-                        // 3. The inferred variance is no longer Bivariant (we found a constraint)
-                        // Case 3 fixes self-referential types where `has_inferred` is always false
-                        // but we still discover variance constraints through the fixpoint iteration.
                         let new_has_variance_inferred = old_status.has_variance_inferred
                             || has_inferred
                             || new_inferred_variance != Variance::Bivariant;
-                        if new_inferred_variance != old_status.inferred_variance
-                            || new_has_variance_inferred != old_status.has_variance_inferred
-                        {
-                            old_status.inferred_variance = new_inferred_variance;
-                            old_status.has_variance_inferred = new_has_variance_inferred;
-                            changed = true;
-                        }
+                        old_status.inferred_variance = new_inferred_variance;
+                        old_status.has_variance_inferred = new_has_variance_inferred;
                     }
                 };
                 let mut on_edge = |c: &Class| env.get(c).cloned().unwrap_or_default();
@@ -586,6 +624,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &|c| self.get_base_types_for_class(c),
                     &|c| self.get_class_field_map(c),
                 );
+                if &new_params != params {
+                    changed = true;
+                }
                 new_environment.insert(my_class.dupe(), new_params);
             }
             env = new_environment;
@@ -685,15 +726,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         // Check methods shallowly
-        let fields = self.get_class_field_map(class);
-        for (name, field) in fields.iter() {
+        let class_fields = self.get_class_fields(class);
+        let field_map = self.get_class_field_map(class);
+        for (name, field) in field_map.iter() {
             if name == &dunder::INIT || name == &dunder::NEW {
                 continue;
             }
             let (ty, _, _) = field.for_variance_inference();
             if ty.is_toplevel_callable() {
-                let range = class
-                    .field_decl_range(name)
+                let range = class_fields
+                    .and_then(|f| f.field_decl_range(name))
                     .unwrap_or_else(|| class.range());
                 check_method_shallow(ty, range, &mut violations);
             }

@@ -16,3 +16,4 @@
 //! These tests are separate from integration tests that require the main pyrefly crate.
 
 pub mod get_snapshot;
+pub mod protocol_types;

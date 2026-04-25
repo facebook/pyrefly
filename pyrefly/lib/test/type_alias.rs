@@ -530,6 +530,26 @@ Z = Optional["Y"]
 );
 
 testcase!(
+    test_bare_special_form_assignment_alias,
+    r#"
+import typing
+from typing import Literal, assert_type
+
+MyOptional = typing.Optional
+AlsoOptional = MyOptional
+MyLiteral = typing.Literal
+
+x: AlsoOptional[int] = None
+y: AlsoOptional[int] = 1
+z: MyLiteral[1] = 1
+
+assert_type(x, int | None)
+assert_type(y, int | None)
+assert_type(z, Literal[1])
+"#,
+);
+
+testcase!(
     test_type_alias_recursive,
     r#"
 type X = int | list["X"]
@@ -751,6 +771,46 @@ Z = int
 class C1(X): pass  # E: Cannot use scoped type alias `X` as a base class
 class C2(Y): pass  # Should work - legacy explicit type alias
 class C3(Z): pass  # Should work - legacy implicit type alias
+    "#,
+);
+
+testcase!(
+    test_annotated_type_alias_base_class,
+    r#"
+from typing import Annotated, TypeAlias, TypeVar
+
+T = TypeVar("T")
+
+# Legacy explicit type alias using Annotated
+Ignore: TypeAlias = Annotated[T, "Ignore"]
+
+class A: ...
+class B(Ignore[A]): ...
+class C: ...  # unrelated class
+
+def test(o: A) -> None: ...
+test(B())  # should pass: B inherits from A
+
+def test2(o: C) -> None: ...
+test2(B())  # E: Argument `B` is not assignable to parameter `o` with type `C`
+
+# Legacy implicit type alias using Annotated
+Wrapper = Annotated[T, "Wrapper"]
+
+class D: ...
+class E(Wrapper[D]): ...
+
+def test3(o: D) -> None: ...
+test3(E())  # should pass: E inherits from D
+
+def test4(o: C) -> None: ...
+test4(E())  # E: Argument `E` is not assignable to parameter `o` with type `C`
+
+# PEP 695 type alias using Annotated
+type Tagged[S] = Annotated[S, "Tagged"]
+
+class F: ...
+class G(Tagged[F]): ...  # E: Cannot use scoped type alias `Tagged` as a base class
     "#,
 );
 
@@ -1075,7 +1135,6 @@ class ClassB_1(B_Alias_1[T_contra, T_co]): ...  # E: Type variable `T_contra` is
 );
 
 testcase!(
-    bug = "conformance: Should detect circular dependencies in TypeAliasType definitions",
     test_typealiastype_circular_conformance,
     r#"
 from typing import TypeAliasType, TypeVar
@@ -1089,11 +1148,11 @@ BadAlias4 = TypeAliasType("BadAlias4", "BadAlias4")  # E: cyclic self-reference 
 BadAlias5 = TypeAliasType("BadAlias5", T | "BadAlias5[str]", type_params=(T,))  # E: cyclic self-reference in `BadAlias5`
 
 # Mutual circular reference
-BadAlias6 = TypeAliasType("BadAlias6", "BadAlias7")
+BadAlias6 = TypeAliasType("BadAlias6", "BadAlias7")  # E: cyclic self-reference in `BadAlias6`
 BadAlias7 = TypeAliasType("BadAlias7", BadAlias6)  # E: cyclic self-reference in `BadAlias7`
 
 # Self-reference via list
-BadAlias21 = TypeAliasType("BadAlias21", list[BadAlias21])  # should error: circular dependency
+BadAlias21 = TypeAliasType("BadAlias21", list[BadAlias21])  # E: cyclic self-reference in `BadAlias21`
 "#,
 );
 
@@ -1132,7 +1191,7 @@ type RecursiveTypeAlias3 = RecursiveTypeAlias3  # E: cyclic self-reference in `R
 
 type RecursiveTypeAlias4[T] = T | RecursiveTypeAlias4[str]  # E: cyclic self-reference in `RecursiveTypeAlias4`
 
-type RecursiveTypeAlias6 = RecursiveTypeAlias7
+type RecursiveTypeAlias6 = RecursiveTypeAlias7  # E: cyclic self-reference in `RecursiveTypeAlias6`
 type RecursiveTypeAlias7 = RecursiveTypeAlias6  # E: cyclic self-reference in `RecursiveTypeAlias7`
 "#,
 );
@@ -1209,5 +1268,66 @@ def f(x: X):
 T = TypeVar("T")
 X = list[T]
 reveal_type([X])  # E: list[type[X[T]]]
+    "#,
+);
+
+testcase!(
+    test_logger_alias,
+    r#"
+from typing import Any
+import logging
+
+LoggerLike = logging.Logger | logging.LoggerAdapter[Any]
+
+def f(x: LoggerLike | None = None): ...
+    "#,
+);
+
+testcase!(
+    test_annotated_type_alias,
+    r#"
+from typing import Annotated
+X = Annotated[int, "metadata"]
+Y = Annotated[X, "more metadata"]
+
+class C:
+    y: Y
+
+class D:
+    x: X
+    def __init__(self, c: C):
+        self.x = c.y
+"#,
+);
+
+testcase!(
+    test_chained_type_alias_substitution,
+    r#"
+from typing import TypeVar, TypeAlias, assert_type
+
+_T = TypeVar("_T")
+_U = TypeVar("_U")
+
+A: TypeAlias = list[_T]
+B: TypeAlias = A[_U]
+C: TypeAlias = B[int]
+
+def f1(x: A[int]) -> None:
+    assert_type(x, list[int])
+
+def f2(x: B[int]) -> None:
+    assert_type(x, list[int])
+
+def f3(x: C) -> None:
+    assert_type(x, list[int])
+    "#,
+);
+
+testcase!(
+    test_union_is_not_callable,
+    r#"
+from typing import TypeAlias
+X: TypeAlias = int | str
+X()  # E: Expected a callable
     "#,
 );

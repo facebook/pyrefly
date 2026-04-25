@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::LazyLock;
+
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::finder::ConfigFinder;
@@ -21,6 +23,8 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use starlark_map::Hashed;
+use starlark_map::small_map::SmallMap;
+use starlark_map::smallmap;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingClass;
@@ -72,10 +76,18 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             _ => {}
         }
         match bindings.get(current_idx) {
+            // TypeAliasRef is a terminal binding — the name directly references
+            // another type alias. Treat it as a definition for IDE purposes.
+            Binding::TypeAliasRef(..) => {
+                return Some(current_key);
+            }
+            Binding::IterableValueComprehension(..) | Binding::IterableValueLoop(..) => {
+                return Some(current_key);
+            }
             Binding::Forward(k)
+            | Binding::PromoteForward(k)
+            | Binding::ForwardToFirstUse(k)
             | Binding::Narrow(k, _, _)
-            | Binding::CompletedPartialType(k, ..)
-            | Binding::PartialTypeWithUpstreamsCompleted(k, ..)
             | Binding::LoopPhi(k, ..) => {
                 current_idx = *k;
             }
@@ -86,15 +98,14 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
                 let binding = bindings.get(*k);
                 current_idx = binding.idx();
             }
-            Binding::AssignToSubscript(subscript, _)
-                if let Some(key) =
-                    base_key_of_assign_target(&Expr::Subscript(subscript.clone())) =>
+            Binding::AssignToSubscript(x)
+                if let Some(key) = base_key_of_assign_target(&Expr::Subscript(x.0.clone())) =>
             {
                 current_idx = bindings.key_to_idx(&key);
             }
-            Binding::AssignToAttribute {
-                attr: attribute, ..
-            } if let Some(key) = base_key_of_assign_target(&Expr::Attribute(attribute.clone())) => {
+            Binding::AssignToAttribute(x)
+                if let Some(key) = base_key_of_assign_target(&Expr::Attribute(x.attr.clone())) =>
+            {
                 current_idx = bindings.key_to_idx(&key);
             }
             _ => {
@@ -117,40 +128,42 @@ fn create_intermediate_definition_from(
 
     while !gas.stop() {
         match current_binding {
-            Binding::Forward(k) => current_binding = bindings.get(*k),
+            Binding::Forward(k) | Binding::PromoteForward(k) | Binding::ForwardToFirstUse(k) => {
+                current_binding = bindings.get(*k)
+            }
             Binding::PossibleLegacyTParam(k, _) => {
                 let binding = bindings.get(*k);
                 current_binding = bindings.get(binding.idx());
             }
-            Binding::Import(m, name, original_name_range) => {
+            Binding::Import(x) => {
                 return Some(IntermediateDefinition::NamedImport(
                     def_key.range(),
-                    *m,
-                    name.clone(),
-                    *original_name_range,
+                    x.0,
+                    x.1.clone(),
+                    x.2,
                 ));
             }
-            Binding::ImportViaGetattr(m, _name) => {
+            Binding::ImportViaGetattr(x) => {
                 // For __getattr__ imports, the name doesn't exist directly in the module,
                 // so we point to __getattr__ instead.
                 return Some(IntermediateDefinition::NamedImport(
                     def_key.range(),
-                    *m,
+                    x.0,
                     pyrefly_python::dunder::GETATTR.clone(),
                     None,
                 ));
             }
-            Binding::Module(name, path, ..) => {
-                let imported_module_name = if path.len() == 1 {
+            Binding::Module(x) => {
+                let imported_module_name = if x.1.len() == 1 {
                     // This corresponds to the case for `import x.y` -- the corresponding key would
                     // always be `Key::Import(x)`, so the actual module that corresponds to the key
                     // should be `x` instead of `x.y`.
-                    ModuleName::from_name(&path[0])
+                    ModuleName::from_name(&x.1[0])
                 } else {
                     // This corresponds to all other cases (e.g. `import x.y as z` or `from x.y
                     // import z`) -- the corresponding key would be `Key::Definition(z)` so the
                     // actual module that corresponds to the key must be `x.y`.
-                    name.dupe()
+                    x.0.dupe()
                 };
                 return Some(IntermediateDefinition::Module(
                     def_key.range(),
@@ -170,6 +183,7 @@ fn create_intermediate_definition_from(
                     symbol_kind: Some(symbol_kind),
                     docstring_range: func.docstring_range,
                     deprecation: None,
+                    is_final: false,
                     special_export: None,
                 }));
             }
@@ -181,6 +195,7 @@ fn create_intermediate_definition_from(
                             symbol_kind: Some(SymbolKind::Class),
                             docstring_range: None,
                             deprecation: None,
+                            is_final: false,
                             special_export: None,
                         }))
                     }
@@ -193,9 +208,20 @@ fn create_intermediate_definition_from(
                         symbol_kind: Some(SymbolKind::Class),
                         docstring_range: *docstring_range,
                         deprecation: None,
+                        is_final: false,
                         special_export: None,
                     })),
                 };
+            }
+            Binding::IterableValueComprehension(_, _, target_range) => {
+                return Some(IntermediateDefinition::Local(Export {
+                    location: *target_range,
+                    symbol_kind: Some(SymbolKind::Variable),
+                    docstring_range: None,
+                    deprecation: None,
+                    is_final: false,
+                    special_export: None,
+                }));
             }
             _ => {
                 return Some(IntermediateDefinition::Local(Export {
@@ -203,6 +229,7 @@ fn create_intermediate_definition_from(
                     symbol_kind: current_binding.symbol_kind(),
                     docstring_range: None,
                     deprecation: None,
+                    is_final: false,
                     special_export: None,
                 }));
             }
@@ -234,19 +261,52 @@ pub fn insert_import_edit(
     )
 }
 
-/// Insert `import <>` import at the top of the file
+/// Common alias -> module mappings used for auto-imports.
+/// These are modeled after Pylance's built-in aliases.
+static COMMON_MODULE_ALIASES: LazyLock<SmallMap<&'static str, &'static str>> =
+    LazyLock::new(|| {
+        smallmap! {
+            "np" => "numpy",
+            "pd" => "pandas",
+            "tf" => "tensorflow",
+            "mpl" => "matplotlib",
+            "plt" => "matplotlib.pyplot",
+            "m" => "math",
+            "sp" => "scipy",
+            "spio" => "scipy.io",
+            "pn" => "panel",
+            "hv" => "holoviews",
+        }
+    });
+
+pub fn common_alias_target_module(alias: &str) -> Option<&'static str> {
+    COMMON_MODULE_ALIASES.get(alias).copied()
+}
+
+/// Insert `import <module>` (optionally with an alias) at the top of the file.
+/// Returns (position, import text, completion label).
 pub fn import_regular_import_edit(
     ast: &ModModule,
     handle_to_import_from: Handle,
-) -> (TextSize, String) {
+    alias: Option<&str>,
+) -> (TextSize, String, String) {
     let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
         first_stmt.range().start()
     } else {
         ast.range.end()
     };
     let module_name_to_import = handle_to_import_from.module();
-    let insert_text = format!("import {}\n", module_name_to_import.as_str());
-    (position, insert_text)
+    let (import_text, completion_label) = match alias {
+        Some(alias) => (
+            format!("import {} as {}\n", module_name_to_import.as_str(), alias),
+            alias.to_owned(),
+        ),
+        None => (
+            format!("import {}\n", module_name_to_import.as_str()),
+            module_name_to_import.as_str().to_owned(),
+        ),
+    };
+    (position, import_text, completion_label)
 }
 
 pub fn insert_import_edit_with_forced_import_format(

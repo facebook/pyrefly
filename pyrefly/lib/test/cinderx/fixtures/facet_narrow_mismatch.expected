@@ -1,0 +1,14 @@
+  8:4-5: typing.Optional[builtins.int]
+  8:7-17: typing.Type[typing.Optional[builtins.int]]
+  8:7-10: typing.Type[builtins.int]
+  8:13-17: None
+  11:11-14: typing.Type[facet_narrow_mismatch.Foo]
+  11:19-23: None
+  12:7-24: builtins.bool
+  12:7-12: typing.Optional[builtins.int]
+  12:7-10: facet_narrow_mismatch.Foo
+  12:20-24: None
+  13:8-9: builtins.int
+  13:12-17: builtins.int
+    unnarrowed: typing.Optional[builtins.int] (mismatch)
+  13:12-15: facet_narrow_mismatch.Foo

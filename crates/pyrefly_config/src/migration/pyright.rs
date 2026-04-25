@@ -303,8 +303,8 @@ pub struct RuleOverrides {
 }
 
 impl RuleOverrides {
-    /// Consume the RuleOverrides to turn it into an ErrorDisplayConfig map.
-    pub fn to_config(self) -> Option<ErrorDisplayConfig> {
+    /// Convert the RuleOverrides into an ErrorDisplayConfig map.
+    pub fn to_config(&self) -> Option<ErrorDisplayConfig> {
         let mut map = HashMap::new();
         let mut add = |value, kind| {
             // If multiple Pyright overrides map to the same Pyrefly error

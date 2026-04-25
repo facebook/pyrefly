@@ -5,18 +5,23 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cell::RefCell;
+
 use itertools::Itertools;
+use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionResponse;
 use lsp_types::InsertTextFormat;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::request::Completion;
+use lsp_types::request::ResolveCompletionItem;
+use pyrefly::commands::lsp::IndexingMode;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_completion_basic() {
@@ -223,6 +228,95 @@ fn test_completion_sorted_in_sorttext_order() {
 }
 
 #[test]
+fn test_completion_mru_ranked() {
+    let root = get_test_files_root();
+    let workspace_root = root.path().join("basic");
+    let foo_path = workspace_root.join("foo.py");
+    let foo_uri = Url::from_file_path(&foo_path).unwrap().to_string();
+
+    let insert_text = "\nclass Alchemy:\n    pass\nclass Alpha:\n    pass\n\nAl";
+
+    // Select Alpha to populate MRU.
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(workspace_root.clone());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": foo_uri.clone(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 10, "character": 0},
+                    "end": {"line": 10, "character": 0}
+                },
+                "text": insert_text
+            }],
+        }));
+
+    let captured = RefCell::new(None);
+    interaction
+        .client
+        .completion("foo.py", 16, 2)
+        .expect_completion_response_with(|list| {
+            *captured.borrow_mut() = Some(list.clone());
+            true
+        })
+        .unwrap();
+    let list = captured.into_inner().expect("expected completion list");
+    let alpha_idx = list
+        .items
+        .iter()
+        .position(|item| item.label == "Alpha")
+        .expect("expected Alpha completion");
+    let alchemy_idx = list
+        .items
+        .iter()
+        .position(|item| item.label == "Alchemy")
+        .expect("expected Alchemy completion");
+    assert!(alchemy_idx < alpha_idx, "expected default sort order");
+    let alpha_item: CompletionItem = list.items[alpha_idx].clone();
+
+    interaction
+        .client
+        .send_request::<ResolveCompletionItem>(json!(alpha_item))
+        .expect_response_with(|resolved| resolved.label == "Alpha")
+        .unwrap();
+
+    let captured = RefCell::new(None);
+    interaction
+        .client
+        .completion("foo.py", 16, 2)
+        .expect_completion_response_with(|list| {
+            *captured.borrow_mut() = Some(list.clone());
+            true
+        })
+        .unwrap();
+    let list = captured.into_inner().expect("expected completion list");
+    let alpha_idx = list
+        .items
+        .iter()
+        .position(|item| item.label == "Alpha")
+        .expect("expected Alpha completion");
+    let alchemy_idx = list
+        .items
+        .iter()
+        .position(|item| item.label == "Alchemy")
+        .expect("expected Alchemy completion");
+    assert!(alpha_idx < alchemy_idx, "expected MRU sort order");
+    assert_eq!(list.items[alpha_idx].preselect, Some(true));
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_completion_keywords() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
@@ -323,7 +417,7 @@ fn test_completion_with_autoimport() {
     let root_path = root.path().join("tests_requiring_config");
 
     let mut interaction =
-        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
 
     interaction.set_root(root_path.clone());
     interaction
@@ -353,6 +447,41 @@ fn test_completion_with_autoimport() {
             && item.additional_text_edits.as_ref().is_some_and(|edits| !edits.is_empty())
         })
     }).unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_with_autoimport_submodule() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("autoimport_submodule");
+
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+    interaction.client.did_change("foo.py", "auto_submodule");
+
+    interaction
+        .client
+        .completion("foo.py", 0, 14)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| {
+                item.label == "auto_submodule"
+                    && item.detail.as_ref().is_some_and(|detail| {
+                        detail.contains("from autoimport_submodule_pkg import auto_submodule")
+                    })
+                    && item
+                        .additional_text_edits
+                        .as_ref()
+                        .is_some_and(|edits| !edits.is_empty())
+            })
+        })
+        .unwrap();
 
     interaction.shutdown().unwrap();
 }
@@ -497,7 +626,7 @@ fn test_module_completion() {
                 "label": "bar",
                 "detail": "bar",
                 "kind": 9,
-                "sortText": "0"
+                "sortText": "0.9999.bar"
             }],
         }))
         .unwrap();
@@ -586,7 +715,7 @@ fn test_stdlib_submodule_completion() {
     let root_path = root.path().join("basic");
 
     let mut interaction =
-        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
 
     interaction.set_root(root_path.clone());
     interaction
@@ -616,7 +745,7 @@ fn test_stdlib_class_completion() {
     let root_path = root.path().join("basic");
 
     let mut interaction =
-        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
 
     interaction.set_root(root_path.clone());
     interaction
@@ -740,7 +869,7 @@ fn test_autoimport_completions_show_reexported_paths() {
     let root_path = root.path().join("autoimport_reexport_test");
 
     let mut interaction =
-        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
 
     interaction.set_root(root_path.clone());
     interaction
@@ -916,6 +1045,86 @@ fn test_deep_submodule_chain_reexport_completion() {
             list.items
                 .iter()
                 .any(|item| item.label == "D" && item.kind == Some(CompletionItemKind::CLASS))
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_relative_import_module_completion() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("relative_import_completion"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("pkg/main.py");
+    interaction.client.did_change("pkg/main.py", "from .fo\n");
+
+    // Complete the module name in `from .fo` (parser recovery produces ImportedModule context)
+    interaction
+        .client
+        .completion("pkg/main.py", 0, 8)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| {
+                item.label == "foo"
+                    && item.kind == Some(CompletionItemKind::MODULE)
+                    && item.detail.as_deref() == Some("foo")
+            })
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_relative_import_name_completion() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("relative_import_completion"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("pkg/main.py");
+    interaction
+        .client
+        .did_change("pkg/main.py", "from .foo import imperial");
+
+    // Complete the imported name from a relative module
+    interaction
+        .client
+        .completion("pkg/main.py", 0, 24)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| item.label == "imperial_guard")
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_relative_import_double_dot_name_completion() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("relative_import_completion"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("pkg/sub/main.py");
+    interaction
+        .client
+        .did_change("pkg/sub/main.py", "from ..foo import imperial");
+
+    // Complete the imported name from a double-dot relative module
+    interaction
+        .client
+        .completion("pkg/sub/main.py", 0, 25)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| item.label == "imperial_guard")
         })
         .unwrap();
 

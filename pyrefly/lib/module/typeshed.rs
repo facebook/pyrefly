@@ -81,7 +81,7 @@ impl BundledStub for BundledTypeshedStdlib {
             let error_overrides = HashMap::from([
                 // The stdlib is full of deliberately incorrect overrides, so ignore them
                 (ErrorKind::BadOverride, Severity::Ignore),
-                (ErrorKind::BadParamNameOverride, Severity::Ignore),
+                (ErrorKind::BadOverrideParamName, Severity::Ignore),
                 // The stdlib has variance violations in typing.pyi, so ignore them
                 (ErrorKind::InvalidVariance, Severity::Ignore),
             ]);
