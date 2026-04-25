@@ -1186,6 +1186,16 @@ assert_type(A, type[A])
 );
 
 testcase!(
+    test_assert_type_metaclass,
+    r#"
+from typing import assert_type
+class Meta(type): pass
+class A(metaclass=Meta): pass
+assert_type(A, Meta)  # E: assert_type(type[A], Meta) failed
+    "#,
+);
+
+testcase!(
     test_compare_int_str_error,
     r#"
 0 < "oops"  # E: Argument `Literal['oops']` is not assignable to parameter `value` with type `int`
